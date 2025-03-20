@@ -1,25 +1,22 @@
 import 'phaser';
-import { Game } from 'phaser';
+import { GameScene } from './scenes/GameScene';
 
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
-    width: 1280,
-    height: 720,
+    width: window.innerWidth,
+    height: window.innerHeight,
     parent: 'game',
-    backgroundColor: '#ffffff',
-    scene: {
-        preload: function() {
-            // Assets will be loaded here
-        },
-        create: function() {
-            this.add.text(400, 300, 'Eurorails Game', {
-                fontSize: '32px',
-                color: '#000'
-            });
-        }
+    backgroundColor: '#1e1e1e',
+    scene: GameScene,
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH
     }
 };
 
-window.addEventListener('load', () => {
-    new Game(config);
-}); 
+// Handle window resizing
+window.addEventListener('resize', () => {
+    game.scale.resize(window.innerWidth, window.innerHeight);
+});
+
+const game = new Phaser.Game(config); 
