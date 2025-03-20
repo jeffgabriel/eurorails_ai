@@ -1,0 +1,544 @@
+{
+  "DemandCards": [
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Cattle",
+      "Payment": "17"
+    },
+    {
+      "DestinationCity": "Lyon",
+      "Resource": "Copper",
+      "Payment": "26"
+    },
+    {
+      "DestinationCity": "Budapest",
+      "Resource": "Machinery",
+      "Payment": "22"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Imports",
+      "Payment": "06"
+    },
+    {
+      "DestinationCity": "Hamburg",
+      "Resource": "Bauxite",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Kaliningrad",
+      "Resource": "Machinery",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Marble",
+      "Payment": "24"
+    },
+    {
+      "DestinationCity": "Luxembourg",
+      "Resource": "Wheat",
+      "Payment": "10"
+    },
+    {
+      "DestinationCity": "Bilbao",
+      "Resource": "Wine",
+      "Payment": "08"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Oranges",
+      "Payment": "42"
+    },
+    {
+      "DestinationCity": "Luxembourg",
+      "Resource": "Chocolate",
+      "Payment": "07"
+    },
+    {
+      "DestinationCity": "Lodz",
+      "Resource": "Labor",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Fish",
+      "Payment": "27"
+    },
+    {
+      "DestinationCity": "Antwerpen",
+      "Resource": "Oil",
+      "Payment": "20"
+    },
+    {
+      "DestinationCity": "Leipzig",
+      "Resource": "Labor",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Tobacco",
+      "Payment": "32"
+    },
+    {
+      "DestinationCity": "Bruxelles",
+      "Resource": "Copper",
+      "Payment": "19"
+    },
+    {
+      "DestinationCity": "Marseille",
+      "Resource": "Chocolate",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Labor",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Bern",
+      "Resource": "Potatoes",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Zurich",
+      "Resource": "Cork",
+      "Payment": "42"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Cheese",
+      "Payment": "10"
+    },
+    {
+      "DestinationCity": "Birmingham",
+      "Resource": "Tobacco",
+      "Payment": "44"
+    },
+    {
+      "DestinationCity": "Bremen",
+      "Resource": "Ham",
+      "Payment": "19"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Wood",
+      "Payment": "22"
+    },
+    {
+      "DestinationCity": "Frankfurt",
+      "Resource": "Cattle",
+      "Payment": "10"
+    },
+    {
+      "DestinationCity": "Dublin",
+      "Resource": "Marble",
+      "Payment": "44"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Sheep",
+      "Payment": "27"
+    },
+    {
+      "DestinationCity": "Manchester",
+      "Resource": "Beer",
+      "Payment": "09"
+    },
+    {
+      "DestinationCity": "Arhus",
+      "Resource": "Wheat",
+      "Payment": "27"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Steel",
+      "Payment": "08"
+    },
+    {
+      "DestinationCity": "Glasgow",
+      "Resource": "Bauxite",
+      "Payment": "39"
+    },
+    {
+      "DestinationCity": "Antwerpen",
+      "Resource": "Wine",
+      "Payment": "10"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Oil",
+      "Payment": "23"
+    },
+    {
+      "DestinationCity": "Stuttgart",
+      "Resource": "China",
+      "Payment": "08"
+    },
+    {
+      "DestinationCity": "Newcastle",
+      "Resource": "Labor",
+      "Payment": "40"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Machinery",
+      "Payment": "07"
+    },
+    {
+      "DestinationCity": "Porto",
+      "Resource": "Oil",
+      "Payment": "50"
+    },
+    {
+      "DestinationCity": "Kobenhavn",
+      "Resource": "Coal",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Berlin",
+      "Resource": "Chocolate",
+      "Payment": "13"
+    },
+    {
+      "DestinationCity": "Cork",
+      "Resource": "Wood",
+      "Payment": "45"
+    },
+    {
+      "DestinationCity": "Bordeaux",
+      "Resource": "Copper",
+      "Payment": "36"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Cork",
+      "Payment": "43"
+    },
+    {
+      "DestinationCity": "Firenze",
+      "Resource": "Fish",
+      "Payment": "44"
+    },
+    {
+      "DestinationCity": "Manchester",
+      "Resource": "Labor",
+      "Payment": "36"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Wine",
+      "Payment": "07"
+    },
+    {
+      "DestinationCity": "Marseille",
+      "Resource": "Fish",
+      "Payment": "29"
+    },
+    {
+      "DestinationCity": "Goteborg",
+      "Resource": "Steel",
+      "Payment": "24"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Wheat",
+      "Payment": "15"
+    },
+    {
+      "DestinationCity": "Zurich",
+      "Resource": "Hops",
+      "Payment": "24"
+    },
+    {
+      "DestinationCity": "Glasgow",
+      "Resource": "Cattle",
+      "Payment": "30"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Bauxite",
+      "Payment": "22"
+    },
+    {
+      "DestinationCity": "Venizia",
+      "Resource": "Tourists",
+      "Payment": "19"
+    },
+    {
+      "DestinationCity": "Lisboa",
+      "Resource": "Oranges",
+      "Payment": "09"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Copper",
+      "Payment": "17"
+    },
+    {
+      "DestinationCity": "Torino",
+      "Resource": "Imports",
+      "Payment": "20"
+    },
+    {
+      "DestinationCity": "Kaliningrad",
+      "Resource": "Sheep",
+      "Payment": "40"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Potatoes",
+      "Payment": "12"
+    },
+    {
+      "DestinationCity": "Sarajevo",
+      "Resource": "Imports",
+      "Payment": "30"
+    },
+    {
+      "DestinationCity": "Toulouse",
+      "Resource": "Flowers",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Ham",
+      "Payment": "21"
+    },
+    {
+      "DestinationCity": "Munchen",
+      "Resource": "Iron",
+      "Payment": "26"
+    },
+    {
+      "DestinationCity": "Cardiff",
+      "Resource": "Cheese",
+      "Payment": "15"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Oranges",
+      "Payment": "33"
+    },
+    {
+      "DestinationCity": "Roma",
+      "Resource": "Cheese",
+      "Payment": "19"
+    },
+    {
+      "DestinationCity": "Newcastle",
+      "Resource": "Beer",
+      "Payment": "14"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Cars",
+      "Payment": "10"
+    },
+    {
+      "DestinationCity": "Zagreb",
+      "Resource": "Beer",
+      "Payment": "11"
+    },
+    {
+      "DestinationCity": "Zurich",
+      "Resource": "Tourists",
+      "Payment": "12"
+    },
+    {
+      "DestinationCity": "Holland",
+      "Resource": "Coal",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Napoli",
+      "Resource": "Oranges",
+      "Payment": "39"
+    },
+    {
+      "DestinationCity": "Oslo",
+      "Resource": "Bauxite",
+      "Payment": "42"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Wood",
+      "Payment": "37"
+    },
+    {
+      "DestinationCity": "Beograd",
+      "Resource": "Beer",
+      "Payment": "17"
+    },
+    {
+      "DestinationCity": "Marseille",
+      "Resource": "Coal",
+      "Payment": "29"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Flowers",
+      "Payment": "08"
+    },
+    {
+      "DestinationCity": "Krakow",
+      "Resource": "Chocolate",
+      "Payment": "22"
+    },
+    {
+      "DestinationCity": "Munchen",
+      "Resource": "Hops",
+      "Payment": "29"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Beer",
+      "Payment": "12"
+    },
+    {
+      "DestinationCity": "Budapest",
+      "Resource": "Imports",
+      "Payment": "25"
+    },
+    {
+      "DestinationCity": "Aberdeen",
+      "Resource": "Machinery",
+      "Payment": "25"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Labor",
+      "Payment": "31"
+    },
+    {
+      "DestinationCity": "Birmingham",
+      "Resource": "Coal",
+      "Payment": "05"
+    },
+    {
+      "DestinationCity": "Roma",
+      "Resource": "Wheat",
+      "Payment": "20"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Copper",
+      "Payment": "25"
+    },
+    {
+      "DestinationCity": "Wroclaw",
+      "Resource": "Cars",
+      "Payment": "14"
+    },
+    {
+      "DestinationCity": "Napoli",
+      "Resource": "Flowers",
+      "Payment": "35"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Bauxite",
+      "Payment": "25"
+    },
+    {
+      "DestinationCity": "Leipzig",
+      "Resource": "Potatoes",
+      "Payment": "07"
+    },
+    {
+      "DestinationCity": "Belfast",
+      "Resource": "Tobacco",
+      "Payment": "59"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Tobacco",
+      "Payment": "40"
+    },
+    {
+      "DestinationCity": "Szczesin",
+      "Resource": "Cheese",
+      "Payment": "12"
+    },
+    {
+      "DestinationCity": "Beograd",
+      "Resource": "Cars",
+      "Payment": "19"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Fish",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Stuttgart",
+      "Resource": "Oil",
+      "Payment": "27"
+    },
+    {
+      "DestinationCity": "Dublin",
+      "Resource": "Copper",
+      "Payment": "36"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Ham",
+      "Payment": "30"
+    },
+    {
+      "DestinationCity": "Zurich",
+      "Resource": "Bauxite",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Budapest",
+      "Resource": "Steel",
+      "Payment": "22"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Marble",
+      "Payment": "31"
+    },
+    {
+      "DestinationCity": "Hamburg",
+      "Resource": "Ham",
+      "Payment": "17"
+    },
+    {
+      "DestinationCity": "Praha",
+      "Resource": "Oil",
+      "Payment": "17"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Cattle",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Stockholm",
+      "Resource": "Wheat",
+      "Payment": "46"
+    },
+    {
+      "DestinationCity": "Cork",
+      "Resource": "Cork",
+      "Payment": "62"
+    },
+    {
+      "DestinationCity": "London",
+      "Resource": "Wine",
+      "Payment": "16"
+    },
+    {
+      "DestinationCity": "Lyon",
+      "Resource": "Machinery",
+      "Payment": "12"
+    },
+    {
+      "DestinationCity": "Lodz",
+      "Resource": "Flowers",
+      "Payment": "21"
+    }
+  ]
+}

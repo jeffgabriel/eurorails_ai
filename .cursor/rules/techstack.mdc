@@ -1,0 +1,17 @@
+---
+description: These are the core elements of the tech stack to be used.
+globs: 
+alwaysApply: false
+---
+Tech Stack
+Frontend (Game Rendering & UI)
+HTML5 & CSS3 – For structure and styling.
+TypeScript – Core scripting language for interactivity.
+Canvas API (2D) – For rendering graphics.
+Phaser.js – A great game engine for 2D browser games with physics, animations, and scene management.
+
+Backend (Multiplayer, Game State, and Logic)
+Node.js – High-performance server-side runtime.
+Fastify – Lightweight web frameworks for API and game state management.
+Socket.IO – Real-time communication for multiplayer features.
+PostgreSQL – Database for storing user progress and game data.

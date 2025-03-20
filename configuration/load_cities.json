@@ -1,0 +1,164 @@
+{
+  "LoadCities": [
+    {
+      "Bauxite": [
+        "Budapest",
+        "Beograd",
+        "Marseille",
+        "Wroclaw",
+        "Aberdeen",
+        "Newcastle"
+      ]
+    },
+    {
+      "Beer": [
+        "Cork",
+        "Dublin",
+        "Frankfurt",
+        "München",
+        "Praha",
+        "Lisboa",
+        "Sevilla",
+        "Valencia"
+      ]
+    },
+    {
+      "Cars": [
+        "Oslo",
+        "Manchester",
+        "München",
+        "Stuttgart",
+        "Torino",
+        "Szczecin"
+      ]
+    },
+    {
+      "Flowers": [
+        "Holland"
+      ]
+    },
+    {
+      "Sheep": [
+        "Bilbao",
+        "Bern",
+        "Cork",
+        "Nantes",
+        "Glasgow",
+        "Warszawa"
+      ]
+    },
+    {
+      "Cattle": [
+        "Bilbao",
+        "Bern",
+        "Cork",
+        "Nantes",
+        "Glasgow",
+        "Warszawa"
+      ]
+    },
+    {
+      "Cheese": [
+        "Bern",
+        "Holland",
+        "København"
+      ]
+    },
+    {
+      "Ham": [
+        "Glasgow",
+        "Warszawa"
+      ]
+    },
+    {
+      "Steel": [
+        "Birmingham"
+      ]
+    },
+    {
+      "Hops": [
+        "Bern",
+        "Holland",
+        "København"
+      ]
+    },
+    {
+      "Imports": [
+        "Antwerpen"
+      ]
+    },
+    {
+      "China": [
+        "Birmingham",
+        "Hamburg",
+        "Napoli",
+        "Leipzig"
+      ]
+    },
+    {
+      "Tobacco": [
+        "Birmingham",
+        "Hamburg",
+        "Napoli",
+        "Leipzig"
+      ]
+    },
+    {
+      "Iron": [
+        "Bruxelles",
+        "Kaliningrad",
+        "Ruhr",
+        "Zürich",
+        "Stockholm"
+      ]
+    },
+    {
+      "Tourists": [
+        "Birmingham",
+        "London",
+        "Kaliningrad",
+        "Stockholm"
+      ]
+    },
+    {
+      "Wheat": [
+        "Lyon",
+        "Beograd",
+        "Toulouse",
+        "Krakow",
+        "Sarajevo"
+      ]
+    },
+    {
+      "Coal": [
+        "Cardiff",
+        "Beograd",
+        "Toulouse",
+        "Krakow",
+        "Sarajevo"
+      ]
+    },
+    {
+      "Wine": [
+        "Berlin",
+        "Madrid",
+        "Milano",
+        "Rondeaux"
+      ]
+    },
+    {
+      "Machinery": [
+        "Frankfurt",
+        "Barcelona",
+        "Porto",
+        "Nantes"
+      ]
+    },
+    {
+      "Marble": [
+        "Oslo",
+        "Sarajevo"
+      ]
+    }
+  ]
+}
