@@ -34,7 +34,8 @@ export default {
   ],
   devServer: {
     static: {
-      directory: path.join(__dirname, 'dist/client'),
+      directory: path.join(__dirname, 'public'),
+      publicPath: '/'
     },
     compress: true,
     port: 3000,

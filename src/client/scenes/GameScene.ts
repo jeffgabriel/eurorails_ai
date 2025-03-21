@@ -1,12 +1,50 @@
 import 'phaser';
+import { mapConfig } from '../config/mapConfig';
+import { TerrainType, GridPointConfig } from '../../shared/types/GridTypes';
+
+interface GridPoint {
+    x: number;
+    y: number;
+    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
+    terrain: TerrainType;
+    ferryConnection?: { row: number; col: number };
+}
 
 export class GameScene extends Phaser.Scene {
     private mapContainer!: Phaser.GameObjects.Container;
     private uiContainer!: Phaser.GameObjects.Container;
     private playerHandContainer!: Phaser.GameObjects.Container;
+    private gridPoints: GridPoint[][] = [];
+    private isDragging: boolean = false;
+    private lastDragTime: number = 0;
+    private pendingRender: boolean = false;
+    
+    // Grid configuration
+    private readonly GRID_WIDTH = 70;
+    private readonly GRID_HEIGHT = 90;
+    private readonly HORIZONTAL_SPACING = 20;
+    private readonly VERTICAL_SPACING = 20;
+    private readonly POINT_RADIUS = 3;
+    private readonly GRID_MARGIN = 100;        // Increased margin around the grid
+    private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
+    private readonly terrainColors = {
+        [TerrainType.LAND]: 0x000000,
+        [TerrainType.WATER]: 0x0000ff,
+        [TerrainType.HILL]: 0x964B00,
+        [TerrainType.MOUNTAIN]: 0x808080,
+        [TerrainType.FERRY_PORT]: 0xffa500
+    };
 
     constructor() {
-        super({ key: 'GameScene' });
+        super({ 
+            key: 'GameScene',
+            active: true,
+            visible: true
+        });
+    }
+
+    preload() {
+        this.load.image('ferry-port', '/assets/ferry-port.png');
     }
 
     create() {
@@ -24,6 +62,19 @@ export class GameScene extends Phaser.Scene {
 
         // Set up camera controls for the map
         this.setupCamera();
+
+        // Set a low frame rate for the scene
+        this.game.loop.targetFps = 30;
+    }
+
+    private requestRender() {
+        if (!this.pendingRender) {
+            this.pendingRender = true;
+            requestAnimationFrame(() => {
+                this.cameras.main.dirty = true;
+                this.pendingRender = false;
+            });
+        }
     }
 
     private createContainers() {
@@ -45,27 +96,148 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
     }
 
+    private calculateMapDimensions() {
+        const width = (this.GRID_WIDTH * this.HORIZONTAL_SPACING) + (this.GRID_MARGIN * 2);
+        const height = (this.GRID_HEIGHT * this.VERTICAL_SPACING) + (this.GRID_MARGIN * 2);
+        return { width, height };
+    }
+
     private setupMapArea() {
-        // Create a background for the map area
-        const mapBackground = this.add.rectangle(0, 0, 3000, 2000, 0xf0f0f0);
+        const { width, height } = this.calculateMapDimensions();
+        
+        // Create a background for the map area that fits the grid exactly
+        const mapBackground = this.add.rectangle(
+            width / 2,  // Center the background
+            height / 2,
+            width,
+            height,
+            0xf0f0f0
+        );
+        
         const mapLabel = this.add.text(
-            10,
-            10,
+            this.GRID_MARGIN + 10,  // Adjust label position to account for margin
+            this.GRID_MARGIN + 10,
             'Game Map (Pan & Zoom)',
             { color: '#000000', fontSize: '16px' }
         );
+        
         this.mapContainer.add([mapBackground, mapLabel]);
         
-        // Add a grid overlay for development purposes
-        this.createGrid();
+        // Create the triangular grid
+        this.createTriangularGrid();
+    }
+
+    private createTriangularGrid(): void {
+        // Create a lookup map for terrain configuration for O(1) access
+        const terrainLookup = new Map<string, { terrain: TerrainType, ferryConnection?: { row: number; col: number } }>();
+        mapConfig.points.forEach(point => {
+            terrainLookup.set(`${point.row},${point.col}`, {
+                terrain: point.terrain,
+                ferryConnection: point.ferryConnection
+            });
+        });
+
+        // Create a single graphics object for all land points
+        const landPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        landPoints.lineStyle(1, 0x000000);
+        landPoints.fillStyle(this.terrainColors[TerrainType.LAND]);
+
+        // Create a single graphics object for all mountains
+        const mountainPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        mountainPoints.lineStyle(1, 0x000000);
+
+        // Create a single graphics object for all hills
+        const hillPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        hillPoints.lineStyle(1, 0x000000);
+        hillPoints.fillStyle(this.terrainColors[TerrainType.HILL]);
+
+        // Create a single graphics object for all ferry connections
+        const ferryConnections = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        ferryConnections.lineStyle(2, 0xffa500, 0.5);
+
+        // Initialize the 2D array
+        for (let row = 0; row < this.GRID_HEIGHT; row++) {
+            this.gridPoints[row] = [];
+            const isOffsetRow = row % 2 === 1;
+            
+            for (let col = 0; col < this.GRID_WIDTH; col++) {
+                const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+                const y = row * this.VERTICAL_SPACING;
+
+                // Get terrain configuration using O(1) lookup
+                const config = terrainLookup.get(`${row},${col}`);
+                const terrain = config?.terrain || TerrainType.LAND;
+                const ferryConnection = config?.ferryConnection;
+
+                let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
+
+                // Skip drawing point for water terrain
+                if (terrain !== TerrainType.WATER) {
+                    if (terrain === TerrainType.MOUNTAIN || terrain === TerrainType.HILL) {
+                        // Draw triangle using the appropriate graphics object
+                        const graphics = terrain === TerrainType.MOUNTAIN ? mountainPoints : hillPoints;
+                        const triangleHeight = this.POINT_RADIUS * 2;
+                        graphics.beginPath();
+                        graphics.moveTo(x, y - triangleHeight);
+                        graphics.lineTo(x - triangleHeight, y + triangleHeight);
+                        graphics.lineTo(x + triangleHeight, y + triangleHeight);
+                        graphics.closePath();
+                        if (terrain === TerrainType.HILL) {
+                            graphics.fill();
+                        }
+                        graphics.stroke();
+                    } else if (terrain === TerrainType.FERRY_PORT) {
+                        // Ferry ports still need individual sprites for the image
+                        sprite = this.add.image(x + this.GRID_MARGIN, y + this.GRID_MARGIN, 'ferry-port');
+                        sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
+                        this.mapContainer.add(sprite);
+                    } else {
+                        // Draw land point using the land points graphics object
+                        landPoints.beginPath();
+                        landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
+                        landPoints.closePath();
+                        landPoints.fill();
+                        landPoints.stroke();
+                    }
+                }
+
+                // Store the actual position including margin
+                this.gridPoints[row][col] = { 
+                    x: x + this.GRID_MARGIN, 
+                    y: y + this.GRID_MARGIN, 
+                    sprite, 
+                    terrain, 
+                    ferryConnection 
+                };
+
+                // Draw ferry connection if exists
+                if (ferryConnection) {
+                    const targetX = ferryConnection.col * this.HORIZONTAL_SPACING + 
+                        (ferryConnection.row % 2 === 1 ? this.HORIZONTAL_SPACING / 2 : 0);
+                    const targetY = ferryConnection.row * this.VERTICAL_SPACING;
+                    
+                    ferryConnections.beginPath();
+                    ferryConnections.moveTo(x, y);
+                    ferryConnections.lineTo(targetX, targetY);
+                    ferryConnections.closePath();
+                    ferryConnections.stroke();
+                }
+            }
+        }
+
+        // Add all graphics objects to the map container
+        this.mapContainer.add([landPoints, mountainPoints, hillPoints, ferryConnections]);
     }
 
     private setupUIOverlay() {
+        const LEADERBOARD_WIDTH = 200;
+        const LEADERBOARD_PADDING = 10;
+        
         // Create semi-transparent background for leaderboard
         const leaderboardBg = this.add.rectangle(
-            this.cameras.main.width - 200, 
-            10, 
-            190, 
+            this.cameras.main.width - (LEADERBOARD_WIDTH / 2) - LEADERBOARD_PADDING, 
+            80,  // Moved down to center content better
+            LEADERBOARD_WIDTH, 
             150, 
             0x000000, 
             0.3
@@ -73,18 +245,23 @@ export class GameScene extends Phaser.Scene {
         
         // Add leaderboard title
         const leaderboardTitle = this.add.text(
-            this.cameras.main.width - 190, 
+            this.cameras.main.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING, 
             20, 
             'Leaderboard', 
-            { color: '#ffffff', fontSize: '18px' }
+            { color: '#ffffff', fontSize: '18px', wordWrap: { width: LEADERBOARD_WIDTH - (LEADERBOARD_PADDING * 2) } }
         );
+        leaderboardTitle.setX(this.cameras.main.width - (LEADERBOARD_WIDTH / 2) - LEADERBOARD_PADDING - (leaderboardTitle.width / 2));
         
-        // Add example player entry
+        // Add example player entry with proper wrapping
         const player1Text = this.add.text(
-            this.cameras.main.width - 180,
+            this.cameras.main.width - LEADERBOARD_WIDTH + LEADERBOARD_PADDING,
             50,
             'Player 1: ECU 50M',
-            { color: '#ffffff', fontSize: '14px' }
+            { 
+                color: '#ffffff', 
+                fontSize: '14px',
+                wordWrap: { width: LEADERBOARD_WIDTH - (LEADERBOARD_PADDING * 2) }
+            }
         );
         
         this.uiContainer.add([leaderboardBg, leaderboardTitle, player1Text]);
@@ -105,7 +282,7 @@ export class GameScene extends Phaser.Scene {
         // Add sections for demand cards (3 slots)
         for (let i = 0; i < 3; i++) {
             // Create a container for each card slot to manage layering
-            const cardContainer = this.add.container(50 + i * 160, 50);
+            const cardContainer = this.add.container(30 + i * 180, 50);  // Increased spacing between cards
             
             const cardSlot = this.add.rectangle(
                 0,
@@ -123,13 +300,12 @@ export class GameScene extends Phaser.Scene {
             );
             cardLabel.setOrigin(0.5, 0);
             
-            // Add elements to card container in correct order (background then text)
             cardContainer.add([cardSlot, cardLabel]);
             this.playerHandContainer.add(cardContainer);
         }
         
-        // Create a container for train section to manage layering
-        const trainContainer = this.add.container(530, 50);
+        // Create a container for train section with increased spacing
+        const trainContainer = this.add.container(600, 50);  // Moved further right
         
         const trainSection = this.add.rectangle(
             0,
@@ -147,76 +323,106 @@ export class GameScene extends Phaser.Scene {
         );
         trainLabel.setOrigin(0.5, 0);
         
-        // Add elements to train container in correct order
         trainContainer.add([trainSection, trainLabel]);
         
-        // Add money counter
+        // Add money counter with adjusted position
         const moneyText = this.add.text(
-            750,
+            850,  // Moved further right
             40,
             'Money: ECU 50M',
             { color: '#ffffff', fontSize: '20px' }
         );
         
-        // Add containers to main player hand container
         this.playerHandContainer.add([trainContainer, moneyText]);
     }
 
     private setupCamera() {
-        // Set up main camera to follow the map
-        this.cameras.main.setBounds(0, 0, 3000, 2000);
+        const { width, height } = this.calculateMapDimensions();
         
-        // Track if mouse is being dragged
-        let isDragging = false;
+        // Set up main camera with extended bounds to allow for proper scrolling
+        this.cameras.main.setBounds(-this.GRID_MARGIN, -this.GRID_MARGIN, 
+            width + (this.GRID_MARGIN * 2), height + (this.GRID_MARGIN * 2));
+        
+        // Center the camera on the map
+        this.cameras.main.centerOn(width / 2, height / 2);
+        
+        // Set initial zoom to fit the board better
+        const initialZoom = Math.min(
+            (this.cameras.main.width - 100) / width,  // Added padding for zoom
+            (this.cameras.main.height - 300) / height // Added more space for UI
+        );
+        this.cameras.main.setZoom(initialZoom);
+        
         let lastPointerPosition = { x: 0, y: 0 };
 
         this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            isDragging = true;
+            this.isDragging = true;
             lastPointerPosition = { x: pointer.x, y: pointer.y };
+            this.lastDragTime = Date.now();
         });
 
         this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-            if (isDragging) {
-                const deltaX = pointer.x - lastPointerPosition.x;
-                const deltaY = pointer.y - lastPointerPosition.y;
-                
-                this.cameras.main.scrollX -= deltaX / this.cameras.main.zoom;
-                this.cameras.main.scrollY -= deltaY / this.cameras.main.zoom;
-                
-                lastPointerPosition = { x: pointer.x, y: pointer.y };
+            if (this.isDragging) {
+                const now = Date.now();
+                // Throttle updates to every 32ms (approximately 30fps)
+                if (now - this.lastDragTime >= 32) {
+                    const deltaX = pointer.x - lastPointerPosition.x;
+                    const deltaY = pointer.y - lastPointerPosition.y;
+                    
+                    // Calculate new scroll position
+                    const newScrollX = this.cameras.main.scrollX - (deltaX / this.cameras.main.zoom);
+                    const newScrollY = this.cameras.main.scrollY - (deltaY / this.cameras.main.zoom);
+                    
+                    // Ensure the bottom of the map doesn't scroll above the player hand area
+                    const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
+                    
+                    this.cameras.main.scrollX = newScrollX;
+                    this.cameras.main.scrollY = Math.min(maxScrollY, Math.max(0, newScrollY));
+                    
+                    lastPointerPosition = { x: pointer.x, y: pointer.y };
+                    this.lastDragTime = now;
+                    this.requestRender();
+                }
             }
         });
 
         this.input.on('pointerup', () => {
-            isDragging = false;
+            this.isDragging = false;
+            this.requestRender();
         });
 
-        // Add zoom controls
+        // Add zoom controls with adjusted limits and throttling
+        let lastWheelTime = 0;
         this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
-            const zoom = this.cameras.main.zoom;
-            if (deltaY > 0) {
-                this.cameras.main.zoom = Math.max(0.5, zoom - 0.1);
-            } else {
-                this.cameras.main.zoom = Math.min(2, zoom + 0.1);
+            const now = Date.now();
+            // Throttle zoom updates to every 32ms
+            if (now - lastWheelTime >= 32) {
+                const zoom = this.cameras.main.zoom;
+                const minZoom = Math.min(
+                    (this.cameras.main.width - 100) / width,  // Added padding for zoom
+                    (this.cameras.main.height - 300) / height // Added more space for UI
+                ) * 0.8;
+                const maxZoom = 2.0;
+                
+                if (deltaY > 0) {
+                    this.cameras.main.zoom = Math.max(minZoom, zoom - 0.1);
+                } else {
+                    this.cameras.main.zoom = Math.min(maxZoom, zoom + 0.1);
+                }
+                
+                const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
+                this.cameras.main.scrollY = Math.min(maxScrollY, this.cameras.main.scrollY);
+                
+                lastWheelTime = now;
+                this.requestRender();
             }
         });
     }
 
-    private createGrid() {
-        const graphics = this.add.graphics();
-        graphics.lineStyle(1, 0xcccccc, 0.3);
-
-        // Create grid lines
-        for (let x = 0; x < 3000; x += 100) {
-            graphics.moveTo(x, 0);
-            graphics.lineTo(x, 2000);
+    update(time: number, delta: number): void {
+        // Only update if we're dragging or have a pending render
+        if (!this.isDragging && !this.pendingRender) {
+            return;
         }
-        for (let y = 0; y < 2000; y += 100) {
-            graphics.moveTo(0, y);
-            graphics.lineTo(3000, y);
-        }
-        graphics.strokePath();
-
-        this.mapContainer.add(graphics);
     }
 } 
