@@ -1,6 +1,6 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType, GridPointConfig } from '../../shared/types/GridTypes';
+import { TerrainType, GridPointConfig, CityType } from '../../shared/types/GridTypes';
 
 interface GridPoint {
     x: number;
@@ -8,6 +8,11 @@ interface GridPoint {
     sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
     terrain: TerrainType;
     ferryConnection?: { row: number; col: number };
+    city?: {
+        type: CityType;
+        name: string;
+        connectedPoints?: Array<{ row: number; col: number }>;
+    };
 }
 
 export class GameScene extends Phaser.Scene {
@@ -22,8 +27,8 @@ export class GameScene extends Phaser.Scene {
     // Grid configuration
     private readonly GRID_WIDTH = 70;
     private readonly GRID_HEIGHT = 90;
-    private readonly HORIZONTAL_SPACING = 20;
-    private readonly VERTICAL_SPACING = 20;
+    private readonly HORIZONTAL_SPACING = 30;
+    private readonly VERTICAL_SPACING = 30;
     private readonly POINT_RADIUS = 3;
     private readonly GRID_MARGIN = 100;        // Increased margin around the grid
     private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
@@ -33,6 +38,18 @@ export class GameScene extends Phaser.Scene {
         [TerrainType.HILL]: 0x964B00,
         [TerrainType.MOUNTAIN]: 0x808080,
         [TerrainType.FERRY_PORT]: 0xffa500
+    };
+
+    private readonly CITY_COLORS = {
+        [CityType.MAJOR_CITY]: 0xff9999,  // Brighter red for major cities
+        [CityType.CITY]: 0x9999ff,        // Brighter blue for cities
+        [CityType.SMALL_CITY]: 0x99ff99   // Brighter green for small cities
+    };
+
+    private readonly CITY_RADIUS = {
+        [CityType.MAJOR_CITY]: 30,   // Size for major city hexagon
+        [CityType.CITY]: 12,         // Reduced size for city circle
+        [CityType.SMALL_CITY]: 8     // Reduced size for small city square
     };
 
     constructor() {
@@ -128,34 +145,160 @@ export class GameScene extends Phaser.Scene {
     }
 
     private createTriangularGrid(): void {
-        // Create a lookup map for terrain configuration for O(1) access
-        const terrainLookup = new Map<string, { terrain: TerrainType, ferryConnection?: { row: number; col: number } }>();
+        // Create lookup maps
+        const terrainLookup = new Map<string, { 
+            terrain: TerrainType, 
+            ferryConnection?: { row: number; col: number },
+            city?: { type: CityType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
+        }>();
+        
         mapConfig.points.forEach(point => {
             terrainLookup.set(`${point.row},${point.col}`, {
                 terrain: point.terrain,
-                ferryConnection: point.ferryConnection
+                ferryConnection: point.ferryConnection,
+                city: point.city
             });
         });
 
-        // Create a single graphics object for all land points
+        // Create graphics objects for different elements
+        const cityAreas = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         const landPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        const mountainPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        const hillPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        const ferryConnections = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+
+        // Set styles
         landPoints.lineStyle(1, 0x000000);
         landPoints.fillStyle(this.terrainColors[TerrainType.LAND]);
-
-        // Create a single graphics object for all mountains
-        const mountainPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         mountainPoints.lineStyle(1, 0x000000);
-
-        // Create a single graphics object for all hills
-        const hillPoints = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         hillPoints.lineStyle(1, 0x000000);
         hillPoints.fillStyle(this.terrainColors[TerrainType.HILL]);
-
-        // Create a single graphics object for all ferry connections
-        const ferryConnections = this.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         ferryConnections.lineStyle(2, 0xffa500, 0.5);
 
-        // Initialize the 2D array
+        // First pass: Draw city areas
+        const majorCities = new Set<string>(); // Track major city points
+        for (let row = 0; row < this.GRID_HEIGHT; row++) {
+            for (let col = 0; col < this.GRID_WIDTH; col++) {
+                const config = terrainLookup.get(`${row},${col}`);
+                if (config?.city) {
+                    const isOffsetRow = row % 2 === 1;
+                    const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+                    const y = row * this.VERTICAL_SPACING;
+
+                    if (config.city.type === CityType.MAJOR_CITY && config.city.connectedPoints) {
+                        // Only draw major city once
+                        const cityKey = `${config.city.name}`;
+                        if (!majorCities.has(cityKey)) {
+                            majorCities.add(cityKey);
+                            
+                            // Draw hexagonal area
+                            cityAreas.fillStyle(this.CITY_COLORS[CityType.MAJOR_CITY], 0.7);
+                            cityAreas.lineStyle(2, 0x000000, 0.7);
+                            cityAreas.beginPath();
+                            
+                            // Find center point (first point in the array) and outer points
+                            const centerPoint = config.city.connectedPoints[0];
+                            const outerPoints = config.city.connectedPoints.slice(1);
+                            
+                            // Calculate center coordinates
+                            const centerIsOffsetRow = centerPoint.row % 2 === 1;
+                            const centerX = centerPoint.col * this.HORIZONTAL_SPACING + 
+                                         (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+                            const centerY = centerPoint.row * this.VERTICAL_SPACING;
+
+                            // Sort outer points clockwise around the center
+                            const sortedPoints = outerPoints
+                                .map(p => ({
+                                    point: p,
+                                    angle: Math.atan2(
+                                        p.row - centerPoint.row,
+                                        p.col - centerPoint.col
+                                    )
+                                }))
+                                .sort((a, b) => a.angle - b.angle)
+                                .map(p => {
+                                    const pIsOffsetRow = p.point.row % 2 === 1;
+                                    return {
+                                        x: p.point.col * this.HORIZONTAL_SPACING + 
+                                           (pIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0),
+                                        y: p.point.row * this.VERTICAL_SPACING
+                                    };
+                                });
+                            
+                            // Draw the hexagon
+                            cityAreas.moveTo(sortedPoints[0].x, sortedPoints[0].y);
+                            for (let i = 1; i < sortedPoints.length; i++) {
+                                cityAreas.lineTo(sortedPoints[i].x, sortedPoints[i].y);
+                            }
+                            cityAreas.closePath();
+                            cityAreas.fill();
+                            cityAreas.stroke();
+
+                            // Draw star at center point
+                            this.drawStar(cityAreas, centerX, centerY, 8);
+
+                            // Add city name centered in the hexagon
+                            const cityName = this.add.text(
+                                centerX + this.GRID_MARGIN,
+                                centerY + this.GRID_MARGIN + 15,  // Added offset to move below center point
+                                config.city.name,
+                                { 
+                                    color: '#000000',
+                                    fontSize: '12px',
+                                    fontStyle: 'bold'
+                                }
+                            );
+                            cityName.setOrigin(0.5, 0.5);
+                            this.mapContainer.add(cityName);
+                        }
+                    } else if (config.city.type === CityType.CITY) {
+                        // Draw circle for regular city
+                        cityAreas.fillStyle(this.CITY_COLORS[CityType.CITY], 0.7);  // Increased opacity
+                        cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
+                        cityAreas.beginPath();
+                        cityAreas.arc(x, y, this.CITY_RADIUS[CityType.CITY], 0, Math.PI * 2);
+                        cityAreas.closePath();
+                        cityAreas.fill();
+                        cityAreas.stroke();
+
+                        // Add city name with adjusted position
+                        const cityName = this.add.text(
+                            x + this.GRID_MARGIN,
+                            y + this.GRID_MARGIN - 15,
+                            config.city.name,
+                            { 
+                                color: '#000000',
+                                fontSize: '10px'
+                            }
+                        );
+                        cityName.setOrigin(0.5, 0.5);
+                        this.mapContainer.add(cityName);
+                    } else if (config.city.type === CityType.SMALL_CITY) {
+                        // Draw square for small city
+                        cityAreas.fillStyle(this.CITY_COLORS[CityType.SMALL_CITY], 0.7);  // Increased opacity
+                        cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
+                        const radius = this.CITY_RADIUS[CityType.SMALL_CITY];
+                        cityAreas.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+                        cityAreas.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+
+                        // Add city name with adjusted position
+                        const cityName = this.add.text(
+                            x + this.GRID_MARGIN,
+                            y + this.GRID_MARGIN - 15,
+                            config.city.name,
+                            { 
+                                color: '#000000',
+                                fontSize: '8px'
+                            }
+                        );
+                        cityName.setOrigin(0.5, 0.5);
+                        this.mapContainer.add(cityName);
+                    }
+                }
+            }
+        }
+
+        // Second pass: Draw regular grid points and terrain
         for (let row = 0; row < this.GRID_HEIGHT; row++) {
             this.gridPoints[row] = [];
             const isOffsetRow = row % 2 === 1;
@@ -164,17 +307,17 @@ export class GameScene extends Phaser.Scene {
                 const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                 const y = row * this.VERTICAL_SPACING;
 
-                // Get terrain configuration using O(1) lookup
                 const config = terrainLookup.get(`${row},${col}`);
                 const terrain = config?.terrain || TerrainType.LAND;
                 const ferryConnection = config?.ferryConnection;
+                const city = config?.city;
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
                 // Skip drawing point for water terrain
                 if (terrain !== TerrainType.WATER) {
                     if (terrain === TerrainType.MOUNTAIN || terrain === TerrainType.HILL) {
-                        // Draw triangle using the appropriate graphics object
+                        // Draw terrain features as before
                         const graphics = terrain === TerrainType.MOUNTAIN ? mountainPoints : hillPoints;
                         const triangleHeight = this.POINT_RADIUS * 2;
                         graphics.beginPath();
@@ -187,12 +330,11 @@ export class GameScene extends Phaser.Scene {
                         }
                         graphics.stroke();
                     } else if (terrain === TerrainType.FERRY_PORT) {
-                        // Ferry ports still need individual sprites for the image
                         sprite = this.add.image(x + this.GRID_MARGIN, y + this.GRID_MARGIN, 'ferry-port');
                         sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
                         this.mapContainer.add(sprite);
                     } else {
-                        // Draw land point using the land points graphics object
+                        // Draw standard point
                         landPoints.beginPath();
                         landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
                         landPoints.closePath();
@@ -201,16 +343,17 @@ export class GameScene extends Phaser.Scene {
                     }
                 }
 
-                // Store the actual position including margin
+                // Store point data
                 this.gridPoints[row][col] = { 
                     x: x + this.GRID_MARGIN, 
                     y: y + this.GRID_MARGIN, 
                     sprite, 
-                    terrain, 
-                    ferryConnection 
+                    terrain,
+                    ferryConnection,
+                    city 
                 };
 
-                // Draw ferry connection if exists
+                // Draw ferry connections
                 if (ferryConnection) {
                     const targetX = ferryConnection.col * this.HORIZONTAL_SPACING + 
                         (ferryConnection.row % 2 === 1 ? this.HORIZONTAL_SPACING / 2 : 0);
@@ -225,8 +368,34 @@ export class GameScene extends Phaser.Scene {
             }
         }
 
-        // Add all graphics objects to the map container
-        this.mapContainer.add([landPoints, mountainPoints, hillPoints, ferryConnections]);
+        // Add all graphics objects to the map container in correct order
+        this.mapContainer.add([cityAreas, landPoints, mountainPoints, hillPoints, ferryConnections]);
+    }
+
+    private drawStar(graphics: Phaser.GameObjects.Graphics, x: number, y: number, radius: number) {
+        const points = 5;
+        const innerRadius = radius * 0.4;  // Inner radius of the star
+        
+        graphics.beginPath();
+        
+        for (let i = 0; i <= points * 2; i++) {
+            const r = i % 2 === 0 ? radius : innerRadius;
+            const angle = (i * Math.PI) / points;
+            const pointX = x + r * Math.sin(angle);
+            const pointY = y - r * Math.cos(angle);
+            
+            if (i === 0) {
+                graphics.moveTo(pointX, pointY);
+            } else {
+                graphics.lineTo(pointX, pointY);
+            }
+        }
+        
+        graphics.closePath();
+        graphics.fillStyle(0x000000, 1);  // Black fill
+        graphics.fill();
+        graphics.lineStyle(1, 0x000000);
+        graphics.stroke();
     }
 
     private setupUIOverlay() {
