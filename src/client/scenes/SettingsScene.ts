@@ -29,6 +29,15 @@ export class SettingsScene extends Phaser.Scene {
         // Clear existing scene
         this.children.removeAll();
         
+        // Add semi-transparent dark background for better visibility
+        const background = this.add.rectangle(
+            0, 0,
+            this.scale.width,
+            this.scale.height,
+            0x000000,
+            0.5
+        ).setOrigin(0);
+        
         // If we're not editing a player, show the main settings menu
         if (!this.editingPlayer) {
             this.showMainSettings();
@@ -36,10 +45,22 @@ export class SettingsScene extends Phaser.Scene {
     }
 
     private showMainSettings() {
+        // Add white background panel for settings
+        const panelWidth = 600;
+        const panelHeight = Math.max(400, 150 + (this.gameState.players.length * 60) + 200);
+        const panel = this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            panelWidth,
+            panelHeight,
+            0xffffff,
+            1
+        ).setOrigin(0.5);
+
         // Add title
         this.add.text(
             this.scale.width / 2,
-            50,
+            this.scale.height / 2 - (panelHeight / 2) + 50,
             'Game Settings',
             {
                 color: '#000000',
@@ -50,40 +71,41 @@ export class SettingsScene extends Phaser.Scene {
 
         // Add player list with edit/delete buttons
         this.gameState.players.forEach((player, index) => {
-            const y = 150 + (index * 60);
+            const y = this.scale.height / 2 - (panelHeight / 4) + (index * 60);
+            const rowCenter = this.scale.width / 2;
 
             // Player info
             this.add.text(
-                100,
+                rowCenter - 150,
                 y,
                 `${player.name}`,
                 {
                     color: '#000000',
                     fontSize: '18px'
                 }
-            );
+            ).setOrigin(0, 0.5);
 
             // Color indicator
             this.add.rectangle(
-                300,
-                y + 10,
+                rowCenter,
+                y,
                 30,
                 30,
                 parseInt(player.color.replace('#', '0x'))
-            );
+            ).setOrigin(0.5);
 
             // Edit button
             const editButton = this.add.rectangle(
-                400,
-                y + 10,
+                rowCenter + 100,
+                y,
                 80,
                 30,
                 0x0055aa
             ).setInteractive({ useHandCursor: true });
 
             this.add.text(
-                400,
-                y + 10,
+                rowCenter + 100,
+                y,
                 'Edit',
                 {
                     color: '#ffffff',
@@ -96,16 +118,16 @@ export class SettingsScene extends Phaser.Scene {
             // Delete button (only show if more than 2 players)
             if (this.gameState.players.length > 2) {
                 const deleteButton = this.add.rectangle(
-                    500,
-                    y + 10,
+                    rowCenter + 200,
+                    y,
                     80,
                     30,
                     0xaa0000
                 ).setInteractive({ useHandCursor: true });
 
                 this.add.text(
-                    500,
-                    y + 10,
+                    rowCenter + 200,
+                    y,
                     'Delete',
                     {
                         color: '#ffffff',
@@ -117,29 +139,70 @@ export class SettingsScene extends Phaser.Scene {
             }
         });
 
+        // Add setup button (only if less than max players)
+        if (this.gameState.players.length < this.gameState.maxPlayers) {
+            const setupButton = this.add.rectangle(
+                this.scale.width / 2,
+                this.scale.height / 2 + (panelHeight / 2) - 140,
+                200,
+                45,
+                0x00aa00
+            ).setInteractive({ useHandCursor: true });
+
+            this.add.text(
+                this.scale.width / 2,
+                this.scale.height / 2 + (panelHeight / 2) - 140,
+                'Add New Player',
+                {
+                    color: '#ffffff',
+                    fontSize: '20px'
+                }
+            ).setOrigin(0.5);
+
+            setupButton.on('pointerdown', () => this.showAddPlayer());
+        }
+
         // Add back button
         const backButton = this.add.rectangle(
             this.scale.width / 2,
-            this.scale.height - 100,
+            this.scale.height / 2 + (panelHeight / 2) - 60,
             200,
-            40,
+            45,
             0x666666
         ).setInteractive({ useHandCursor: true });
 
         this.add.text(
             this.scale.width / 2,
-            this.scale.height - 100,
+            this.scale.height / 2 + (panelHeight / 2) - 60,
             'Back to Game',
             {
                 color: '#ffffff',
-                fontSize: '18px'
+                fontSize: '20px'
             }
         ).setOrigin(0.5);
 
         backButton.on('pointerdown', () => this.closeSettings());
     }
 
-    private showEditPlayer(player: Player) {
+    private showAddPlayer() {
+        // Create a temporary player object for the add flow
+        const newPlayer: Player = {
+            id: '', // Will be set by the server
+            name: '',
+            color: PlayerColor.YELLOW, // Default color
+            money: 50,
+            trainType: 'Freight'
+        };
+        
+        // Use the existing edit player UI but with different save behavior
+        this.editingPlayer = newPlayer;
+        this.selectedColor = PlayerColor.YELLOW;
+        
+        // Show the edit dialog
+        this.showEditPlayer(newPlayer, true);
+    }
+
+    private showEditPlayer(player: Player, isNewPlayer: boolean = false) {
         this.editingPlayer = player;
         
         // Create semi-transparent dark overlay for the entire screen
@@ -152,8 +215,8 @@ export class SettingsScene extends Phaser.Scene {
         ).setOrigin(0);
 
         // Calculate panel dimensions based on content
-        const panelWidth = 500;  // Increased from 400 to accommodate color buttons
-        const panelHeight = 400;  // Increased from 300 to give more vertical space
+        const panelWidth = 500;
+        const panelHeight = 400;
         
         // Create edit panel with darker background
         const panel = this.add.rectangle(
@@ -168,10 +231,10 @@ export class SettingsScene extends Phaser.Scene {
         const title = this.add.text(
             this.scale.width / 2,
             this.scale.height / 2 - 140,
-            'Edit Player',
+            isNewPlayer ? 'Add New Player' : 'Edit Player',
             {
                 color: '#ffffff',
-                fontSize: '32px',  // Increased font size
+                fontSize: '32px',
                 fontStyle: 'bold'
             }
         ).setOrigin(0.5);
@@ -230,22 +293,28 @@ export class SettingsScene extends Phaser.Scene {
         const saveButton = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height / 2 + 100,
-            160,  // Wider button
-            45,   // Taller button
+            160,
+            45,
             0x00aa00
         ).setInteractive({ useHandCursor: true });
 
         this.add.text(
             this.scale.width / 2,
             this.scale.height / 2 + 100,
-            'Save',
+            isNewPlayer ? 'Add' : 'Save',
             {
                 color: '#ffffff',
-                fontSize: '20px'  // Larger font
+                fontSize: '20px'
             }
         ).setOrigin(0.5);
 
-        saveButton.on('pointerdown', () => this.savePlayerChanges());
+        saveButton.on('pointerdown', () => {
+            if (isNewPlayer) {
+                this.addNewPlayer();
+            } else {
+                this.savePlayerChanges();
+            }
+        });
 
         // Add cancel button - adjusted position
         const cancelButton = this.add.rectangle(
@@ -394,6 +463,86 @@ export class SettingsScene extends Phaser.Scene {
         } catch (error) {
             console.error('Error deleting player:', error);
             this.showErrorMessage(error instanceof Error ? error.message : 'Failed to delete player. Please try again.');
+        }
+    }
+
+    private async addNewPlayer() {
+        if (!this.editingPlayer || !this.nameInput) return;
+
+        const newName = this.nameInput.value.trim();
+        if (!newName) {
+            this.showErrorMessage('Please enter a valid name');
+            return;
+        }
+
+        // Check for duplicate names
+        const isDuplicateName = this.gameState.players.some(
+            player => player.name.toLowerCase() === newName.toLowerCase()
+        );
+
+        if (isDuplicateName) {
+            this.showErrorMessage('A player with this name already exists');
+            return;
+        }
+
+        try {
+            const playerData = {
+                name: newName,
+                color: this.selectedColor || PlayerColor.YELLOW,
+                money: 50,
+                trainType: 'Freight'
+            };
+
+            console.log('Creating new player with data:', playerData);
+
+            // Save to database using the create endpoint
+            const response = await fetch('/api/players/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    player: playerData
+                })
+            });
+
+            const responseText = await response.text();
+            console.log('Server response:', responseText);
+
+            if (!response.ok) {
+                let errorMessage = 'Failed to create player';
+                try {
+                    const errorData = JSON.parse(responseText);
+                    if (errorData.details?.includes('duplicate key')) {
+                        errorMessage = 'A player with this name already exists';
+                    } else {
+                        errorMessage = errorData.error || errorMessage;
+                    }
+                } catch (e) {
+                    // If we can't parse the error, use the raw text
+                    errorMessage = responseText || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
+            let newPlayer;
+            try {
+                newPlayer = JSON.parse(responseText);
+            } catch (e) {
+                console.error('Failed to parse server response:', e);
+                throw new Error('Invalid server response');
+            }
+
+            // Update local state with the server response
+            this.gameState.players.push(newPlayer);
+            console.log('Added new player to game state:', newPlayer);
+
+            // Close the dialog and refresh the display
+            this.closeEditDialog();
+        } catch (error) {
+            console.error('Error creating player:', error);
+            this.showErrorMessage(error instanceof Error ? error.message : 'Failed to create player. Please try again.');
         }
     }
 

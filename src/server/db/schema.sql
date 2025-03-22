@@ -10,34 +10,23 @@ CREATE TABLE IF NOT EXISTS games (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(20) DEFAULT 'setup',
-    max_players INTEGER DEFAULT 6
+    max_players INTEGER DEFAULT 6,
 );
 
 -- Create players table if it doesn't exist
 CREATE TABLE IF NOT EXISTS players (
-    id VARCHAR(36) PRIMARY KEY,
+    id VARCHAR(36),
     game_id VARCHAR(36) REFERENCES games(id) ON DELETE CASCADE,
     name VARCHAR(100) NOT NULL,
     color VARCHAR(7) NOT NULL CHECK (color ~ '^#[0-9A-Fa-f]{6}$'),  -- Hex color code validation
     money INTEGER DEFAULT 50,
     train_type VARCHAR(20) DEFAULT 'Freight',
     turn_order INTEGER,
+    is_winner BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(game_id, name),
     UNIQUE(game_id, color),
-    UNIQUE(game_id, turn_order)
+    UNIQUE(game_id, turn_order),
+    PRIMARY KEY (id, game_id)
 );
-
--- Create game_players table if it doesn't exist
-CREATE TABLE IF NOT EXISTS game_players (
-    id VARCHAR(36) PRIMARY KEY,
-    game_id VARCHAR(36) REFERENCES games(id) ON DELETE CASCADE,
-    player_id VARCHAR(36) REFERENCES players(id) ON DELETE CASCADE,
-    color VARCHAR(7) NOT NULL,  -- Hex color code
-    money INTEGER DEFAULT 50,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(game_id, player_id),
-    UNIQUE(game_id, color)
-); 

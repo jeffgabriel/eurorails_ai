@@ -1,6 +1,7 @@
 import express from 'express';
 import { PlayerService } from '../db/playerService';
 import { Player } from '../../shared/types/GameTypes';
+import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
 
@@ -12,11 +13,91 @@ router.get('/test', (req, res) => {
     res.json({ message: 'Player routes are working' });
 });
 
+// Create player
+router.post('/create', async (req, res) => {
+    console.debug('Received player create request at /api/players/create');
+    console.debug('Request body:', req.body);
+    console.debug('Request headers:', req.headers);
+
+    try {
+        const { gameId = DEFAULT_GAME_ID, player } = req.body;
+
+        // Validate request
+        if (!gameId) {
+            console.error('Invalid request - missing gameId:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Game ID is required'
+            });
+        }
+
+        if (!player) {
+            console.error('Invalid request - missing player:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Player data is required'
+            });
+        }
+
+        if (!player.name) {
+            console.error('Invalid request - missing player.name:', player);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Player name is required'
+            });
+        }
+
+        if (!player.color) {
+            console.error('Invalid request - missing player.color:', player);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Player color is required'
+            });
+        }
+
+        // Generate a new UUID for the player
+        const newPlayer = {
+            ...player,
+            id: uuidv4(),
+            money: player.money || 50,
+            trainType: player.trainType || 'Freight'
+        };
+
+        console.log('Creating new player in database:', { gameId, player: newPlayer });
+        await PlayerService.createPlayer(gameId, newPlayer);
+        console.log('Successfully created player');
+
+        return res.status(200).json(newPlayer);
+    } catch (error: any) {
+        console.error('Error in /create route:', error);
+        
+        // Handle specific error cases
+        if (error.message.includes('Color already taken')) {
+            return res.status(409).json({ 
+                error: 'Color conflict',
+                details: error.message
+            });
+        }
+        if (error.message.includes('Invalid color format')) {
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: error.message
+            });
+        }
+        
+        // Generic error case
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
 // Update player
 router.post('/update', async (req, res) => {
-    console.log('Received player update request at /api/players/update');
-    console.log('Request body:', req.body);
-    console.log('Request headers:', req.headers);
+    console.debug('Received player update request at /api/players/update');
+    console.debug('Request body:', req.body);
+    console.debug('Request headers:', req.headers);
 
     try {
         const { gameId = DEFAULT_GAME_ID, player } = req.body;

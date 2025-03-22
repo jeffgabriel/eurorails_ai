@@ -139,7 +139,7 @@ export class SetupScene extends Phaser.Scene {
         this.updatePlayerList();
     }
 
-    private addPlayer() {
+    private async addPlayer() {
         if (!this.nameInput || !this.selectedColor) {
             this.showError('Please enter a name and select a color');
             return;
@@ -169,23 +169,43 @@ export class SetupScene extends Phaser.Scene {
             return;
         }
 
-        // Add new player with generated ID
-        const newPlayer: Player = {
-            id: IdService.generatePlayerId(),
-            name,
-            color: this.selectedColor,
-            money: INITIAL_PLAYER_MONEY,
-            trainType: 'Freight'  // Default train type
-        };
+        try {
+            // Create new player on the server
+            const response = await fetch('/api/players/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    player: {
+                        name,
+                        color: this.selectedColor,
+                        money: INITIAL_PLAYER_MONEY,
+                        trainType: 'Freight'  // Default train type
+                    }
+                })
+            });
 
-        this.gameState.players.push(newPlayer);
-        this.updatePlayerList();
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.details || errorData.error || 'Failed to create player');
+            }
 
-        // Reset input
-        this.nameInput.value = '';
-        this.selectedColor = undefined;
-        this.colorButtons.forEach(btn => btn.setStrokeStyle());
-        this.showError('');
+            // Get the created player with server-generated ID
+            const newPlayer = await response.json();
+            this.gameState.players.push(newPlayer);
+            this.updatePlayerList();
+
+            // Reset input
+            this.nameInput.value = '';
+            this.selectedColor = undefined;
+            this.colorButtons.forEach(btn => btn.setStrokeStyle());
+            this.showError('');
+        } catch (error) {
+            console.error('Error creating player:', error);
+            this.showError(error instanceof Error ? error.message : 'Failed to create player');
+        }
     }
 
     private updatePlayerList() {
