@@ -1,6 +1,7 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { TerrainType, GridPointConfig, CityType } from '../../shared/types/GridTypes';
+import { GameState } from '../../shared/types/GameTypes';
 
 interface GridPoint {
     x: number;
@@ -23,12 +24,13 @@ export class GameScene extends Phaser.Scene {
     private isDragging: boolean = false;
     private lastDragTime: number = 0;
     private pendingRender: boolean = false;
+    private gameState: GameState;
     
     // Grid configuration
     private readonly GRID_WIDTH = 70;
     private readonly GRID_HEIGHT = 90;
-    private readonly HORIZONTAL_SPACING = 30;
-    private readonly VERTICAL_SPACING = 30;
+    private readonly HORIZONTAL_SPACING = 35;
+    private readonly VERTICAL_SPACING = 35;
     private readonly POINT_RADIUS = 3;
     private readonly GRID_MARGIN = 100;        // Increased margin around the grid
     private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
@@ -53,11 +55,27 @@ export class GameScene extends Phaser.Scene {
     };
 
     constructor() {
-        super({ 
-            key: 'GameScene',
-            active: true,
-            visible: true
-        });
+        super({ key: 'GameScene' });
+        // Initialize with default state
+        this.gameState = {
+            players: [],
+            currentPlayerIndex: 0,
+            gamePhase: 'setup',
+            maxPlayers: 6
+        };
+    }
+
+    init(data: { gameState?: GameState }) {
+        // Update gameState if provided
+        if (data.gameState) {
+            this.gameState = data.gameState;
+        }
+        
+        // If no players, return to setup
+        if (this.gameState.players.length === 0) {
+            this.scene.start('SetupScene');
+            return;
+        }
     }
 
     preload() {
@@ -65,20 +83,27 @@ export class GameScene extends Phaser.Scene {
     }
 
     create() {
-        // Create main containers for different parts of the UI
-        this.createContainers();
+        // Create containers in the right order
+        this.mapContainer = this.add.container(0, 0);
         
-        // Set up the game map area (main play area)
-        this.setupMapArea();
-        
-        // Set up the UI overlay (leaderboard)
-        this.setupUIOverlay();
-        
-        // Set up player's hand area (demand cards, train, money)
-        this.setupPlayerHand();
-
-        // Set up camera controls for the map
+        // Setup scene elements
         this.setupCamera();
+        this.createTriangularGrid();
+
+        // Create UI containers last to ensure they overlay
+        this.uiContainer = this.add.container(0, 0);
+        this.playerHandContainer = this.add.container(0, 0);  // Position will be set in setupPlayerHand
+        
+        // Create a separate camera for UI that won't move
+        const uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
+        uiCamera.setScroll(0, 0);
+        uiCamera.ignore(this.mapContainer);  // UI camera ignores the map
+        
+        // Main camera ignores UI elements
+        this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
+
+        this.setupUIOverlay();
+        this.setupPlayerHand();
 
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
@@ -399,110 +424,157 @@ export class GameScene extends Phaser.Scene {
     }
 
     private setupUIOverlay() {
-        const LEADERBOARD_WIDTH = 200;
+        if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
+            return;
+        }
+
+        const LEADERBOARD_WIDTH = 150;
         const LEADERBOARD_PADDING = 10;
         
         // Create semi-transparent background for leaderboard
         const leaderboardBg = this.add.rectangle(
-            this.cameras.main.width - (LEADERBOARD_WIDTH / 2) - LEADERBOARD_PADDING, 
-            80,  // Moved down to center content better
-            LEADERBOARD_WIDTH, 
-            150, 
-            0x000000, 
-            0.3
-        );
+            this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+            LEADERBOARD_PADDING,  // Position at top
+            LEADERBOARD_WIDTH,
+            40 + (this.gameState.players.length * 20),  // Tighter spacing
+            0x333333,
+            0.9  // More opaque background
+        ).setOrigin(0, 0);  // Align to top-right
         
         // Add leaderboard title
         const leaderboardTitle = this.add.text(
-            this.cameras.main.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING, 
-            20, 
-            'Leaderboard', 
-            { color: '#ffffff', fontSize: '18px', wordWrap: { width: LEADERBOARD_WIDTH - (LEADERBOARD_PADDING * 2) } }
-        );
-        leaderboardTitle.setX(this.cameras.main.width - (LEADERBOARD_WIDTH / 2) - LEADERBOARD_PADDING - (leaderboardTitle.width / 2));
-        
-        // Add example player entry with proper wrapping
-        const player1Text = this.add.text(
-            this.cameras.main.width - LEADERBOARD_WIDTH + LEADERBOARD_PADDING,
-            50,
-            'Player 1: ECU 50M',
+            this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING + (LEADERBOARD_WIDTH / 2),
+            LEADERBOARD_PADDING + 5,
+            'Players',
             { 
-                color: '#ffffff', 
-                fontSize: '14px',
-                wordWrap: { width: LEADERBOARD_WIDTH - (LEADERBOARD_PADDING * 2) }
+                color: '#ffffff',
+                fontSize: '16px',
+                fontStyle: 'bold'
             }
-        );
+        ).setOrigin(0.5, 0);
         
-        this.uiContainer.add([leaderboardBg, leaderboardTitle, player1Text]);
+        // Add all player entries
+        const playerEntries = this.gameState.players.map((player, index) => {
+            const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
+            
+            // Create background highlight for current player
+            let entryBg;
+            if (isCurrentPlayer) {
+                entryBg = this.add.rectangle(
+                    this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+                    LEADERBOARD_PADDING + 30 + (index * 20),
+                    LEADERBOARD_WIDTH,
+                    20,
+                    0x666666,
+                    0.5
+                ).setOrigin(0, 0);
+            }
+            
+            // Create player text
+            const playerText = this.add.text(
+                this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING + 5,
+                LEADERBOARD_PADDING + 30 + (index * 20),
+                `${isCurrentPlayer ? '►' : ' '} ${player.name}`,
+                { 
+                    color: '#ffffff',
+                    fontSize: '14px',
+                    fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+                }
+            ).setOrigin(0, 0);
+
+            // Create money text (right-aligned)
+            const moneyText = this.add.text(
+                this.scale.width - LEADERBOARD_PADDING - 5,
+                LEADERBOARD_PADDING + 30 + (index * 20),
+                `${player.money}M`,
+                { 
+                    color: '#ffffff',
+                    fontSize: '14px',
+                    fontStyle: isCurrentPlayer ? 'bold' : 'normal'
+                }
+            ).setOrigin(1, 0);  // Right-align
+
+            // Return all elements for this player
+            return entryBg ? [entryBg, playerText, moneyText] : [playerText, moneyText];
+        }).flat();  // Flatten the array of arrays
+        
+        this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries]);
     }
 
     private setupPlayerHand() {
-        // Create background for player's hand area first
+        if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
+            return;
+        }
+
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // Create background for player's hand area
         const handBackground = this.add.rectangle(
             0,
-            0,
-            this.cameras.main.width,
+            this.scale.height - 200,  // Position from bottom of screen
+            this.scale.width,
             200,
             0x333333,
             0.8
-        );
-        this.playerHandContainer.add(handBackground);
+        ).setOrigin(0, 0);
         
         // Add sections for demand cards (3 slots)
         for (let i = 0; i < 3; i++) {
-            // Create a container for each card slot to manage layering
-            const cardContainer = this.add.container(30 + i * 180, 50);  // Increased spacing between cards
-            
+            // Create card background
             const cardSlot = this.add.rectangle(
-                0,
-                0,
-                150,
-                180,
+                30 + (i * 180),  // Space cards horizontally
+                this.scale.height - 180,  // Position relative to bottom
+                150,  // Card width
+                160,  // Card height
                 0x666666
-            );
+            ).setOrigin(0, 0);
             
+            // Add card label
             const cardLabel = this.add.text(
-                0,
-                -20,
+                30 + (i * 180) + 75,  // Center text above card
+                this.scale.height - 195,  // Position above card
                 `Demand Card ${i + 1}`,
-                { color: '#ffffff', fontSize: '14px' }
-            );
-            cardLabel.setOrigin(0.5, 0);
+                { 
+                    color: '#ffffff', 
+                    fontSize: '14px' 
+                }
+            ).setOrigin(0.5, 0);
             
-            cardContainer.add([cardSlot, cardLabel]);
-            this.playerHandContainer.add(cardContainer);
+            this.playerHandContainer.add([cardSlot, cardLabel]);
         }
         
-        // Create a container for train section with increased spacing
-        const trainContainer = this.add.container(600, 50);  // Moved further right
-        
+        // Create train card section
         const trainSection = this.add.rectangle(
-            0,
-            0,
-            200,
-            180,
+            600,  // Position after demand cards
+            this.scale.height - 180,  // Align with demand cards
+            180,  // Width
+            160,  // Height
             0x666666
-        );
+        ).setOrigin(0, 0);
         
         const trainLabel = this.add.text(
-            0,
-            -20,
-            'Train Card',
-            { color: '#ffffff', fontSize: '14px' }
-        );
-        trainLabel.setOrigin(0.5, 0);
+            690,  // Center above train card
+            this.scale.height - 195,  // Align with other labels
+            `${currentPlayer.trainType}`,
+            { 
+                color: '#ffffff', 
+                fontSize: '14px' 
+            }
+        ).setOrigin(0.5, 0);
         
-        trainContainer.add([trainSection, trainLabel]);
+        // Add player info
+        const playerInfo = this.add.text(
+            820,  // Position after train card
+            this.scale.height - 180,  // Align with cards
+            `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`,
+            { 
+                color: '#000000',
+                fontSize: '20px',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0, 0);
         
-        // Add money counter with adjusted position
-        const moneyText = this.add.text(
-            850,  // Moved further right
-            40,
-            'Money: ECU 50M',
-            { color: '#ffffff', fontSize: '20px' }
-        );
-        
-        this.playerHandContainer.add([trainContainer, moneyText]);
+        this.playerHandContainer.add([handBackground, trainSection, trainLabel, playerInfo]);
     }
 
     private setupCamera() {
@@ -515,10 +587,10 @@ export class GameScene extends Phaser.Scene {
         // Center the camera on the map
         this.cameras.main.centerOn(width / 2, height / 2);
         
-        // Set initial zoom to fit the board better
+        // Set initial zoom to fit the board better, accounting for the player hand area
         const initialZoom = Math.min(
-            (this.cameras.main.width - 100) / width,  // Added padding for zoom
-            (this.cameras.main.height - 300) / height // Added more space for UI
+            (this.scale.width - 100) / width,
+            (this.scale.height - 300) / height  // Leave space for player hand
         );
         this.cameras.main.setZoom(initialZoom);
         
