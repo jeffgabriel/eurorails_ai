@@ -1,88 +1,103 @@
-import { createServer } from 'http';
-import { Server } from 'socket.io';
-import pg from 'pg';
-import fs from 'fs';
+import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
-const Pool = pg.Pool;
-import dotenv from 'dotenv';
+import cors from 'cors';
+import playerRoutes from './routes/playerRoutes';
+import { checkDatabase } from './db';
+import { PlayerService } from './db/playerService';
 
-// Load environment variables
-dotenv.config();
+const app = express();
+const port = process.env.PORT || 3001;
 
-// ES Module dirname equivalent
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Debug logging middleware - add more detail
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    console.log('Headers:', req.headers);
+    if (req.body && Object.keys(req.body).length > 0) {
+        console.log('Body:', req.body);
+    }
+    next();
+});
 
-// Create HTTP server with request handler
-const httpServer = createServer((req, res) => {
-    if (req.url === '/') {
-        // Serve the index.html file
-        fs.readFile(path.join(__dirname, '../../dist/client/index.html'), (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading index.html');
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end(data);
-        });
-    } else if (req.url === '/bundle.js') {
-        // Serve the webpack bundle
-        fs.readFile(path.join(__dirname, '../../dist/client/bundle.js'), (err, data) => {
-            if (err) {
-                res.writeHead(500);
-                res.end('Error loading bundle.js');
-                return;
-            }
-            res.writeHead(200, { 'Content-Type': 'application/javascript' });
-            res.end(data);
-        });
-    } else {
-        res.writeHead(404);
-        res.end('Not found');
+// Middleware for parsing JSON and serving static files
+app.use(cors({
+    origin: 'http://localhost:3000',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// API Routes - make sure this comes before static file serving
+app.use('/api/players', playerRoutes);
+
+// Log registered routes
+console.log('Registered routes:');
+app._router.stack.forEach((r: any) => {
+    if (r.route && r.route.path) {
+        console.log(`Route: ${Object.keys(r.route.methods)} ${r.route.path}`);
+    } else if (r.name === 'router') {
+        console.log('Router middleware:', r.regexp);
     }
 });
 
-// Create Socket.IO server
-const io = new Server(httpServer, {
-    cors: {
-        origin: '*',
-        methods: ['GET', 'POST']
+// Static file serving
+app.use(express.static(path.join(__dirname, '../../dist/client')));
+
+// SPA fallback - this should come after API routes
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
+});
+
+// Initialize database and start server
+async function startServer() {
+    try {
+        // Check database connection and schema
+        const dbReady = await checkDatabase();
+        if (!dbReady) {
+            console.error('Database initialization failed');
+            process.exit(1);
+        }
+
+        // Initialize default game
+        try {
+            const gameId = await PlayerService.initializeDefaultGame();
+            console.log('Default game initialized with ID:', gameId);
+        } catch (err) {
+            console.error('Failed to initialize default game:', err);
+            // Don't exit - the game might already exist
+        }
+
+        // Start server
+        const server = app.listen(port, () => {
+            console.log('=================================');
+            console.log(`Server running in ${process.env.NODE_ENV} mode`);
+            console.log(`API server listening on port ${port}`);
+            console.log(`API routes available at http://localhost:${port}/api`);
+            console.log('In development mode:');
+            console.log('- Client dev server runs on port 3000');
+            console.log('- API requests are proxied from port 3000 to 3001');
+            console.log('Database connection established');
+            console.log('=================================');
+        });
+
+        // Log when server closes
+        server.on('close', () => {
+            console.log('Server shutting down');
+        });
+
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
     }
-});
+}
 
-// Database connection
-const pool = new Pool({
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    database: process.env.DB_NAME || 'eurorails',
-    password: process.env.DB_PASSWORD || 'postgres',
-    port: parseInt(process.env.DB_PORT || '5432')
-});
-
-// Socket.IO connection handler
-io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
-
-    socket.on('disconnect', () => {
-        console.log('Client disconnected:', socket.id);
+// Add error handling middleware
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('Unhandled error:', err);
+    res.status(err.status || 500).json({
+        message: err.message || 'Internal server error'
     });
 });
 
-// Start the server
-const PORT = parseInt(process.env.PORT || '8080');
-httpServer.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-    
-    // Test database connection
-    pool.connect()
-        .then((client) => {
-            console.log('Successfully connected to PostgreSQL');
-            client.release();
-        })
-        .catch((error: Error) => {
-            console.error('Database connection error:', error);
-            process.exit(1);
-        });
-}); 
+startServer(); 

@@ -1,7 +1,8 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { TerrainType, GridPointConfig, CityType } from '../../shared/types/GridTypes';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, PlayerColor } from '../../shared/types/GameTypes';
+import { IdService } from '../../shared/services/IdService';
 
 interface GridPoint {
     x: number;
@@ -24,7 +25,7 @@ export class GameScene extends Phaser.Scene {
     private isDragging: boolean = false;
     private lastDragTime: number = 0;
     private pendingRender: boolean = false;
-    private gameState: GameState;
+    public gameState: GameState;  // Make gameState public
     
     // Grid configuration
     private readonly GRID_WIDTH = 70;
@@ -56,9 +57,25 @@ export class GameScene extends Phaser.Scene {
 
     constructor() {
         super({ key: 'GameScene' });
-        // Initialize with default state
+        // Initialize with test players for development
         this.gameState = {
-            players: [],
+            id: IdService.generateGameId(),
+            players: [
+                { 
+                    id: IdService.generatePlayerId(),
+                    name: 'Player 1',
+                    color: PlayerColor.RED, 
+                    money: 50,
+                    trainType: 'Freight'
+                },
+                { 
+                    id: IdService.generatePlayerId(),
+                    name: 'Player 2',
+                    color: PlayerColor.BLUE, 
+                    money: 50,
+                    trainType: 'Freight'
+                }
+            ],
             currentPlayerIndex: 0,
             gamePhase: 'setup',
             maxPlayers: 6
@@ -66,16 +83,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
-        // Update gameState if provided
-        if (data.gameState) {
+        // If we get players from setup scene, use those instead of defaults
+        if (data.gameState?.players && data.gameState.players.length > 0) {
             this.gameState = data.gameState;
-        }
-        
-        // If no players, return to setup
-        if (this.gameState.players.length === 0) {
-            this.scene.start('SetupScene');
             return;
         }
+        
+        // Otherwise use our default test players and continue to game
+        if (this.gameState.players.length > 0) {
+            return;
+        }
+
+        // Only go to setup if we somehow have no players at all
+        this.scene.start('SetupScene');
     }
 
     preload() {
@@ -431,15 +451,37 @@ export class GameScene extends Phaser.Scene {
         const LEADERBOARD_WIDTH = 150;
         const LEADERBOARD_PADDING = 10;
         
+        // Add settings button
+        const settingsButton = this.add.rectangle(
+            LEADERBOARD_PADDING,
+            LEADERBOARD_PADDING,
+            40,
+            40,
+            0x444444,
+            0.9
+        ).setOrigin(0, 0);
+
+        const settingsIcon = this.add.text(
+            LEADERBOARD_PADDING + 20,
+            LEADERBOARD_PADDING + 20,
+            '⚙️',
+            { fontSize: '24px' }
+        ).setOrigin(0.5);
+
+        settingsButton.setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => this.openSettings())
+            .on('pointerover', () => settingsButton.setFillStyle(0x555555))
+            .on('pointerout', () => settingsButton.setFillStyle(0x444444));
+
         // Create semi-transparent background for leaderboard
         const leaderboardBg = this.add.rectangle(
             this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
-            LEADERBOARD_PADDING,  // Position at top
+            LEADERBOARD_PADDING,
             LEADERBOARD_WIDTH,
-            40 + (this.gameState.players.length * 20),  // Tighter spacing
+            40 + (this.gameState.players.length * 20),
             0x333333,
-            0.9  // More opaque background
-        ).setOrigin(0, 0);  // Align to top-right
+            0.9
+        ).setOrigin(0, 0);
         
         // Add leaderboard title
         const leaderboardTitle = this.add.text(
@@ -499,6 +541,12 @@ export class GameScene extends Phaser.Scene {
         }).flat();  // Flatten the array of arrays
         
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries]);
+    }
+
+    private openSettings() {
+        // Pause this scene and start settings scene
+        this.scene.pause();
+        this.scene.launch('SettingsScene', { gameState: this.gameState });
     }
 
     private setupPlayerHand() {

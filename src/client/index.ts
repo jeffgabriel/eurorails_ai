@@ -1,6 +1,7 @@
 import 'phaser';
 import { GameScene } from './scenes/GameScene';
 import { SetupScene } from './scenes/SetupScene';
+import { SettingsScene } from './scenes/SettingsScene';
 
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
@@ -11,7 +12,7 @@ const config: Phaser.Types.Core.GameConfig = {
     dom: {
         createContainer: true
     },
-    scene: [SetupScene, GameScene],  // SetupScene will run first
+    scene: [GameScene, SetupScene, SettingsScene],  // GameScene will run first with test players
     physics: {
         default: 'none'
     },
