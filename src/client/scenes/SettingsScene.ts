@@ -1,5 +1,6 @@
 import 'phaser';
 import { GameState, Player, PlayerColor } from '../../shared/types/GameTypes';
+import { GameScene } from './GameScene';
 
 export class SettingsScene extends Phaser.Scene {
     private gameState: GameState;
@@ -181,8 +182,10 @@ export class SettingsScene extends Phaser.Scene {
         inputElement.style.padding = '8px';
         inputElement.style.fontSize = '16px';
         inputElement.style.textAlign = 'center';
+        inputElement.className = 'settings-scene-element';
         
         const inputContainer = document.createElement('div');
+        inputContainer.className = 'settings-scene-element';
         inputContainer.appendChild(inputElement);
 
         const inputDom = this.add.dom(
@@ -406,8 +409,24 @@ export class SettingsScene extends Phaser.Scene {
     }
 
     private closeSettings() {
-        // Resume and return to game scene
-        this.scene.resume('GameScene');
+        // Clean up only settings scene DOM elements
+        const settingsElements = document.querySelectorAll('.settings-scene-element');
+        settingsElements.forEach(element => element.remove());
+
+        // Clean up any remaining input references
+        if (this.nameInput) {
+            this.nameInput = undefined;
+        }
+
+        // Get the game scene and update its state
+        const gameScene = this.scene.get('GameScene') as GameScene;
+        gameScene.gameState = this.gameState;
+
+        // Stop this scene first
         this.scene.stop();
+
+        // Resume and restart game scene to ensure proper initialization
+        this.scene.resume('GameScene');
+        gameScene.scene.restart({ gameState: this.gameState });
     }
 } 

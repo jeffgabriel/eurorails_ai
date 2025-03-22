@@ -83,8 +83,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
-        // If we get players from setup scene, use those instead of defaults
-        if (data.gameState?.players && data.gameState.players.length > 0) {
+        // If we get a gameState, always use it
+        if (data.gameState) {
             this.gameState = data.gameState;
             return;
         }
@@ -103,17 +103,19 @@ export class GameScene extends Phaser.Scene {
     }
 
     create() {
+        console.log('GameScene create method called');
+        // Clear any existing containers
+        this.children.removeAll(true);
+        
         // Create containers in the right order
         this.mapContainer = this.add.container(0, 0);
+        this.uiContainer = this.add.container(0, 0);
+        this.playerHandContainer = this.add.container(0, 0);
         
         // Setup scene elements
         this.setupCamera();
         this.createTriangularGrid();
 
-        // Create UI containers last to ensure they overlay
-        this.uiContainer = this.add.container(0, 0);
-        this.playerHandContainer = this.add.container(0, 0);  // Position will be set in setupPlayerHand
-        
         // Create a separate camera for UI that won't move
         const uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
         uiCamera.setScroll(0, 0);
@@ -122,11 +124,21 @@ export class GameScene extends Phaser.Scene {
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
 
+        // Setup UI elements
         this.setupUIOverlay();
         this.setupPlayerHand();
 
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
+
+        // Add event handler for scene resume
+        this.events.on('resume', () => {
+            // Clear and recreate UI elements
+            this.uiContainer?.removeAll(true);
+            this.playerHandContainer?.removeAll(true);
+            this.setupUIOverlay();
+            this.setupPlayerHand();
+        });
     }
 
     private requestRender() {

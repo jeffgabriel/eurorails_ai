@@ -24,6 +24,11 @@ export class SetupScene extends Phaser.Scene {
         });
     }
 
+    preload() {
+        // Set background color
+        this.cameras.main.setBackgroundColor('#ffffff');
+    }
+
     create() {
         // Check if we already have players from GameScene
         const gameScene = this.scene.get('GameScene') as GameScene;
@@ -33,13 +38,13 @@ export class SetupScene extends Phaser.Scene {
         }
 
         // Add title
-        this.add.text(400, 50, 'Player Setup', {
+        this.add.text(this.scale.width / 2, 50, 'Player Setup', {
             color: '#000000',
             fontSize: '32px'
         }).setOrigin(0.5);
 
         // Add instructions
-        this.add.text(400, 100, 'Enter player name and select color\n(2-6 players required)', {
+        this.add.text(this.scale.width / 2, 100, 'Enter player name and select color\n(2-6 players required)', {
             color: '#000000',
             fontSize: '18px',
             align: 'center'
@@ -58,7 +63,7 @@ export class SetupScene extends Phaser.Scene {
         inputContainer.style.position = 'relative';
         inputContainer.appendChild(inputElement);
 
-        const domElement = this.add.dom(400, 200, inputContainer);
+        const domElement = this.add.dom(this.scale.width / 2, 200, inputContainer);
         domElement.setOrigin(0.5);
         this.nameInput = inputElement;
 
@@ -96,8 +101,8 @@ export class SetupScene extends Phaser.Scene {
         });
 
         // Add player button
-        const addButton = this.add.rectangle(400, 400, 200, 40, 0x00aa00);
-        const addButtonText = this.add.text(400, 400, 'Add Player', {
+        const addButton = this.add.rectangle(this.scale.width / 2, 400, 200, 40, 0x00aa00);
+        const addButtonText = this.add.text(this.scale.width / 2, 400, 'Add Player', {
             color: '#ffffff',
             fontSize: '18px'
         }).setOrigin(0.5);
@@ -108,8 +113,8 @@ export class SetupScene extends Phaser.Scene {
             .on('pointerout', () => addButton.setFillStyle(0x00aa00));
 
         // Start game button
-        const startButton = this.add.rectangle(400, 500, 200, 40, 0x0055aa);
-        const startButtonText = this.add.text(400, 500, 'Start Game', {
+        const startButton = this.add.rectangle(this.scale.width / 2, 500, 200, 40, 0x0055aa);
+        const startButtonText = this.add.text(this.scale.width / 2, 500, 'Start Game', {
             color: '#ffffff',
             fontSize: '18px'
         }).setOrigin(0.5);
@@ -120,13 +125,13 @@ export class SetupScene extends Phaser.Scene {
             .on('pointerout', () => startButton.setFillStyle(0x0055aa));
 
         // Error text
-        this.errorText = this.add.text(400, 450, '', {
+        this.errorText = this.add.text(this.scale.width / 2, 450, '', {
             color: '#ff0000',
             fontSize: '16px'
         }).setOrigin(0.5);
 
         // Player list
-        this.playerList = this.add.text(600, 200, 'Current Players:', {
+        this.playerList = this.add.text(this.scale.width / 2 + 200, 200, 'Current Players:', {
             color: '#000000',
             fontSize: '16px'
         });

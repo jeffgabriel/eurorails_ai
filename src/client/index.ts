@@ -5,22 +5,23 @@ import { SettingsScene } from './scenes/SettingsScene';
 
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
-    width: 1200,
-    height: 800,
-    backgroundColor: '#ffffff',
     parent: 'game',
+    backgroundColor: '#ffffff',
     dom: {
         createContainer: true
     },
-    scene: [GameScene, SetupScene, SettingsScene],  // GameScene will run first with test players
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        parent: 'game',
+        width: '100%',
+        height: '100%',
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+    scene: [SetupScene, GameScene, SettingsScene],
     physics: {
         default: 'none'
     },
-    disableContextMenu: true,
-    scale: {
-        mode: Phaser.Scale.RESIZE,
-        autoCenter: Phaser.Scale.CENTER_BOTH
-    }
+    disableContextMenu: true
 };
 
 // Create game instance
