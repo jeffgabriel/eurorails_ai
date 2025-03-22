@@ -486,11 +486,12 @@ export class GameScene extends Phaser.Scene {
             .on('pointerout', () => settingsButton.setFillStyle(0x444444));
 
         // Create semi-transparent background for leaderboard
+        const leaderboardHeight = 40 + (this.gameState.players.length * 20) + 50; // Added height for next player button
         const leaderboardBg = this.add.rectangle(
             this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
             LEADERBOARD_PADDING,
             LEADERBOARD_WIDTH,
-            40 + (this.gameState.players.length * 20),
+            leaderboardHeight,
             0x333333,
             0.9
         ).setOrigin(0, 0);
@@ -551,8 +552,35 @@ export class GameScene extends Phaser.Scene {
             // Return all elements for this player
             return entryBg ? [entryBg, playerText, moneyText] : [playerText, moneyText];
         }).flat();  // Flatten the array of arrays
+
+        // Add next player button
+        const nextPlayerButton = this.add.rectangle(
+            this.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+            LEADERBOARD_PADDING + 40 + (this.gameState.players.length * 20),
+            LEADERBOARD_WIDTH,
+            40,
+            0x00aa00,
+            0.9
+        ).setOrigin(0, 0);
+
+        const nextPlayerText = this.add.text(
+            this.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
+            LEADERBOARD_PADDING + 60 + (this.gameState.players.length * 20),
+            'Next Player',
+            { 
+                color: '#ffffff',
+                fontSize: '16px',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0.5, 0.5);
+
+        // Make the button interactive
+        nextPlayerButton.setInteractive({ useHandCursor: true })
+            .on('pointerdown', () => this.nextPlayerTurn())
+            .on('pointerover', () => nextPlayerButton.setFillStyle(0x008800))
+            .on('pointerout', () => nextPlayerButton.setFillStyle(0x00aa00));
         
-        this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries]);
+        this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText]);
     }
 
     private openSettings() {
@@ -718,6 +746,17 @@ export class GameScene extends Phaser.Scene {
                 this.requestRender();
             }
         });
+    }
+
+    private nextPlayerTurn() {
+        // Move to the next player
+        this.gameState.currentPlayerIndex = (this.gameState.currentPlayerIndex + 1) % this.gameState.players.length;
+        
+        // Update the UI
+        this.uiContainer.removeAll(true);
+        this.playerHandContainer.removeAll(true);
+        this.setupUIOverlay();
+        this.setupPlayerHand();
     }
 
     update(time: number, delta: number): void {

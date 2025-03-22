@@ -4,24 +4,19 @@ import { GameScene } from './GameScene';
 import { IdService } from '../../shared/services/IdService';
 
 export class SetupScene extends Phaser.Scene {
-    private gameState: GameState = {
-        id: IdService.generateGameId(),
-        players: [],
-        currentPlayerIndex: 0,
-        gamePhase: 'setup',
-        maxPlayers: 6
-    };
+    private gameState: GameState;
     private nameInput?: HTMLInputElement;
     private colorButtons: Phaser.GameObjects.Rectangle[] = [];
     private selectedColor?: PlayerColor;
     private errorText?: Phaser.GameObjects.Text;
     private playerList?: Phaser.GameObjects.Text;
 
-    constructor() {
+    constructor(gameState: GameState) {
         super({ 
             key: 'SetupScene',
             active: true
         });
+        this.gameState = gameState;
     }
 
     preload() {
