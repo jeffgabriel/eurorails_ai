@@ -1,10 +1,10 @@
 export enum PlayerColor {
-    RED = '#ff0000',
-    BLUE = '#0000ff',
-    GREEN = '#00ff00',
-    YELLOW = '#ffff00',
-    PURPLE = '#800080',
-    ORANGE = '#ffa500'
+    YELLOW = '#FFD700',  // Using a golden yellow for better visibility
+    RED = '#FF0000',
+    BLUE = '#0000FF',
+    BLACK = '#000000',
+    GREEN = '#008000',  // Using a darker green for better visibility
+    BROWN = '#8B4513'   // Using saddle brown for better visibility
 }
 
 export interface Player {

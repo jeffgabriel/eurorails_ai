@@ -142,7 +142,7 @@ export class SettingsScene extends Phaser.Scene {
     private showEditPlayer(player: Player) {
         this.editingPlayer = player;
         
-        // Create semi-transparent dark overlay
+        // Create semi-transparent dark overlay for the entire screen
         const overlay = this.add.rectangle(
             0, 0,
             this.scale.width,
@@ -151,9 +151,11 @@ export class SettingsScene extends Phaser.Scene {
             0.7
         ).setOrigin(0);
 
-        // Create edit panel
-        const panelWidth = 400;
-        const panelHeight = 300;
+        // Calculate panel dimensions based on content
+        const panelWidth = 500;  // Increased from 400 to accommodate color buttons
+        const panelHeight = 400;  // Increased from 300 to give more vertical space
+        
+        // Create edit panel with darker background
         const panel = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height / 2,
@@ -162,25 +164,25 @@ export class SettingsScene extends Phaser.Scene {
             0x333333
         ).setOrigin(0.5);
 
-        // Add title
+        // Add title - moved up slightly
         const title = this.add.text(
             this.scale.width / 2,
-            this.scale.height / 2 - 120,
+            this.scale.height / 2 - 140,
             'Edit Player',
             {
                 color: '#ffffff',
-                fontSize: '24px',
+                fontSize: '32px',  // Increased font size
                 fontStyle: 'bold'
             }
         ).setOrigin(0.5);
 
-        // Create name input
+        // Create name input - moved up slightly
         const inputElement = document.createElement('input');
         inputElement.type = 'text';
         inputElement.value = player.name;
-        inputElement.style.width = '200px';
-        inputElement.style.padding = '8px';
-        inputElement.style.fontSize = '16px';
+        inputElement.style.width = '250px';  // Increased width
+        inputElement.style.padding = '10px';  // Increased padding
+        inputElement.style.fontSize = '18px';  // Increased font size
         inputElement.style.textAlign = 'center';
         inputElement.className = 'settings-scene-element';
         
@@ -190,19 +192,20 @@ export class SettingsScene extends Phaser.Scene {
 
         const inputDom = this.add.dom(
             this.scale.width / 2,
-            this.scale.height / 2 - 50,
+            this.scale.height / 2 - 60,  // Moved up to make room for color buttons
             inputContainer
         );
         this.nameInput = inputElement;
 
-        // Create color selection
+        // Create color selection - adjusted spacing
         const colors = Object.entries(PlayerColor);
-        const startX = this.scale.width / 2 - (colors.length * 30);
-        const colorY = this.scale.height / 2 + 20;
+        const colorSpacing = 70;  // Increased spacing between color buttons
+        const startX = this.scale.width / 2 - ((colors.length - 1) * colorSpacing) / 2;
+        const colorY = this.scale.height / 2 + 20;  // Adjusted vertical position
 
         this.colorButtons = colors.map(([name, color], index) => {
-            const x = startX + (index * 60);
-            const colorButton = this.add.rectangle(x, colorY, 40, 40, parseInt(color.replace('#', '0x')));
+            const x = startX + (index * colorSpacing);
+            const colorButton = this.add.rectangle(x, colorY, 50, 50, parseInt(color.replace('#', '0x')));  // Larger color buttons
             
             colorButton.setInteractive({ useHandCursor: true });
             colorButton.setStrokeStyle(color === player.color ? 4 : 0, 0xffffff);
@@ -214,56 +217,74 @@ export class SettingsScene extends Phaser.Scene {
                 });
             });
 
-            // Add color name
-            this.add.text(x, colorY + 30, name, {
+            // Add color name below - adjusted position
+            this.add.text(x, colorY + 40, name, {
                 color: '#ffffff',
-                fontSize: '12px'
+                fontSize: '14px'
             }).setOrigin(0.5);
 
             return colorButton;
         });
 
-        // Add save button
+        // Add save button - adjusted position
         const saveButton = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height / 2 + 100,
-            120,
-            40,
+            160,  // Wider button
+            45,   // Taller button
             0x00aa00
         ).setInteractive({ useHandCursor: true });
 
-        const saveText = this.add.text(
+        this.add.text(
             this.scale.width / 2,
             this.scale.height / 2 + 100,
             'Save',
             {
                 color: '#ffffff',
-                fontSize: '18px'
+                fontSize: '20px'  // Larger font
             }
         ).setOrigin(0.5);
 
         saveButton.on('pointerdown', () => this.savePlayerChanges());
 
-        // Add cancel button
+        // Add cancel button - adjusted position
         const cancelButton = this.add.rectangle(
             this.scale.width / 2,
-            this.scale.height / 2 + 150,
-            120,
-            40,
+            this.scale.height / 2 + 160,  // More space between buttons
+            160,  // Wider button
+            45,   // Taller button
             0xaa0000
         ).setInteractive({ useHandCursor: true });
 
-        const cancelText = this.add.text(
+        this.add.text(
             this.scale.width / 2,
-            this.scale.height / 2 + 150,
+            this.scale.height / 2 + 160,
             'Cancel',
             {
                 color: '#ffffff',
-                fontSize: '18px'
+                fontSize: '20px'  // Larger font
             }
         ).setOrigin(0.5);
 
-        cancelButton.on('pointerdown', () => this.create());
+        cancelButton.on('pointerdown', () => this.closeEditDialog());
+    }
+
+    private closeEditDialog() {
+        // Clean up only settings scene DOM elements
+        const settingsElements = document.querySelectorAll('.settings-scene-element');
+        settingsElements.forEach(element => element.remove());
+
+        // Clean up any remaining input references
+        if (this.nameInput) {
+            this.nameInput = undefined;
+        }
+
+        // Reset editing state
+        this.editingPlayer = undefined;
+        this.selectedColor = undefined;
+
+        // Refresh the main settings display
+        this.create();
     }
 
     private async savePlayerChanges() {
@@ -333,10 +354,8 @@ export class SettingsScene extends Phaser.Scene {
                 console.log('Successfully updated player in local state:', updatedPlayer);
             }
 
-            // Reset editing state and refresh display
-            this.editingPlayer = undefined;
-            this.selectedColor = undefined;
-            this.create();
+            // Close just the edit dialog and return to main settings
+            this.closeEditDialog();
         } catch (error) {
             console.error('Error saving player changes:', error);
             this.showErrorMessage(error instanceof Error ? error.message : 'Failed to save changes. Please try again.');
