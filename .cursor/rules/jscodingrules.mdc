@@ -1,0 +1,159 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Here are our unified coding principles for the JavaScript/TypeScript codebase:
+
+1. **Module System**
+- Use ES Modules (`import`/`export`) consistently across all code
+- Never mix with CommonJS (`require`/`module.exports`)
+```typescript
+// ✅ Do:
+import { Something } from './something';
+export class MyClass {}
+
+// ❌ Don't:
+const something = require('./something');
+module.exports = MyClass;
+```
+
+2. **TypeScript Configuration**
+- Keep `strict: true` in tsconfig.json
+- Use explicit type annotations for function parameters and returns
+- Allow implicit types for variables when type can be inferred
+```typescript
+// ✅ Do:
+function add(a: number, b: number): number {
+  const result = a + b; // type inferred
+  return result;
+}
+
+// ❌ Don't:
+function add(a, b) {
+  return a + b;
+}
+```
+
+3. **Testing Setup**
+- Use Jest with TypeScript via `ts-jest`
+- Keep test files in `__tests__` directories
+- Use `.test.ts` extension for test files
+- Mock external dependencies explicitly
+```typescript
+// ✅ Do:
+import { MyService } from '../services';
+jest.mock('../services');
+
+// ❌ Don't:
+const MyService = jest.requireActual('../services');
+```
+
+4. **File Organization**
+```
+src/
+  client/
+    __tests__/        # Client-side tests
+    components/
+    scenes/
+  server/
+    __tests__/        # Server-side tests
+    routes/
+    services/
+```
+
+5. **Jest Configuration**
+```typescript
+{
+  preset: 'ts-jest',
+  testEnvironment: 'node',
+  projects: [
+    {
+      displayName: 'server',
+      testMatch: ['<rootDir>/src/server/__tests__/**/*.test.ts'],
+      moduleFileExtensions: ['ts', 'js'],
+      transform: {
+        '^.+\\.ts$': 'ts-jest'
+      }
+    },
+    {
+      displayName: 'client',
+      testMatch: ['<rootDir>/src/client/__tests__/**/*.test.ts'],
+      testEnvironment: 'jsdom',
+      setupFilesAfterEnv: ['<rootDir>/src/client/__tests__/setupTests.ts']
+    }
+  ]
+}
+```
+
+6. **Test File Structure**
+```typescript
+import { Something } from '../path';
+
+// Mock setup at top of file
+jest.mock('../path/to/dependency');
+
+describe('Component/Feature name', () => {
+  let instance: Something;
+  
+  beforeEach(() => {
+    instance = new Something();
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('should do something', () => {
+    // Arrange
+    const input = 'test';
+    
+    // Act
+    const result = instance.doSomething(input);
+    
+    // Assert
+    expect(result).toBe('expected');
+  });
+});
+```
+
+7. **Error Handling**
+- Use typed errors
+- Always catch and handle errors appropriately
+- Provide meaningful error messages
+```typescript
+// ✅ Do:
+try {
+  await service.doSomething();
+} catch (error) {
+  if (error instanceof ServiceError) {
+    // Handle specific error
+  }
+  throw error;
+}
+
+// ❌ Don't:
+try {
+  await service.doSomething();
+} catch (e) {
+  console.log(e);
+}
+```
+
+8. **Async Code**
+- Use async/await over raw promises
+- Handle promise rejections
+- Maintain proper error propagation
+```typescript
+// ✅ Do:
+async function getData(): Promise<Data> {
+  const result = await fetch('/api/data');
+  return result.json();
+}
+
+// ❌ Don't:
+function getData() {
+  return fetch('/api/data')
+    .then(res => res.json());
+}
+```
