@@ -57,25 +57,10 @@ export class GameScene extends Phaser.Scene {
 
     constructor() {
         super({ key: 'GameScene' });
-        // Initialize with test players for development
+        // Initialize with empty game state
         this.gameState = {
-            id: IdService.generateGameId(),
-            players: [
-                { 
-                    id: IdService.generatePlayerId(),
-                    name: 'Player 1',
-                    color: PlayerColor.RED, 
-                    money: 50,
-                    trainType: 'Freight'
-                },
-                { 
-                    id: IdService.generatePlayerId(),
-                    name: 'Player 2',
-                    color: PlayerColor.BLUE, 
-                    money: 50,
-                    trainType: 'Freight'
-                }
-            ],
+            id: '',  // Will be set by SetupScene
+            players: [],
             currentPlayerIndex: 0,
             gamePhase: 'setup',
             maxPlayers: 6
@@ -89,13 +74,11 @@ export class GameScene extends Phaser.Scene {
             return;
         }
         
-        // Otherwise use our default test players and continue to game
-        if (this.gameState.players.length > 0) {
+        // If we don't have a game state or players, go to setup
+        if (!this.gameState.id || this.gameState.players.length === 0) {
+            this.scene.start('SetupScene');
             return;
         }
-
-        // Only go to setup if we somehow have no players at all
-        this.scene.start('SetupScene');
     }
 
     preload() {
@@ -748,9 +731,32 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
-    private nextPlayerTurn() {
+    private async nextPlayerTurn() {
         // Move to the next player
         this.gameState.currentPlayerIndex = (this.gameState.currentPlayerIndex + 1) % this.gameState.players.length;
+        
+        try {
+            // Update the current player in the database
+            const response = await fetch('/api/players/updateCurrentPlayer', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    currentPlayerIndex: this.gameState.currentPlayerIndex
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to update current player:', errorData);
+                // Continue with UI update even if save fails
+            }
+        } catch (error) {
+            console.error('Error updating current player:', error);
+            // Continue with UI update even if save fails
+        }
         
         // Update the UI
         this.uiContainer.removeAll(true);

@@ -5,12 +5,40 @@ import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
 
-// Default game ID for development
-const DEFAULT_GAME_ID = 'default-game';
-
 // Debug endpoint to verify route registration
 router.get('/test', (req, res) => {
     res.json({ message: 'Player routes are working' });
+});
+
+// Create game
+router.post('/game/create', async (req, res) => {
+    console.debug('Received game create request at /api/players/game/create');
+    console.debug('Request body:', req.body);
+    console.debug('Request headers:', req.headers);
+
+    try {
+        const { gameId } = req.body;
+
+        // Validate request
+        if (!gameId) {
+            console.error('Invalid request - missing gameId:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Game ID is required'
+            });
+        }
+
+        await PlayerService.createGame(gameId);
+        console.log('Successfully created game:', gameId);
+
+        return res.status(200).json({ message: 'Game created successfully', gameId });
+    } catch (error: any) {
+        console.error('Error in /game/create route:', error);
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
 });
 
 // Create player
@@ -20,7 +48,7 @@ router.post('/create', async (req, res) => {
     console.debug('Request headers:', req.headers);
 
     try {
-        const { gameId = DEFAULT_GAME_ID, player } = req.body;
+        const { gameId, player } = req.body;
 
         // Validate request
         if (!gameId) {
@@ -100,7 +128,7 @@ router.post('/update', async (req, res) => {
     console.debug('Request headers:', req.headers);
 
     try {
-        const { gameId = DEFAULT_GAME_ID, player } = req.body;
+        const { gameId, player } = req.body;
 
         // Validate request
         if (!gameId) {
@@ -212,7 +240,7 @@ router.get('/:gameId', async (req, res) => {
     console.log('Request headers:', req.headers);
 
     try {
-        const gameId = req.params.gameId || DEFAULT_GAME_ID;
+        const gameId = req.params.gameId;
 
         // Validate request
         if (!gameId) {
@@ -228,6 +256,48 @@ router.get('/:gameId', async (req, res) => {
     } catch (error) {
         console.error('Error in GET /:gameId route:', error);
         return res.status(500).json({ error: 'Failed to get players' });
+    }
+});
+
+// Update current player
+router.post('/updateCurrentPlayer', async (req, res) => {
+    console.debug('Received current player update request at /api/players/updateCurrentPlayer');
+    console.debug('Request body:', req.body);
+    console.debug('Request headers:', req.headers);
+
+    try {
+        const { gameId, currentPlayerIndex } = req.body;
+
+        // Validate request
+        if (!gameId) {
+            console.error('Invalid request - missing gameId:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Game ID is required'
+            });
+        }
+
+        if (typeof currentPlayerIndex !== 'number') {
+            console.error('Invalid request - missing or invalid currentPlayerIndex:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Current player index must be a number'
+            });
+        }
+
+        // Update the current player index
+        await PlayerService.updateCurrentPlayerIndex(gameId, currentPlayerIndex);
+
+        // Get the updated game state
+        const gameState = await PlayerService.getGameState(gameId);
+        
+        return res.status(200).json(gameState);
+    } catch (error: any) {
+        console.error('Error in /updateCurrentPlayer route:', error);
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
     }
 });
 

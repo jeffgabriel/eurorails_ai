@@ -240,4 +240,28 @@ export class PlayerService {
             client.release();
         }
     }
+
+    static async updateCurrentPlayerIndex(gameId: string, currentPlayerIndex: number): Promise<void> {
+        const query = `
+            UPDATE games 
+            SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+        `;
+        await db.query(query, [currentPlayerIndex, gameId]);
+    }
+
+    static async getGameState(gameId: string): Promise<{ currentPlayerIndex: number }> {
+        const query = `
+            SELECT current_player_index
+            FROM games
+            WHERE id = $1
+        `;
+        const result = await db.query(query, [gameId]);
+        if (result.rows.length === 0) {
+            throw new Error('Game not found');
+        }
+        return {
+            currentPlayerIndex: result.rows[0].current_player_index
+        };
+    }
 } 

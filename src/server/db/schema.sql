@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS games (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(20) DEFAULT 'setup',
     max_players INTEGER DEFAULT 6,
+    current_player_index INTEGER DEFAULT 0
 );
 
 -- Create players table if it doesn't exist

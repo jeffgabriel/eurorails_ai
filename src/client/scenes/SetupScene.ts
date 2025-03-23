@@ -11,12 +11,18 @@ export class SetupScene extends Phaser.Scene {
     private errorText?: Phaser.GameObjects.Text;
     private playerList?: Phaser.GameObjects.Text;
 
-    constructor(gameState: GameState) {
+    constructor() {
         super({ 
             key: 'SetupScene',
             active: true
         });
-        this.gameState = gameState;
+        this.gameState = {
+            id: IdService.generateGameId(),
+            players: [],
+            currentPlayerIndex: 0,
+            gamePhase: 'setup',
+            maxPlayers: 6
+        };
     }
 
     preload() {
@@ -24,7 +30,28 @@ export class SetupScene extends Phaser.Scene {
         this.cameras.main.setBackgroundColor('#ffffff');
     }
 
-    create() {
+    async create() {
+        // Create the game in the database first
+        try {
+            const response = await fetch('/api/players/game/create', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id
+                })
+            });
+
+            if (!response.ok) {
+                console.error('Failed to create game:', await response.json());
+                return;
+            }
+        } catch (error) {
+            console.error('Error creating game:', error);
+            return;
+        }
+
         // Check if we already have players from GameScene
         const gameScene = this.scene.get('GameScene') as GameScene;
         if (gameScene.gameState?.players?.length > 0) {
