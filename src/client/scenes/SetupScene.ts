@@ -16,13 +16,30 @@ export class SetupScene extends Phaser.Scene {
             key: 'SetupScene',
             active: true
         });
+        // Initialize with default state
         this.gameState = {
             id: IdService.generateGameId(),
             players: [],
             currentPlayerIndex: 0,
-            gamePhase: 'setup',
+            status: 'setup',
             maxPlayers: 6
         };
+    }
+
+    init(data: { gameState?: GameState }) {
+        // If we receive a game state, use it to override our default state
+        if (data?.gameState) {
+            this.gameState = data.gameState;
+        } else {
+            // Reset to default state if no game state provided
+            this.gameState = {
+                id: IdService.generateGameId(),
+                players: [],
+                currentPlayerIndex: 0,
+                status: 'setup',
+                maxPlayers: 6
+            };
+        }
     }
 
     preload() {
@@ -31,7 +48,32 @@ export class SetupScene extends Phaser.Scene {
     }
 
     async create() {
-        // Create the game in the database first
+        // Add a full-screen white background rectangle to ensure complete coverage
+        this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            this.scale.width,
+            this.scale.height,
+            0xffffff
+        ).setOrigin(0.5);
+
+        // Check for active game first
+        try {
+            const response = await fetch('/api/players/game/active');
+            if (response.ok) {
+                const activeGame = await response.json();
+                // Start game scene with active game
+                this.scene.start('GameScene', { gameState: activeGame });
+                return;
+            }
+        } catch (error) {
+            console.error('Error checking for active game:', error);
+        }
+
+        // No active game found, create a new one
+        const gameId = IdService.generateGameId();
+        this.gameState.id = gameId;
+        
         try {
             const response = await fetch('/api/players/game/create', {
                 method: 'POST',
@@ -39,7 +81,7 @@ export class SetupScene extends Phaser.Scene {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    gameId: this.gameState.id
+                    gameId: gameId
                 })
             });
 
@@ -52,13 +94,7 @@ export class SetupScene extends Phaser.Scene {
             return;
         }
 
-        // Check if we already have players from GameScene
-        const gameScene = this.scene.get('GameScene') as GameScene;
-        if (gameScene.gameState?.players?.length > 0) {
-            this.scene.start('GameScene', { gameState: gameScene.gameState });
-            return;
-        }
-
+        // Continue with scene setup
         // Add title
         this.add.text(this.scale.width / 2, 50, 'Player Setup', {
             color: '#000000',
@@ -247,13 +283,36 @@ export class SetupScene extends Phaser.Scene {
         }
     }
 
-    private startGame() {
+    private async startGame() {
         if (this.gameState.players.length < 2) {
             this.showError('At least 2 players are required to start');
             return;
         }
 
-        // Store game state and switch to game scene
-        this.scene.start('GameScene', { gameState: this.gameState });
+        try {
+            // Update game status to active
+            const response = await fetch(`/api/players/game/${this.gameState.id}/status`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    status: 'active'
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to start game');
+            }
+
+            // Update local game state
+            this.gameState.status = 'active';
+
+            // Switch to game scene
+            this.scene.start('GameScene', { gameState: this.gameState });
+        } catch (error) {
+            console.error('Error starting game:', error);
+            this.showError('Failed to start game. Please try again.');
+        }
     }
 } 

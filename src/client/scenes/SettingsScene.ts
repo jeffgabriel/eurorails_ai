@@ -16,7 +16,7 @@ export class SettingsScene extends Phaser.Scene {
             id: '',  // Empty string as placeholder, will be set in init()
             players: [],
             currentPlayerIndex: 0,
-            gamePhase: 'setup',
+            status: 'setup',
             maxPlayers: 6
         };
     }
@@ -143,7 +143,7 @@ export class SettingsScene extends Phaser.Scene {
         if (this.gameState.players.length < this.gameState.maxPlayers) {
             const setupButton = this.add.rectangle(
                 this.scale.width / 2,
-                this.scale.height / 2 + (panelHeight / 2) - 140,
+                this.scale.height / 2 + (panelHeight / 2) - 180,  // Move up
                 200,
                 45,
                 0x00aa00
@@ -151,7 +151,7 @@ export class SettingsScene extends Phaser.Scene {
 
             this.add.text(
                 this.scale.width / 2,
-                this.scale.height / 2 + (panelHeight / 2) - 140,
+                this.scale.height / 2 + (panelHeight / 2) - 180,  // Move up
                 'Add New Player',
                 {
                     color: '#ffffff',
@@ -161,6 +161,27 @@ export class SettingsScene extends Phaser.Scene {
 
             setupButton.on('pointerdown', () => this.showAddPlayer());
         }
+
+        // Add end game button before the back button
+        const endGameButton = this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2 + (panelHeight / 2) - 120,
+            200,
+            45,
+            0xff0000
+        ).setInteractive({ useHandCursor: true });
+
+        this.add.text(
+            this.scale.width / 2,
+            this.scale.height / 2 + (panelHeight / 2) - 120,
+            'End Game',
+            {
+                color: '#ffffff',
+                fontSize: '20px'
+            }
+        ).setOrigin(0.5);
+
+        endGameButton.on('pointerdown', () => this.endGame());
 
         // Add back button
         const backButton = this.add.rectangle(
@@ -596,5 +617,35 @@ export class SettingsScene extends Phaser.Scene {
         // Resume and restart game scene to ensure proper initialization
         this.scene.resume('GameScene');
         gameScene.scene.restart({ gameState: this.gameState });
+    }
+
+    private async endGame() {
+        try {
+            const response = await fetch(`/api/players/game/${this.gameState.id}/end`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to end game');
+            }
+
+            // Stop all current scenes
+            this.scene.stop('GameScene');
+            this.scene.stop('SettingsScene');
+
+            // Start fresh with SetupScene and pass empty game state to force new game creation
+            this.scene.start('SetupScene', { 
+                gameState: {
+                    id: '',
+                    players: [],
+                    currentPlayerIndex: 0,
+                    status: 'setup',
+                    maxPlayers: 6
+                }
+            });
+        } catch (error) {
+            console.error('Error ending game:', error);
+            this.showErrorMessage('Failed to end game');
+        }
     }
 } 

@@ -2,6 +2,7 @@ import express from 'express';
 import { PlayerService } from '../db/playerService';
 import { Player } from '../../shared/types/GameTypes';
 import { v4 as uuidv4 } from 'uuid';
+import { GameStatus } from '../types';
 
 const router = express.Router();
 
@@ -294,6 +295,72 @@ router.post('/updateCurrentPlayer', async (req, res) => {
         return res.status(200).json(gameState);
     } catch (error: any) {
         console.error('Error in /updateCurrentPlayer route:', error);
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Get active game
+router.get('/game/active', async (req, res) => {
+    try {
+        const activeGame = await PlayerService.getActiveGame();
+        if (!activeGame) {
+            return res.status(404).json({ 
+                error: 'Not found',
+                details: 'No active game found'
+            });
+        }
+
+        // Get all players for this game
+        const players = await PlayerService.getPlayers(activeGame.id);
+        
+        return res.status(200).json({
+            ...activeGame,
+            players
+        });
+    } catch (error: any) {
+        console.error('Error in /game/active route:', error);
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// End game
+router.post('/game/:gameId/end', async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        await PlayerService.updateGameStatus(gameId, 'completed');
+        return res.status(200).json({ message: 'Game ended successfully' });
+    } catch (error: any) {
+        console.error('Error ending game:', error);
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Update game status
+router.post('/game/:gameId/status', async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const { status } = req.body;
+
+        if (!status || !['setup', 'active', 'completed'].includes(status)) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Invalid game status'
+            });
+        }
+
+        await PlayerService.updateGameStatus(gameId, status as GameStatus);
+        return res.status(200).json({ message: 'Game status updated successfully' });
+    } catch (error: any) {
+        console.error('Error updating game status:', error);
         return res.status(500).json({ 
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'

@@ -11,10 +11,10 @@ const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'true';
 
 // Create a connection pool
 const pool = new Pool({
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    database: process.env.DB_NAME || 'eurorails',
-    password: String(process.env.DB_PASSWORD || ''),  // Ensure password is a string
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_NAME,
+    password: process.env.DB_PASSWORD,
     port: parseInt(process.env.DB_PORT || '5432'),
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
     max: parseInt(process.env.DB_MAX_CONNECTIONS || '10'),
@@ -22,31 +22,18 @@ const pool = new Pool({
 });
 
 // Clean all game data
-export async function cleanDatabase(): Promise<void> {
+export async function cleanDatabase() {
     if (!DEV_MODE && !TEST_MODE) {
         console.warn('Cleanup attempted in production mode. Skipping.');
         return;
     }
-
-    const client = await pool.connect();
-    try {
-        await client.query('BEGIN');
-        // Delete in correct order to respect foreign keys
-        await client.query('DELETE FROM players');
-        await client.query('DELETE FROM games');
-        await client.query('COMMIT');
-        console.log('Database cleaned for', TEST_MODE ? 'testing' : 'development');
-    } catch (err) {
-        await client.query('ROLLBACK');
-        console.error('Error cleaning database:', err);
-        throw err;
-    } finally {
-        client.release();
-    }
+    console.log('Database cleaned for testing');
+    await pool.query('DELETE FROM players');
+    await pool.query('DELETE FROM games');
 }
 
 // Check database connection and schema version
-export async function checkDatabase(): Promise<boolean> {
+export async function checkDatabase() {
     try {
         const client = await pool.connect();
         
@@ -85,5 +72,4 @@ export async function checkDatabase(): Promise<boolean> {
     }
 }
 
-// Export pool for use in other modules
 export const db = pool; 

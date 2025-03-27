@@ -1,4 +1,4 @@
-export enum PlayerColor {
+enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
     BLUE = '#0000FF',
@@ -7,7 +7,7 @@ export enum PlayerColor {
     BROWN = '#8B4513'   // Using saddle brown for better visibility
 }
 
-export interface Player {
+interface Player {
     id: string;  // Add unique identifier for database
     name: string;
     color: string;  // Hex color code
@@ -15,24 +15,33 @@ export interface Player {
     trainType: string;  // We'll expand this later with proper train types
 }
 
-export type GameStatus = 'setup' | 'initialBuild' | 'playing' | 'completed';
+type GameStatus = 'setup' | 'active' | 'completed';
 
-export interface Game {
+interface Game {
     id: string;
     status: GameStatus;
     maxPlayers: number;
     currentPlayerIndex: number;
     winnerId?: string;
+    createdAt: Date;
+    updatedAt: Date;
 }
 
-export type GamePhase = 'setup' | 'play' | 'end';
-
-export interface GameState {
+interface GameState {
     id: string;  // Add unique identifier for the game
     players: Player[];
     currentPlayerIndex: number;
-    gamePhase: GamePhase;
+    status: GameStatus;
     maxPlayers: number;
 }
 
-export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money 
+const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
+
+export {
+    PlayerColor,
+    Player,
+    GameStatus,
+    Game,
+    GameState,
+    INITIAL_PLAYER_MONEY
+}; 

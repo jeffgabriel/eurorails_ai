@@ -2,7 +2,6 @@ import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { TerrainType, GridPointConfig, CityType } from '../../shared/types/GridTypes';
 import { GameState, PlayerColor } from '../../shared/types/GameTypes';
-import { IdService } from '../../shared/services/IdService';
 
 interface GridPoint {
     x: number;
@@ -62,7 +61,7 @@ export class GameScene extends Phaser.Scene {
             id: '',  // Will be set by SetupScene
             players: [],
             currentPlayerIndex: 0,
-            gamePhase: 'setup',
+            status: 'setup',
             maxPlayers: 6
         };
     }

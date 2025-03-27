@@ -1,5 +1,5 @@
 import { db } from './index';
-import { Player } from '../../shared/types/GameTypes';
+import { Player, Game, GameStatus } from '../../shared/types/GameTypes';
 import { QueryResult } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -263,5 +263,47 @@ export class PlayerService {
         return {
             currentPlayerIndex: result.rows[0].current_player_index
         };
+    }
+
+    static async getActiveGame(): Promise<Game | null> {
+        const query = `
+            SELECT id, status, current_player_index as "currentPlayerIndex", 
+                   created_at as "createdAt", updated_at as "updatedAt"
+            FROM games 
+            WHERE status = 'active'
+            ORDER BY created_at DESC 
+            LIMIT 1
+        `;
+        const result = await db.query(query);
+        return result.rows[0] || null;
+    }
+
+    static async updateGameStatus(gameId: string, status: GameStatus): Promise<void> {
+        // If setting a game to active, complete any other active games first
+        if (status === 'active') {
+            await this.endAllActiveGames();
+        }
+
+        const query = `
+            UPDATE games 
+            SET status = $1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+        `;
+        await db.query(query, [status, gameId]);
+    }
+
+    static async endAllActiveGames(): Promise<void> {
+        const query = `
+            UPDATE games 
+            SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+            WHERE status = 'active'
+        `;
+        await db.query(query);
+    }
+
+    static async getGameStatus(gameId: string): Promise<GameStatus> {
+        const query = 'SELECT status FROM games WHERE id = $1';
+        const result = await db.query(query, [gameId]);
+        return result.rows[0]?.status || 'completed';
     }
 } 
