@@ -1,8 +1,8 @@
-import { Milepost, TerrainType } from '../types/GameTypes';
+import { Milepost } from '../types/GameTypes';
 import { TrackNetwork } from '../types/PlayerTypes';
 
 export interface SerializedNetwork {
-    nodes: string[];
+    nodes: string[];  // We still serialize using IDs for storage
     edges: [string, string][];
 }
 
@@ -12,8 +12,8 @@ export class TrackNetworkService {
      */
     createEmptyNetwork(): TrackNetwork {
         return {
-            nodes: new Set<string>(),
-            edges: new Map<string, Set<string>>()
+            nodes: new Set<Milepost>(),
+            edges: new Map<Milepost, Set<Milepost>>()
         };
     }
 
@@ -21,7 +21,7 @@ export class TrackNetworkService {
      * Adds a track segment to the network
      * Returns a new network with the added segment
      */
-    addTrackSegment(network: TrackNetwork, from: string, to: string): TrackNetwork {
+    addTrackSegment(network: TrackNetwork, from: Milepost, to: Milepost): TrackNetwork {
         // Create new network objects to maintain immutability
         const newNodes = new Set(network.nodes);
         const newEdges = new Map(network.edges);
@@ -32,10 +32,10 @@ export class TrackNetworkService {
 
         // Add edges (undirected graph, so add both directions)
         if (!newEdges.has(from)) {
-            newEdges.set(from, new Set<string>());
+            newEdges.set(from, new Set<Milepost>());
         }
         if (!newEdges.has(to)) {
-            newEdges.set(to, new Set<string>());
+            newEdges.set(to, new Set<Milepost>());
         }
         newEdges.get(from)!.add(to);
         newEdges.get(to)!.add(from);
@@ -50,13 +50,13 @@ export class TrackNetworkService {
      * Checks if two points in the network are connected
      * Uses breadth-first search
      */
-    isConnected(network: TrackNetwork, from: string, to: string): boolean {
+    isConnected(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
         if (!network.nodes.has(from) || !network.nodes.has(to)) {
             return false;
         }
 
-        const visited = new Set<string>();
-        const queue: string[] = [from];
+        const visited = new Set<Milepost>();
+        const queue: Milepost[] = [from];
         visited.add(from);
 
         while (queue.length > 0) {
@@ -65,7 +65,7 @@ export class TrackNetworkService {
                 return true;
             }
 
-            const neighbors = network.edges.get(current) || new Set<string>();
+            const neighbors = network.edges.get(current) || new Set<Milepost>();
             for (const neighbor of neighbors) {
                 if (!visited.has(neighbor)) {
                     visited.add(neighbor);
@@ -79,18 +79,18 @@ export class TrackNetworkService {
 
     /**
      * Finds a path between two points in the network
-     * Returns array of milepost IDs or null if no path exists
+     * Returns array of mileposts or null if no path exists
      * Uses A* search algorithm for optimal path finding
      */
-    findPath(network: TrackNetwork, from: string, to: string, mileposts: Map<string, Milepost>): string[] | null {
+    findPath(network: TrackNetwork, from: Milepost, to: Milepost): Milepost[] | null {
         if (!network.nodes.has(from) || !network.nodes.has(to)) {
             return null;
         }
 
         // Priority queue for A* search
-        const frontier: Array<[string, number]> = [[from, 0]];
-        const cameFrom = new Map<string, string>();
-        const costSoFar = new Map<string, number>();
+        const frontier: Array<[Milepost, number]> = [[from, 0]];
+        const cameFrom = new Map<Milepost, Milepost>();
+        const costSoFar = new Map<Milepost, number>();
         costSoFar.set(from, 0);
 
         while (frontier.length > 0) {
@@ -99,7 +99,7 @@ export class TrackNetworkService {
 
             if (current === to) {
                 // Reconstruct path
-                const path: string[] = [current];
+                const path: Milepost[] = [current];
                 let step = current;
                 while (cameFrom.has(step)) {
                     step = cameFrom.get(step)!;
@@ -108,19 +108,13 @@ export class TrackNetworkService {
                 return path;
             }
 
-            const neighbors = network.edges.get(current) || new Set<string>();
+            const neighbors = network.edges.get(current) || new Set<Milepost>();
             for (const next of neighbors) {
-                const newCost = costSoFar.get(current)! + this.estimateDistance(
-                    mileposts.get(current)!,
-                    mileposts.get(next)!
-                );
+                const newCost = costSoFar.get(current)! + this.estimateDistance(current, next);
 
                 if (!costSoFar.has(next) || newCost < costSoFar.get(next)!) {
                     costSoFar.set(next, newCost);
-                    const priority = newCost + this.estimateDistance(
-                        mileposts.get(next)!,
-                        mileposts.get(to)!
-                    );
+                    const priority = newCost + this.estimateDistance(next, to);
                     frontier.push([next, priority]);
                     cameFrom.set(next, current);
                 }
@@ -134,10 +128,10 @@ export class TrackNetworkService {
      * Checks if a new segment can be added to the network
      * Segment must connect to existing network unless it's a major city start
      */
-    canAddSegment(network: TrackNetwork, from: string, to: string, mileposts: Map<string, Milepost>): boolean {
+    canAddSegment(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
         // If network is empty, must start from a major city
         if (network.nodes.size === 0) {
-            return mileposts.get(from)?.type === 5 || mileposts.get(to)?.type === 5;  // 5 = TerrainType.MajorCity
+            return from.type === 5 || to.type === 5;  // 5 = TerrainType.MajorCity
         }
 
         // Check if either point connects to existing network
@@ -147,7 +141,7 @@ export class TrackNetworkService {
     /**
      * Checks if a milepost is adjacent to the existing network
      */
-    isAdjacentToNetwork(network: TrackNetwork, milepost: string): boolean {
+    isAdjacentToNetwork(network: TrackNetwork, milepost: Milepost): boolean {
         return network.nodes.has(milepost) || 
                Array.from(network.nodes).some(node => 
                    network.edges.get(node)?.has(milepost)
@@ -157,13 +151,13 @@ export class TrackNetworkService {
     /**
      * Gets all mileposts that can be reached from the current network
      */
-    getReachableMileposts(network: TrackNetwork): Set<string> {
-        const reachable = new Set<string>();
+    getReachableMileposts(network: TrackNetwork): Set<Milepost> {
+        const reachable = new Set<Milepost>();
         
         // Add all directly connected nodes
         for (const node of network.nodes) {
             reachable.add(node);
-            const neighbors = network.edges.get(node) || new Set<string>();
+            const neighbors = network.edges.get(node) || new Set<Milepost>();
             for (const neighbor of neighbors) {
                 reachable.add(neighbor);
             }
@@ -182,14 +176,14 @@ export class TrackNetworkService {
         for (const [from, toSet] of network.edges) {
             for (const to of toSet) {
                 // Only add each edge once (avoid duplicates from undirected graph)
-                if (from < to) {
-                    edges.push([from, to]);
+                if (from.id < to.id) {
+                    edges.push([from.id, to.id]);
                 }
             }
         }
 
         return {
-            nodes: Array.from(network.nodes),
+            nodes: Array.from(network.nodes).map(node => node.id),
             edges: edges
         };
     }
@@ -197,24 +191,31 @@ export class TrackNetworkService {
     /**
      * Deserializes the network from storage
      */
-    deserializeNetwork(serialized: SerializedNetwork): TrackNetwork {
+    deserializeNetwork(serialized: SerializedNetwork, mileposts: Map<string, Milepost>): TrackNetwork {
         const network = this.createEmptyNetwork();
 
         // Add nodes
-        for (const node of serialized.nodes) {
-            network.nodes.add(node);
+        for (const nodeId of serialized.nodes) {
+            const milepost = mileposts.get(nodeId);
+            if (milepost) {
+                network.nodes.add(milepost);
+            }
         }
 
         // Add edges
-        for (const [from, to] of serialized.edges) {
-            if (!network.edges.has(from)) {
-                network.edges.set(from, new Set<string>());
+        for (const [fromId, toId] of serialized.edges) {
+            const from = mileposts.get(fromId);
+            const to = mileposts.get(toId);
+            if (from && to) {
+                if (!network.edges.has(from)) {
+                    network.edges.set(from, new Set<Milepost>());
+                }
+                if (!network.edges.has(to)) {
+                    network.edges.set(to, new Set<Milepost>());
+                }
+                network.edges.get(from)!.add(to);
+                network.edges.get(to)!.add(from);
             }
-            if (!network.edges.has(to)) {
-                network.edges.set(to, new Set<string>());
-            }
-            network.edges.get(from)!.add(to);
-            network.edges.get(to)!.add(from);
         }
 
         return network;

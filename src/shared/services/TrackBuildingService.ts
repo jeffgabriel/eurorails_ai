@@ -18,15 +18,15 @@ export class TrackBuildingService {
         this.mileposts = mileposts;
     }
 
-    private canAddSegment(network: TrackNetwork, from: string, to: string): boolean {
-        return this.networkService.canAddSegment(network, from, to, this.mileposts);
+    private canAddSegment(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
+        return this.networkService.canAddSegment(network, from, to);
     }
 
     private isWithinTurnBudget(cost: number): boolean {
         return cost <= this.TURN_BUDGET;
     }
 
-    private calculateNewSegmentCost(from: string, to: string, network: TrackNetwork): number {
+    private calculateNewSegmentCost(from: Milepost, to: Milepost, network: TrackNetwork): number {
         // TODO: Implement cost calculation based on terrain and city types
         return 0; // Placeholder
     }
@@ -44,8 +44,8 @@ export class TrackBuildingService {
     async addPlayerTrack(
         playerId: string, 
         gameId: string, 
-        from: string, 
-        to: string
+        from: Milepost, 
+        to: Milepost
     ): Promise<Result<TrackNetwork, TrackBuildError>> {
         // 1. Get current network state
         const currentNetwork = await this.getPlayerNetwork(playerId, gameId);
