@@ -37,6 +37,11 @@ module.exports = {
       testEnvironment: 'node',
       testMatch: ['<rootDir>/src/server/__tests__/**/*.test.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts']
+    },
+    {
+      displayName: 'shared',
+      testEnvironment: 'node',
+      testMatch: ['<rootDir>/src/shared/**/__tests__/**/*.test.ts']
     }
   ]
 }; 

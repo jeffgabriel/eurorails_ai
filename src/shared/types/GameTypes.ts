@@ -1,4 +1,4 @@
-enum PlayerColor {
+export enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
     BLUE = '#0000FF',
@@ -7,7 +7,7 @@ enum PlayerColor {
     BROWN = '#8B4513'   // Using saddle brown for better visibility
 }
 
-interface Player {
+export interface Player {
     id: string;  // Add unique identifier for database
     name: string;
     color: string;  // Hex color code
@@ -15,9 +15,9 @@ interface Player {
     trainType: string;  // We'll expand this later with proper train types
 }
 
-type GameStatus = 'setup' | 'active' | 'completed';
+export type GameStatus = 'setup' | 'active' | 'completed';
 
-interface Game {
+export interface Game {
     id: string;
     status: GameStatus;
     maxPlayers: number;
@@ -27,7 +27,7 @@ interface Game {
     updatedAt: Date;
 }
 
-interface GameState {
+export interface GameState {
     id: string;  // Add unique identifier for the game
     players: Player[];
     currentPlayerIndex: number;
@@ -35,13 +35,31 @@ interface GameState {
     maxPlayers: number;
 }
 
-const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
+export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
 
-export {
-    PlayerColor,
-    Player,
-    GameStatus,
-    Game,
-    GameState,
-    INITIAL_PLAYER_MONEY
-}; 
+export interface Milepost {
+    id: string;
+    x: number;
+    y: number;
+    type: TerrainType;
+}
+
+export enum TerrainType {
+    Clear = 1,
+    Mountain = 2,
+    Alpine = 5,
+    SmallCity = 3,
+    MediumCity = 3,
+    MajorCity = 5
+}
+
+export enum WaterCrossingType {
+    River = 2,
+    Lake = 3,
+    OceanInlet = 3
+}
+
+export interface TrackNetwork {
+    nodes: Set<string>;  // Set of milepost IDs
+    edges: Map<string, Set<string>>;  // Adjacency list
+}

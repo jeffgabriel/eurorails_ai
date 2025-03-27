@@ -127,8 +127,9 @@ export class SetupScene extends Phaser.Scene {
 
         // Create color selection
         const colors = Object.entries(PlayerColor);
-        const startX = 250;
         const spacing = 60;
+        const totalWidth = colors.length * spacing;
+        const startX = (this.scale.width - totalWidth) / 2 + spacing / 2;
 
         colors.forEach(([name, color], index) => {
             const x = startX + (index * spacing);
