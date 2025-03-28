@@ -1,4 +1,4 @@
-import { Milepost } from '../types/GameTypes';
+import { Milepost, TerrainType } from '../types/GameTypes';
 import { TrackNetwork } from '../types/PlayerTypes';
 
 export interface SerializedNetwork {

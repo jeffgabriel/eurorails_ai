@@ -7,12 +7,19 @@ module.exports = {
       'ts-jest',
       {
         tsconfig: 'tsconfig.json',
-        useESM: false,
-        isolatedModules: true,
         diagnostics: {
           ignoreCodes: [1343]
         },
-        babelConfig: true
+        isolatedModules: false,
+        useESM: false,
+        astTransformers: {
+          before: [
+            {
+              path: 'ts-jest/dist/transformers/hoist-jest',
+              options: { enums: true }
+            }
+          ]
+        }
       }
     ]
   },
