@@ -787,13 +787,30 @@ export class GameScene extends Phaser.Scene {
 
         console.debug('Click registered at:', {
             row: clickedPoint.row,
-            col: clickedPoint.col
+            col: clickedPoint.col,
+            isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity
         });
 
-        // If this is the first point, just store it
+        // If this is the first point
         if (!this.lastClickedPoint) {
+            // First track must start from a major city
+            if (clickedPoint.city?.type !== TerrainType.MajorCity) {
+                console.debug('First point must be a major city');
+                return;
+            }
+            
             this.lastClickedPoint = clickedPoint;
-            console.debug('First point set');
+            console.debug('First point set (major city)');
+            this.highlightValidPoints(clickedPoint);
+            return;
+        }
+
+        // For subsequent points, check if it's adjacent
+        if (!this.isAdjacent(this.lastClickedPoint, clickedPoint)) {
+            console.debug('Points not adjacent:', {
+                from: { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col },
+                to: { row: clickedPoint.row, col: clickedPoint.col }
+            });
             return;
         }
 
@@ -813,19 +830,34 @@ export class GameScene extends Phaser.Scene {
                 col: clickedPoint.col,
                 terrain: clickedPoint.terrain
             },
-            cost: 1  // Simplified cost
+            cost: this.calculateTrackCost(this.lastClickedPoint, clickedPoint)
         };
+
+        // Check if this would exceed the turn budget
+        const newTotalCost = this.turnBuildCost + segment.cost;
+        if (newTotalCost > this.MAX_TURN_BUILD_COST) {
+            console.debug('Exceeds turn budget:', {
+                currentCost: this.turnBuildCost,
+                segmentCost: segment.cost,
+                maxCost: this.MAX_TURN_BUILD_COST
+            });
+            return;
+        }
 
         // Add new segment and draw it
         this.currentSegments.push(segment);
         this.drawTrackSegment(segment);
+        this.turnBuildCost = newTotalCost;
         
-        // Update last clicked point
+        // Update last clicked point and highlight new valid points
         this.lastClickedPoint = clickedPoint;
+        this.highlightValidPoints(clickedPoint);
         
         console.debug('Track segment created:', {
             from: { row: segment.from.row, col: segment.from.col },
-            to: { row: segment.to.row, col: segment.to.col }
+            to: { row: segment.to.row, col: segment.to.col },
+            cost: segment.cost,
+            totalCost: this.turnBuildCost
         });
     }
 
@@ -866,32 +898,24 @@ export class GameScene extends Phaser.Scene {
     }
 
     private highlightValidPoints(fromPoint: GridPoint): void {
-        // Clear previous highlights
+        // Clear previous highlights and redraw existing segments
         this.drawingGraphics.clear();
-
-        // Redraw existing segments first
         this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
 
-        // Then highlight valid points
-        let validPointsFound = 0;
+        // Get all adjacent points
         this.gridPoints.flat().forEach(point => {
-            if (point && this.isAdjacent(fromPoint, point)) {
-                const validationResult = this.validateTrackPlacement(fromPoint, point);
-                if (validationResult.isValid) {
-                    this.drawingGraphics.fillStyle(0x00ff00, 0.3);
-                    this.drawingGraphics.fillCircle(
-                        point.x,
-                        point.y,
-                        5
-                    );
-                    validPointsFound++;
-                }
+            if (!point || point.terrain === TerrainType.Water) return;
+
+            if (this.isAdjacent(fromPoint, point)) {
+                // Calculate potential cost
+                const potentialCost = this.calculateTrackCost(fromPoint, point);
+                const wouldExceedBudget = (this.turnBuildCost + potentialCost) > this.MAX_TURN_BUILD_COST;
+
+                // Highlight in green if valid, red if would exceed budget
+                const color = wouldExceedBudget ? 0xff0000 : 0x00ff00;
+                this.drawingGraphics.fillStyle(color, 0.3);
+                this.drawingGraphics.fillCircle(point.x, point.y, 5);
             }
-        });
-        
-        console.debug('Valid points highlighted:', {
-            fromPoint: { row: fromPoint.row, col: fromPoint.col },
-            validPointsCount: validPointsFound
         });
     }
 
