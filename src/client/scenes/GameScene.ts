@@ -1,6 +1,8 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { GameState, TerrainType } from '../../shared/types/GameTypes';
+import { PlayerTrackState, TrackSegment, TrackBuildResult, TrackBuildError } from '../../shared/types/TrackTypes';
+
 interface GridPoint {
     x: number;
     y: number;
@@ -24,6 +26,17 @@ export class GameScene extends Phaser.Scene {
     private pendingRender: boolean = false;
     public gameState: GameState;  // Make gameState public
     
+    // Drawing mode state
+    private isDrawingMode: boolean = false;
+    private drawingGraphics!: Phaser.GameObjects.Graphics;
+    private currentSegments: TrackSegment[] = [];
+    private lastClickedPoint: GridPoint | null = null;
+    private turnBuildCost: number = 0;
+    private readonly MAX_TURN_BUILD_COST = 20; // 20M ECU per turn
+    
+    // Track state
+    private playerTracks: Map<string, PlayerTrackState> = new Map();
+
     // Grid configuration
     private readonly GRID_WIDTH = 70;
     private readonly GRID_HEIGHT = 90;
@@ -50,6 +63,18 @@ export class GameScene extends Phaser.Scene {
         [TerrainType.MajorCity]: 30,   // Size for major city hexagon
         [TerrainType.MediumCity]: 12,         // Reduced size for city circle
         [TerrainType.SmallCity]: 8     // Reduced size for small city square
+    };
+
+    // Track building costs
+    private readonly TERRAIN_COSTS: { [key in TerrainType]: number } = {
+        [TerrainType.Clear]: 1,
+        [TerrainType.Mountain]: 2,
+        [TerrainType.Alpine]: 5,
+        [TerrainType.SmallCity]: 3,
+        [TerrainType.MediumCity]: 3,
+        [TerrainType.MajorCity]: 5,
+        [TerrainType.Water]: 0,
+        [TerrainType.FerryPort]: 0
     };
 
     constructor() {
@@ -98,6 +123,10 @@ export class GameScene extends Phaser.Scene {
         this.uiContainer = this.add.container(0, 0);
         this.playerHandContainer = this.add.container(0, 0);
         
+        // Initialize drawing graphics
+        this.drawingGraphics = this.add.graphics({ lineStyle: { width: 3, color: 0x000000 } });
+        this.mapContainer.add(this.drawingGraphics);
+        
         // Setup scene elements
         this.setupCamera();
         this.createTriangularGrid();
@@ -113,6 +142,13 @@ export class GameScene extends Phaser.Scene {
         // Setup UI elements
         this.setupUIOverlay();
         this.setupPlayerHand();
+
+        // Set up drawing mode click handler
+        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            if (this.isDrawingMode) {
+                this.handleDrawingClick(pointer);
+            }
+        });
 
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
@@ -672,101 +708,172 @@ export class GameScene extends Phaser.Scene {
         // Add hover effect and click handler
         crayonButton
             .on('pointerover', () => {
-                crayonButton.setScale(0.17);
+                if (!this.isDrawingMode) {
+                    crayonButton.setScale(0.17);
+                }
             })
             .on('pointerout', () => {
-                crayonButton.setScale(0.15);
+                if (!this.isDrawingMode) {
+                    crayonButton.setScale(0.15);
+                }
             })
             .on('pointerdown', () => {
-                console.log('Entering draw mode');
+                this.toggleDrawingMode();
             });
         
-        // Add elements to container in correct order - background first, then UI elements
+        // Add elements to container in correct order
         this.playerHandContainer.add([handBackground]);  // Add background first
         this.playerHandContainer.add([trainSection, trainLabel, playerInfo, crayonButton]);  // Then add UI elements
     }
 
-    private setupCamera() {
-        const { width, height } = this.calculateMapDimensions();
-        
-        // Set up main camera with extended bounds to allow for proper scrolling
-        this.cameras.main.setBounds(-this.GRID_MARGIN, -this.GRID_MARGIN, 
-            width + (this.GRID_MARGIN * 2), height + (this.GRID_MARGIN * 2));
-        
-        // Center the camera on the map
-        this.cameras.main.centerOn(width / 2, height / 2);
-        
-        // Set initial zoom to fit the board better, accounting for the player hand area
-        const initialZoom = Math.min(
-            (this.scale.width - 100) / width,
-            (this.scale.height - 300) / height  // Leave space for player hand
+    private toggleDrawingMode(): void {
+        this.isDrawingMode = !this.isDrawingMode;
+        if (this.isDrawingMode) {
+            this.initializeDrawingMode();
+        } else {
+            this.cleanupDrawingMode();
+        }
+    }
+
+    private initializeDrawingMode(): void {
+        if (!this.drawingGraphics) {
+            this.drawingGraphics = this.add.graphics();
+            this.drawingGraphics.setDepth(1);
+        }
+
+        // Clear any existing graphics
+        this.drawingGraphics.clear();
+        this.currentSegments = [];
+        this.lastClickedPoint = null;
+        this.turnBuildCost = 0;
+
+        // Set up input handlers for drawing mode
+        this.input.on('pointerdown', this.handleDrawingClick, this);
+        this.input.on('pointermove', this.handleDrawingHover, this);
+    }
+
+    private cleanupDrawingMode(): void {
+        this.input.off('pointerdown', this.handleDrawingClick, this);
+        this.input.off('pointermove', this.handleDrawingHover, this);
+        if (this.drawingGraphics) {
+            this.drawingGraphics.clear();
+        }
+        this.currentSegments = [];
+        this.lastClickedPoint = null;
+        this.turnBuildCost = 0;
+    }
+
+    private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
+        if (!this.isDrawingMode) return;
+
+        const clickedPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
+        if (!clickedPoint) return;
+
+        if (!this.lastClickedPoint) {
+            this.lastClickedPoint = clickedPoint;
+            this.highlightValidPoints(clickedPoint);
+        } else {
+            const validationResult = this.validateTrackPlacement(this.lastClickedPoint, clickedPoint);
+            if (validationResult.isValid && validationResult.cost !== undefined) {
+                const segment: TrackSegment = {
+                    from: this.lastClickedPoint,
+                    to: clickedPoint,
+                    cost: validationResult.cost
+                };
+                this.currentSegments.push(segment);
+                this.turnBuildCost += validationResult.cost;
+                this.drawTrackSegment(segment);
+                this.lastClickedPoint = clickedPoint;
+                this.highlightValidPoints(clickedPoint);
+            } else {
+                // Visual feedback for invalid placement
+                this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
+            }
+        }
+    }
+
+    private handleDrawingHover(pointer: Phaser.Input.Pointer): void {
+        if (!this.isDrawingMode || !this.lastClickedPoint) return;
+
+        const hoverPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
+        if (!hoverPoint) return;
+
+        // Clear previous preview
+        this.drawingGraphics.clear();
+
+        // Redraw existing segments
+        this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
+
+        // Draw preview line
+        const validationResult = this.validateTrackPlacement(this.lastClickedPoint!, hoverPoint);
+        const color = validationResult.isValid ? 0x00ff00 : 0xff0000;
+        const alpha = 0.5;
+
+        this.drawingGraphics.lineStyle(2, color, alpha);
+        this.drawingGraphics.beginPath();
+        this.drawingGraphics.moveTo(
+            this.lastClickedPoint!.x * this.HORIZONTAL_SPACING,
+            this.lastClickedPoint!.y * this.VERTICAL_SPACING
         );
-        this.cameras.main.setZoom(initialZoom);
-        
-        let lastPointerPosition = { x: 0, y: 0 };
+        this.drawingGraphics.lineTo(
+            hoverPoint.x * this.HORIZONTAL_SPACING,
+            hoverPoint.y * this.VERTICAL_SPACING
+        );
+        this.drawingGraphics.strokePath();
+    }
 
-        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            this.isDragging = true;
-            lastPointerPosition = { x: pointer.x, y: pointer.y };
-            this.lastDragTime = Date.now();
-        });
+    private drawTrackSegment(segment: TrackSegment): void {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const color = parseInt(currentPlayer.color.replace('#', '0x'));
 
-        this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-            if (this.isDragging) {
-                const now = Date.now();
-                // Throttle updates to every 32ms (approximately 30fps)
-                if (now - this.lastDragTime >= 32) {
-                    const deltaX = pointer.x - lastPointerPosition.x;
-                    const deltaY = pointer.y - lastPointerPosition.y;
-                    
-                    // Calculate new scroll position
-                    const newScrollX = this.cameras.main.scrollX - (deltaX / this.cameras.main.zoom);
-                    const newScrollY = this.cameras.main.scrollY - (deltaY / this.cameras.main.zoom);
-                    
-                    // Ensure the bottom of the map doesn't scroll above the player hand area
-                    const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
-                    
-                    this.cameras.main.scrollX = newScrollX;
-                    this.cameras.main.scrollY = Math.min(maxScrollY, Math.max(0, newScrollY));
-                    
-                    lastPointerPosition = { x: pointer.x, y: pointer.y };
-                    this.lastDragTime = now;
-                    this.requestRender();
-                }
+        this.drawingGraphics.lineStyle(3, color, 1);
+        this.drawingGraphics.beginPath();
+        this.drawingGraphics.moveTo(
+            segment.from.x * this.HORIZONTAL_SPACING,
+            segment.from.y * this.VERTICAL_SPACING
+        );
+        this.drawingGraphics.lineTo(
+            segment.to.x * this.HORIZONTAL_SPACING,
+            segment.to.y * this.VERTICAL_SPACING
+        );
+        this.drawingGraphics.strokePath();
+    }
+
+    private highlightValidPoints(fromPoint: GridPoint): void {
+        // Clear previous highlights
+        this.drawingGraphics.clear();
+
+        // Redraw existing segments
+        this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
+
+        // Draw valid connection points
+        this.gridPoints.flat().forEach(point => {
+            const validationResult = this.validateTrackPlacement(fromPoint, point);
+            if (validationResult.isValid) {
+                this.drawingGraphics.fillStyle(0x00ff00, 0.3);
+                this.drawingGraphics.fillCircle(
+                    point.x * this.HORIZONTAL_SPACING,
+                    point.y * this.VERTICAL_SPACING,
+                    5
+                );
             }
         });
+    }
 
-        this.input.on('pointerup', () => {
-            this.isDragging = false;
-            this.requestRender();
-        });
+    private showInvalidPlacementFeedback(error: TrackBuildError): void {
+        // TODO: Show visual feedback for invalid placement
+        console.log('Invalid track placement:', error);
+    }
 
-        // Add zoom controls with adjusted limits and throttling
-        let lastWheelTime = 0;
-        this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
-            const now = Date.now();
-            // Throttle zoom updates to every 32ms
-            if (now - lastWheelTime >= 32) {
-                const zoom = this.cameras.main.zoom;
-                const minZoom = Math.min(
-                    (this.cameras.main.width - 100) / width,  // Added padding for zoom
-                    (this.cameras.main.height - 300) / height // Added more space for UI
-                ) * 0.8;
-                const maxZoom = 2.0;
-                
-                if (deltaY > 0) {
-                    this.cameras.main.zoom = Math.max(minZoom, zoom - 0.1);
-                } else {
-                    this.cameras.main.zoom = Math.min(maxZoom, zoom + 0.1);
-                }
-                
-                const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
-                this.cameras.main.scrollY = Math.min(maxScrollY, this.cameras.main.scrollY);
-                
-                lastWheelTime = now;
-                this.requestRender();
-            }
-        });
+    private getGridPointAtPosition(x: number, y: number): GridPoint | null {
+        const gridX = Math.floor(x / this.HORIZONTAL_SPACING);
+        const gridY = Math.floor(y / this.VERTICAL_SPACING);
+
+        if (gridX >= 0 && gridX < this.gridPoints.length &&
+            gridY >= 0 && gridY < this.gridPoints[0].length) {
+            return this.gridPoints[gridX][gridY];
+        }
+        return null;
     }
 
     private async nextPlayerTurn() {
@@ -801,6 +908,171 @@ export class GameScene extends Phaser.Scene {
         this.playerHandContainer.removeAll(true);
         this.setupUIOverlay();
         this.setupPlayerHand();
+    }
+
+    private calculateTrackCost(from: GridPoint, to: GridPoint): number {
+        // Base cost is the cost of the destination terrain
+        let cost = this.TERRAIN_COSTS[to.terrain];
+
+        // Add river/water crossing costs if applicable
+        // TODO: Implement water crossing detection and costs
+
+        return cost;
+    }
+
+    private validateTrackPlacement(from: GridPoint, to: GridPoint): TrackBuildResult {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrack = this.playerTracks.get(currentPlayer.id) || {
+            playerId: currentPlayer.id,
+            gameId: this.gameState.id,
+            segments: [],
+            totalCost: 0,
+            turnBuildCost: 0,
+            lastBuildTimestamp: new Date(),
+            networkState: {
+                nodes: [],
+                edges: []
+            }
+        };
+        const cost = this.calculateTrackCost(from, to);
+
+        // Check if this would exceed the turn budget
+        if (this.turnBuildCost + cost > this.MAX_TURN_BUILD_COST) {
+            return { isValid: false, error: TrackBuildError.EXCEEDS_TURN_BUDGET };
+        }
+
+        // If this is the first track segment ever for this player
+        if (playerTrack.segments.length === 0) {
+            // First track must start from a major city
+            if (from.terrain !== TerrainType.MajorCity) {
+                return { isValid: false, error: TrackBuildError.NOT_MAJOR_CITY };
+            }
+        } else {
+            // Check if the new segment connects to existing network
+            const isConnected = playerTrack.segments.some(segment => 
+                (segment.from.x === from.x && segment.from.y === from.y) ||
+                (segment.to.x === from.x && segment.to.y === from.y)
+            );
+            
+            if (!isConnected) {
+                return { isValid: false, error: TrackBuildError.NOT_CONNECTED_TO_NETWORK };
+            }
+        }
+
+        // Check if track already exists at this location
+        const trackExists = Array.from(this.playerTracks.values()).some(track =>
+            track.segments.some(segment =>
+                (segment.from.x === from.x && segment.from.y === from.y &&
+                 segment.to.x === to.x && segment.to.y === to.y) ||
+                (segment.from.x === to.x && segment.from.y === to.y &&
+                 segment.to.x === from.x && segment.to.y === from.y)
+            )
+        );
+
+        if (trackExists) {
+            return { isValid: false, error: TrackBuildError.TRACK_EXISTS };
+        }
+
+        return { isValid: true, cost };
+    }
+
+    private setupCamera(): void {
+        const { width, height } = this.calculateMapDimensions();
+        
+        // Set up main camera with extended bounds to allow for proper scrolling
+        this.cameras.main.setBounds(-this.GRID_MARGIN, -this.GRID_MARGIN, 
+            width + (this.GRID_MARGIN * 2), height + (this.GRID_MARGIN * 2));
+        
+        // Center the camera on the map
+        this.cameras.main.centerOn(width / 2, height / 2);
+        
+        // Set initial zoom to fit the board better, accounting for the player hand area
+        const initialZoom = Math.min(
+            (this.scale.width - 100) / width,
+            (this.scale.height - 300) / height  // Leave space for player hand
+        );
+        this.cameras.main.setZoom(initialZoom);
+        
+        let lastPointerPosition = { x: 0, y: 0 };
+        let isMouseDown = false;
+
+        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            // Don't initiate drag if in drawing mode
+            if (this.isDrawingMode) return;
+            
+            isMouseDown = true;
+            this.isDragging = false;
+            lastPointerPosition = { x: pointer.x, y: pointer.y };
+            this.lastDragTime = Date.now();
+        });
+
+        this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+            // Don't handle drag if in drawing mode or mouse button isn't down
+            if (this.isDrawingMode || !isMouseDown) return;
+            
+            const now = Date.now();
+            const deltaX = pointer.x - lastPointerPosition.x;
+            const deltaY = pointer.y - lastPointerPosition.y;
+            
+            // Only start dragging if we've moved a significant amount
+            if (!this.isDragging && (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5)) {
+                this.isDragging = true;
+            }
+            
+            // If we're dragging, handle the camera movement
+            if (this.isDragging && now - this.lastDragTime >= 32) {
+                const newScrollX = this.cameras.main.scrollX - (deltaX / this.cameras.main.zoom);
+                const newScrollY = this.cameras.main.scrollY - (deltaY / this.cameras.main.zoom);
+                
+                const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
+                
+                this.cameras.main.scrollX = newScrollX;
+                this.cameras.main.scrollY = Math.min(maxScrollY, Math.max(0, newScrollY));
+                
+                lastPointerPosition = { x: pointer.x, y: pointer.y };
+                this.lastDragTime = now;
+                this.requestRender();
+            }
+        });
+
+        this.input.on('pointerup', () => {
+            isMouseDown = false;
+            this.isDragging = false;
+            this.requestRender();
+        });
+
+        // Handle edge case where mouse up happens outside the window
+        this.game.events.on('blur', () => {
+            isMouseDown = false;
+            this.isDragging = false;
+        });
+
+        // Add zoom controls with adjusted limits and throttling
+        let lastWheelTime = 0;
+        this.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
+            const now = Date.now();
+            // Throttle zoom updates to every 32ms
+            if (now - lastWheelTime >= 32) {
+                const zoom = this.cameras.main.zoom;
+                const minZoom = Math.min(
+                    (this.cameras.main.width - 100) / width,
+                    (this.cameras.main.height - 300) / height
+                ) * 0.8;
+                const maxZoom = 2.0;
+                
+                if (deltaY > 0) {
+                    this.cameras.main.zoom = Math.max(minZoom, zoom - 0.1);
+                } else {
+                    this.cameras.main.zoom = Math.min(maxZoom, zoom + 0.1);
+                }
+                
+                const maxScrollY = height - ((this.cameras.main.height - 200) / this.cameras.main.zoom);
+                this.cameras.main.scrollY = Math.min(maxScrollY, this.cameras.main.scrollY);
+                
+                lastWheelTime = now;
+                this.requestRender();
+            }
+        });
     }
 
     update(time: number, delta: number): void {
