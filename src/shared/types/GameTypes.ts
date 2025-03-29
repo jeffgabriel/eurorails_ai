@@ -47,10 +47,12 @@ export interface Milepost {
 export enum TerrainType {
     Clear = 1,
     Mountain = 2,
-    Alpine = 5,
-    SmallCity = 3,
-    MediumCity = 3,
-    MajorCity = 5
+    Alpine = 3,
+    SmallCity = 4,
+    MediumCity = 5,
+    MajorCity = 6,
+    FerryPort = 7,
+    Water = 8,
 }
 
 export enum WaterCrossingType {
@@ -63,3 +65,26 @@ export interface TrackNetwork {
     nodes: Set<string>;  // Set of milepost IDs
     edges: Map<string, Set<string>>;  // Adjacency list
 }
+export interface CityConfig {
+    type: TerrainType;
+    name: string;
+    // For major cities, we need to know which points form the hexagon
+    connectedPoints?: Array<{ row: number; col: number }>;
+}
+
+export interface GridPointConfig {
+    row: number;
+    col: number;
+    terrain: TerrainType;
+    ferryConnection?: {
+        row: number;
+        col: number;
+    };
+    city?: CityConfig;
+}
+
+export interface MapConfig {
+    width: number;
+    height: number;
+    points: GridPointConfig[];
+} 

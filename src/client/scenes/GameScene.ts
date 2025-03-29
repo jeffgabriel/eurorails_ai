@@ -1,8 +1,6 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType, GridPointConfig, CityType } from '../../shared/types/GridTypes';
-import { GameState, PlayerColor } from '../../shared/types/GameTypes';
-
+import { GameState, TerrainType } from '../../shared/types/GameTypes';
 interface GridPoint {
     x: number;
     y: number;
@@ -10,7 +8,7 @@ interface GridPoint {
     terrain: TerrainType;
     ferryConnection?: { row: number; col: number };
     city?: {
-        type: CityType;
+        type: TerrainType;
         name: string;
         connectedPoints?: Array<{ row: number; col: number }>;
     };
@@ -35,23 +33,23 @@ export class GameScene extends Phaser.Scene {
     private readonly GRID_MARGIN = 100;        // Increased margin around the grid
     private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
     private readonly terrainColors = {
-        [TerrainType.LAND]: 0x000000,
-        [TerrainType.WATER]: 0x0000ff,
-        [TerrainType.HILL]: 0x964B00,
-        [TerrainType.MOUNTAIN]: 0x808080,
-        [TerrainType.FERRY_PORT]: 0xffa500
+        [TerrainType.Clear]: 0x000000,
+        [TerrainType.Water]: 0x0000ff,
+        [TerrainType.Mountain]: 0x964B00,
+        [TerrainType.Alpine]: 0x808080,
+        [TerrainType.FerryPort]: 0xffa500
     };
 
     private readonly CITY_COLORS = {
-        [CityType.MAJOR_CITY]: 0xff9999,  // Brighter red for major cities
-        [CityType.CITY]: 0x9999ff,        // Brighter blue for cities
-        [CityType.SMALL_CITY]: 0x99ff99   // Brighter green for small cities
+        [TerrainType.MajorCity]: 0xff9999,  // Brighter red for major cities
+        [TerrainType.MediumCity]: 0x9999ff,        // Brighter blue for cities
+        [TerrainType.SmallCity]: 0x99ff99   // Brighter green for small cities
     };
 
     private readonly CITY_RADIUS = {
-        [CityType.MAJOR_CITY]: 30,   // Size for major city hexagon
-        [CityType.CITY]: 12,         // Reduced size for city circle
-        [CityType.SMALL_CITY]: 8     // Reduced size for small city square
+        [TerrainType.MajorCity]: 30,   // Size for major city hexagon
+        [TerrainType.MediumCity]: 12,         // Reduced size for city circle
+        [TerrainType.SmallCity]: 8     // Reduced size for small city square
     };
 
     constructor() {
@@ -188,7 +186,7 @@ export class GameScene extends Phaser.Scene {
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
             ferryConnection?: { row: number; col: number },
-            city?: { type: CityType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
+            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
         }>();
         
         mapConfig.points.forEach(point => {
@@ -208,10 +206,10 @@ export class GameScene extends Phaser.Scene {
 
         // Set styles
         landPoints.lineStyle(1, 0x000000);
-        landPoints.fillStyle(this.terrainColors[TerrainType.LAND]);
+        landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
         mountainPoints.lineStyle(1, 0x000000);
         hillPoints.lineStyle(1, 0x000000);
-        hillPoints.fillStyle(this.terrainColors[TerrainType.HILL]);
+        hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
         ferryConnections.lineStyle(2, 0xffa500, 0.5);
 
         // First pass: Draw city areas
@@ -224,14 +222,14 @@ export class GameScene extends Phaser.Scene {
                     const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                     const y = row * this.VERTICAL_SPACING;
 
-                    if (config.city.type === CityType.MAJOR_CITY && config.city.connectedPoints) {
+                    if (config.city.type === TerrainType.MajorCity && config.city.connectedPoints) {
                         // Only draw major city once
                         const cityKey = `${config.city.name}`;
                         if (!majorCities.has(cityKey)) {
                             majorCities.add(cityKey);
                             
                             // Draw hexagonal area
-                            cityAreas.fillStyle(this.CITY_COLORS[CityType.MAJOR_CITY], 0.7);
+                            cityAreas.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
                             cityAreas.lineStyle(2, 0x000000, 0.7);
                             cityAreas.beginPath();
                             
@@ -290,12 +288,12 @@ export class GameScene extends Phaser.Scene {
                             cityName.setOrigin(0.5, 0.5);
                             this.mapContainer.add(cityName);
                         }
-                    } else if (config.city.type === CityType.CITY) {
+                    } else if (config.city.type === TerrainType.MediumCity) {
                         // Draw circle for regular city
-                        cityAreas.fillStyle(this.CITY_COLORS[CityType.CITY], 0.7);  // Increased opacity
+                        cityAreas.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);  // Increased opacity
                         cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
                         cityAreas.beginPath();
-                        cityAreas.arc(x, y, this.CITY_RADIUS[CityType.CITY], 0, Math.PI * 2);
+                        cityAreas.arc(x, y, this.CITY_RADIUS[TerrainType.MediumCity], 0, Math.PI * 2);
                         cityAreas.closePath();
                         cityAreas.fill();
                         cityAreas.stroke();
@@ -312,11 +310,11 @@ export class GameScene extends Phaser.Scene {
                         );
                         cityName.setOrigin(0.5, 0.5);
                         this.mapContainer.add(cityName);
-                    } else if (config.city.type === CityType.SMALL_CITY) {
+                    } else if (config.city.type === TerrainType.SmallCity) {
                         // Draw square for small city
-                        cityAreas.fillStyle(this.CITY_COLORS[CityType.SMALL_CITY], 0.7);  // Increased opacity
+                        cityAreas.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);  // Increased opacity
                         cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
-                        const radius = this.CITY_RADIUS[CityType.SMALL_CITY];
+                        const radius = this.CITY_RADIUS[TerrainType.SmallCity];
                         cityAreas.fillRect(x - radius, y - radius, radius * 2, radius * 2);
                         cityAreas.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
 
@@ -347,28 +345,28 @@ export class GameScene extends Phaser.Scene {
                 const y = row * this.VERTICAL_SPACING;
 
                 const config = terrainLookup.get(`${row},${col}`);
-                const terrain = config?.terrain || TerrainType.LAND;
+                const terrain = config?.terrain || TerrainType.Clear;
                 const ferryConnection = config?.ferryConnection;
                 const city = config?.city;
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
                 // Skip drawing point for water terrain
-                if (terrain !== TerrainType.WATER) {
-                    if (terrain === TerrainType.MOUNTAIN || terrain === TerrainType.HILL) {
+                if (terrain !== TerrainType.Water) {
+                    if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
                         // Draw terrain features as before
-                        const graphics = terrain === TerrainType.MOUNTAIN ? mountainPoints : hillPoints;
+                        const graphics = terrain === TerrainType.Alpine ? mountainPoints : hillPoints;
                         const triangleHeight = this.POINT_RADIUS * 2;
                         graphics.beginPath();
                         graphics.moveTo(x, y - triangleHeight);
                         graphics.lineTo(x - triangleHeight, y + triangleHeight);
                         graphics.lineTo(x + triangleHeight, y + triangleHeight);
                         graphics.closePath();
-                        if (terrain === TerrainType.HILL) {
+                        if (terrain === TerrainType.Mountain) {
                             graphics.fill();
                         }
                         graphics.stroke();
-                    } else if (terrain === TerrainType.FERRY_PORT) {
+                    } else if (terrain === TerrainType.FerryPort) {
                         sprite = this.add.image(x + this.GRID_MARGIN, y + this.GRID_MARGIN, 'ferry-port');
                         sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
                         this.mapContainer.add(sprite);

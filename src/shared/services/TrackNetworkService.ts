@@ -131,7 +131,7 @@ export class TrackNetworkService {
     canAddSegment(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
         // If network is empty, must start from a major city
         if (network.nodes.size === 0) {
-            return from.type === 5 || to.type === 5;  // 5 = TerrainType.MajorCity
+            return from.type === TerrainType.MajorCity
         }
 
         // Check if either point connects to existing network

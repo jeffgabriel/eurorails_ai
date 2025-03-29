@@ -1,4 +1,4 @@
-import { MapConfig, TerrainType, CityType } from '../../shared/types/GridTypes';
+import { MapConfig, TerrainType } from '../../shared/types/GameTypes';
 
 export const mapConfig: MapConfig = {
     width: 70,
@@ -8,9 +8,9 @@ export const mapConfig: MapConfig = {
         {
             row: 20,
             col: 35,
-            terrain: TerrainType.LAND,
+            terrain: TerrainType.Clear,
             city: {
-                type: CityType.MAJOR_CITY,
+                type: TerrainType.MajorCity,
                 name: 'Berlin',
                 connectedPoints: [
                     // Center point
@@ -28,20 +28,20 @@ export const mapConfig: MapConfig = {
             }
         },
         // Connected points for Berlin
-        { row: 19, col: 34, terrain: TerrainType.LAND },
-        { row: 19, col: 35, terrain: TerrainType.LAND },
-        { row: 20, col: 34, terrain: TerrainType.LAND },
-        { row: 20, col: 36, terrain: TerrainType.LAND },
-        { row: 21, col: 34, terrain: TerrainType.LAND },
-        { row: 21, col: 35, terrain: TerrainType.LAND },
+        { row: 19, col: 34, terrain: TerrainType.Clear },
+        { row: 19, col: 35, terrain: TerrainType.Clear },
+        { row: 20, col: 34, terrain: TerrainType.Clear },
+        { row: 20, col: 36, terrain: TerrainType.Clear },
+        { row: 21, col: 34, terrain: TerrainType.Clear },
+        { row: 21, col: 35, terrain: TerrainType.Clear },
 
         // Example regular city (Frankfurt)
         {
             row: 25,
             col: 30,
-            terrain: TerrainType.LAND,
+            terrain: TerrainType.Clear,
             city: {
-                type: CityType.CITY,
+                type: TerrainType.MediumCity,
                 name: 'Frankfurt'
             }
         },
@@ -50,9 +50,9 @@ export const mapConfig: MapConfig = {
         {
             row: 25,
             col: 35,
-            terrain: TerrainType.LAND,
+            terrain: TerrainType.Clear,
             city: {
-                type: CityType.SMALL_CITY,
+                type: TerrainType.SmallCity,
                 name: 'Heidelberg'
             }
         },
@@ -61,26 +61,26 @@ export const mapConfig: MapConfig = {
         { 
             row: 40, 
             col: 20, 
-            terrain: TerrainType.FERRY_PORT,
+            terrain: TerrainType.FerryPort,
             ferryConnection: { row: 40, col: 25 }
         },
         { 
             row: 40, 
             col: 25, 
-            terrain: TerrainType.FERRY_PORT,
+            terrain: TerrainType.FerryPort,
             ferryConnection: { row: 40, col: 20 }
         },
         
         // Example water points for a lake
-        { row: 50, col: 50, terrain: TerrainType.WATER },
-        { row: 50, col: 51, terrain: TerrainType.WATER },
-        { row: 51, col: 50, terrain: TerrainType.WATER },
-        { row: 51, col: 51, terrain: TerrainType.WATER },
+        { row: 50, col: 50, terrain: TerrainType.Water },
+        { row: 50, col: 51, terrain: TerrainType.Water },
+        { row: 51, col: 50, terrain: TerrainType.Water },
+        { row: 51, col: 51, terrain: TerrainType.Water },
         
         // Example mountain range
-        { row: 45, col: 30, terrain: TerrainType.MOUNTAIN },
-        { row: 45, col: 31, terrain: TerrainType.MOUNTAIN },
-        { row: 46, col: 30, terrain: TerrainType.MOUNTAIN },
-        { row: 46, col: 31, terrain: TerrainType.HILL }
+        { row: 45, col: 30, terrain: TerrainType.Mountain },
+        { row: 45, col: 31, terrain: TerrainType.Mountain },
+        { row: 46, col: 30, terrain: TerrainType.Mountain },
+        { row: 46, col: 31, terrain: TerrainType.Alpine }
     ]
 }; 

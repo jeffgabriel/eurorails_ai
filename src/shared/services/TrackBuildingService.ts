@@ -1,7 +1,7 @@
 import { TrackNetwork } from "../types/PlayerTypes";
 import { Result, Ok, Err } from "neverthrow";
 import { TrackNetworkService } from "./TrackNetworkService";
-import { Milepost } from "../types/GameTypes";
+import { Milepost, TerrainType } from "../types/GameTypes";
 
 export enum TrackBuildError {
     INVALID_CONNECTION = 'INVALID_CONNECTION',
@@ -16,10 +16,6 @@ export class TrackBuildingService {
     constructor(networkService: TrackNetworkService, mileposts: Map<string, Milepost>) {
         this.networkService = networkService;
         this.mileposts = mileposts;
-    }
-
-    private canAddSegment(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
-        return this.networkService.canAddSegment(network, from, to);
     }
 
     private isWithinTurnBudget(cost: number): boolean {
@@ -51,7 +47,7 @@ export class TrackBuildingService {
         const currentNetwork = await this.getPlayerNetwork(playerId, gameId);
         
         // 2. Validate the new segment
-        if (!this.canAddSegment(currentNetwork, from, to)) {
+        if (!this.networkService.canAddSegment(currentNetwork, from, to)) {
             return new Err(TrackBuildError.INVALID_CONNECTION);
         }
         

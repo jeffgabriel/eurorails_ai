@@ -1,5 +1,5 @@
 import { TrackNetworkService } from '../TrackNetworkService';
-import { Milepost } from '../../types/GameTypes';
+import { Milepost, TerrainType } from '../../types/GameTypes';
 import { TrackNetwork } from '../../types/PlayerTypes';
 
 describe('TrackNetworkService', () => {
@@ -20,25 +20,25 @@ describe('TrackNetworkService', () => {
             id: 'city1',
             x: 0,
             y: 0,
-            type: 5  // TerrainType.MajorCity
+            type: TerrainType.MajorCity
         };
         city2 = {
             id: 'city2',
             x: 10,
             y: 0,
-            type: 5  // TerrainType.MajorCity
+            type: TerrainType.MajorCity
         };
         clear1 = {
             id: 'clear1',
             x: 5,
             y: 0,
-            type: 1  // TerrainType.Clear
+            type: TerrainType.Clear
         };
         mountain1 = {
             id: 'mountain1',
             x: 5,
             y: 5,
-            type: 2  // TerrainType.Mountain
+            type: TerrainType.Mountain
         };
 
         mileposts = new Map();

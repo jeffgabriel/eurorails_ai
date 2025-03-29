@@ -1,6 +1,6 @@
 import { TrackBuildingService } from '../TrackBuildingService';
 import { TrackNetworkService } from '../TrackNetworkService';
-import { Milepost } from '../../types/GameTypes';
+import { Milepost, TerrainType } from '../../types/GameTypes';
 import { TrackNetwork } from '../../types/PlayerTypes';
 import { Result } from 'neverthrow';
 
@@ -21,25 +21,25 @@ describe('TrackBuildingService', () => {
             id: 'city1',
             x: 0,
             y: 0,
-            type: 5  // TerrainType.MajorCity
+            type: TerrainType.MajorCity
         };
         city2 = {
             id: 'city2',
             x: 10,
             y: 0,
-            type: 5  // TerrainType.MajorCity
+            type: TerrainType.MajorCity
         };
         clear1 = {
             id: 'clear1',
             x: 5,
             y: 0,
-            type: 1  // TerrainType.Clear
+            type: TerrainType.Clear
         };
         clear2 = {
             id: 'clear2',
             x: 7,
             y: 0,
-            type: 1  // TerrainType.Clear
+            type: TerrainType.Clear
         };
 
         mileposts = new Map();
