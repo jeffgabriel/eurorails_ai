@@ -87,4 +87,31 @@ export interface MapConfig {
     width: number;
     height: number;
     points: GridPointConfig[];
+}
+
+export interface TrackSegment {
+    from: {
+        x: number;
+        y: number;
+        row: number;
+        col: number;
+        terrain: TerrainType;
+    };
+    to: {
+        x: number;
+        y: number;
+        row: number;
+        col: number;
+        terrain: TerrainType;
+    };
+    cost: number;
+}
+
+export interface PlayerTrackState {
+    playerId: string;
+    gameId: string;
+    segments: TrackSegment[];
+    totalCost: number;
+    turnBuildCost: number;
+    lastBuildTimestamp: Date;
 } 

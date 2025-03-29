@@ -735,13 +735,108 @@ export class GameScene extends Phaser.Scene {
         this.playerHandContainer.add([trainSection, trainLabel, playerInfo, crayonButton]);  // Then add UI elements
     }
 
-    private toggleDrawingMode(): void {
+    private async toggleDrawingMode(): Promise<void> {
+        if (this.isDrawingMode) {
+            // We're currently in drawing mode and turning it off
+            await this.saveCurrentTracks();
+        }
+        
         this.isDrawingMode = !this.isDrawingMode;
+        
         if (this.isDrawingMode) {
             this.initializeDrawingMode();
         } else {
             this.cleanupDrawingMode();
         }
+    }
+
+    private async saveCurrentTracks(): Promise<void> {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // Get or create track state for current player
+        let playerTrackState = this.playerTracks.get(currentPlayer.id);
+        if (!playerTrackState) {
+            playerTrackState = {
+                playerId: currentPlayer.id,
+                gameId: this.gameState.id,
+                segments: [],
+                totalCost: 0,
+                turnBuildCost: 0,
+                lastBuildTimestamp: new Date()
+            };
+            this.playerTracks.set(currentPlayer.id, playerTrackState);
+        }
+
+        // Add new segments to player's track state
+        if (this.currentSegments.length > 0 && playerTrackState) {
+            playerTrackState.segments.push(...this.currentSegments);
+            playerTrackState.totalCost += this.turnBuildCost;
+            playerTrackState.turnBuildCost = this.turnBuildCost;
+            playerTrackState.lastBuildTimestamp = new Date();
+            
+            console.debug('Saving tracks for player:', {
+                playerId: currentPlayer.id,
+                newSegments: this.currentSegments.length,
+                totalSegments: playerTrackState.segments.length,
+                totalCost: playerTrackState.totalCost,
+                turnCost: playerTrackState.turnBuildCost
+            });
+
+            try {
+                // Save to database
+                const response = await fetch('/api/tracks/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        gameId: this.gameState.id,
+                        playerId: currentPlayer.id,
+                        trackState: playerTrackState
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('Failed to save track state:', errorData);
+                    // TODO: Show error to user and potentially revert the local state
+                }
+            } catch (error) {
+                console.error('Error saving track state:', error);
+                // TODO: Show error to user and potentially revert the local state
+            }
+        }
+    }
+
+    private cleanupDrawingMode(): void {
+        // Remove input handlers
+        this.input.off('pointerdown', this.handleDrawingClick, this);
+        this.input.off('pointermove', this.handleDrawingHover, this);
+
+        if (this.drawingGraphics) {
+            // Clear the graphics object
+            this.drawingGraphics.clear();
+            
+            // Redraw all permanent tracks for all players
+            this.playerTracks.forEach((trackState, playerId) => {
+                const player = this.gameState.players.find(p => p.id === playerId);
+                if (player) {
+                    const color = parseInt(player.color.replace('#', '0x'));
+                    trackState.segments.forEach(segment => {
+                        this.drawingGraphics.lineStyle(3, color, 1);
+                        this.drawingGraphics.beginPath();
+                        this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
+                        this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
+                        this.drawingGraphics.strokePath();
+                    });
+                }
+            });
+        }
+
+        // Reset drawing state
+        this.currentSegments = [];
+        this.lastClickedPoint = null;
+        this.turnBuildCost = 0;
     }
 
     private initializeDrawingMode(): void {
@@ -750,24 +845,30 @@ export class GameScene extends Phaser.Scene {
             this.drawingGraphics.setDepth(1);
         }
 
-        // Clear any existing graphics
+        // Clear any existing graphics and redraw all permanent tracks
         this.drawingGraphics.clear();
+        this.playerTracks.forEach((trackState, playerId) => {
+            const player = this.gameState.players.find(p => p.id === playerId);
+            if (player) {
+                const color = parseInt(player.color.replace('#', '0x'));
+                trackState.segments.forEach(segment => {
+                    this.drawingGraphics.lineStyle(3, color, 1);
+                    this.drawingGraphics.beginPath();
+                    this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
+                    this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
+                    this.drawingGraphics.strokePath();
+                });
+            }
+        });
+
+        // Reset current drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        this.turnBuildCost = 0;
 
         // Set up input handlers for drawing mode
         this.input.on('pointerdown', this.handleDrawingClick, this);
         this.input.on('pointermove', this.handleDrawingHover, this);
-    }
-
-    private cleanupDrawingMode(): void {
-        this.input.off('pointerdown', this.handleDrawingClick, this);
-        this.input.off('pointermove', this.handleDrawingHover, this);
-        if (this.drawingGraphics) {
-            this.drawingGraphics.clear();
-        }
-        this.currentSegments = [];
-        this.lastClickedPoint = null;
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {

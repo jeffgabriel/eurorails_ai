@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import cors from 'cors';
 import playerRoutes from './routes/playerRoutes';
+import trackRoutes from './routes/trackRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './db/playerService';
 
@@ -30,6 +31,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // API Routes - make sure this comes before static file serving
 app.use('/api/players', playerRoutes);
+app.use('/api/tracks', trackRoutes);
 
 // Log registered routes
 console.log('Registered routes:');
@@ -47,6 +49,11 @@ app.use(express.static(path.join(__dirname, '../../dist/client')));
 // SPA fallback - this should come after API routes
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
+});
+
+// Debug endpoint
+app.get('/api/test', (req, res) => {
+    res.json({ message: 'API is working' });
 });
 
 // Initialize database and start server

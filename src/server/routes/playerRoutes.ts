@@ -1,6 +1,5 @@
 import express from 'express';
 import { PlayerService } from '../db/playerService';
-import { Player } from '../../shared/types/GameTypes';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 
