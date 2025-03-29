@@ -5,11 +5,40 @@ import '@jest/globals';
 
 describe('PlayerService Integration Tests', () => {
     let gameId: string;
+    let client: any;
+
+    beforeAll(async () => {
+        // Create a dedicated client for transactions
+        client = await db.connect();
+    });
+
+    afterAll(async () => {
+        await client.release();
+    });
 
     beforeEach(async () => {
+        // Start a transaction
+        await client.query('BEGIN');
         gameId = uuidv4();
-        // Create the game before running player tests
         await PlayerService.createGame(gameId);
+    });
+
+    afterEach(async () => {
+        // Rollback the transaction to clean up
+        await client.query('ROLLBACK');
+        
+        // Additional cleanup for any data that might have been committed
+        // Order matters due to foreign key constraints
+        try {
+            // First delete tracks as they depend on players
+            await db.query('DELETE FROM player_tracks');
+            // Then delete players as they depend on games
+            await db.query('DELETE FROM players');
+            // Finally delete games
+            await db.query('DELETE FROM games');
+        } catch (error) {
+            console.error('Cleanup error:', error);
+        }
     });
 
     describe('Game Operations', () => {
@@ -79,7 +108,8 @@ describe('PlayerService Integration Tests', () => {
                 money: 50,
                 trainType: 'Freight'
             };
-            await expect(PlayerService.createPlayer(gameId, player2)).rejects.toThrow('Color already taken by another player');
+            await expect(PlayerService.createPlayer(gameId, player2))
+                .rejects.toThrow('Color already taken by another player');
         });
 
         it('should validate color format', async () => {
@@ -90,7 +120,8 @@ describe('PlayerService Integration Tests', () => {
                 money: 50,
                 trainType: 'Freight'
             };
-            await expect(PlayerService.createPlayer(gameId, player)).rejects.toThrow('Invalid color format');
+            await expect(PlayerService.createPlayer(gameId, player))
+                .rejects.toThrow('Invalid color format');
         });
 
         it('should delete a player', async () => {
@@ -107,6 +138,28 @@ describe('PlayerService Integration Tests', () => {
 
             const result = await db.query('SELECT * FROM players WHERE id = $1', [playerId]);
             expect(result.rows.length).toBe(0);
+        });
+
+        it('should cascade delete player tracks when player is deleted', async () => {
+            const playerId = uuidv4();
+            const player = {
+                id: playerId,
+                name: 'Test Player',
+                color: '#FF0000',
+                money: 50,
+                trainType: 'Freight'
+            };
+            await PlayerService.createPlayer(gameId, player);
+            
+            // Add some track data
+            await db.query(
+                'INSERT INTO player_tracks (game_id, player_id, segments, total_cost) VALUES ($1, $2, $3, $4)',
+                [gameId, playerId, JSON.stringify([{x1: 0, y1: 0, x2: 1, y2: 1}]), 10]
+            );
+            await PlayerService.deletePlayer(gameId, playerId);
+
+            const trackResult = await db.query('SELECT * FROM player_tracks WHERE player_id = $1', [playerId]);
+            expect(trackResult.rows.length).toBe(0);
         });
     });
 

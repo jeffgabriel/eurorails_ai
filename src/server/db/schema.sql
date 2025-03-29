@@ -27,8 +27,8 @@ CREATE TABLE IF NOT EXISTS players (
 -- Create player_tracks table
 CREATE TABLE IF NOT EXISTS player_tracks (
     id SERIAL PRIMARY KEY,
-    game_id VARCHAR(255) REFERENCES games(id),
-    player_id VARCHAR(255) REFERENCES players(id),
+    game_id VARCHAR(255) REFERENCES games(id) ON DELETE CASCADE,
+    player_id VARCHAR(255) REFERENCES players(id) ON DELETE CASCADE,
     segments JSONB NOT NULL DEFAULT '[]',
     total_cost INTEGER NOT NULL DEFAULT 0,
     turn_build_cost INTEGER NOT NULL DEFAULT 0,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS player_tracks (
 
 -- Create game_state table
 CREATE TABLE IF NOT EXISTS game_state (
-    game_id VARCHAR(255) PRIMARY KEY REFERENCES games(id),
+    game_id VARCHAR(255) PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
     current_player_index INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

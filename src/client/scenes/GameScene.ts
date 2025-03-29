@@ -115,7 +115,7 @@ export class GameScene extends Phaser.Scene {
         });
     }
 
-    create() {
+    async create() {
         console.debug('GameScene create method called');
         // Clear any existing containers
         this.children.removeAll(true);
@@ -126,9 +126,13 @@ export class GameScene extends Phaser.Scene {
         this.playerHandContainer = this.add.container(0, 0);
         
         // Initialize drawing graphics
-        this.drawingGraphics = this.add.graphics({ lineStyle: { width: 3, color: 0x000000 } });
+        this.drawingGraphics = this.add.graphics();
+        this.drawingGraphics.setDepth(1);
         this.mapContainer.add(this.drawingGraphics);
         
+        // Load existing tracks for the game
+        await this.loadExistingTracks();
+
         // Setup scene elements
         this.setupCamera();
         this.createTriangularGrid();
@@ -1281,6 +1285,44 @@ export class GameScene extends Phaser.Scene {
                 this.requestRender();
             }
         });
+    }
+
+    private async loadExistingTracks(): Promise<void> {
+        try {
+            // Fetch all tracks for the current game
+            const response = await fetch(`/api/tracks/${this.gameState.id}`);
+            if (!response.ok) {
+                console.error('Failed to load tracks:', await response.text());
+                return;
+            }
+
+            const tracks: PlayerTrackState[] = await response.json();
+            console.debug('Loaded tracks:', tracks);
+
+            // Initialize playerTracks Map with loaded data
+            tracks.forEach(trackState => {
+                this.playerTracks.set(trackState.playerId, trackState);
+            });
+
+            // Draw all loaded tracks
+            this.playerTracks.forEach((trackState, playerId) => {
+                const player = this.gameState.players.find(p => p.id === playerId);
+                if (player) {
+                    const color = parseInt(player.color.replace('#', '0x'));
+                    trackState.segments.forEach(segment => {
+                        this.drawingGraphics.lineStyle(3, color, 1);
+                        this.drawingGraphics.beginPath();
+                        this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
+                        this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
+                        this.drawingGraphics.strokePath();
+                    });
+                }
+            });
+
+            console.debug('Finished drawing loaded tracks');
+        } catch (error) {
+            console.error('Error loading tracks:', error);
+        }
     }
 
     update(time: number, delta: number): void {
