@@ -231,12 +231,33 @@ export class GameScene extends Phaser.Scene {
             city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
         }>();
         
+        // Create a map to store connected city points
+        const cityAreaPoints = new Map<string, { city: { type: TerrainType; name: string }, terrain: TerrainType }>();
+        
+        // First pass: Build lookup maps and identify city areas
         mapConfig.points.forEach(point => {
             terrainLookup.set(`${point.row},${point.col}`, {
                 terrain: point.terrain,
                 ferryConnection: point.ferryConnection,
                 city: point.city
             });
+            
+            // If this is a city point, mark all its connected points
+            if (point.city?.connectedPoints) {
+                // Mark the center point
+                cityAreaPoints.set(`${point.row},${point.col}`, {
+                    city: point.city,
+                    terrain: point.terrain
+                });
+                
+                // Mark all connected points as part of the city
+                point.city.connectedPoints.forEach(connectedPoint => {
+                    cityAreaPoints.set(`${connectedPoint.row},${connectedPoint.col}`, {
+                        city: point.city!,
+                        terrain: point.terrain
+                    });
+                });
+            }
         });
 
         // Create graphics objects for different elements
@@ -387,9 +408,12 @@ export class GameScene extends Phaser.Scene {
                 const y = row * this.VERTICAL_SPACING;
 
                 const config = terrainLookup.get(`${row},${col}`);
+                const cityAreaConfig = cityAreaPoints.get(`${row},${col}`);
+                
+                // Use city area config if available, otherwise use regular config
                 const terrain = config?.terrain || TerrainType.Clear;
                 const ferryConnection = config?.ferryConnection;
-                const city = config?.city;
+                const city = cityAreaConfig?.city || config?.city;
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
@@ -431,19 +455,6 @@ export class GameScene extends Phaser.Scene {
                     ferryConnection,
                     city 
                 };
-
-                // Draw ferry connections
-                if (ferryConnection) {
-                    const targetX = ferryConnection.col * this.HORIZONTAL_SPACING + 
-                        (ferryConnection.row % 2 === 1 ? this.HORIZONTAL_SPACING / 2 : 0);
-                    const targetY = ferryConnection.row * this.VERTICAL_SPACING;
-                    
-                    ferryConnections.beginPath();
-                    ferryConnections.moveTo(x, y);
-                    ferryConnections.lineTo(targetX, targetY);
-                    ferryConnections.closePath();
-                    ferryConnections.stroke();
-                }
             }
         }
 
@@ -769,6 +780,27 @@ export class GameScene extends Phaser.Scene {
         const clickedPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
         if (!clickedPoint) return;
 
+        // Only log on actual clicks in drawing mode
+        if (pointer.leftButtonDown()) {
+            // Get world coordinates
+            const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+            
+            // Calculate grid coordinates
+            const x = worldPoint.x - this.GRID_MARGIN;
+            const y = worldPoint.y - this.GRID_MARGIN;
+            const gridX = Math.floor(x / this.HORIZONTAL_SPACING);
+            const gridY = Math.floor(y / this.VERTICAL_SPACING);
+
+            console.log('Drawing mode click:', {
+                screen: { x: pointer.x, y: pointer.y },
+                world: { x: worldPoint.x, y: worldPoint.y },
+                grid: { x: gridX, y: gridY },
+                point: clickedPoint,
+                city: clickedPoint.city,
+                isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity
+            });
+        }
+
         if (!this.lastClickedPoint) {
             this.lastClickedPoint = clickedPoint;
             this.highlightValidPoints(clickedPoint);
@@ -786,7 +818,6 @@ export class GameScene extends Phaser.Scene {
                 this.lastClickedPoint = clickedPoint;
                 this.highlightValidPoints(clickedPoint);
             } else {
-                // Visual feedback for invalid placement
                 this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
             }
         }
@@ -862,17 +893,27 @@ export class GameScene extends Phaser.Scene {
 
     private showInvalidPlacementFeedback(error: TrackBuildError): void {
         // TODO: Show visual feedback for invalid placement
-        console.log('Invalid track placement:', error);
     }
 
-    private getGridPointAtPosition(x: number, y: number): GridPoint | null {
+    private getGridPointAtPosition(screenX: number, screenY: number): GridPoint | null {
+        // Convert screen coordinates to world coordinates
+        const worldPoint = this.cameras.main.getWorldPoint(screenX, screenY);
+        
+        // Adjust for grid margin
+        const x = worldPoint.x - this.GRID_MARGIN;
+        const y = worldPoint.y - this.GRID_MARGIN;
+        
+        // Convert to grid coordinates
         const gridX = Math.floor(x / this.HORIZONTAL_SPACING);
         const gridY = Math.floor(y / this.VERTICAL_SPACING);
 
-        if (gridX >= 0 && gridX < this.gridPoints.length &&
-            gridY >= 0 && gridY < this.gridPoints[0].length) {
-            return this.gridPoints[gridX][gridY];
+        // Check if the point is within bounds
+        if (gridX >= 0 && gridX < this.GRID_WIDTH &&
+            gridY >= 0 && gridY < this.GRID_HEIGHT) {
+            const point = this.gridPoints[gridY][gridX];
+            return point;
         }
+        
         return null;
     }
 
@@ -944,7 +985,8 @@ export class GameScene extends Phaser.Scene {
         // If this is the first track segment ever for this player
         if (playerTrack.segments.length === 0) {
             // First track must start from a major city
-            if (from.terrain !== TerrainType.MajorCity) {
+            const isMajorCity = from.city?.type === TerrainType.MajorCity;
+            if (!isMajorCity) {
                 return { isValid: false, error: TrackBuildError.NOT_MAJOR_CITY };
             }
         } else {
