@@ -80,6 +80,12 @@ export class GameScene extends Phaser.Scene {
 
     preload() {
         this.load.image('ferry-port', '/assets/ferry-port.png');
+        
+        // Preload crayon images for each player color
+        const colors = ['red', 'blue', 'green', 'yellow', 'black', 'brown'];
+        colors.forEach(color => {
+            this.load.image(`crayon_${color}`, `/assets/crayon_${color}.png`);
+        });
     }
 
     create() {
@@ -636,13 +642,48 @@ export class GameScene extends Phaser.Scene {
             this.scale.height - 180,  // Align with cards
             `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`,
             { 
-                color: '#000000',
+                color: '#ffffff',  // Changed to white for better visibility
                 fontSize: '20px',
                 fontStyle: 'bold'
             }
         ).setOrigin(0, 0);
+
+        // Add crayon button
+        const colorMap: { [key: string]: string } = {
+            '#FFD700': 'yellow',
+            '#FF0000': 'red',
+            '#0000FF': 'blue',
+            '#000000': 'black',
+            '#008000': 'green',
+            '#8B4513': 'brown'
+        };
         
-        this.playerHandContainer.add([handBackground, trainSection, trainLabel, playerInfo]);
+        const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || 'black';
+        const crayonTexture = `crayon_${crayonColor}`;
+        
+        // Position crayon relative to player info
+        const crayonButton = this.add.image(
+            820 + 200,  // Position 200 pixels right of player info start
+            this.scale.height - 140,  // Vertically center between player info lines
+            crayonTexture
+        ).setScale(0.15)
+        .setInteractive({ useHandCursor: true });
+
+        // Add hover effect and click handler
+        crayonButton
+            .on('pointerover', () => {
+                crayonButton.setScale(0.17);
+            })
+            .on('pointerout', () => {
+                crayonButton.setScale(0.15);
+            })
+            .on('pointerdown', () => {
+                console.log('Entering draw mode');
+            });
+        
+        // Add elements to container in correct order - background first, then UI elements
+        this.playerHandContainer.add([handBackground]);  // Add background first
+        this.playerHandContainer.add([trainSection, trainLabel, playerInfo, crayonButton]);  // Then add UI elements
     }
 
     private setupCamera() {
