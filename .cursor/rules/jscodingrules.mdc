@@ -157,3 +157,55 @@ function getData() {
     .then(res => res.json());
 }
 ```
+
+9. **Enum Guidelines**
+- Use unique enum names across the entire codebase
+- Never create enums with overlapping purposes (e.g., CityType vs TerrainType for cities)
+- Document enum values with JSDoc comments
+- Use PascalCase for enum names and values
+- Prefix enum names with domain/category if needed to avoid conflicts
+```typescript
+// ✅ Do:
+/** Represents all terrain types including cities */
+export enum TerrainType {
+  Clear = 0,
+  Mountain = 1,
+  MajorCity = 2,
+  // ...
+}
+
+// ❌ Don't:
+export enum TerrainType { /* ... */ }
+export enum CityType { /* ... */ }  // Overlapping purpose
+
+// ❌ Don't: Ambiguous naming
+export enum Type { /* ... */ }
+```
+
+10. **Enum Value Management**
+- Keep a central registry of all enum values to prevent duplicates
+- Use numeric values explicitly to catch duplicate values at compile time
+- Never mix string and numeric enum values within the same enum
+```typescript
+// ✅ Do:
+export enum TerrainType {
+  Clear = 0,
+  Mountain = 1,
+  MajorCity = 2
+}
+
+// ❌ Don't: Mixed value types
+export enum TerrainType {
+  Clear = 0,
+  Mountain = "MOUNTAIN",
+  MajorCity = 2
+}
+
+// ❌ Don't: Implicit values that could clash
+export enum TerrainType {
+  Clear,      // 0
+  Mountain,   // 1
+  MajorCity   // 2
+}
+```
+

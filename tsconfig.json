@@ -20,8 +20,8 @@
     },
     "noImplicitAny": false,
     "strictPropertyInitialization": false,
-    "preserveConstEnums": false,
-    "isolatedModules": false
+    "preserveConstEnums": true,
+    "isolatedModules": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
