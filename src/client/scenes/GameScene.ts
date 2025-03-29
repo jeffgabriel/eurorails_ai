@@ -4,8 +4,10 @@ import { GameState, TerrainType } from '../../shared/types/GameTypes';
 import { PlayerTrackState, TrackSegment, TrackBuildResult, TrackBuildError } from '../../shared/types/TrackTypes';
 
 interface GridPoint {
-    x: number;
-    y: number;
+    x: number;  // screen x
+    y: number;  // screen y
+    row: number;  // grid row
+    col: number;  // grid column
     sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
     terrain: TerrainType;
     ferryConnection?: { row: number; col: number };
@@ -114,7 +116,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     create() {
-        console.log('GameScene create method called');
+        console.debug('GameScene create method called');
         // Clear any existing containers
         this.children.removeAll(true);
         
@@ -446,10 +448,12 @@ export class GameScene extends Phaser.Scene {
                     }
                 }
 
-                // Store point data
+                // Store point data with grid coordinates
                 this.gridPoints[row][col] = { 
                     x: x + this.GRID_MARGIN, 
-                    y: y + this.GRID_MARGIN, 
+                    y: y + this.GRID_MARGIN,
+                    row,
+                    col,
                     sprite, 
                     terrain,
                     ferryConnection,
@@ -728,7 +732,8 @@ export class GameScene extends Phaser.Scene {
                     crayonButton.setScale(0.15);
                 }
             })
-            .on('pointerdown', () => {
+            .on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+                pointer.event.stopPropagation();  // Prevent click from propagating
                 this.toggleDrawingMode();
             });
         
@@ -777,6 +782,11 @@ export class GameScene extends Phaser.Scene {
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
         if (!this.isDrawingMode) return;
 
+        // Check if click is in the UI area (bottom 200px of screen)
+        if (pointer.y > this.scale.height - 200) {
+            return;  // Ignore clicks in the UI area
+        }
+
         const clickedPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
         if (!clickedPoint) return;
 
@@ -785,16 +795,10 @@ export class GameScene extends Phaser.Scene {
             // Get world coordinates
             const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
             
-            // Calculate grid coordinates
-            const x = worldPoint.x - this.GRID_MARGIN;
-            const y = worldPoint.y - this.GRID_MARGIN;
-            const gridX = Math.floor(x / this.HORIZONTAL_SPACING);
-            const gridY = Math.floor(y / this.VERTICAL_SPACING);
-
-            console.log('Drawing mode click:', {
+            console.debug('Drawing mode click:', {
                 screen: { x: pointer.x, y: pointer.y },
                 world: { x: worldPoint.x, y: worldPoint.y },
-                grid: { x: gridX, y: gridY },
+                grid: { row: clickedPoint.row, col: clickedPoint.col },
                 point: clickedPoint,
                 city: clickedPoint.city,
                 isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity
@@ -808,8 +812,20 @@ export class GameScene extends Phaser.Scene {
             const validationResult = this.validateTrackPlacement(this.lastClickedPoint, clickedPoint);
             if (validationResult.isValid && validationResult.cost !== undefined) {
                 const segment: TrackSegment = {
-                    from: this.lastClickedPoint,
-                    to: clickedPoint,
+                    from: {
+                        x: this.lastClickedPoint.x,
+                        y: this.lastClickedPoint.y,
+                        row: this.lastClickedPoint.row,
+                        col: this.lastClickedPoint.col,
+                        terrain: this.lastClickedPoint.terrain
+                    },
+                    to: {
+                        x: clickedPoint.x,
+                        y: clickedPoint.y,
+                        row: clickedPoint.row,
+                        col: clickedPoint.col,
+                        terrain: clickedPoint.terrain
+                    },
                     cost: validationResult.cost
                 };
                 this.currentSegments.push(segment);
@@ -835,22 +851,19 @@ export class GameScene extends Phaser.Scene {
         // Redraw existing segments
         this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
 
-        // Draw preview line
-        const validationResult = this.validateTrackPlacement(this.lastClickedPoint!, hoverPoint);
-        const color = validationResult.isValid ? 0x00ff00 : 0xff0000;
-        const alpha = 0.5;
+        // Only show preview line if hovering over an adjacent point
+        if (this.isAdjacent(this.lastClickedPoint, hoverPoint)) {
+            // Draw preview line
+            const validationResult = this.validateTrackPlacement(this.lastClickedPoint!, hoverPoint);
+            const color = validationResult.isValid ? 0x00ff00 : 0xff0000;
+            const alpha = 0.5;
 
-        this.drawingGraphics.lineStyle(2, color, alpha);
-        this.drawingGraphics.beginPath();
-        this.drawingGraphics.moveTo(
-            this.lastClickedPoint!.x * this.HORIZONTAL_SPACING,
-            this.lastClickedPoint!.y * this.VERTICAL_SPACING
-        );
-        this.drawingGraphics.lineTo(
-            hoverPoint.x * this.HORIZONTAL_SPACING,
-            hoverPoint.y * this.VERTICAL_SPACING
-        );
-        this.drawingGraphics.strokePath();
+            this.drawingGraphics.lineStyle(2, color, alpha);
+            this.drawingGraphics.beginPath();
+            this.drawingGraphics.moveTo(this.lastClickedPoint!.x, this.lastClickedPoint!.y);
+            this.drawingGraphics.lineTo(hoverPoint.x, hoverPoint.y);
+            this.drawingGraphics.strokePath();
+        }
     }
 
     private drawTrackSegment(segment: TrackSegment): void {
@@ -859,15 +872,22 @@ export class GameScene extends Phaser.Scene {
 
         this.drawingGraphics.lineStyle(3, color, 1);
         this.drawingGraphics.beginPath();
-        this.drawingGraphics.moveTo(
-            segment.from.x * this.HORIZONTAL_SPACING,
-            segment.from.y * this.VERTICAL_SPACING
-        );
-        this.drawingGraphics.lineTo(
-            segment.to.x * this.HORIZONTAL_SPACING,
-            segment.to.y * this.VERTICAL_SPACING
-        );
+        this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
+        this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
         this.drawingGraphics.strokePath();
+
+        // Add debug info for the drawn segment
+        console.debug('Drawing track segment:', {
+            from: { 
+                screen: { x: segment.from.x, y: segment.from.y },
+                grid: { row: segment.from.row, col: segment.from.col }
+            },
+            to: { 
+                screen: { x: segment.to.x, y: segment.to.y },
+                grid: { row: segment.to.row, col: segment.to.col }
+            },
+            color: currentPlayer.color
+        });
     }
 
     private highlightValidPoints(fromPoint: GridPoint): void {
@@ -877,16 +897,18 @@ export class GameScene extends Phaser.Scene {
         // Redraw existing segments
         this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
 
-        // Draw valid connection points
+        // Only highlight adjacent points that are valid connections
         this.gridPoints.flat().forEach(point => {
-            const validationResult = this.validateTrackPlacement(fromPoint, point);
-            if (validationResult.isValid) {
-                this.drawingGraphics.fillStyle(0x00ff00, 0.3);
-                this.drawingGraphics.fillCircle(
-                    point.x * this.HORIZONTAL_SPACING,
-                    point.y * this.VERTICAL_SPACING,
-                    5
-                );
+            if (this.isAdjacent(fromPoint, point)) {
+                const validationResult = this.validateTrackPlacement(fromPoint, point);
+                if (validationResult.isValid) {
+                    this.drawingGraphics.fillStyle(0x00ff00, 0.3);
+                    this.drawingGraphics.fillCircle(
+                        point.x,
+                        point.y,
+                        5
+                    );
+                }
             }
         });
     }
@@ -904,14 +926,13 @@ export class GameScene extends Phaser.Scene {
         const y = worldPoint.y - this.GRID_MARGIN;
         
         // Convert to grid coordinates
-        const gridX = Math.floor(x / this.HORIZONTAL_SPACING);
-        const gridY = Math.floor(y / this.VERTICAL_SPACING);
+        const row = Math.floor(y / this.VERTICAL_SPACING);
+        const col = Math.floor(x / this.HORIZONTAL_SPACING - (row % 2 === 1 ? 0.5 : 0));
 
         // Check if the point is within bounds
-        if (gridX >= 0 && gridX < this.GRID_WIDTH &&
-            gridY >= 0 && gridY < this.GRID_HEIGHT) {
-            const point = this.gridPoints[gridY][gridX];
-            return point;
+        if (col >= 0 && col < this.GRID_WIDTH &&
+            row >= 0 && row < this.GRID_HEIGHT) {
+            return this.gridPoints[row][col];
         }
         
         return null;
@@ -961,6 +982,24 @@ export class GameScene extends Phaser.Scene {
         return cost;
     }
 
+    private isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
+        // Same row - must be adjacent columns
+        if (point1.row === point2.row) {
+            return Math.abs(point1.col - point2.col) === 1;
+        }
+
+        // Must be adjacent rows
+        if (Math.abs(point1.row - point2.row) !== 1) {
+            return false;
+        }
+
+        // In odd rows, can connect to same column or one to the left
+        // In even rows, can connect to same column or one to the right
+        return point1.row % 2 === 1 ? 
+            point2.col === point1.col || point2.col === point1.col - 1 :
+            point2.col === point1.col || point2.col === point1.col + 1;
+    }
+
     private validateTrackPlacement(from: GridPoint, to: GridPoint): TrackBuildResult {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrack = this.playerTracks.get(currentPlayer.id) || {
@@ -977,24 +1016,28 @@ export class GameScene extends Phaser.Scene {
         };
         const cost = this.calculateTrackCost(from, to);
 
+        // Check if points are adjacent
+        if (!this.isAdjacent(from, to)) {
+            return { isValid: false, error: TrackBuildError.NOT_ADJACENT };
+        }
+
         // Check if this would exceed the turn budget
         if (this.turnBuildCost + cost > this.MAX_TURN_BUILD_COST) {
             return { isValid: false, error: TrackBuildError.EXCEEDS_TURN_BUDGET };
         }
 
         // If this is the first track segment ever for this player
-        if (playerTrack.segments.length === 0) {
+        if (this.currentSegments.length === 0) {
             // First track must start from a major city
             const isMajorCity = from.city?.type === TerrainType.MajorCity;
             if (!isMajorCity) {
                 return { isValid: false, error: TrackBuildError.NOT_MAJOR_CITY };
             }
         } else {
-            // Check if the new segment connects to existing network
-            const isConnected = playerTrack.segments.some(segment => 
-                (segment.from.x === from.x && segment.from.y === from.y) ||
-                (segment.to.x === from.x && segment.to.y === from.y)
-            );
+            // Check if the new segment connects to the last placed segment
+            const lastSegment = this.currentSegments[this.currentSegments.length - 1];
+            const isConnected = 
+                (lastSegment.to.x === from.x && lastSegment.to.y === from.y);
             
             if (!isConnected) {
                 return { isValid: false, error: TrackBuildError.NOT_CONNECTED_TO_NETWORK };
