@@ -145,13 +145,6 @@ export class GameScene extends Phaser.Scene {
         this.setupUIOverlay();
         this.setupPlayerHand();
 
-        // Set up drawing mode click handler
-        this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-            if (this.isDrawingMode) {
-                this.handleDrawingClick(pointer);
-            }
-        });
-
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
 
@@ -761,7 +754,6 @@ export class GameScene extends Phaser.Scene {
         this.drawingGraphics.clear();
         this.currentSegments = [];
         this.lastClickedPoint = null;
-        this.turnBuildCost = 0;
 
         // Set up input handlers for drawing mode
         this.input.on('pointerdown', this.handleDrawingClick, this);
@@ -776,81 +768,65 @@ export class GameScene extends Phaser.Scene {
         }
         this.currentSegments = [];
         this.lastClickedPoint = null;
-        this.turnBuildCost = 0;
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
-        if (!this.isDrawingMode) return;
+        if (!this.isDrawingMode || !pointer.leftButtonDown()) return;
 
-        // Check if click is in the UI area (bottom 200px of screen)
+        // Ignore clicks in UI area
         if (pointer.y > this.scale.height - 200) {
-            return;  // Ignore clicks in the UI area
-        }
-
-        const clickedPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
-        if (!clickedPoint) return;
-
-        // Only log on actual clicks in drawing mode
-        if (pointer.leftButtonDown()) {
-            // Get world coordinates
-            const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
-            
-            console.debug('Drawing mode click:', {
-                screen: { x: pointer.x, y: pointer.y },
-                world: { x: worldPoint.x, y: worldPoint.y },
-                grid: { row: clickedPoint.row, col: clickedPoint.col },
-                point: clickedPoint,
-                city: clickedPoint.city,
-                isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity,
-                isAdjacent: this.lastClickedPoint ? this.isAdjacent(this.lastClickedPoint, clickedPoint) : 'first point'
-            });
-        }
-
-        // If this is the first point
-        if (!this.lastClickedPoint) {
-            // Validate if it's a valid starting point (major city)
-            const validationResult = this.validateTrackPlacement(clickedPoint, clickedPoint);
-            if (validationResult.isValid) {
-                this.lastClickedPoint = clickedPoint;
-                this.highlightValidPoints(clickedPoint);
-            } else {
-                this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
-            }
+            console.debug('Click ignored: in UI area');
             return;
         }
 
-        // For subsequent points, check if it's adjacent and valid
-        if (this.isAdjacent(this.lastClickedPoint, clickedPoint)) {
-            const validationResult = this.validateTrackPlacement(this.lastClickedPoint, clickedPoint);
-            if (validationResult.isValid && validationResult.cost !== undefined) {
-                const segment: TrackSegment = {
-                    from: {
-                        x: this.lastClickedPoint.x,
-                        y: this.lastClickedPoint.y,
-                        row: this.lastClickedPoint.row,
-                        col: this.lastClickedPoint.col,
-                        terrain: this.lastClickedPoint.terrain
-                    },
-                    to: {
-                        x: clickedPoint.x,
-                        y: clickedPoint.y,
-                        row: clickedPoint.row,
-                        col: clickedPoint.col,
-                        terrain: clickedPoint.terrain
-                    },
-                    cost: validationResult.cost
-                };
-                this.currentSegments.push(segment);
-                this.turnBuildCost += validationResult.cost;
-                this.drawTrackSegment(segment);
-                this.lastClickedPoint = clickedPoint;
-                this.highlightValidPoints(clickedPoint);
-            } else {
-                this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
-            }
-        } else {
-            this.showInvalidPlacementFeedback(TrackBuildError.NOT_ADJACENT);
+        const clickedPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
+        if (!clickedPoint) {
+            console.debug('Click ignored: no valid grid point found');
+            return;
         }
+
+        console.debug('Click registered at:', {
+            row: clickedPoint.row,
+            col: clickedPoint.col
+        });
+
+        // If this is the first point, just store it
+        if (!this.lastClickedPoint) {
+            this.lastClickedPoint = clickedPoint;
+            console.debug('First point set');
+            return;
+        }
+
+        // Create and draw the segment
+        const segment: TrackSegment = {
+            from: {
+                x: this.lastClickedPoint.x,
+                y: this.lastClickedPoint.y,
+                row: this.lastClickedPoint.row,
+                col: this.lastClickedPoint.col,
+                terrain: this.lastClickedPoint.terrain
+            },
+            to: {
+                x: clickedPoint.x,
+                y: clickedPoint.y,
+                row: clickedPoint.row,
+                col: clickedPoint.col,
+                terrain: clickedPoint.terrain
+            },
+            cost: 1  // Simplified cost
+        };
+
+        // Add new segment and draw it
+        this.currentSegments.push(segment);
+        this.drawTrackSegment(segment);
+        
+        // Update last clicked point
+        this.lastClickedPoint = clickedPoint;
+        
+        console.debug('Track segment created:', {
+            from: { row: segment.from.row, col: segment.from.col },
+            to: { row: segment.to.row, col: segment.to.col }
+        });
     }
 
     private handleDrawingHover(pointer: Phaser.Input.Pointer): void {
@@ -865,19 +841,12 @@ export class GameScene extends Phaser.Scene {
         // Redraw existing segments
         this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
 
-        // Only show preview line if hovering over an adjacent point
-        if (this.isAdjacent(this.lastClickedPoint, hoverPoint)) {
-            // Draw preview line
-            const validationResult = this.validateTrackPlacement(this.lastClickedPoint!, hoverPoint);
-            const color = validationResult.isValid ? 0x00ff00 : 0xff0000;
-            const alpha = 0.5;
-
-            this.drawingGraphics.lineStyle(2, color, alpha);
-            this.drawingGraphics.beginPath();
-            this.drawingGraphics.moveTo(this.lastClickedPoint!.x, this.lastClickedPoint!.y);
-            this.drawingGraphics.lineTo(hoverPoint.x, hoverPoint.y);
-            this.drawingGraphics.strokePath();
-        }
+        // Draw preview line
+        this.drawingGraphics.lineStyle(2, 0x00ff00, 0.5);
+        this.drawingGraphics.beginPath();
+        this.drawingGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
+        this.drawingGraphics.lineTo(hoverPoint.x, hoverPoint.y);
+        this.drawingGraphics.strokePath();
     }
 
     private drawTrackSegment(segment: TrackSegment): void {
@@ -890,17 +859,9 @@ export class GameScene extends Phaser.Scene {
         this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
         this.drawingGraphics.strokePath();
 
-        // Add debug info for the drawn segment
-        console.debug('Drawing track segment:', {
-            from: { 
-                screen: { x: segment.from.x, y: segment.from.y },
-                grid: { row: segment.from.row, col: segment.from.col }
-            },
-            to: { 
-                screen: { x: segment.to.x, y: segment.to.y },
-                grid: { row: segment.to.row, col: segment.to.col }
-            },
-            color: currentPlayer.color
+        console.debug('Drew segment:', {
+            from: { row: segment.from.row, col: segment.from.col },
+            to: { row: segment.to.row, col: segment.to.col }
         });
     }
 
@@ -908,12 +869,13 @@ export class GameScene extends Phaser.Scene {
         // Clear previous highlights
         this.drawingGraphics.clear();
 
-        // Redraw existing segments
+        // Redraw existing segments first
         this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
 
-        // Only highlight adjacent points that are valid connections
+        // Then highlight valid points
+        let validPointsFound = 0;
         this.gridPoints.flat().forEach(point => {
-            if (this.isAdjacent(fromPoint, point)) {
+            if (point && this.isAdjacent(fromPoint, point)) {
                 const validationResult = this.validateTrackPlacement(fromPoint, point);
                 if (validationResult.isValid) {
                     this.drawingGraphics.fillStyle(0x00ff00, 0.3);
@@ -922,8 +884,14 @@ export class GameScene extends Phaser.Scene {
                         point.y,
                         5
                     );
+                    validPointsFound++;
                 }
             }
+        });
+        
+        console.debug('Valid points highlighted:', {
+            fromPoint: { row: fromPoint.row, col: fromPoint.col },
+            validPointsCount: validPointsFound
         });
     }
 
@@ -935,21 +903,46 @@ export class GameScene extends Phaser.Scene {
         // Convert screen coordinates to world coordinates
         const worldPoint = this.cameras.main.getWorldPoint(screenX, screenY);
         
-        // Adjust for grid margin
-        const x = worldPoint.x - this.GRID_MARGIN;
-        const y = worldPoint.y - this.GRID_MARGIN;
+        // Define maximum distance for point selection (adjust this value as needed)
+        const MAX_DISTANCE = 15; // pixels
         
-        // Convert to grid coordinates
-        const row = Math.floor(y / this.VERTICAL_SPACING);
-        const col = Math.floor(x / this.HORIZONTAL_SPACING - (row % 2 === 1 ? 0.5 : 0));
+        let closestPoint: GridPoint | null = null;
+        let minDistance = MAX_DISTANCE;
 
-        // Check if the point is within bounds
-        if (col >= 0 && col < this.GRID_WIDTH &&
-            row >= 0 && row < this.GRID_HEIGHT) {
-            return this.gridPoints[row][col];
+        // Check all points in a 3x3 grid area around the cursor
+        const approxRow = Math.floor((worldPoint.y - this.GRID_MARGIN) / this.VERTICAL_SPACING);
+        const approxCol = Math.floor((worldPoint.x - this.GRID_MARGIN) / this.HORIZONTAL_SPACING);
+
+        // Search in a 3x3 area around the approximate position
+        for (let r = Math.max(0, approxRow - 1); r <= Math.min(this.GRID_HEIGHT - 1, approxRow + 1); r++) {
+            for (let c = Math.max(0, approxCol - 1); c <= Math.min(this.GRID_WIDTH - 1, approxCol + 1); c++) {
+                const point = this.gridPoints[r][c];
+                if (!point) continue;
+
+                // Skip water points
+                if (point.terrain === TerrainType.Water) continue;
+
+                // Calculate distance to this point
+                const dx = point.x - worldPoint.x;
+                const dy = point.y - worldPoint.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                // Update closest point if this is closer
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = point;
+                }
+            }
         }
-        
-        return null;
+
+        // Debug info
+        console.debug('Point selection:', {
+            world: { x: worldPoint.x, y: worldPoint.y },
+            closestPoint: closestPoint ? { row: closestPoint.row, col: closestPoint.col } : null,
+            distance: minDistance
+        });
+
+        return closestPoint;
     }
 
     private async nextPlayerTurn() {
@@ -1000,39 +993,27 @@ export class GameScene extends Phaser.Scene {
         // Prevent null/undefined points
         if (!point1 || !point2) return false;
 
-        // For a hexagonal grid, each point has 6 adjacent points
-        // The pattern depends on whether we're in an odd or even row
-        const isOddRow = point1.row % 2 === 1;
-
-        // Same row adjacency
+        // Same row adjacency - must be consecutive columns
         if (point1.row === point2.row) {
-            // Left or right
             return Math.abs(point1.col - point2.col) === 1;
         }
 
         // One row difference only
-        if (Math.abs(point1.row - point2.row) !== 1) {
-            return false;
-        }
+        const rowDiff = Math.abs(point1.row - point2.row);
+        if (rowDiff !== 1) return false;
 
-        if (point2.row === point1.row + 1) {
-            // Point2 is in the row below point1
-            if (isOddRow) {
-                // For odd rows, can connect to same column or one to the right
-                return point2.col === point1.col || point2.col === point1.col + 1;
-            } else {
-                // For even rows, can connect to same column or one to the left
-                return point2.col === point1.col || point2.col === point1.col - 1;
-            }
+        // For points in adjacent rows, the column relationship depends on which row is odd/even
+        const isPoint1OddRow = point1.row % 2 === 1;
+        const colDiff = point2.col - point1.col;  // Use directed difference
+
+        // If point1 is in an odd row
+        if (isPoint1OddRow) {
+            // Can connect to same column or one column to the right in adjacent rows
+            return colDiff === 0 || colDiff === 1;
         } else {
-            // Point2 is in the row above point1
-            if (isOddRow) {
-                // For odd rows, can connect to same column or one to the right
-                return point2.col === point1.col || point2.col === point1.col + 1;
-            } else {
-                // For even rows, can connect to same column or one to the left
-                return point2.col === point1.col || point2.col === point1.col - 1;
-            }
+            // If point1 is in an even row
+            // Can connect to same column or one column to the left in adjacent rows
+            return colDiff === 0 || colDiff === -1;
         }
     }
 
