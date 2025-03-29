@@ -801,14 +801,26 @@ export class GameScene extends Phaser.Scene {
                 grid: { row: clickedPoint.row, col: clickedPoint.col },
                 point: clickedPoint,
                 city: clickedPoint.city,
-                isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity
+                isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity,
+                isAdjacent: this.lastClickedPoint ? this.isAdjacent(this.lastClickedPoint, clickedPoint) : 'first point'
             });
         }
 
+        // If this is the first point
         if (!this.lastClickedPoint) {
-            this.lastClickedPoint = clickedPoint;
-            this.highlightValidPoints(clickedPoint);
-        } else {
+            // Validate if it's a valid starting point (major city)
+            const validationResult = this.validateTrackPlacement(clickedPoint, clickedPoint);
+            if (validationResult.isValid) {
+                this.lastClickedPoint = clickedPoint;
+                this.highlightValidPoints(clickedPoint);
+            } else {
+                this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
+            }
+            return;
+        }
+
+        // For subsequent points, check if it's adjacent and valid
+        if (this.isAdjacent(this.lastClickedPoint, clickedPoint)) {
             const validationResult = this.validateTrackPlacement(this.lastClickedPoint, clickedPoint);
             if (validationResult.isValid && validationResult.cost !== undefined) {
                 const segment: TrackSegment = {
@@ -836,6 +848,8 @@ export class GameScene extends Phaser.Scene {
             } else {
                 this.showInvalidPlacementFeedback(validationResult.error || TrackBuildError.UNKNOWN_ERROR);
             }
+        } else {
+            this.showInvalidPlacementFeedback(TrackBuildError.NOT_ADJACENT);
         }
     }
 
@@ -983,74 +997,77 @@ export class GameScene extends Phaser.Scene {
     }
 
     private isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
-        // Same row - must be adjacent columns
+        // Prevent null/undefined points
+        if (!point1 || !point2) return false;
+
+        // For a hexagonal grid, each point has 6 adjacent points
+        // The pattern depends on whether we're in an odd or even row
+        const isOddRow = point1.row % 2 === 1;
+
+        // Same row adjacency
         if (point1.row === point2.row) {
+            // Left or right
             return Math.abs(point1.col - point2.col) === 1;
         }
 
-        // Must be adjacent rows
+        // One row difference only
         if (Math.abs(point1.row - point2.row) !== 1) {
             return false;
         }
 
-        // In odd rows, can connect to same column or one to the left
-        // In even rows, can connect to same column or one to the right
-        return point1.row % 2 === 1 ? 
-            point2.col === point1.col || point2.col === point1.col - 1 :
-            point2.col === point1.col || point2.col === point1.col + 1;
+        if (point2.row === point1.row + 1) {
+            // Point2 is in the row below point1
+            if (isOddRow) {
+                // For odd rows, can connect to same column or one to the right
+                return point2.col === point1.col || point2.col === point1.col + 1;
+            } else {
+                // For even rows, can connect to same column or one to the left
+                return point2.col === point1.col || point2.col === point1.col - 1;
+            }
+        } else {
+            // Point2 is in the row above point1
+            if (isOddRow) {
+                // For odd rows, can connect to same column or one to the right
+                return point2.col === point1.col || point2.col === point1.col + 1;
+            } else {
+                // For even rows, can connect to same column or one to the left
+                return point2.col === point1.col || point2.col === point1.col - 1;
+            }
+        }
     }
 
     private validateTrackPlacement(from: GridPoint, to: GridPoint): TrackBuildResult {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        const playerTrack = this.playerTracks.get(currentPlayer.id) || {
-            playerId: currentPlayer.id,
-            gameId: this.gameState.id,
-            segments: [],
-            totalCost: 0,
-            turnBuildCost: 0,
-            lastBuildTimestamp: new Date(),
-            networkState: {
-                nodes: [],
-                edges: []
-            }
-        };
-        const cost = this.calculateTrackCost(from, to);
+
+        // If this is the first segment (from === to), only check if it's a major city
+        if (from === to) {
+            const isMajorCity = from.city?.type === TerrainType.MajorCity;
+            return {
+                isValid: isMajorCity,
+                error: isMajorCity ? undefined : TrackBuildError.NOT_MAJOR_CITY,
+                cost: 0
+            };
+        }
 
         // Check if points are adjacent
         if (!this.isAdjacent(from, to)) {
             return { isValid: false, error: TrackBuildError.NOT_ADJACENT };
         }
 
+        const cost = this.calculateTrackCost(from, to);
+
         // Check if this would exceed the turn budget
         if (this.turnBuildCost + cost > this.MAX_TURN_BUILD_COST) {
             return { isValid: false, error: TrackBuildError.EXCEEDS_TURN_BUDGET };
         }
 
-        // If this is the first track segment ever for this player
-        if (this.currentSegments.length === 0) {
-            // First track must start from a major city
-            const isMajorCity = from.city?.type === TerrainType.MajorCity;
-            if (!isMajorCity) {
-                return { isValid: false, error: TrackBuildError.NOT_MAJOR_CITY };
-            }
-        } else {
-            // Check if the new segment connects to the last placed segment
-            const lastSegment = this.currentSegments[this.currentSegments.length - 1];
-            const isConnected = 
-                (lastSegment.to.x === from.x && lastSegment.to.y === from.y);
-            
-            if (!isConnected) {
-                return { isValid: false, error: TrackBuildError.NOT_CONNECTED_TO_NETWORK };
-            }
-        }
-
         // Check if track already exists at this location
         const trackExists = Array.from(this.playerTracks.values()).some(track =>
             track.segments.some(segment =>
-                (segment.from.x === from.x && segment.from.y === from.y &&
-                 segment.to.x === to.x && segment.to.y === to.y) ||
-                (segment.from.x === to.x && segment.from.y === to.y &&
-                 segment.to.x === from.x && segment.to.y === from.y)
+                (segment.from.row === from.row && segment.from.col === from.col &&
+                 segment.to.row === to.row && segment.to.col === to.col) ||
+                (segment.from.row === to.row && segment.from.col === to.col &&
+                 segment.to.row === from.row && segment.to.col === from.col)
             )
         );
 
