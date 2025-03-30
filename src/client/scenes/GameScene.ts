@@ -31,6 +31,7 @@ export class GameScene extends Phaser.Scene {
     // Drawing mode state
     private isDrawingMode: boolean = false;
     private drawingGraphics!: Phaser.GameObjects.Graphics;
+    private previewGraphics!: Phaser.GameObjects.Graphics;  // Add new graphics object for preview
     private currentSegments: TrackSegment[] = [];
     private lastClickedPoint: GridPoint | null = null;
     private turnBuildCost: number = 0;
@@ -817,8 +818,9 @@ export class GameScene extends Phaser.Scene {
         this.input.off('pointermove', this.handleDrawingHover, this);
 
         if (this.drawingGraphics) {
-            // Clear the graphics object
+            // Clear the graphics objects
             this.drawingGraphics.clear();
+            this.previewGraphics?.clear();
             
             // Redraw all permanent tracks for all players
             this.playerTracks.forEach((trackState, playerId) => {
@@ -847,9 +849,14 @@ export class GameScene extends Phaser.Scene {
             this.drawingGraphics = this.add.graphics();
             this.drawingGraphics.setDepth(1);
         }
+        if (!this.previewGraphics) {
+            this.previewGraphics = this.add.graphics();
+            this.previewGraphics.setDepth(2);  // Set higher depth to appear above tracks
+        }
 
         // Clear any existing graphics and redraw all permanent tracks
         this.drawingGraphics.clear();
+        this.previewGraphics.clear();
         this.playerTracks.forEach((trackState, playerId) => {
             const player = this.gameState.players.find(p => p.id === playerId);
             if (player) {
@@ -897,14 +904,22 @@ export class GameScene extends Phaser.Scene {
 
         // If this is the first point
         if (!this.lastClickedPoint) {
-            // First track must start from a major city
-            if (clickedPoint.city?.type !== TerrainType.MajorCity) {
-                console.debug('First point must be a major city');
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            const playerTrackState = this.playerTracks.get(currentPlayer.id);
+            
+            // Check if point is a major city
+            const isMajorCity = clickedPoint.city?.type === TerrainType.MajorCity;
+            
+            // Check if point is connected to existing track network
+            const isConnectedToNetwork = this.isPointConnectedToNetwork(clickedPoint, playerTrackState);
+            
+            if (!isMajorCity && !isConnectedToNetwork) {
+                console.debug('First point must be a major city or connect to existing track network');
                 return;
             }
             
             this.lastClickedPoint = clickedPoint;
-            console.debug('First point set (major city)');
+            console.debug('First point set:', { isMajorCity, isConnectedToNetwork });
             this.highlightValidPoints(clickedPoint);
             return;
         }
@@ -971,18 +986,15 @@ export class GameScene extends Phaser.Scene {
         const hoverPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
         if (!hoverPoint) return;
 
-        // Clear previous preview
-        this.drawingGraphics.clear();
-
-        // Redraw existing segments
-        this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
+        // Clear only the preview graphics
+        this.previewGraphics.clear();
 
         // Draw preview line
-        this.drawingGraphics.lineStyle(2, 0x00ff00, 0.5);
-        this.drawingGraphics.beginPath();
-        this.drawingGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
-        this.drawingGraphics.lineTo(hoverPoint.x, hoverPoint.y);
-        this.drawingGraphics.strokePath();
+        this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
+        this.previewGraphics.beginPath();
+        this.previewGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
+        this.previewGraphics.lineTo(hoverPoint.x, hoverPoint.y);
+        this.previewGraphics.strokePath();
     }
 
     private drawTrackSegment(segment: TrackSegment): void {
@@ -1002,9 +1014,8 @@ export class GameScene extends Phaser.Scene {
     }
 
     private highlightValidPoints(fromPoint: GridPoint): void {
-        // Clear previous highlights and redraw existing segments
-        this.drawingGraphics.clear();
-        this.currentSegments.forEach(segment => this.drawTrackSegment(segment));
+        // Clear only the preview graphics for highlights
+        this.previewGraphics.clear();
 
         // Get all adjacent points
         this.gridPoints.flat().forEach(point => {
@@ -1015,10 +1026,24 @@ export class GameScene extends Phaser.Scene {
                 const potentialCost = this.calculateTrackCost(fromPoint, point);
                 const wouldExceedBudget = (this.turnBuildCost + potentialCost) > this.MAX_TURN_BUILD_COST;
 
-                // Highlight in green if valid, red if would exceed budget
-                const color = wouldExceedBudget ? 0xff0000 : 0x00ff00;
-                this.drawingGraphics.fillStyle(color, 0.3);
-                this.drawingGraphics.fillCircle(point.x, point.y, 5);
+                // Check if this would create a valid connection
+                const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+                const playerTrackState = this.playerTracks.get(currentPlayer.id);
+                const isValidConnection = 
+                    point.city?.type === TerrainType.MajorCity || 
+                    this.isPointConnectedToNetwork(point, playerTrackState);
+
+                // Determine highlight color:
+                // - Red if exceeds budget
+                // - Yellow if valid adjacent point but not connected to network
+                // - Green if valid adjacent point and connected to network or major city
+                let color = 0xff0000; // Red by default (exceeds budget)
+                if (!wouldExceedBudget) {
+                    color = isValidConnection ? 0x00ff00 : 0xffff00;
+                }
+
+                this.previewGraphics.fillStyle(color, 0.3);
+                this.previewGraphics.fillCircle(point.x, point.y, 5);
             }
         });
     }
@@ -1322,6 +1347,27 @@ export class GameScene extends Phaser.Scene {
         } catch (error) {
             console.error('Error loading tracks:', error);
         }
+    }
+
+    private isPointConnectedToNetwork(point: GridPoint, trackState?: PlayerTrackState): boolean {
+        if (!trackState) return false;
+
+        // First check if the point is directly part of any existing segment
+        const isDirectlyConnected = trackState.segments.some(segment => 
+            (segment.from.row === point.row && segment.from.col === point.col) ||
+            (segment.to.row === point.row && segment.to.col === point.col)
+        );
+
+        if (isDirectlyConnected) {
+            return true;
+        }
+
+        // If we're currently building track, also check if the point is connected
+        // to any of our current segments
+        return this.currentSegments.some(segment =>
+            (segment.from.row === point.row && segment.from.col === point.col) ||
+            (segment.to.row === point.row && segment.to.col === point.col)
+        );
     }
 
     update(time: number, delta: number): void {
