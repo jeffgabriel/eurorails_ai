@@ -36,7 +36,10 @@ export class GameScene extends Phaser.Scene {
     private lastClickedPoint: GridPoint | null = null;
     private turnBuildCost: number = 0;
     private readonly MAX_TURN_BUILD_COST = 20; // 20M ECU per turn
-    
+
+    // Add new property to track valid connection points
+    private validConnectionPoints: Set<GridPoint> = new Set();
+
     // Track state
     private playerTracks: Map<string, PlayerTrackState> = new Map();
 
@@ -947,45 +950,55 @@ export class GameScene extends Phaser.Scene {
             isMajorCity: clickedPoint.city?.type === TerrainType.MajorCity
         });
 
-        // If this is the first point
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+
+        // If this is a new starting point
         if (!this.lastClickedPoint) {
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
-            
-            // Check if point is a major city
+            // Check if point is a valid starting point (major city or connected to network)
             const isMajorCity = clickedPoint.city?.type === TerrainType.MajorCity;
-            
-            // Check if point is connected to existing track network
             const isConnectedToNetwork = this.isPointConnectedToNetwork(clickedPoint, playerTrackState);
             
             if (!isMajorCity && !isConnectedToNetwork) {
-                console.debug('First point must be a major city or connect to existing track network');
+                console.debug('Starting point must be a major city or connect to existing track network');
                 return;
             }
             
             this.lastClickedPoint = clickedPoint;
-            console.debug('First point set:', { isMajorCity, isConnectedToNetwork });
-            this.highlightValidPoints(clickedPoint);
+            console.debug('Starting point set:', { isMajorCity, isConnectedToNetwork });
+            this.updateValidConnectionPoints();
             return;
         }
 
-        // For subsequent points, check if it's adjacent
-        if (!this.isAdjacent(this.lastClickedPoint, clickedPoint)) {
-            console.debug('Points not adjacent:', {
-                from: { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col },
-                to: { row: clickedPoint.row, col: clickedPoint.col }
-            });
+        // For subsequent points, check if it's adjacent to any valid connection point
+        const isValidConnection = this.isAdjacentToValidPoint(clickedPoint);
+        if (!isValidConnection) {
+            // If clicked point is itself a valid starting point, make it the new start
+            const isMajorCity = clickedPoint.city?.type === TerrainType.MajorCity;
+            const isConnectedToNetwork = this.isPointConnectedToNetwork(clickedPoint, playerTrackState);
+            
+            if (isMajorCity || isConnectedToNetwork) {
+                this.lastClickedPoint = clickedPoint;
+                this.updateValidConnectionPoints();
+                return;
+            }
+
+            console.debug('Point not adjacent to any valid connection point');
             return;
         }
+
+        // Find the closest valid connection point to draw from
+        const connectFromPoint = this.findClosestValidPoint(clickedPoint);
+        if (!connectFromPoint) return;
 
         // Create and draw the segment
         const segment: TrackSegment = {
             from: {
-                x: this.lastClickedPoint.x,
-                y: this.lastClickedPoint.y,
-                row: this.lastClickedPoint.row,
-                col: this.lastClickedPoint.col,
-                terrain: this.lastClickedPoint.terrain
+                x: connectFromPoint.x,
+                y: connectFromPoint.y,
+                row: connectFromPoint.row,
+                col: connectFromPoint.col,
+                terrain: connectFromPoint.terrain
             },
             to: {
                 x: clickedPoint.x,
@@ -994,7 +1007,7 @@ export class GameScene extends Phaser.Scene {
                 col: clickedPoint.col,
                 terrain: clickedPoint.terrain
             },
-            cost: this.calculateTrackCost(this.lastClickedPoint, clickedPoint)
+            cost: this.calculateTrackCost(connectFromPoint, clickedPoint)
         };
 
         // Check if this would exceed the turn budget
@@ -1013,9 +1026,9 @@ export class GameScene extends Phaser.Scene {
         this.drawTrackSegment(segment);
         this.turnBuildCost = newTotalCost;
         
-        // Update last clicked point and highlight new valid points
+        // Update last clicked point and valid connection points
         this.lastClickedPoint = clickedPoint;
-        this.highlightValidPoints(clickedPoint);
+        this.updateValidConnectionPoints();
         
         console.debug('Track segment created:', {
             from: { row: segment.from.row, col: segment.from.col },
@@ -1030,27 +1043,30 @@ export class GameScene extends Phaser.Scene {
 
         const hoverPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
         if (!hoverPoint) {
-            // Clear preview if no valid hover point
             this.previewGraphics.clear();
             return;
         }
 
-        // Calculate grid distance
-        const rowDiff = Math.abs(hoverPoint.row - this.lastClickedPoint.row);
-        const colDiff = Math.abs(hoverPoint.col - this.lastClickedPoint.col);
+        // Find the closest valid connection point
+        const connectFromPoint = this.findClosestValidPoint(hoverPoint);
+        if (!connectFromPoint) {
+            this.previewGraphics.clear();
+            return;
+        }
+
+        // Calculate grid distance from closest valid point
+        const rowDiff = Math.abs(hoverPoint.row - connectFromPoint.row);
+        const colDiff = Math.abs(hoverPoint.col - connectFromPoint.col);
         
-        // Only show preview if within 2 mileposts distance
         const MAX_PREVIEW_DISTANCE = 2;
         const isTooFar = rowDiff > MAX_PREVIEW_DISTANCE || colDiff > MAX_PREVIEW_DISTANCE;
 
-        // Clear the preview graphics
         this.previewGraphics.clear();
 
-        // Only draw preview line if point is close enough
         if (!isTooFar) {
             this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
             this.previewGraphics.beginPath();
-            this.previewGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
+            this.previewGraphics.moveTo(connectFromPoint.x, connectFromPoint.y);
             this.previewGraphics.lineTo(hoverPoint.x, hoverPoint.y);
             this.previewGraphics.strokePath();
         }
@@ -1503,6 +1519,47 @@ export class GameScene extends Phaser.Scene {
             (segment.from.row === point.row && segment.from.col === point.col) ||
             (segment.to.row === point.row && segment.to.col === point.col)
         );
+    }
+
+    private updateValidConnectionPoints(): void {
+        this.validConnectionPoints.clear();
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+
+        // Add all major cities and points connected to the network
+        this.gridPoints.flat().forEach(point => {
+            if (!point || point.terrain === TerrainType.Water) return;
+            
+            const isMajorCity = point.city?.type === TerrainType.MajorCity;
+            const isConnectedToNetwork = this.isPointConnectedToNetwork(point, playerTrackState);
+            
+            if (isMajorCity || isConnectedToNetwork) {
+                this.validConnectionPoints.add(point);
+            }
+        });
+    }
+
+    private isAdjacentToValidPoint(point: GridPoint): boolean {
+        return Array.from(this.validConnectionPoints).some(validPoint => 
+            this.isAdjacent(validPoint, point)
+        );
+    }
+
+    private findClosestValidPoint(point: GridPoint): GridPoint | null {
+        let closestPoint: GridPoint | null = null;
+        let minDistance = Infinity;
+
+        for (const validPoint of this.validConnectionPoints) {
+            if (this.isAdjacent(validPoint, point)) {
+                const distance = Math.abs(validPoint.row - point.row) + Math.abs(validPoint.col - point.col);
+                if (distance < minDistance) {
+                    minDistance = distance;
+                    closestPoint = validPoint;
+                }
+            }
+        }
+
+        return closestPoint;
     }
 
     update(time: number, delta: number): void {
