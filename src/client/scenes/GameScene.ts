@@ -138,7 +138,7 @@ export class GameScene extends Phaser.Scene {
         
         // Setup UI elements
         this.uiManager.setupUIOverlay();
-        this.uiManager.setupPlayerHand();
+        this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
         
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
@@ -148,14 +148,14 @@ export class GameScene extends Phaser.Scene {
             console.debug('Scene resumed, refreshing UI...');
             // Clear and recreate UI elements
             this.uiManager.setupUIOverlay();
-            this.uiManager.setupPlayerHand();
+            this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
         });
     }
     
     private toggleDrawingMode(): void {
-        this.trackManager.toggleDrawingMode();
-        // Re-render the player hand to update UI state if needed
-        this.uiManager.setupPlayerHand();
+        const isDrawingMode = this.trackManager.toggleDrawingMode();
+        // Re-render the player hand with updated drawing mode state
+        this.uiManager.setupPlayerHand(isDrawingMode);
     }
     
     private async nextPlayerTurn() {
@@ -164,7 +164,7 @@ export class GameScene extends Phaser.Scene {
         
         // Update the UI
         this.uiManager.setupUIOverlay();
-        this.uiManager.setupPlayerHand();
+        this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
     }
     
     private openSettings() {

@@ -166,7 +166,7 @@ export class UIManager {
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText, settingsButton, settingsIcon]);
     }
 
-    public setupPlayerHand(): void {
+    public setupPlayerHand(isDrawingMode: boolean = false): void {
         if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
             return;
         }
@@ -264,13 +264,39 @@ export class UIManager {
         .setInteractive({ useHandCursor: true });
 
         // Add hover effect and click handler
+        // Set appropriate initial scale based on drawing mode
+        if (isDrawingMode) {
+            crayonButton.setScale(0.18);  // Larger scale when in drawing mode
+        }
+        
         crayonButton
-            .on('pointerover', () => crayonButton.setScale(0.17))
-            .on('pointerout', () => crayonButton.setScale(0.15))
+            .on('pointerover', () => {
+                if (!isDrawingMode) {
+                    crayonButton.setScale(0.17);
+                }
+            })
+            .on('pointerout', () => {
+                if (!isDrawingMode) {
+                    crayonButton.setScale(0.15);
+                }
+            })
             .on('pointerdown', (pointer: Phaser.Input.Pointer) => {
                 pointer.event.stopPropagation();  // Prevent click from propagating
                 this.toggleDrawingCallback();
             });
+            
+        // Add visual indicator for drawing mode
+        if (isDrawingMode) {
+            // Add glowing effect or highlight around the crayon
+            const highlight = this.scene.add.circle(
+                crayonButton.x,
+                crayonButton.y,
+                30,  // Radius slightly larger than the crayon
+                0xffff00,  // Yellow glow
+                0.3  // Semi-transparent
+            );
+            this.playerHandContainer.add(highlight);
+        }
         
         // Add elements to container in correct order
         this.playerHandContainer.add([handBackground]);  // Add background first
