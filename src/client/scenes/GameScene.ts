@@ -129,9 +129,6 @@ export class GameScene extends Phaser.Scene {
         this.drawingGraphics = this.add.graphics();
         this.drawingGraphics.setDepth(1);
         this.mapContainer.add(this.drawingGraphics);
-        
-        // Load existing tracks for the game
-        await this.loadExistingTracks();
 
         // Setup scene elements
         this.setupCamera();
@@ -148,6 +145,8 @@ export class GameScene extends Phaser.Scene {
         // Setup UI elements
         this.setupUIOverlay();
         this.setupPlayerHand();
+        // Load existing tracks for the game
+        await this.loadExistingTracks();
 
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
