@@ -1029,17 +1029,31 @@ export class GameScene extends Phaser.Scene {
         if (!this.isDrawingMode || !this.lastClickedPoint) return;
 
         const hoverPoint = this.getGridPointAtPosition(pointer.x, pointer.y);
-        if (!hoverPoint) return;
+        if (!hoverPoint) {
+            // Clear preview if no valid hover point
+            this.previewGraphics.clear();
+            return;
+        }
 
-        // Clear only the preview graphics
+        // Calculate grid distance
+        const rowDiff = Math.abs(hoverPoint.row - this.lastClickedPoint.row);
+        const colDiff = Math.abs(hoverPoint.col - this.lastClickedPoint.col);
+        
+        // Only show preview if within 2 mileposts distance
+        const MAX_PREVIEW_DISTANCE = 2;
+        const isTooFar = rowDiff > MAX_PREVIEW_DISTANCE || colDiff > MAX_PREVIEW_DISTANCE;
+
+        // Clear the preview graphics
         this.previewGraphics.clear();
 
-        // Draw preview line
-        this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
-        this.previewGraphics.beginPath();
-        this.previewGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
-        this.previewGraphics.lineTo(hoverPoint.x, hoverPoint.y);
-        this.previewGraphics.strokePath();
+        // Only draw preview line if point is close enough
+        if (!isTooFar) {
+            this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
+            this.previewGraphics.beginPath();
+            this.previewGraphics.moveTo(this.lastClickedPoint.x, this.lastClickedPoint.y);
+            this.previewGraphics.lineTo(hoverPoint.x, hoverPoint.y);
+            this.previewGraphics.strokePath();
+        }
     }
 
     private drawTrackSegment(segment: TrackSegment): void {
