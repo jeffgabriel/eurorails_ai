@@ -19,6 +19,13 @@ export interface TrackSegment {
 }
 
 /**
+ * Options for track building
+ */
+export interface TrackBuildOptions {
+    turnBudget?: number;
+}
+
+/**
  * Represents a player's track state, including both runtime and storage concerns
  */
 export interface PlayerTrackState {
