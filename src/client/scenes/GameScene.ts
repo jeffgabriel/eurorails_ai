@@ -93,9 +93,23 @@ export class GameScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
+        console.debug('GameScene init called with data:', data);
+        
         // If we get a gameState, always use it
         if (data.gameState) {
-            this.gameState = data.gameState;
+            this.gameState = {
+                ...data.gameState,
+                // Ensure we preserve the camera state if it exists
+                cameraState: data.gameState.cameraState || this.gameState.cameraState
+            };
+            
+            // If we have camera state, apply it immediately
+            if (this.gameState.cameraState) {
+                console.debug('Applying camera state in init:', this.gameState.cameraState);
+                this.cameras.main.setZoom(this.gameState.cameraState.zoom);
+                this.cameras.main.scrollX = this.gameState.cameraState.scrollX;
+                this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
+            }
             return;
         }
         
@@ -118,6 +132,8 @@ export class GameScene extends Phaser.Scene {
 
     async create() {
         console.debug('GameScene create method called');
+        console.debug('Initial game state:', this.gameState);
+        
         // Clear any existing containers
         this.children.removeAll(true);
         
@@ -131,10 +147,6 @@ export class GameScene extends Phaser.Scene {
         this.drawingGraphics.setDepth(1);
         this.mapContainer.add(this.drawingGraphics);
 
-        // Setup scene elements
-        this.setupCamera();
-        this.createTriangularGrid();
-
         // Create a separate camera for UI that won't move
         const uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
         uiCamera.setScroll(0, 0);
@@ -143,22 +155,55 @@ export class GameScene extends Phaser.Scene {
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
 
+        // Create the grid first
+        console.debug('Creating triangular grid...');
+        this.createTriangularGrid();
+        console.debug('Camera state after grid creation:', {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY
+        });
+
+        // Load existing tracks
+        console.debug('Loading existing tracks...');
+        await this.loadExistingTracks();
+        console.debug('Camera state after loading tracks:', {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY
+        });
+
+        // Setup camera after tracks are loaded
+        console.debug('Setting up camera...');
+        this.setupCamera();
+        console.debug('Camera state after setup:', {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY
+        });
+
         // Setup UI elements
         this.setupUIOverlay();
         this.setupPlayerHand();
-        // Load existing tracks for the game
-        await this.loadExistingTracks();
 
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
 
         // Add event handler for scene resume
         this.events.on('resume', () => {
+            console.debug('Scene resumed, refreshing UI...');
             // Clear and recreate UI elements
             this.uiContainer?.removeAll(true);
             this.playerHandContainer?.removeAll(true);
             this.setupUIOverlay();
             this.setupPlayerHand();
+        });
+
+        console.debug('Create method complete. Final camera state:', {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY,
+            savedState: this.gameState.cameraState
         });
     }
 
@@ -1215,20 +1260,42 @@ export class GameScene extends Phaser.Scene {
     private setupCamera(): void {
         const { width, height } = this.calculateMapDimensions();
         
+        console.debug('Setting up camera with dimensions:', { width, height });
+        console.debug('Current camera state:', {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY,
+            savedState: this.gameState.cameraState
+        });
+        
         // Set up main camera with extended bounds to allow for proper scrolling
         this.cameras.main.setBounds(-this.GRID_MARGIN, -this.GRID_MARGIN, 
             width + (this.GRID_MARGIN * 2), height + (this.GRID_MARGIN * 2));
         
-        // Center the camera on the map
-        this.cameras.main.centerOn(width / 2, height / 2);
-        
-        // Set initial zoom to fit the board better, accounting for the player hand area
-        const initialZoom = Math.min(
-            (this.scale.width - 100) / width,
-            (this.scale.height - 300) / height  // Leave space for player hand
-        );
-        this.cameras.main.setZoom(initialZoom);
-        
+        // If we have a saved camera state, apply it
+        if (this.gameState.cameraState) {
+            console.debug('Applying saved camera state:', this.gameState.cameraState);
+            this.cameras.main.setZoom(this.gameState.cameraState.zoom);
+            this.cameras.main.scrollX = this.gameState.cameraState.scrollX;
+            this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
+        } else {
+            console.debug('No camera state found, using defaults');
+            // Center the camera on the map
+            this.cameras.main.centerOn(width / 2, height / 2);
+            
+            // Set initial zoom to fit the board better, accounting for the player hand area
+            const initialZoom = Math.min(
+                (this.scale.width - 100) / width,
+                (this.scale.height - 300) / height  // Leave space for player hand
+            );
+            console.debug('Calculated initial zoom:', initialZoom);
+            this.cameras.main.setZoom(initialZoom);
+
+            // Save initial camera state
+            this.saveCameraState();
+        }
+
+        // Always set up camera controls regardless of whether we restored state or not
         let lastPointerPosition = { x: 0, y: 0 };
         let isMouseDown = false;
 
@@ -1268,6 +1335,9 @@ export class GameScene extends Phaser.Scene {
                 lastPointerPosition = { x: pointer.x, y: pointer.y };
                 this.lastDragTime = now;
                 this.requestRender();
+
+                // Save camera state after drag
+                this.saveCameraState();
             }
         });
 
@@ -1307,13 +1377,64 @@ export class GameScene extends Phaser.Scene {
                 
                 lastWheelTime = now;
                 this.requestRender();
+
+                // Save camera state after zoom
+                this.saveCameraState();
             }
         });
     }
 
+    private async saveCameraState(): Promise<void> {
+        const currentState = {
+            zoom: this.cameras.main.zoom,
+            scrollX: this.cameras.main.scrollX,
+            scrollY: this.cameras.main.scrollY
+        };
+        
+        console.debug('Saving camera state:', currentState);
+        console.debug('Previous game state camera state:', this.gameState.cameraState);
+
+        // Update local state
+        this.gameState.cameraState = currentState;
+
+        try {
+            // Save to database
+            const response = await fetch('/api/game/updateCameraState', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    cameraState: currentState
+                })
+            });
+
+            if (!response.ok) {
+                console.error('Failed to save camera state:', await response.text());
+            } else {
+                console.debug('Successfully saved camera state to database');
+            }
+        } catch (error) {
+            console.error('Error saving camera state:', error);
+        }
+    }
+
     private async loadExistingTracks(): Promise<void> {
         try {
-            // Fetch all tracks for the current game
+            // First fetch the game state to get camera state
+            const gameResponse = await fetch(`/api/game/${this.gameState.id}`);
+            if (!gameResponse.ok) {
+                console.error('Failed to load game state:', await gameResponse.text());
+            } else {
+                const gameState = await gameResponse.json();
+                if (gameState.cameraState) {
+                    console.debug('Loaded camera state from game:', gameState.cameraState);
+                    this.gameState.cameraState = gameState.cameraState;
+                }
+            }
+
+            // Then fetch all tracks for the current game
             const response = await fetch(`/api/tracks/${this.gameState.id}`);
             if (!response.ok) {
                 console.error('Failed to load tracks:', await response.text());

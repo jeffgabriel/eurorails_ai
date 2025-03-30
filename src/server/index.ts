@@ -3,6 +3,7 @@ import path from 'path';
 import cors from 'cors';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
+import gameRoutes from './routes/gameRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './db/playerService';
 
@@ -32,6 +33,7 @@ app.use(express.urlencoded({ extended: true }));
 // API Routes - make sure this comes before static file serving
 app.use('/api/players', playerRoutes);
 app.use('/api/tracks', trackRoutes);
+app.use('/api/game', gameRoutes);
 
 // Log registered routes
 console.log('Registered routes:');
