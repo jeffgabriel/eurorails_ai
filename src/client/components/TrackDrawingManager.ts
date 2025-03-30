@@ -200,10 +200,14 @@ export class TrackDrawingManager {
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
-        if (!this.isDrawingMode || !pointer.leftButtonDown()) return;
+        if (!this.isDrawingMode || !pointer.leftButtonDown()) {
+            console.debug('Drawing click ignored - not in drawing mode or not left button');
+            return;
+        }
 
         // Ignore clicks in UI area
         if (pointer.y > this.scene.scale.height - 200) {
+            console.debug('Drawing click ignored - in UI area');
             return;
         }
 
@@ -211,13 +215,46 @@ export class TrackDrawingManager {
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
         if (!gridPoint) {
+            console.debug('Drawing click ignored - no valid grid point found');
             return;
         }
+
+        console.debug('Valid click at grid point:', { row: gridPoint.row, col: gridPoint.col, terrain: gridPoint.terrain });
+
+        // Handle first click (starting point)
+        if (!this.lastClickedPoint) {
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            const playerTrackState = this.playerTracks.get(currentPlayer.id);
+            
+            const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
+            const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
+            
+            console.debug('First click validation:', { isMajorCity, isConnectedToNetwork });
+            
+            if (!isMajorCity && !isConnectedToNetwork) {
+                console.debug('Starting point must be a major city or connect to existing track network');
+                return;
+            }
+            
+            this.lastClickedPoint = gridPoint;
+            this.updateValidConnectionPoints();
+            console.debug('First point set, valid connection points updated');
+            return;
+        }
+
+        console.debug('Checking preview path:', { 
+            hasPreviewPath: this.previewPath.length > 0,
+            targetMatches: this.previewPath.length > 0 && 
+                this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
+                this.previewPath[this.previewPath.length - 1].col === gridPoint.col
+        });
 
         // If we have a valid preview path to this point, use it
         if (this.previewPath.length > 0 && 
             this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
+            
+            console.debug('Creating track segments from preview path');
             
             // Create segments from the path
             for (let i = 0; i < this.previewPath.length - 1; i++) {
@@ -251,29 +288,18 @@ export class TrackDrawingManager {
             // Update last clicked point and valid connection points
             this.lastClickedPoint = gridPoint;
             this.updateValidConnectionPoints();
-            return;
-        }
-
-        // If no preview path, handle as a new starting point
-        if (!this.lastClickedPoint) {
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
-            
-            const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
-            const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
-            
-            if (!isMajorCity && !isConnectedToNetwork) {
-                console.debug('Starting point must be a major city or connect to existing track network');
-                return;
-            }
-            
-            this.lastClickedPoint = gridPoint;
-            this.updateValidConnectionPoints();
+            console.debug('Track segments created and drawn');
+        } else {
+            console.debug('No valid preview path to create track segments');
         }
     }
 
     private handleDrawingHover(pointer: Phaser.Input.Pointer): void {
-        if (!this.isDrawingMode || !this.lastClickedPoint) return;
+        if (!this.isDrawingMode || !this.lastClickedPoint) {
+            this.previewGraphics.clear();
+            this.previewPath = [];
+            return;
+        }
 
         const hoverPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         const gridPoint = this.getGridPointAtPosition(hoverPoint.x, hoverPoint.y);
@@ -283,8 +309,28 @@ export class TrackDrawingManager {
             return;
         }
 
+        console.debug('Hover at grid point:', { 
+            row: gridPoint.row, 
+            col: gridPoint.col, 
+            terrain: gridPoint.terrain,
+            lastClickedPoint: this.lastClickedPoint ? 
+                { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col } : null
+        });
+
+        // Skip if hovering over the last clicked point - compare coordinates instead of object reference
+        if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
+            this.previewGraphics.clear();
+            this.previewPath = [];
+            return;
+        }
+
         // Find path to hover point
         const path = this.findPreviewPath(gridPoint);
+        console.debug('Preview path calculation result:', { 
+            found: !!path, 
+            length: path?.length || 0 
+        });
+
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
             this.previewPath = [];
@@ -305,6 +351,7 @@ export class TrackDrawingManager {
             this.previewGraphics.lineTo(path[i].x, path[i].y);
         }
         this.previewGraphics.strokePath();
+        console.debug('Preview path drawn');
     }
 
     private getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
@@ -350,65 +397,199 @@ export class TrackDrawingManager {
     }
 
     private findPreviewPath(targetPoint: GridPoint): GridPoint[] | null {
-        // Find the closest valid starting point
-        const startPoint = this.findClosestValidPoint(targetPoint);
-        if (!startPoint) return null;
+        // Use lastClickedPoint as the starting point
+        const startPoint = this.lastClickedPoint;
+        if (!startPoint) {
+            console.debug('No start point available for preview path');
+            return null;
+        }
 
-        // Initialize path with start point
-        const path: GridPoint[] = [startPoint];
-        let currentPoint = startPoint;
+        // Skip if target is the same as start point
+        if (targetPoint.row === startPoint.row && targetPoint.col === startPoint.col) {
+            console.debug('Target point is same as start point');
+            return null;
+        }
+
+        console.debug('Finding preview path:', {
+            from: { row: startPoint.row, col: startPoint.col },
+            to: { row: targetPoint.row, col: targetPoint.col }
+        });
+
+        // Initialize Dijkstra's algorithm data structures
+        const distances = new Map<string, number>();
+        const previous = new Map<string, GridPoint>();
+        const unvisited = new Set<string>();
+
+        // Helper function to get point key for maps
+        const getPointKey = (p: GridPoint) => `${p.row},${p.col}`;
+
+        // Initialize points within a reasonable range of the path
+        let pointCount = 0;
+        const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 5;  // Add some margin
+        const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 5;  // Add some margin
+        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - maxRowDiff);
+        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + maxRowDiff);
+        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - maxColDiff);
+        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + maxColDiff);
+
+        // Initialize only points within the search area
+        for (let r = minRow; r <= maxRow; r++) {
+            if (!this.gridPoints[r]) continue;
+            for (let c = minCol; c <= maxCol; c++) {
+                const point = this.gridPoints[r][c];
+                if (!point || point.terrain === TerrainType.Water) continue;
+                const key = getPointKey(point);
+                distances.set(key, Infinity);
+                unvisited.add(key);
+                pointCount++;
+            }
+        }
+
+        console.debug('Initialized path finding:', { 
+            pointCount,
+            searchArea: { minRow, maxRow, minCol, maxCol }
+        });
+
+        // Set start point distance to 0
+        const startKey = getPointKey(startPoint);
+        distances.set(startKey, 0);
         
-        // Keep track of total cost
-        let totalCost = this.turnBuildCost;
+        // Make sure start point is in unvisited set
+        if (!unvisited.has(startKey)) {
+            unvisited.add(startKey);
+            pointCount++;
+        }
 
-        while (currentPoint !== targetPoint) {
-            // Find the next point that's closest to our target
-            let bestNextPoint: GridPoint | null = null;
-            let bestDistance = Infinity;
+        let iterations = 0;
+        while (unvisited.size > 0) {
+            iterations++;
 
-            // Check all adjacent points to current point
-            for (let r = 0; r < this.gridPoints.length; r++) {
-                if (!this.gridPoints[r]) continue;
-                
-                for (let c = 0; c < this.gridPoints[r].length; c++) {
-                    const point = this.gridPoints[r][c];
-                    if (!point || point.terrain === TerrainType.Water) continue;
-                    
-                    // Check if points are adjacent
-                    if (!this.isAdjacent(currentPoint, point)) continue;
-                    
-                    // Calculate Manhattan distance to target
-                    const distanceToTarget = 
-                        Math.abs(point.row - targetPoint.row) + 
-                        Math.abs(point.col - targetPoint.col);
-
-                    // Check if this point would be better
-                    if (distanceToTarget < bestDistance) {
-                        // Calculate cost of adding this segment
-                        const segmentCost = this.calculateTrackCost(currentPoint, point);
-                        
-                        // Check if adding this point would exceed budget
-                        if (totalCost + segmentCost <= this.MAX_TURN_BUILD_COST) {
-                            bestDistance = distanceToTarget;
-                            bestNextPoint = point;
-                        }
-                    }
+            // Find unvisited point with minimum distance
+            let currentKey: string | null = null;
+            let minDistance = Infinity;
+            
+            for (const key of unvisited) {
+                const distance = distances.get(key);
+                if (distance !== undefined && distance < minDistance) {
+                    minDistance = distance;
+                    currentKey = key;
                 }
             }
 
-            // If we can't find a next point, path is invalid
-            if (!bestNextPoint) return null;
+            if (!currentKey || minDistance === Infinity) {
+                console.debug('No more reachable points', { 
+                    iterations, 
+                    unvisitedSize: unvisited.size,
+                    startKey,
+                    startDistance: distances.get(startKey)
+                });
+                break;
+            }
 
-            // Add point to path and update cost
-            path.push(bestNextPoint);
-            totalCost += this.calculateTrackCost(currentPoint, bestNextPoint);
-            currentPoint = bestNextPoint;
+            // Get current point from key
+            const [row, col] = currentKey.split(',').map(Number);
+            const currentPoint = this.gridPoints[row][col];
 
-            // Prevent infinite loops
-            if (path.length > 20) return null;
+            console.debug('Processing point:', {
+                row,
+                col,
+                distance: minDistance,
+                remainingPoints: unvisited.size
+            });
+            
+            // If we've reached the target, build and return the path
+            if (row === targetPoint.row && col === targetPoint.col) {
+                const path: GridPoint[] = [];
+                let current: GridPoint | null = targetPoint;
+                
+                // Check if total cost would exceed budget
+                const totalCost = distances.get(getPointKey(targetPoint)) || 0;
+                if (totalCost + this.turnBuildCost > this.MAX_TURN_BUILD_COST) {
+                    console.debug('Path found but exceeds budget', { totalCost, currentBudget: this.turnBuildCost });
+                    return null;
+                }
+
+                while (current !== null) {
+                    path.unshift(current);
+                    current = previous.get(getPointKey(current)) || null;
+                }
+
+                console.debug('Path found:', { 
+                    length: path.length,
+                    cost: totalCost,
+                    iterations
+                });
+                return path;
+            }
+
+            // Remove current point from unvisited
+            unvisited.delete(currentKey);
+
+            // Get potential neighbors based on hex grid rules
+            const potentialNeighbors: GridPoint[] = [];
+            
+            // Same row neighbors
+            if (currentPoint.col > 0) {
+                const left = this.gridPoints[currentPoint.row][currentPoint.col - 1];
+                if (left && left.terrain !== TerrainType.Water) potentialNeighbors.push(left);
+            }
+            if (currentPoint.col < this.gridPoints[currentPoint.row].length - 1) {
+                const right = this.gridPoints[currentPoint.row][currentPoint.col + 1];
+                if (right && right.terrain !== TerrainType.Water) potentialNeighbors.push(right);
+            }
+
+            // Adjacent row neighbors based on hex grid rules
+            const isCurrentOddRow = currentPoint.row % 2 === 1;
+            if (currentPoint.row > 0) {
+                // Upper row
+                const upperCol = isCurrentOddRow ? currentPoint.col - 1 : currentPoint.col;
+                if (upperCol >= 0 && upperCol < this.gridPoints[currentPoint.row - 1].length) {
+                    const upper = this.gridPoints[currentPoint.row - 1][upperCol];
+                    if (upper && upper.terrain !== TerrainType.Water) potentialNeighbors.push(upper);
+                }
+                if (upperCol + 1 < this.gridPoints[currentPoint.row - 1].length) {
+                    const upperNext = this.gridPoints[currentPoint.row - 1][upperCol + 1];
+                    if (upperNext && upperNext.terrain !== TerrainType.Water) potentialNeighbors.push(upperNext);
+                }
+            }
+            if (currentPoint.row < this.gridPoints.length - 1) {
+                // Lower row
+                const lowerCol = isCurrentOddRow ? currentPoint.col : currentPoint.col - 1;
+                if (lowerCol >= 0 && lowerCol < this.gridPoints[currentPoint.row + 1].length) {
+                    const lower = this.gridPoints[currentPoint.row + 1][lowerCol];
+                    if (lower && lower.terrain !== TerrainType.Water) potentialNeighbors.push(lower);
+                }
+                if (lowerCol + 1 < this.gridPoints[currentPoint.row + 1].length) {
+                    const lowerNext = this.gridPoints[currentPoint.row + 1][lowerCol + 1];
+                    if (lowerNext && lowerNext.terrain !== TerrainType.Water) potentialNeighbors.push(lowerNext);
+                }
+            }
+
+            console.debug('Found potential neighbors:', {
+                count: potentialNeighbors.length,
+                currentPoint: { row: currentPoint.row, col: currentPoint.col }
+            });
+
+            // Process neighbors
+            for (const neighbor of potentialNeighbors) {
+                const neighborKey = getPointKey(neighbor);
+                if (!unvisited.has(neighborKey)) continue;
+
+                // Calculate new distance through current point
+                const segmentCost = this.calculateTrackCost(currentPoint, neighbor);
+                const newDistance = minDistance + segmentCost;
+
+                // Update distance if new path is shorter
+                const currentNeighborDistance = distances.get(neighborKey) || Infinity;
+                if (newDistance < currentNeighborDistance) {
+                    distances.set(neighborKey, newDistance);
+                    previous.set(neighborKey, currentPoint);
+                }
+            }
         }
 
-        return path;
+        console.debug('No path found', { iterations });
+        return null;
     }
 
     private findClosestValidPoint(point: GridPoint): GridPoint | null {
@@ -437,30 +618,63 @@ export class TrackDrawingManager {
 
     private isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
         // Prevent null/undefined points
-        if (!point1 || !point2) return false;
-
-        // Same row adjacency - must be consecutive columns
-        if (point1.row === point2.row) {
-            return Math.abs(point1.col - point2.col) === 1;
+        if (!point1 || !point2) {
+            console.debug('isAdjacent: null/undefined points');
+            return false;
         }
 
-        // One row difference only
-        const rowDiff = Math.abs(point1.row - point2.row);
-        if (rowDiff !== 1) return false;
+        // Log the points being checked
+        console.debug('Checking adjacency:', {
+            point1: { row: point1.row, col: point1.col },
+            point2: { row: point2.row, col: point2.col }
+        });
 
-        // For points in adjacent rows, the column relationship depends on which row is odd/even
-        const isPoint1OddRow = point1.row % 2 === 1;
+        // Calculate differences
+        const rowDiff = point2.row - point1.row;  // Use directed difference
         const colDiff = point2.col - point1.col;  // Use directed difference
 
-        // If point1 is in an odd row
-        if (isPoint1OddRow) {
-            // Can connect to same column or one column to the right in adjacent rows
-            return colDiff === 0 || colDiff === 1;
-        } else {
-            // If point1 is in an even row
-            // Can connect to same column or one column to the left in adjacent rows
-            return colDiff === 0 || colDiff === -1;
+        // Same row adjacency - must be consecutive columns
+        if (rowDiff === 0) {
+            const isAdjacent = Math.abs(colDiff) === 1;
+            console.debug('Same row check:', { rowDiff, colDiff, isAdjacent });
+            return isAdjacent;
         }
+
+        // Must be adjacent rows
+        if (Math.abs(rowDiff) !== 1) {
+            console.debug('Not adjacent rows:', { rowDiff });
+            return false;
+        }
+
+        // For hex grid:
+        // Even rows can connect to: (row+1, col) and (row+1, col-1)
+        // Odd rows can connect to: (row+1, col) and (row+1, col+1)
+        const isFromOddRow = point1.row % 2 === 1;
+
+        let isAdjacent: boolean;
+        if (rowDiff === 1) {  // Moving down
+            if (isFromOddRow) {
+                isAdjacent = colDiff === 0 || colDiff === 1;
+            } else {
+                isAdjacent = colDiff === 0 || colDiff === -1;
+            }
+        } else {  // Moving up (rowDiff === -1)
+            const isToOddRow = point2.row % 2 === 1;
+            if (isToOddRow) {
+                isAdjacent = colDiff === 0 || colDiff === -1;
+            } else {
+                isAdjacent = colDiff === 0 || colDiff === 1;
+            }
+        }
+
+        console.debug('Hex grid check:', {
+            rowDiff,
+            colDiff,
+            isFromOddRow,
+            isAdjacent
+        });
+
+        return isAdjacent;
     }
 
     private calculateTrackCost(from: GridPoint, to: GridPoint): number {
