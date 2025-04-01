@@ -308,11 +308,12 @@ export class TrackDrawingManager {
 
         console.debug('Valid click at grid point:', { row: gridPoint.row, col: gridPoint.col, terrain: gridPoint.terrain });
 
-        // Handle first click (starting point)
+        // Get current player information
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+
+        // Handle first click (starting point) - still needed to initialize the pathfinding
         if (!this.lastClickedPoint) {
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
-            
             const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
             
@@ -342,10 +343,6 @@ export class TrackDrawingManager {
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
             
             console.debug('Creating track segments from preview path');
-            
-            // Get the current player's track state for cost calculation
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            const playerTrackState = this.playerTracks.get(currentPlayer.id);
             
             // Calculate total cost of the path to check against player's money and turn budget
             let totalPathCost = 0;
@@ -413,7 +410,8 @@ export class TrackDrawingManager {
                 }
             }
 
-            // Update last clicked point and valid connection points
+            // After adding track, update last clicked point and valid connection points
+            // Now this includes the most recently added track segments
             this.lastClickedPoint = gridPoint;
             this.updateValidConnectionPoints();
             console.debug('Track segments created and drawn');
@@ -525,6 +523,18 @@ export class TrackDrawingManager {
     }
 
     private findPreviewPath(targetPoint: GridPoint): GridPoint[] | null {
+        // Get the current player's track state once
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        
+        // Initialize Dijkstra's algorithm data structures
+        const distances = new Map<string, number>();
+        const previous = new Map<string, GridPoint>();
+        const unvisited = new Set<string>();
+
+        // Helper function to get point key for maps
+        const getPointKey = (p: GridPoint) => `${p.row},${p.col}`;
+
         // Use lastClickedPoint as the starting point
         const startPoint = this.lastClickedPoint;
         if (!startPoint) {
@@ -538,29 +548,21 @@ export class TrackDrawingManager {
             return null;
         }
 
-        //console.debug('Finding preview path:', {
-        //    from: { row: startPoint.row, col: startPoint.col },
-        //    to: { row: targetPoint.row, col: targetPoint.col }
-        //});
+        console.debug('Finding preview path:', {
+            from: { row: startPoint.row, col: startPoint.col },
+            to: { row: targetPoint.row, col: targetPoint.col }
+        });
 
-        // Initialize Dijkstra's algorithm data structures
-        const distances = new Map<string, number>();
-        const previous = new Map<string, GridPoint>();
-        const unvisited = new Set<string>();
-
-        // Helper function to get point key for maps
-        const getPointKey = (p: GridPoint) => `${p.row},${p.col}`;
-
-        // Initialize points within a reasonable range of the path
-        let pointCount = 0;
-        const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 5;  // Add some margin
-        const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 5;  // Add some margin
+        // Calculate search area with larger margins to cover potential network connections
+        const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 10;  // Add larger margin
+        const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 10;  // Add larger margin
         const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - maxRowDiff);
         const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + maxRowDiff);
         const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - maxColDiff);
         const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + maxColDiff);
 
-        // Initialize only points within the search area
+        // Initialize all points with infinity distance within the search area
+        let pointCount = 0;
         for (let r = minRow; r <= maxRow; r++) {
             if (!this.gridPoints[r]) continue;
             for (let c = minCol; c <= maxCol; c++) {
@@ -573,24 +575,44 @@ export class TrackDrawingManager {
             }
         }
 
-        //console.debug('Initialized path finding:', { 
-        //    pointCount,
-        //    searchArea: { minRow, maxRow, minCol, maxCol }
-        //});
+        console.debug('Initialized path finding:', { 
+            pointCount,
+            searchArea: { minRow, maxRow, minCol, maxCol }
+        });
 
-        // Set start point distance to 0
-        const startKey = getPointKey(startPoint);
-        distances.set(startKey, 0);
-        
-        // Make sure start point is in unvisited set
-        if (!unvisited.has(startKey)) {
-            unvisited.add(startKey);
-            pointCount++;
+        // Build a set of all nodes in the player's network (for quick lookup)
+        const networkNodes = new Set<string>();
+        if (playerTrackState) {
+            for (const segment of playerTrackState.segments) {
+                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+            }
+            
+            // Also add current segments being built in this session
+            for (const segment of this.currentSegments) {
+                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+            }
         }
 
-        // Get the current player's track state once instead of in each loop
-        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        // Set distance to 0 for the clicked point and all nodes in the player's network
+        // This makes Dijkstra search from all network nodes simultaneously
+        distances.set(getPointKey(startPoint), 0);
+        if (!unvisited.has(getPointKey(startPoint))) {
+            unvisited.add(getPointKey(startPoint));
+            pointCount++;
+        }
+        
+        // Set all nodes in player's network to zero distance for pathfinding
+        for (const nodeKey of networkNodes) {
+            if (unvisited.has(nodeKey)) {
+                distances.set(nodeKey, 0);
+            }
+        }
+        
+        console.debug('Starting pathfinding with network nodes:', { 
+            networkNodeCount: networkNodes.size,
+        });
 
         let iterations = 0;
         while (unvisited.size > 0) {
@@ -611,9 +633,7 @@ export class TrackDrawingManager {
             if (!currentKey || minDistance === Infinity) {
                 console.debug('No more reachable points', { 
                     iterations, 
-                    unvisitedSize: unvisited.size,
-                    startKey,
-                    startDistance: distances.get(startKey)
+                    unvisitedSize: unvisited.size
                 });
                 break;
             }
@@ -622,13 +642,6 @@ export class TrackDrawingManager {
             const [row, col] = currentKey.split(',').map(Number);
             const currentPoint = this.gridPoints[row][col];
 
-            //    console.debug('Processing point:', {
-            //    row,
-            //    col,
-            //    distance: minDistance,
-            //    remainingPoints: unvisited.size
-            //});
-            
             // If we've reached the target, build and return the path
             if (row === targetPoint.row && col === targetPoint.col) {
                 const path: GridPoint[] = [];
@@ -639,20 +652,28 @@ export class TrackDrawingManager {
                 
                 // Use our helper method to check against both budget and money
                 if (!this.isValidCost(totalCost)) {
-                    //console.debug('Path found but exceeds budget or available money');
+                    console.debug('Path found but exceeds budget or available money');
                     return null;
                 }
 
+                // Reconstruct the path backwards from the target
                 while (current !== null) {
                     path.unshift(current);
                     current = previous.get(getPointKey(current)) || null;
+                    
+                    // If we've reached a network node, we're done - no need to go back to original click
+                    if (current && networkNodes.has(getPointKey(current))) {
+                        path.unshift(current); // Include the network node in the path
+                        break;
+                    }
                 }
 
-                //console.debug('Path found:', { 
-                //    length: path.length,
-                //    cost: totalCost,
-                //    iterations
-                //});
+                console.debug('Path found:', { 
+                    length: path.length,
+                    cost: totalCost,
+                    iterations,
+                    startingFromNetwork: path.length > 0 && networkNodes.has(getPointKey(path[0]))
+                });
                 return path;
             }
 
@@ -699,24 +720,31 @@ export class TrackDrawingManager {
                 }
             }
 
-            //console.debug('Found potential neighbors:', {
-            //    count: potentialNeighbors.length,
-            //    currentPoint: { row: currentPoint.row, col: currentPoint.col }
-            //});
-
             // Process neighbors
             for (const neighbor of potentialNeighbors) {
                 const neighborKey = getPointKey(neighbor);
                 if (!unvisited.has(neighborKey)) continue;
                 
-                // Check if this segment already exists in the player's network
-                // If it exists, skip this neighbor entirely - we don't want to include existing segments in the path
-                if (this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
-                    continue;
+                // Skip this neighbor if the segment already exists in the player's network
+                // EXCEPT if the current point is part of the network - then we allow travel via existing tracks
+                const isCurrentInNetwork = networkNodes.has(currentKey);
+                const isNeighborInNetwork = networkNodes.has(neighborKey);
+                
+                if (!isCurrentInNetwork && !isNeighborInNetwork) {
+                    // Only check for existing segment if neither point is in the network
+                    if (this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
+                        continue;
+                    }
                 }
                 
-                // Calculate the normal cost for a new segment
-                const segmentCost = this.calculateTrackCost(currentPoint, neighbor);
+                // Calculate the cost for a segment
+                // If both points are in the network, or there's an existing segment between them, cost is 0
+                let segmentCost = 0;
+                if (!(isCurrentInNetwork && isNeighborInNetwork) && 
+                    !this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
+                    segmentCost = this.calculateTrackCost(currentPoint, neighbor);
+                }
+                
                 const newDistance = minDistance + segmentCost;
 
                 // Update distance if new path is shorter
@@ -728,7 +756,7 @@ export class TrackDrawingManager {
             }
         }
 
-        //console.debug('No path found', { iterations });
+        console.debug('No path found', { iterations });
         return null;
     }
 
