@@ -609,14 +609,21 @@ export class SettingsScene extends Phaser.Scene {
 
         // Get the game scene and update its state
         const gameScene = this.scene.get('GameScene') as GameScene;
-        gameScene.gameState = this.gameState;
+        
+        // Update game state while preserving camera state
+        gameScene.gameState = {
+            ...this.gameState,
+            cameraState: gameScene.gameState.cameraState || this.gameState.cameraState
+        };
 
         // Stop this scene first
         this.scene.stop();
 
-        // Resume and restart game scene to ensure proper initialization
+        // Just resume the game scene, no need to restart
         this.scene.resume('GameScene');
-        gameScene.scene.restart({ gameState: this.gameState });
+        
+        // Refresh UI elements without restarting the scene
+        gameScene.events.emit('resume');
     }
 
     private async endGame() {

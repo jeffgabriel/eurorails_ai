@@ -55,7 +55,7 @@ export class PlayerService {
             gameId,
             player.name,
             normalizedColor,
-            player.money || 50,
+            typeof player.money === 'number' ? player.money : 50, // Use explicit check for number
             player.trainType || 'Freight'
         ];
         try {
@@ -70,6 +70,7 @@ export class PlayerService {
 
     static async updatePlayer(gameId: string, player: Player): Promise<void> {
         console.log('Starting database update for player:', { gameId, player });
+        
         const client = await db.connect();
         try {
             await client.query('BEGIN');
@@ -122,15 +123,18 @@ export class PlayerService {
                 WHERE game_id = $5 AND id = $6
                 RETURNING *
             `;
+            // Determine money value with proper type checking
+            const moneyValue = typeof player.money === 'number' ? player.money : 50;
+            
             const values = [
                 player.name, 
                 normalizedColor, 
-                player.money || 50, 
+                moneyValue, // Use explicit check for number
                 trainType, 
                 gameId, 
                 player.id
             ];
-            console.log('Executing update query:', { query, values });
+            console.log('Executing update query');
 
             const result: QueryResult<PlayerRow> = await client.query(query, values);
             console.log('Update result:', { rowCount: result.rowCount, row: result.rows[0] });
@@ -267,7 +271,7 @@ export class PlayerService {
 
     static async getActiveGame(): Promise<Game | null> {
         const query = `
-            SELECT id, status, current_player_index as "currentPlayerIndex", 
+            SELECT id, status, current_player_index as "currentPlayerIndex", camera_state as "cameraState",
                    created_at as "createdAt", updated_at as "updatedAt"
             FROM games 
             WHERE status = 'active'

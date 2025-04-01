@@ -33,6 +33,11 @@ export interface GameState {
     currentPlayerIndex: number;
     status: GameStatus;
     maxPlayers: number;
+    cameraState?: {
+        zoom: number;
+        scrollX: number;
+        scrollY: number;
+    };
 }
 
 export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
