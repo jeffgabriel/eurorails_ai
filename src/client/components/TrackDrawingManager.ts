@@ -582,43 +582,43 @@ export class TrackDrawingManager {
             // Remove current point from unvisited
             unvisited.delete(currentKey);
 
-            // Get potential neighbors based on hex grid rules
+            // Get potential neighbors using isAdjacent method to ensure proper hex grid adjacency
             const potentialNeighbors: GridPoint[] = [];
             
-            // Same row neighbors
+            // Check in all possible directions
+            // Check same row (left and right)
             if (currentPoint.col > 0) {
                 const left = this.gridPoints[currentPoint.row][currentPoint.col - 1];
-                if (left && left.terrain !== TerrainType.Water) potentialNeighbors.push(left);
+                if (left && left.terrain !== TerrainType.Water && this.isAdjacent(currentPoint, left)) {
+                    potentialNeighbors.push(left);
+                }
             }
             if (currentPoint.col < this.gridPoints[currentPoint.row].length - 1) {
                 const right = this.gridPoints[currentPoint.row][currentPoint.col + 1];
-                if (right && right.terrain !== TerrainType.Water) potentialNeighbors.push(right);
+                if (right && right.terrain !== TerrainType.Water && this.isAdjacent(currentPoint, right)) {
+                    potentialNeighbors.push(right);
+                }
             }
-
-            // Adjacent row neighbors based on hex grid rules
-            const isCurrentOddRow = currentPoint.row % 2 === 1;
+            
+            // Check row above if it exists
             if (currentPoint.row > 0) {
-                // Upper row
-                const upperCol = isCurrentOddRow ? currentPoint.col - 1 : currentPoint.col;
-                if (upperCol >= 0 && upperCol < this.gridPoints[currentPoint.row - 1].length) {
-                    const upper = this.gridPoints[currentPoint.row - 1][upperCol];
-                    if (upper && upper.terrain !== TerrainType.Water) potentialNeighbors.push(upper);
-                }
-                if (upperCol + 1 < this.gridPoints[currentPoint.row - 1].length) {
-                    const upperNext = this.gridPoints[currentPoint.row - 1][upperCol + 1];
-                    if (upperNext && upperNext.terrain !== TerrainType.Water) potentialNeighbors.push(upperNext);
+                // Check all columns in the row above that could potentially be adjacent
+                for (let c = Math.max(0, currentPoint.col - 1); c <= Math.min(this.gridPoints[currentPoint.row - 1].length - 1, currentPoint.col + 1); c++) {
+                    const upper = this.gridPoints[currentPoint.row - 1][c];
+                    if (upper && upper.terrain !== TerrainType.Water && this.isAdjacent(currentPoint, upper)) {
+                        potentialNeighbors.push(upper);
+                    }
                 }
             }
+            
+            // Check row below if it exists
             if (currentPoint.row < this.gridPoints.length - 1) {
-                // Lower row
-                const lowerCol = isCurrentOddRow ? currentPoint.col : currentPoint.col - 1;
-                if (lowerCol >= 0 && lowerCol < this.gridPoints[currentPoint.row + 1].length) {
-                    const lower = this.gridPoints[currentPoint.row + 1][lowerCol];
-                    if (lower && lower.terrain !== TerrainType.Water) potentialNeighbors.push(lower);
-                }
-                if (lowerCol + 1 < this.gridPoints[currentPoint.row + 1].length) {
-                    const lowerNext = this.gridPoints[currentPoint.row + 1][lowerCol + 1];
-                    if (lowerNext && lowerNext.terrain !== TerrainType.Water) potentialNeighbors.push(lowerNext);
+                // Check all columns in the row below that could potentially be adjacent
+                for (let c = Math.max(0, currentPoint.col - 1); c <= Math.min(this.gridPoints[currentPoint.row + 1].length - 1, currentPoint.col + 1); c++) {
+                    const lower = this.gridPoints[currentPoint.row + 1][c];
+                    if (lower && lower.terrain !== TerrainType.Water && this.isAdjacent(currentPoint, lower)) {
+                        potentialNeighbors.push(lower);
+                    }
                 }
             }
 
