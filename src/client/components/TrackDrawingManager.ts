@@ -683,6 +683,14 @@ export class TrackDrawingManager {
 
         // Add river/water crossing costs if applicable
         // TODO: Implement water crossing detection and costs
+        // Add river/water crossing costs if applicable
+        
+        
+        // Add a very small additional cost for diagonal movement to prefer straight paths when costs are equal
+        // This ensures the algorithm prefers horizontal/vertical paths when multiple paths have the same terrain cost
+        if (from.row !== to.row) {
+            cost += 0.01;  // Very small penalty for changing rows
+        }
 
         return cost;
     }

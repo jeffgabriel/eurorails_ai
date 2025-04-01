@@ -159,12 +159,17 @@ export class GameScene extends Phaser.Scene {
     }
     
     private async nextPlayerTurn() {
+        // If in drawing mode, finalize track drawing first
+        if (this.trackManager.isInDrawingMode) {
+            this.trackManager.toggleDrawingMode();
+        }
+        
         // Use the game state service to handle player turn changes
         await this.gameStateService.nextPlayerTurn();
         
         // Update the UI
         this.uiManager.setupUIOverlay();
-        this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+        this.uiManager.setupPlayerHand(false); // Always set to false as we're exiting drawing mode
     }
     
     private openSettings() {
