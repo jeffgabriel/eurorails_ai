@@ -91,4 +91,13 @@ export class TrackService {
             lastBuildTimestamp: row.last_build_timestamp
         }));
     }
+    
+    static async clearTurnBuildCost(gameId: string, playerId: string): Promise<void> {
+        await db.query(
+            `UPDATE player_tracks 
+             SET turn_build_cost = 0
+             WHERE game_id = $1 AND player_id = $2`,
+            [gameId, playerId]
+        );
+    }
 } 

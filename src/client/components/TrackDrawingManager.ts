@@ -139,6 +139,36 @@ export class TrackDrawingManager {
         return playerTrackState ? playerTrackState.turnBuildCost : 0;
     }
     
+    // Clear the last build cost for a player after processing turn change
+    public async clearLastBuildCost(playerId: string): Promise<void> {
+        const playerTrackState = this.playerTracks.get(playerId);
+        if (playerTrackState) {
+            // Reset the turn build cost to zero
+            playerTrackState.turnBuildCost = 0;
+            
+            // Save the updated track state to the database
+            try {
+                const response = await fetch('/api/tracks/save', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        gameId: this.gameState.id,
+                        playerId: playerId,
+                        trackState: playerTrackState
+                    })
+                });
+                
+                if (!response.ok) {
+                    console.error('Failed to clear turn build cost in database');
+                }
+            } catch (error) {
+                console.error('Error clearing turn build cost:', error);
+            }
+        }
+    }
+    
     // Helper method to check if a cost is valid against both turn budget and player money
     private isValidCost(additionalCost: number): boolean {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];

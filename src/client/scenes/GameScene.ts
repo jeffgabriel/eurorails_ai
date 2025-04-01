@@ -178,11 +178,11 @@ export class GameScene extends Phaser.Scene {
         // Get the current player before changing turns
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
-        // First check if there was a build cost from previous build activity
-        // (this works even if player isn't currently in drawing mode)
+        // Check if there was a build cost from the player's previous activity
         let buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
         
-        // If in drawing mode, finalize track drawing first
+        // If in drawing mode, finalize track drawing first by toggling it off
+        // This will handle saving tracks and cleanup through TrackDrawingManager
         if (this.trackManager.isInDrawingMode) {
             this.trackManager.toggleDrawingMode();
             
@@ -196,15 +196,19 @@ export class GameScene extends Phaser.Scene {
             
             try {
                 // Update player money in local state and database
-                const updateResult = await this.gameStateService.updatePlayerMoney(currentPlayer.id, newMoney);
+                await this.gameStateService.updatePlayerMoney(currentPlayer.id, newMoney);
             } catch (error) {
                 console.error('Error updating player money:', error);
             }
+            
+            // Clear the build cost after processing it to avoid double-counting
+            await this.trackManager.clearLastBuildCost(currentPlayer.id);
         }
         
         // Use the game state service to handle player turn changes
         await this.gameStateService.nextPlayerTurn();
         
+        // Get the new current player after the turn change
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
         // Update the UI
