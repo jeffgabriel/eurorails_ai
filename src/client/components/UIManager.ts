@@ -166,7 +166,7 @@ export class UIManager {
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText, settingsButton, settingsIcon]);
     }
 
-    public setupPlayerHand(isDrawingMode: boolean = false): void {
+    public setupPlayerHand(isDrawingMode: boolean = false, currentTrackCost: number = 0): void {
         if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
             return;
         }
@@ -230,11 +230,18 @@ export class UIManager {
             }
         ).setOrigin(0.5, 0);
         
-        // Add player info
+        // Add player info with track cost if in drawing mode
+        let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
+        
+        // Add track cost display when in drawing mode - just the number, no label
+        if (isDrawingMode && currentTrackCost > 0) {
+            playerInfoText += `\nECU ${currentTrackCost}M`;
+        }
+        
         const playerInfo = this.scene.add.text(
             820,  // Position after train card
             this.scene.scale.height - 180,  // Align with cards
-            `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`,
+            playerInfoText,
             { 
                 color: '#ffffff',  // Changed to white for better visibility
                 fontSize: '20px',

@@ -35,6 +35,9 @@ export class TrackDrawingManager {
 
     private gameStateService: any; // Using 'any' to avoid circular dependency
     
+    // Callback for cost updates
+    private onCostUpdateCallback: ((cost: number) => void) | null = null;
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -57,6 +60,11 @@ export class TrackDrawingManager {
         this.previewGraphics = this.scene.add.graphics();
         this.previewGraphics.setDepth(2);  // Set higher depth to appear above tracks
         this.mapContainer.add(this.previewGraphics);
+    }
+    
+    // Method to register a callback when the track cost changes
+    public onCostUpdate(callback: (cost: number) => void): void {
+        this.onCostUpdateCallback = callback;
     }
 
     public async loadExistingTracks(): Promise<void> {
@@ -211,6 +219,11 @@ export class TrackDrawingManager {
         this.currentSegments = [];
         this.lastClickedPoint = null;
         this.turnBuildCost = 0;
+        
+        // Notify about cost reset
+        if (this.onCostUpdateCallback) {
+            this.onCostUpdateCallback(0);
+        }
 
         // Set up input handlers for drawing mode
         this.scene.input.on('pointerdown', this.handleDrawingClick, this);
@@ -322,6 +335,11 @@ export class TrackDrawingManager {
                 this.currentSegments.push(segment);
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
+                
+                // Notify about cost update
+                if (this.onCostUpdateCallback) {
+                    this.onCostUpdateCallback(this.turnBuildCost);
+                }
             }
 
             // Update last clicked point and valid connection points

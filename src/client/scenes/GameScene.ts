@@ -121,6 +121,14 @@ export class GameScene extends Phaser.Scene {
             this.gameStateService
         );
         
+        // Register for track cost updates
+        this.trackManager.onCostUpdate((cost) => {
+            // Update the UI to show the current track cost
+            if (this.trackManager.isInDrawingMode) {
+                this.uiManager.setupPlayerHand(true, cost);
+            }
+        });
+        
         // Create a separate camera for UI that won't move
         const uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
         uiCamera.setScroll(0, 0);
@@ -162,7 +170,8 @@ export class GameScene extends Phaser.Scene {
         }
         
         // Re-render the player hand with updated drawing mode state
-        this.uiManager.setupPlayerHand(isDrawingMode);
+        const currentCost = isDrawingMode ? this.trackManager.getCurrentTurnBuildCost() : 0;
+        this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
     }
     
     private async nextPlayerTurn() {

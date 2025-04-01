@@ -45,15 +45,16 @@ export class CameraController {
             this.camera.scrollX = this.gameState.cameraState.scrollX;
             this.camera.scrollY = this.gameState.cameraState.scrollY;
         } else {
-            // Center the camera on the map
-            this.camera.centerOn(mapWidth / 2, mapHeight / 2);
+            // Use predefined initial camera settings for better default view
+            const initialSettings = {
+                zoom: 1.0561194029850745,
+                scrollX: 779.2424871482747,
+                scrollY: 584.8135343081639
+            };
             
-            // Set initial zoom to fit the board better, accounting for the player hand area
-            const initialZoom = Math.min(
-                (this.scene.scale.width - 100) / mapWidth,
-                (this.scene.scale.height - 300) / mapHeight  // Leave space for player hand
-            );
-            this.camera.setZoom(initialZoom);
+            this.camera.setZoom(initialSettings.zoom);
+            this.camera.scrollX = initialSettings.scrollX;
+            this.camera.scrollY = initialSettings.scrollY;
 
             // Save initial camera state
             this.saveCameraState();
