@@ -138,6 +138,16 @@ export class TrackDrawingManager {
         const playerTrackState = this.playerTracks.get(playerId);
         return playerTrackState ? playerTrackState.turnBuildCost : 0;
     }
+    
+    // Helper method to check if a cost is valid against both turn budget and player money
+    private isValidCost(additionalCost: number): boolean {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerMoney = currentPlayer.money;
+        
+        // Check against both the turn budget and the player's available money
+        return (this.turnBuildCost + additionalCost <= this.MAX_TURN_BUILD_COST) && 
+               (this.turnBuildCost + additionalCost <= playerMoney);
+    }
 
     private async saveCurrentTracks(): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
@@ -302,6 +312,22 @@ export class TrackDrawingManager {
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
             
             console.debug('Creating track segments from preview path');
+            
+            // Calculate total cost of the path to check against player's money and turn budget
+            let totalPathCost = 0;
+            for (let i = 0; i < this.previewPath.length - 1; i++) {
+                const fromPoint = this.previewPath[i];
+                const toPoint = this.previewPath[i + 1];
+                let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
+                segmentCost = Math.floor(segmentCost);
+                totalPathCost += segmentCost;
+            }
+            
+            // Check if the total cost is valid
+            if (!this.isValidCost(totalPathCost)) {
+                console.debug('Cannot build track - exceeds budget or available money');
+                return;
+            }
             
             // Create segments from the path
             for (let i = 0; i < this.previewPath.length - 1; i++) {
@@ -559,10 +585,12 @@ export class TrackDrawingManager {
                 const path: GridPoint[] = [];
                 let current: GridPoint | null = targetPoint;
                 
-                // Check if total cost would exceed budget
+                // Check if total cost would exceed budget or player's money
                 const totalCost = distances.get(getPointKey(targetPoint)) || 0;
-                if (totalCost + this.turnBuildCost > this.MAX_TURN_BUILD_COST) {
-                    //console.debug('Path found but exceeds budget', { totalCost, currentBudget: this.turnBuildCost });
+                
+                // Use our helper method to check against both budget and money
+                if (!this.isValidCost(totalCost)) {
+                    //console.debug('Path found but exceeds budget or available money');
                     return null;
                 }
 
