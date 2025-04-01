@@ -33,17 +33,21 @@ export class TrackDrawingManager {
         [TerrainType.FerryPort]: 0
     };
 
+    private gameStateService: any; // Using 'any' to avoid circular dependency
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
         gameState: GameState,
-        gridPoints: GridPoint[][]
+        gridPoints: GridPoint[][],
+        gameStateService?: any // Using 'any' to avoid circular dependency
     ) {
         this.scene = scene;
         this.mapContainer = mapContainer;
         this.gameState = gameState;
         this.gridPoints = gridPoints;
         this.playerTracks = new Map();
+        this.gameStateService = gameStateService;
         
         // Initialize drawing graphics
         this.drawingGraphics = this.scene.add.graphics();
@@ -116,6 +120,16 @@ export class TrackDrawingManager {
     public get isInDrawingMode(): boolean {
         return this.isDrawingMode;
     }
+    
+    public getCurrentTurnBuildCost(): number {
+        return this.turnBuildCost;
+    }
+    
+    // Get the latest build cost for the current player
+    public getLastBuildCost(playerId: string): number {
+        const playerTrackState = this.playerTracks.get(playerId);
+        return playerTrackState ? playerTrackState.turnBuildCost : 0;
+    }
 
     private async saveCurrentTracks(): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
@@ -142,7 +156,7 @@ export class TrackDrawingManager {
             playerTrackState.lastBuildTimestamp = new Date();
             
             try {
-                // Save to database
+                // Save track state to database
                 const response = await fetch('/api/tracks/save', {
                     method: 'POST',
                     headers: {
@@ -159,6 +173,26 @@ export class TrackDrawingManager {
                     const errorData = await response.json();
                     console.error('Failed to save track state:', errorData);
                     // TODO: Show error to user and potentially revert the local state
+                    return;
+                }
+                
+                // Update player's money if we have track building cost and gameStateService
+                if (this.turnBuildCost > 0 && this.gameStateService) {
+                    // Calculate new money amount
+                    const newMoney = currentPlayer.money - this.turnBuildCost;
+                    
+                    // Update money both locally and in the database
+                    const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
+                        currentPlayer.id, 
+                        newMoney
+                    );
+                    
+                    if (!moneyUpdateSuccess) {
+                        console.error('Failed to update player money');
+                        // TODO: Show error to user
+                    } else {
+                        console.debug(`Player money updated from ${currentPlayer.money} to ${newMoney}`);
+                    }
                 }
             } catch (error) {
                 console.error('Error saving track state:', error);
@@ -261,6 +295,11 @@ export class TrackDrawingManager {
                 const fromPoint = this.previewPath[i];
                 const toPoint = this.previewPath[i + 1];
                 
+                // Calculate cost (rounding to ensure it's an integer for actual cost)
+                let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
+                // Round down to ensure we have an integer cost for the actual track
+                segmentCost = Math.floor(segmentCost);
+                
                 const segment: TrackSegment = {
                     from: {
                         x: fromPoint.x,
@@ -276,13 +315,13 @@ export class TrackDrawingManager {
                         col: toPoint.col,
                         terrain: toPoint.terrain
                     },
-                    cost: this.calculateTrackCost(fromPoint, toPoint)
+                    cost: segmentCost
                 };
 
                 // Add and draw the segment
                 this.currentSegments.push(segment);
                 this.drawTrackSegment(segment);
-                this.turnBuildCost += segment.cost;
+                this.turnBuildCost += segmentCost;
             }
 
             // Update last clicked point and valid connection points
@@ -309,13 +348,13 @@ export class TrackDrawingManager {
             return;
         }
 
-        console.debug('Hover at grid point:', { 
-            row: gridPoint.row, 
-            col: gridPoint.col, 
-            terrain: gridPoint.terrain,
-            lastClickedPoint: this.lastClickedPoint ? 
-                { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col } : null
-        });
+        // console.debug('Hover at grid point:', { 
+        //     row: gridPoint.row, 
+        //     col: gridPoint.col, 
+        //     terrain: gridPoint.terrain,
+        //     lastClickedPoint: this.lastClickedPoint ? 
+        //         { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col } : null
+        // });
 
         // Skip if hovering over the last clicked point - compare coordinates instead of object reference
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
@@ -326,10 +365,10 @@ export class TrackDrawingManager {
 
         // Find path to hover point
         const path = this.findPreviewPath(gridPoint);
-        console.debug('Preview path calculation result:', { 
-            found: !!path, 
-            length: path?.length || 0 
-        });
+        //console.debug('Preview path calculation result:', { 
+        //    found: !!path, 
+        //    length: path?.length || 0 
+        //});
 
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
@@ -351,7 +390,7 @@ export class TrackDrawingManager {
             this.previewGraphics.lineTo(path[i].x, path[i].y);
         }
         this.previewGraphics.strokePath();
-        console.debug('Preview path drawn');
+        //console.debug('Preview path drawn');
     }
 
     private getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
@@ -400,20 +439,20 @@ export class TrackDrawingManager {
         // Use lastClickedPoint as the starting point
         const startPoint = this.lastClickedPoint;
         if (!startPoint) {
-            console.debug('No start point available for preview path');
+            //console.debug('No start point available for preview path');
             return null;
         }
 
         // Skip if target is the same as start point
         if (targetPoint.row === startPoint.row && targetPoint.col === startPoint.col) {
-            console.debug('Target point is same as start point');
+            //console.debug('Target point is same as start point');
             return null;
         }
 
-        console.debug('Finding preview path:', {
-            from: { row: startPoint.row, col: startPoint.col },
-            to: { row: targetPoint.row, col: targetPoint.col }
-        });
+        //console.debug('Finding preview path:', {
+        //    from: { row: startPoint.row, col: startPoint.col },
+        //    to: { row: targetPoint.row, col: targetPoint.col }
+        //});
 
         // Initialize Dijkstra's algorithm data structures
         const distances = new Map<string, number>();
@@ -445,10 +484,10 @@ export class TrackDrawingManager {
             }
         }
 
-        console.debug('Initialized path finding:', { 
-            pointCount,
-            searchArea: { minRow, maxRow, minCol, maxCol }
-        });
+        //console.debug('Initialized path finding:', { 
+        //    pointCount,
+        //    searchArea: { minRow, maxRow, minCol, maxCol }
+        //});
 
         // Set start point distance to 0
         const startKey = getPointKey(startPoint);
@@ -490,12 +529,12 @@ export class TrackDrawingManager {
             const [row, col] = currentKey.split(',').map(Number);
             const currentPoint = this.gridPoints[row][col];
 
-            console.debug('Processing point:', {
-                row,
-                col,
-                distance: minDistance,
-                remainingPoints: unvisited.size
-            });
+            //    console.debug('Processing point:', {
+            //    row,
+            //    col,
+            //    distance: minDistance,
+            //    remainingPoints: unvisited.size
+            //});
             
             // If we've reached the target, build and return the path
             if (row === targetPoint.row && col === targetPoint.col) {
@@ -505,7 +544,7 @@ export class TrackDrawingManager {
                 // Check if total cost would exceed budget
                 const totalCost = distances.get(getPointKey(targetPoint)) || 0;
                 if (totalCost + this.turnBuildCost > this.MAX_TURN_BUILD_COST) {
-                    console.debug('Path found but exceeds budget', { totalCost, currentBudget: this.turnBuildCost });
+                    //console.debug('Path found but exceeds budget', { totalCost, currentBudget: this.turnBuildCost });
                     return null;
                 }
 
@@ -514,11 +553,11 @@ export class TrackDrawingManager {
                     current = previous.get(getPointKey(current)) || null;
                 }
 
-                console.debug('Path found:', { 
-                    length: path.length,
-                    cost: totalCost,
-                    iterations
-                });
+                //console.debug('Path found:', { 
+                //    length: path.length,
+                //    cost: totalCost,
+                //    iterations
+                //});
                 return path;
             }
 
@@ -565,10 +604,10 @@ export class TrackDrawingManager {
                 }
             }
 
-            console.debug('Found potential neighbors:', {
-                count: potentialNeighbors.length,
-                currentPoint: { row: currentPoint.row, col: currentPoint.col }
-            });
+            //console.debug('Found potential neighbors:', {
+            //    count: potentialNeighbors.length,
+            //    currentPoint: { row: currentPoint.row, col: currentPoint.col }
+            //});
 
             // Process neighbors
             for (const neighbor of potentialNeighbors) {
@@ -588,7 +627,7 @@ export class TrackDrawingManager {
             }
         }
 
-        console.debug('No path found', { iterations });
+        //console.debug('No path found', { iterations });
         return null;
     }
 

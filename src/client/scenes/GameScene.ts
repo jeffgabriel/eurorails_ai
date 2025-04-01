@@ -117,7 +117,8 @@ export class GameScene extends Phaser.Scene {
             this,
             this.mapContainer,
             this.gameState,
-            this.mapRenderer.gridPoints
+            this.mapRenderer.gridPoints,
+            this.gameStateService
         );
         
         // Create a separate camera for UI that won't move
@@ -154,18 +155,48 @@ export class GameScene extends Phaser.Scene {
     
     private toggleDrawingMode(): void {
         const isDrawingMode = this.trackManager.toggleDrawingMode();
+        
+        // If exiting drawing mode, update the UI completely to refresh money display
+        if (!isDrawingMode) {
+            this.uiManager.setupUIOverlay();
+        }
+        
         // Re-render the player hand with updated drawing mode state
         this.uiManager.setupPlayerHand(isDrawingMode);
     }
     
     private async nextPlayerTurn() {
+        // Get the current player before changing turns
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // First check if there was a build cost from previous build activity
+        // (this works even if player isn't currently in drawing mode)
+        let buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        
         // If in drawing mode, finalize track drawing first
         if (this.trackManager.isInDrawingMode) {
             this.trackManager.toggleDrawingMode();
+            
+            // Get the updated build cost after saving track state
+            buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        }
+        
+        // Deduct track building cost from player's money if there was any building
+        if (buildCost > 0) {
+            const newMoney = currentPlayer.money - buildCost;
+            
+            try {
+                // Update player money in local state and database
+                const updateResult = await this.gameStateService.updatePlayerMoney(currentPlayer.id, newMoney);
+            } catch (error) {
+                console.error('Error updating player money:', error);
+            }
         }
         
         // Use the game state service to handle player turn changes
         await this.gameStateService.nextPlayerTurn();
+        
+        const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
         // Update the UI
         this.uiManager.setupUIOverlay();
