@@ -267,7 +267,7 @@ export class PlayerService {
 
     static async getActiveGame(): Promise<Game | null> {
         const query = `
-            SELECT id, status, current_player_index as "currentPlayerIndex", 
+            SELECT id, status, current_player_index as "currentPlayerIndex", camera_state as "cameraState",
                    created_at as "createdAt", updated_at as "updatedAt"
             FROM games 
             WHERE status = 'active'
