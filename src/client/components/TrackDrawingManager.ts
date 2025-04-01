@@ -343,11 +343,21 @@ export class TrackDrawingManager {
             
             console.debug('Creating track segments from preview path');
             
+            // Get the current player's track state for cost calculation
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            const playerTrackState = this.playerTracks.get(currentPlayer.id);
+            
             // Calculate total cost of the path to check against player's money and turn budget
             let totalPathCost = 0;
             for (let i = 0; i < this.previewPath.length - 1; i++) {
                 const fromPoint = this.previewPath[i];
                 const toPoint = this.previewPath[i + 1];
+                
+                // Skip cost for existing segments
+                if (this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
+                    continue;
+                }
+                
                 let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
                 segmentCost = Math.floor(segmentCost);
                 totalPathCost += segmentCost;
@@ -363,6 +373,11 @@ export class TrackDrawingManager {
             for (let i = 0; i < this.previewPath.length - 1; i++) {
                 const fromPoint = this.previewPath[i];
                 const toPoint = this.previewPath[i + 1];
+                
+                // Skip if this segment already exists in the player's network
+                if (this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
+                    continue;
+                }
                 
                 // Calculate cost (rounding to ensure it's an integer for actual cost)
                 let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
@@ -573,6 +588,10 @@ export class TrackDrawingManager {
             pointCount++;
         }
 
+        // Get the current player's track state once instead of in each loop
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+
         let iterations = 0;
         while (unvisited.size > 0) {
             iterations++;
@@ -689,8 +708,14 @@ export class TrackDrawingManager {
             for (const neighbor of potentialNeighbors) {
                 const neighborKey = getPointKey(neighbor);
                 if (!unvisited.has(neighborKey)) continue;
-
-                // Calculate new distance through current point
+                
+                // Check if this segment already exists in the player's network
+                // If it exists, skip this neighbor entirely - we don't want to include existing segments in the path
+                if (this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
+                    continue;
+                }
+                
+                // Calculate the normal cost for a new segment
                 const segmentCost = this.calculateTrackCost(currentPoint, neighbor);
                 const newDistance = minDistance + segmentCost;
 
@@ -810,6 +835,26 @@ export class TrackDrawingManager {
         return cost;
     }
 
+    // Helper method to check if a segment already exists in player's track network
+    private isSegmentInNetwork(point1: GridPoint, point2: GridPoint, trackState?: PlayerTrackState): boolean {
+        if (!trackState) return false;
+        
+        // Check both directions since track segments are bidirectional
+        return trackState.segments.some(segment => 
+            // Check if segment matches in either direction
+            ((segment.from.row === point1.row && segment.from.col === point1.col &&
+              segment.to.row === point2.row && segment.to.col === point2.col) ||
+             (segment.from.row === point2.row && segment.from.col === point2.col &&
+              segment.to.row === point1.row && segment.to.col === point1.col))
+        ) || this.currentSegments.some(segment =>
+            // Also check current segments being built
+            ((segment.from.row === point1.row && segment.from.col === point1.col &&
+              segment.to.row === point2.row && segment.to.col === point2.col) ||
+             (segment.from.row === point2.row && segment.from.col === point2.col &&
+              segment.to.row === point1.row && segment.to.col === point1.col))
+        );
+    }
+    
     private isPointConnectedToNetwork(point: GridPoint, trackState?: PlayerTrackState): boolean {
         if (!trackState) return false;
 
