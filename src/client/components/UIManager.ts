@@ -51,12 +51,59 @@ export class UIManager {
         };
     }
 
+    private updateTrainZOrders(): void {
+        // Group trains by location
+        const trainsByLocation = new Map<string, string[]>();
+        
+        this.gameState.players.forEach(player => {
+            if (player.position) {
+                const locationKey = `${player.position.row},${player.position.col}`;
+                const trains = trainsByLocation.get(locationKey) || [];
+                trains.push(player.id);
+                trainsByLocation.set(locationKey, trains);
+            }
+        });
+
+        // Update z-order for each location with multiple trains
+        trainsByLocation.forEach((trainsAtLocation) => {
+            // First, bring non-current player trains to top in their original order
+            trainsAtLocation.forEach(trainId => {
+                if (trainId !== this.gameState.players[this.gameState.currentPlayerIndex].id) {
+                    const sprite = this.gameState.trainSprites?.get(trainId);
+                    if (sprite) {
+                        this.trainContainer.bringToTop(sprite);
+                    }
+                }
+            });
+
+            // Finally, bring current player's train to the very top
+            const currentPlayerSprite = this.gameState.trainSprites?.get(
+                this.gameState.players[this.gameState.currentPlayerIndex].id
+            );
+            if (currentPlayerSprite) {
+                this.trainContainer.bringToTop(currentPlayerSprite);
+            }
+        });
+    }
+
     public async updateTrainPosition(playerId: string, x: number, y: number, row: number, col: number): Promise<void> {
         const player = this.gameState.players.find(p => p.id === playerId);
         if (!player) return;
 
         // Update player position in database
         await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
+
+        // Find all trains at this location
+        const trainsAtLocation = this.gameState.players
+            .filter(p => p.position?.row === row && p.position?.col === col)
+            .map(p => p.id);
+        
+        // Calculate offset based on position in stack
+        const OFFSET_X = 5; // pixels to offset each train horizontally
+        const OFFSET_Y = 5; // pixels to offset each train vertically
+        const index = trainsAtLocation.indexOf(playerId);
+        const offsetX = index * OFFSET_X;
+        const offsetY = index * OFFSET_Y;
 
         // Update or create train sprite
         let trainSprite = this.gameState.trainSprites?.get(playerId);
@@ -73,13 +120,16 @@ export class UIManager {
             const trainColor = colorMap[player.color.toUpperCase()] || 'black';
             const trainTexture = player.trainType === 'Freight' ? `train_${trainColor}` : `train_12_${trainColor}`;
             
-            trainSprite = this.scene.add.image(x, y, trainTexture);
+            trainSprite = this.scene.add.image(x + offsetX, y + offsetY, trainTexture);
             trainSprite.setScale(0.1); // Adjust scale as needed
             this.trainContainer.add(trainSprite);
             this.gameState.trainSprites?.set(playerId, trainSprite);
         } else {
-            trainSprite.setPosition(x, y);
+            trainSprite.setPosition(x + offsetX, y + offsetY);
         }
+
+        // Update z-ordering for all trains
+        this.updateTrainZOrders();
     }
 
     public async initializePlayerTrain(playerId: string, startX: number, startY: number, startRow: number, startCol: number): Promise<void> {
@@ -216,6 +266,9 @@ export class UIManager {
         
         // Add all UI elements to container
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText, settingsButton, settingsIcon]);
+
+        // Update train z-ordering for new current player
+        this.updateTrainZOrders();
 
         // Check if current player needs to select a starting city
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
