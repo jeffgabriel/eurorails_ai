@@ -103,12 +103,13 @@ export class GameScene extends Phaser.Scene {
         
         // Create UI manager with callbacks
         this.uiManager = new UIManager(
-            this, 
+            this,
             this.gameState,
-            () => this.toggleDrawingMode(),
+            () => this.trackManager.toggleDrawingMode(),
             () => this.nextPlayerTurn(),
             () => this.openSettings(),
-            this.gameStateService
+            this.gameStateService,
+            this.mapRenderer
         );
         
         // Set container references from UI manager
@@ -148,23 +149,11 @@ export class GameScene extends Phaser.Scene {
         console.debug('Loading existing tracks...');
         await this.trackManager.loadExistingTracks();
         
-        // Initialize train positions for each player
+        // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
             if (!player.position) {
-                // Find a major city to start in
-                const majorCity = this.mapRenderer.gridPoints.flat().find(point => 
-                    point?.city?.type === TerrainType.MajorCity
-                );
-                
-                if (majorCity) {
-                    this.uiManager.initializePlayerTrain(
-                        player.id,
-                        majorCity.x,
-                        majorCity.y,
-                        majorCity.row,
-                        majorCity.col
-                    );
-                }
+                // Player needs to select a starting city
+                this.uiManager.showCitySelectionForPlayer(player.id);
             } else {
                 // Restore existing position
                 this.uiManager.updateTrainPosition(

@@ -1,6 +1,7 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, Player, TerrainType } from '../../shared/types/GameTypes';
 import { GameStateService } from '../services/GameStateService';
+import { MapRenderer } from './MapRenderer';
 
 export class UIManager {
     private scene: Phaser.Scene;
@@ -12,6 +13,7 @@ export class UIManager {
     private nextPlayerCallback: () => void;
     private openSettingsCallback: () => void;
     private gameStateService: GameStateService;
+    private mapRenderer: MapRenderer;
 
     constructor(
         scene: Phaser.Scene, 
@@ -19,7 +21,8 @@ export class UIManager {
         toggleDrawingCallback: () => void,
         nextPlayerCallback: () => void,
         openSettingsCallback: () => void,
-        gameStateService: GameStateService
+        gameStateService: GameStateService,
+        mapRenderer: MapRenderer
     ) {
         this.scene = scene;
         this.gameState = gameState;
@@ -27,6 +30,7 @@ export class UIManager {
         this.nextPlayerCallback = nextPlayerCallback;
         this.openSettingsCallback = openSettingsCallback;
         this.gameStateService = gameStateService;
+        this.mapRenderer = mapRenderer;
         
         // Create containers
         this.uiContainer = this.scene.add.container(0, 0);
@@ -356,5 +360,65 @@ export class UIManager {
         // Add elements to container in correct order
         this.playerHandContainer.add([handBackground]);  // Add background first
         this.playerHandContainer.add([trainSection, trainLabel, playerInfo, crayonButton]);  // Then add UI elements
+    }
+
+    public showCitySelectionForPlayer(playerId: string): void {
+        // Find all major cities from the grid
+        const majorCities = this.mapRenderer.gridPoints.flat()
+            .filter(point => point?.city?.type === TerrainType.MajorCity)
+            .map(point => ({
+                name: point.city!.name,
+                x: point.x,
+                y: point.y,
+                row: point.row,
+                col: point.col
+            }));
+
+        // Create a container for the selection UI
+        const container = this.scene.add.container(10, this.scene.scale.height - 190);
+        this.playerHandContainer.add(container);
+
+        // Add background
+        const bg = this.scene.add.rectangle(0, 0, 200, 100, 0x000000, 0.8);
+        container.add(bg);
+
+        // Add title text
+        const titleText = this.scene.add.text(10, 10, 'Select Starting City:', { 
+            color: '#ffffff',
+            fontSize: '14px'
+        });
+        container.add(titleText);
+
+        // Create dropdown (using HTML overlay)
+        const dropdown = document.createElement('select');
+        dropdown.style.position = 'absolute';
+        dropdown.style.left = (container.x + 10) + 'px';
+        dropdown.style.top = (container.y + 40) + 'px';
+        dropdown.style.width = '180px';
+        dropdown.style.padding = '5px';
+
+        // Add options for each major city
+        majorCities.forEach(city => {
+            const option = document.createElement('option');
+            option.value = JSON.stringify({ name: city.name, x: city.x, y: city.y, row: city.row, col: city.col });
+            option.text = city.name;
+            dropdown.appendChild(option);
+        });
+
+        // Handle selection
+        dropdown.onchange = () => {
+            const selectedCity = JSON.parse(dropdown.value);
+            this.initializePlayerTrain(
+                playerId,
+                selectedCity.x,
+                selectedCity.y,
+                selectedCity.row,
+                selectedCity.col
+            );
+            document.body.removeChild(dropdown);
+            container.destroy();
+        };
+
+        document.body.appendChild(dropdown);
     }
 }
