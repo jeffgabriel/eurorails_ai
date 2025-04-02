@@ -90,18 +90,34 @@ export class GameScene extends Phaser.Scene {
         this.uiContainer = this.add.container(0, 0);
         this.playerHandContainer = this.add.container(0, 0);
         
+        // Create track manager first since it's a dependency for MapRenderer
+        this.trackManager = new TrackDrawingManager(
+            this,
+            this.mapContainer,
+            this.gameState,
+            [], // Empty array initially, will be set after grid creation
+            this.gameStateService
+        );
+        
         // Initialize component managers
-        this.mapRenderer = new MapRenderer(this, this.mapContainer);
+        this.mapRenderer = new MapRenderer(this, this.mapContainer, this.gameState, this.trackManager);
         
         // Create the map
         console.debug('Creating triangular grid...');
         this.mapRenderer.createTriangularGrid();
         
+        // Now update TrackManager with the created grid points
+        this.trackManager.updateGridPoints(this.mapRenderer.gridPoints);
+        
         // Create camera controller with map dimensions
         const { width, height } = this.mapRenderer.calculateMapDimensions();
         this.cameraController = new CameraController(this, width, height, this.gameState);
         
-        // Create UI manager with callbacks
+        // Load existing tracks before creating UI
+        console.debug('Loading existing tracks...');
+        await this.trackManager.loadExistingTracks();
+        
+        // Create UI manager with callbacks after tracks are loaded
         this.uiManager = new UIManager(
             this,
             this.gameState,
@@ -120,15 +136,6 @@ export class GameScene extends Phaser.Scene {
         // Add train container to map container
         this.mapContainer.add(containers.trainContainer);
         
-        // Create track manager
-        this.trackManager = new TrackDrawingManager(
-            this,
-            this.mapContainer,
-            this.gameState,
-            this.mapRenderer.gridPoints,
-            this.gameStateService
-        );
-        
         // Register for track cost updates
         this.trackManager.onCostUpdate((cost) => {
             // Update the UI to show the current track cost
@@ -144,10 +151,6 @@ export class GameScene extends Phaser.Scene {
         
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
-        
-        // Load existing tracks
-        console.debug('Loading existing tracks...');
-        await this.trackManager.loadExistingTracks();
         
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {

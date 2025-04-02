@@ -67,6 +67,10 @@ export class TrackDrawingManager {
         this.onCostUpdateCallback = callback;
     }
 
+    public getPlayerTrackState(playerId: string): PlayerTrackState | undefined {
+        return this.playerTracks.get(playerId);
+    }
+
     public async loadExistingTracks(): Promise<void> {
         try {
             // Fetch all tracks for the current game
@@ -923,5 +927,10 @@ export class TrackDrawingManager {
         this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
         this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
         this.drawingGraphics.strokePath();
+    }
+
+    // Method to update grid points after initialization
+    public updateGridPoints(gridPoints: GridPoint[][]): void {
+        this.gridPoints = gridPoints;
     }
 }

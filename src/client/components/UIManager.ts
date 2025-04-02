@@ -14,6 +14,8 @@ export class UIManager {
     private openSettingsCallback: () => void;
     private gameStateService: GameStateService;
     private mapRenderer: MapRenderer;
+    private isTrainMovementMode: boolean = false;
+    private isDrawingMode: boolean = false;
 
     constructor(
         scene: Phaser.Scene, 
@@ -40,6 +42,70 @@ export class UIManager {
         // Initialize trainSprites map in gameState if not exists
         if (!this.gameState.trainSprites) {
             this.gameState.trainSprites = new Map();
+        }
+
+        this.setupTrainInteraction();
+    }
+
+    private setupTrainInteraction(): void {
+        // Listen for pointer down events on the scene
+        this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            if (this.isTrainMovementMode) {
+                this.handleTrainPlacement(pointer);
+            }
+        });
+    }
+
+    private handleTrainPlacement(pointer: Phaser.Input.Pointer): void {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // Find the nearest milepost to the click that belongs to the current player
+        const nearestMilepost = this.mapRenderer.findNearestMilepostOnOwnTrack(
+            pointer.x,
+            pointer.y,
+            currentPlayer.id
+        );
+
+        if (nearestMilepost) {
+            console.log('nearestMilepost', nearestMilepost);
+            // Update train position
+            this.updateTrainPosition(
+                currentPlayer.id,
+                nearestMilepost.x,
+                nearestMilepost.y,
+                nearestMilepost.row,
+                nearestMilepost.col
+            );
+            
+            // Exit train movement mode
+            this.exitTrainMovementMode();
+        }
+    }
+
+    private exitTrainMovementMode(): void {
+        this.isTrainMovementMode = false;
+        // Reset cursor style
+        this.scene.input.setDefaultCursor('default');
+        
+        // Reset any visual indicators of train movement mode
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+        if (trainSprite) {
+            trainSprite.setAlpha(1);
+        }
+    }
+
+    public enterTrainMovementMode(): void {
+        console.log('enterTrainMovementMode');
+        this.isTrainMovementMode = true;
+        // Set cursor to indicate movement mode
+        this.scene.input.setDefaultCursor('pointer');
+        
+        // Add visual indicator that train is selected
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+        if (trainSprite) {
+            trainSprite.setAlpha(0.7); // Make train slightly transparent to indicate it's being moved
         }
     }
 
@@ -86,9 +152,18 @@ export class UIManager {
         });
     }
 
+    public setDrawingMode(isDrawing: boolean): void {
+        this.isDrawingMode = isDrawing;
+    }
+
     public async updateTrainPosition(playerId: string, x: number, y: number, row: number, col: number): Promise<void> {
         const player = this.gameState.players.find(p => p.id === playerId);
         if (!player) return;
+
+        // Exit train movement mode if we're updating the current player's position
+        if (playerId === this.gameState.players[this.gameState.currentPlayerIndex].id) {
+            this.exitTrainMovementMode();
+        }
 
         // Update player position in database
         await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
@@ -104,6 +179,46 @@ export class UIManager {
         const index = trainsAtLocation.indexOf(playerId);
         const offsetX = index * OFFSET_X;
         const offsetY = index * OFFSET_Y;
+
+        // Helper function to set up train sprite interaction
+        const setupTrainInteraction = (sprite: Phaser.GameObjects.Image) => {
+            sprite.setInteractive({ useHandCursor: true })
+                .on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+                    console.log('Train clicked:', {
+                        playerId,
+                        isCurrentPlayer: playerId === this.gameState.players[this.gameState.currentPlayerIndex].id,
+                        hasTrack: this.mapRenderer.playerHasTrack(playerId),
+                        isDrawingMode: this.isDrawingMode,
+                        isTrainMovementMode: this.isTrainMovementMode
+                    });
+
+                    // Debug track data
+                    console.log('=== Debugging track data on train click ===');
+                    this.mapRenderer.debugTrackData();
+                    console.log('=====================================');
+
+                    // Only allow interaction if:
+                    // 1. This is the current player's train
+                    // 2. Not in drawing mode
+                    // 3. Player has track
+                    // 4. Not already in train movement mode
+                    const isCurrentPlayer = playerId === this.gameState.players[this.gameState.currentPlayerIndex].id;
+                    const hasTrack = this.mapRenderer.playerHasTrack(playerId);
+
+                    if (isCurrentPlayer && hasTrack && !this.isDrawingMode && !this.isTrainMovementMode) {
+                        console.log('Entering train movement mode');
+                        pointer.event.stopPropagation();
+                        this.enterTrainMovementMode();
+                    } else {
+                        console.log('Train movement mode conditions not met:', {
+                            isCurrentPlayer,
+                            hasTrack,
+                            notDrawingMode: !this.isDrawingMode,
+                            notTrainMovementMode: !this.isTrainMovementMode
+                        });
+                    }
+                });
+        };
 
         // Update or create train sprite
         let trainSprite = this.gameState.trainSprites?.get(playerId);
@@ -126,7 +241,12 @@ export class UIManager {
             this.gameState.trainSprites?.set(playerId, trainSprite);
         } else {
             trainSprite.setPosition(x + offsetX, y + offsetY);
+            // Remove any existing listeners to prevent duplicates
+            trainSprite.removeAllListeners();
         }
+
+        // Set up interaction for both new and existing sprites
+        setupTrainInteraction(trainSprite);
 
         // Update z-ordering for all trains
         this.updateTrainZOrders();

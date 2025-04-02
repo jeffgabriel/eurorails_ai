@@ -1,6 +1,8 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { TerrainType } from '../../shared/types/GameTypes';
+import { GameState } from '../../shared/types/GameTypes';
+import { TrackDrawingManager } from '../components/TrackDrawingManager';
 
 export interface GridPoint {
     x: number;  // screen x
@@ -15,6 +17,7 @@ export interface GridPoint {
         name: string;
         connectedPoints?: Array<{ row: number; col: number }>;
     };
+    tracks?: Array<{ playerId: string }>;
 }
 
 export class MapRenderer {
@@ -50,10 +53,19 @@ export class MapRenderer {
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     public gridPoints: GridPoint[][] = [];
+    private gameState: GameState;
+    private trackDrawingManager: TrackDrawingManager;
 
-    constructor(scene: Phaser.Scene, mapContainer: Phaser.GameObjects.Container) {
+    constructor(
+        scene: Phaser.Scene,
+        mapContainer: Phaser.GameObjects.Container,
+        gameState: GameState,
+        trackDrawingManager: TrackDrawingManager
+    ) {
         this.scene = scene;
         this.mapContainer = mapContainer;
+        this.gameState = gameState;
+        this.trackDrawingManager = trackDrawingManager;
     }
 
     public calculateMapDimensions() {
@@ -401,5 +413,62 @@ export class MapRenderer {
             // Can connect to same column or one column to the left in adjacent rows
             return colDiff === 0 || colDiff === -1;
         }
+    }
+
+    public playerHasTrack(playerId: string): boolean {
+        // Get player's track state from TrackDrawingManager
+        const playerTrackState = this.trackDrawingManager.getPlayerTrackState(playerId);
+        if (!playerTrackState || !playerTrackState.segments) {
+            return false;
+        }
+        return playerTrackState.segments.length > 0;
+    }
+
+    // Also let's add a method to help debug track data
+    public debugTrackData(): void {
+        console.log('=== Track Data Debug ===');
+        this.gridPoints.forEach((row, rowIndex) => {
+            row.forEach((point, colIndex) => {
+                if (point?.tracks && point.tracks.length > 0) {
+                    console.log(`Track at [${rowIndex},${colIndex}]:`, {
+                        point,
+                        tracks: point.tracks,
+                        numTracks: point.tracks.length
+                    });
+                }
+            });
+        });
+        console.log('=== End Track Data Debug ===');
+    }
+
+    public findNearestMilepostOnOwnTrack(x: number, y: number, playerId: string): { x: number, y: number, row: number, col: number } | null {
+        let nearestPoint: { x: number, y: number, row: number, col: number } | null = null;
+        let minDistance = Infinity;
+
+        // Search through all grid points
+        this.gridPoints.forEach((row, rowIndex) => {
+            row.forEach((point, colIndex) => {
+                // Check if this point has a track owned by the player
+                if (point?.tracks?.some(track => track.playerId === playerId)) {
+                    // Calculate distance to this point
+                    const dx = point.x - x;
+                    const dy = point.y - y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    // Update nearest point if this is closer
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        nearestPoint = {
+                            x: point.x,
+                            y: point.y,
+                            row: rowIndex,
+                            col: colIndex
+                        };
+                    }
+                }
+            });
+        });
+
+        return nearestPoint;
     }
 }
