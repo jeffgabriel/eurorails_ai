@@ -233,8 +233,9 @@ export class UIManager {
         // Add player info with track cost if in drawing mode
         let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
         
-        // Add track cost display when in drawing mode - just the number, no label
-        if (isDrawingMode && currentTrackCost > 0) {
+        // Add track cost display when in drawing mode
+        if (isDrawingMode) {
+            // Show the cost even if zero, with more descriptive label
             playerInfoText += `\nECU ${currentTrackCost}M`;
         }
         

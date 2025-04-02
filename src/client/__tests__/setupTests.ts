@@ -65,7 +65,10 @@ const mockAdd = {
         stroke: jest.fn().mockReturnThis(),
         arc: jest.fn().mockReturnThis(),
         fillRect: jest.fn().mockReturnThis(),
-        strokeRect: jest.fn().mockReturnThis()
+        strokeRect: jest.fn().mockReturnThis(),
+        setDepth: jest.fn().mockReturnThis(),
+        clear: jest.fn().mockReturnThis(),
+        strokePath: jest.fn().mockReturnThis()
     }))
 };
 

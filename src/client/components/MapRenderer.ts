@@ -250,9 +250,14 @@ export class MapRenderer {
                 const cityAreaConfig = cityAreaPoints.get(`${row},${col}`);
                 
                 // Use city area config if available, otherwise use regular config
-                const terrain = config?.terrain || TerrainType.Clear;
+                let terrain = config?.terrain || TerrainType.Clear;
                 const ferryConnection = config?.ferryConnection;
                 const city = cityAreaConfig?.city || config?.city;
+                
+                // If this point has a city, use the city's type as the terrain type for cost calculations
+                if (city) {
+                    terrain = city.type;
+                }
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
