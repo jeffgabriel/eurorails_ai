@@ -9,6 +9,10 @@ interface PlayerRow {
     color: string;
     money: number;
     train_type: string;
+    position_x: number | null;
+    position_y: number | null;
+    position_row: number | null;
+    position_col: number | null;
 }
 
 export class PlayerService {
@@ -47,16 +51,23 @@ export class PlayerService {
         const normalizedColor = this.validateColor(player.color);
 
         const query = `
-            INSERT INTO players (id, game_id, name, color, money, train_type)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO players (
+                id, game_id, name, color, money, train_type,
+                position_x, position_y, position_row, position_col
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         `;
         const values = [
             player.id,
             gameId,
             player.name,
             normalizedColor,
-            typeof player.money === 'number' ? player.money : 50, // Use explicit check for number
-            player.trainType || 'Freight'
+            typeof player.money === 'number' ? player.money : 50,
+            player.trainType || 'Freight',
+            player.position?.x || null,
+            player.position?.y || null,
+            player.position?.row || null,
+            player.position?.col || null
         ];
         try {
             await db.query(query, values);
@@ -118,9 +129,13 @@ export class PlayerService {
                 SET name = $1, 
                     color = $2, 
                     money = $3, 
-                    train_type = $4, 
+                    train_type = $4,
+                    position_x = $5,
+                    position_y = $6,
+                    position_row = $7,
+                    position_col = $8,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE game_id = $5 AND id = $6
+                WHERE game_id = $9 AND id = $10
                 RETURNING *
             `;
             // Determine money value with proper type checking
@@ -129,8 +144,12 @@ export class PlayerService {
             const values = [
                 player.name, 
                 normalizedColor, 
-                moneyValue, // Use explicit check for number
-                trainType, 
+                moneyValue,
+                trainType,
+                player.position?.x ? Math.round(player.position.x) : null,
+                player.position?.y ? Math.round(player.position.y) : null,
+                player.position?.row ? Math.round(player.position.row) : null,
+                player.position?.col ? Math.round(player.position.col) : null,
                 gameId, 
                 player.id
             ];
@@ -175,10 +194,18 @@ export class PlayerService {
         const client = await db.connect();
         try {
             const query = `
-                SELECT id, name, color, money, train_type as "trainType"
+                SELECT 
+                    id, 
+                    name, 
+                    color, 
+                    money, 
+                    train_type as "trainType",
+                    position_x,
+                    position_y,
+                    position_row,
+                    position_col
                 FROM players 
                 WHERE game_id = $1
-                ORDER BY turn_order
             `;
             const values = [gameId];
             console.log('Executing select query:', { query, values });
@@ -186,7 +213,15 @@ export class PlayerService {
             const result = await client.query(query, values);
             console.log('Query result:', { rowCount: result.rowCount });
 
-            return result.rows;
+            return result.rows.map(row => ({
+                ...row,
+                position: row.position_x !== null ? {
+                    x: row.position_x,
+                    y: row.position_y,
+                    row: row.position_row,
+                    col: row.position_col
+                } : undefined
+            }));
         } catch (err) {
             console.error('Database error during players query:', err);
             throw err;

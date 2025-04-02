@@ -625,10 +625,6 @@ export class TrackDrawingManager {
                 distances.set(nodeKey, 0);
             }
         }
-        
-        console.debug('Starting pathfinding with network nodes:', { 
-            networkNodeCount: networkNodes.size,
-        });
 
         let iterations = 0;
         while (unvisited.size > 0) {

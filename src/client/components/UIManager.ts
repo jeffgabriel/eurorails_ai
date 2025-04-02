@@ -1,38 +1,85 @@
 import 'phaser';
 import { GameState } from '../../shared/types/GameTypes';
+import { GameStateService } from '../services/GameStateService';
 
 export class UIManager {
     private scene: Phaser.Scene;
     private gameState: GameState;
     private uiContainer: Phaser.GameObjects.Container;
     private playerHandContainer: Phaser.GameObjects.Container;
+    private trainContainer: Phaser.GameObjects.Container;
     private toggleDrawingCallback: () => void;
     private nextPlayerCallback: () => void;
     private openSettingsCallback: () => void;
+    private gameStateService: GameStateService;
 
     constructor(
         scene: Phaser.Scene, 
         gameState: GameState,
         toggleDrawingCallback: () => void,
         nextPlayerCallback: () => void,
-        openSettingsCallback: () => void
+        openSettingsCallback: () => void,
+        gameStateService: GameStateService
     ) {
         this.scene = scene;
         this.gameState = gameState;
         this.toggleDrawingCallback = toggleDrawingCallback;
         this.nextPlayerCallback = nextPlayerCallback;
         this.openSettingsCallback = openSettingsCallback;
+        this.gameStateService = gameStateService;
         
         // Create containers
         this.uiContainer = this.scene.add.container(0, 0);
         this.playerHandContainer = this.scene.add.container(0, 0);
+        this.trainContainer = this.scene.add.container(0, 0);
+        
+        // Initialize trainSprites map in gameState if not exists
+        if (!this.gameState.trainSprites) {
+            this.gameState.trainSprites = new Map();
+        }
     }
 
-    public getContainers(): { uiContainer: Phaser.GameObjects.Container, playerHandContainer: Phaser.GameObjects.Container } {
+    public getContainers(): { uiContainer: Phaser.GameObjects.Container, playerHandContainer: Phaser.GameObjects.Container, trainContainer: Phaser.GameObjects.Container } {
         return {
             uiContainer: this.uiContainer,
-            playerHandContainer: this.playerHandContainer
+            playerHandContainer: this.playerHandContainer,
+            trainContainer: this.trainContainer
         };
+    }
+
+    public async updateTrainPosition(playerId: string, x: number, y: number, row: number, col: number): Promise<void> {
+        const player = this.gameState.players.find(p => p.id === playerId);
+        if (!player) return;
+
+        // Update player position in database
+        await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
+
+        // Update or create train sprite
+        let trainSprite = this.gameState.trainSprites?.get(playerId);
+        if (!trainSprite) {
+            const colorMap: { [key: string]: string } = {
+                '#FFD700': 'yellow',
+                '#FF0000': 'red',
+                '#0000FF': 'blue',
+                '#000000': 'black',
+                '#008000': 'green',
+                '#8B4513': 'brown'
+            };
+            
+            const trainColor = colorMap[player.color.toUpperCase()] || 'black';
+            const trainTexture = player.trainType === 'Freight' ? `train_${trainColor}` : `train_12_${trainColor}`;
+            
+            trainSprite = this.scene.add.image(x, y, trainTexture);
+            trainSprite.setScale(0.1); // Adjust scale as needed
+            this.trainContainer.add(trainSprite);
+            this.gameState.trainSprites?.set(playerId, trainSprite);
+        } else {
+            trainSprite.setPosition(x, y);
+        }
+    }
+
+    public async initializePlayerTrain(playerId: string, startX: number, startY: number, startRow: number, startCol: number): Promise<void> {
+        await this.updateTrainPosition(playerId, startX, startY, startRow, startCol);
     }
 
     public setupUIOverlay(): void {

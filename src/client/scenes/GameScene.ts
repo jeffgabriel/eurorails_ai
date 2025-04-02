@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, TerrainType } from '../../shared/types/GameTypes';
 import { MapRenderer } from '../components/MapRenderer';
 import { CameraController } from '../components/CameraController';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
@@ -69,6 +69,9 @@ export class GameScene extends Phaser.Scene {
         const colors = ['red', 'blue', 'green', 'yellow', 'black', 'brown'];
         colors.forEach(color => {
             this.load.image(`crayon_${color}`, `/assets/crayon_${color}.png`);
+            // Load both regular and fast/heavy train images
+            this.load.image(`train_${color}`, `/assets/train_${color}.png`);
+            this.load.image(`train_12_${color}`, `/assets/train_12_${color}.png`);
         });
     }
 
@@ -104,13 +107,17 @@ export class GameScene extends Phaser.Scene {
             this.gameState,
             () => this.toggleDrawingMode(),
             () => this.nextPlayerTurn(),
-            () => this.openSettings()
+            () => this.openSettings(),
+            this.gameStateService
         );
         
         // Set container references from UI manager
         const containers = this.uiManager.getContainers();
         this.uiContainer = containers.uiContainer;
         this.playerHandContainer = containers.playerHandContainer;
+        
+        // Add train container to map container
+        this.mapContainer.add(containers.trainContainer);
         
         // Create track manager
         this.trackManager = new TrackDrawingManager(
@@ -140,6 +147,35 @@ export class GameScene extends Phaser.Scene {
         // Load existing tracks
         console.debug('Loading existing tracks...');
         await this.trackManager.loadExistingTracks();
+        
+        // Initialize train positions for each player
+        this.gameState.players.forEach(player => {
+            if (!player.position) {
+                // Find a major city to start in
+                const majorCity = this.mapRenderer.gridPoints.flat().find(point => 
+                    point?.city?.type === TerrainType.MajorCity
+                );
+                
+                if (majorCity) {
+                    this.uiManager.initializePlayerTrain(
+                        player.id,
+                        majorCity.x,
+                        majorCity.y,
+                        majorCity.row,
+                        majorCity.col
+                    );
+                }
+            } else {
+                // Restore existing position
+                this.uiManager.updateTrainPosition(
+                    player.id,
+                    player.position.x,
+                    player.position.y,
+                    player.position.row,
+                    player.position.col
+                );
+            }
+        });
         
         // Setup camera
         console.debug('Setting up camera...');
