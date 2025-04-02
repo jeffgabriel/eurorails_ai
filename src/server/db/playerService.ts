@@ -50,6 +50,17 @@ export class PlayerService {
         // Validate and normalize color
         const normalizedColor = this.validateColor(player.color);
 
+        // First check if another player already has this color
+        const colorCheckQuery = `
+            SELECT id FROM players 
+            WHERE game_id = $1 AND color = $2
+        `;
+        const colorCheckResult = await db.query(colorCheckQuery, [gameId, normalizedColor]);
+        
+        if (colorCheckResult.rows.length > 0) {
+            throw new Error('Color already taken by another player');
+        }
+
         const query = `
             INSERT INTO players (
                 id, game_id, name, color, money, train_type,
@@ -185,8 +196,25 @@ export class PlayerService {
     }
 
     static async deletePlayer(gameId: string, playerId: string): Promise<void> {
-        const query = 'DELETE FROM players WHERE game_id = $1 AND id = $2';
-        await db.query(query, [gameId, playerId]);
+        const client = await db.connect();
+        try {
+            await client.query('BEGIN');
+            
+            // First delete the player's tracks
+            const deleteTracksQuery = 'DELETE FROM player_tracks WHERE player_id = $1';
+            await client.query(deleteTracksQuery, [playerId]);
+            
+            // Then delete the player
+            const deletePlayerQuery = 'DELETE FROM players WHERE game_id = $1 AND id = $2';
+            await client.query(deletePlayerQuery, [gameId, playerId]);
+            
+            await client.query('COMMIT');
+        } catch (err) {
+            await client.query('ROLLBACK');
+            throw err;
+        } finally {
+            client.release();
+        }
     }
 
     static async getPlayers(gameId: string): Promise<Player[]> {
