@@ -214,7 +214,14 @@ export class UIManager {
             .on('pointerover', () => nextPlayerButton.setFillStyle(0x008800))
             .on('pointerout', () => nextPlayerButton.setFillStyle(0x00aa00));
         
+        // Add all UI elements to container
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText, settingsButton, settingsIcon]);
+
+        // Check if current player needs to select a starting city
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        if (currentPlayer && !currentPlayer.position) {
+            this.showCitySelectionForPlayer(currentPlayer.id);
+        }
     }
 
     public setupPlayerHand(isDrawingMode: boolean = false, currentTrackCost: number = 0): void {
@@ -363,39 +370,53 @@ export class UIManager {
     }
 
     public showCitySelectionForPlayer(playerId: string): void {
+        // Only show selection for current player
+        if (this.gameState.currentPlayerIndex === undefined || 
+            this.gameState.players[this.gameState.currentPlayerIndex].id !== playerId) {
+            return;
+        }
+
         // Find all major cities from the grid
-        const majorCities = this.mapRenderer.gridPoints.flat()
-            .filter(point => point?.city?.type === TerrainType.MajorCity)
-            .map(point => ({
-                name: point.city!.name,
-                x: point.x,
-                y: point.y,
-                row: point.row,
-                col: point.col
-            }));
+        const majorCities = [...new Map(
+            this.mapRenderer.gridPoints.flat()
+                .filter(point => point?.city?.type === TerrainType.MajorCity)
+                .map(point => [
+                    point.city!.name, // use name as key for uniqueness
+                    {
+                        name: point.city!.name,
+                        x: point.x,
+                        y: point.y,
+                        row: point.row,
+                        col: point.col
+                    }
+                ])
+        ).values()];
 
-        // Create a container for the selection UI
-        const container = this.scene.add.container(10, this.scene.scale.height - 190);
-        this.playerHandContainer.add(container);
+        // Find the player's info position
+        const player = this.gameState.players.find(p => p.id === playerId);
+        if (!player) return;
 
-        // Add background
-        const bg = this.scene.add.rectangle(0, 0, 200, 100, 0x000000, 0.8);
-        container.add(bg);
-
-        // Add title text
-        const titleText = this.scene.add.text(10, 10, 'Select Starting City:', { 
-            color: '#ffffff',
-            fontSize: '14px'
-        });
-        container.add(titleText);
+        const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
+        const yOffset = this.scene.scale.height - 180 + (playerIndex * 20);
 
         // Create dropdown (using HTML overlay)
         const dropdown = document.createElement('select');
         dropdown.style.position = 'absolute';
-        dropdown.style.left = (container.x + 10) + 'px';
-        dropdown.style.top = (container.y + 40) + 'px';
+        dropdown.style.left = '820px'; // Align with player info
+        dropdown.style.top = (yOffset + 60) + 'px'; // Position below money text
         dropdown.style.width = '180px';
         dropdown.style.padding = '5px';
+        dropdown.style.backgroundColor = '#444444';
+        dropdown.style.color = '#ffffff';
+        dropdown.style.border = '1px solid #666666';
+
+        // Add prompt option
+        const promptOption = document.createElement('option');
+        promptOption.value = '';
+        promptOption.text = 'Choose Starting City...';
+        promptOption.disabled = true;
+        promptOption.selected = true;
+        dropdown.appendChild(promptOption);
 
         // Add options for each major city
         majorCities.forEach(city => {
@@ -407,6 +428,7 @@ export class UIManager {
 
         // Handle selection
         dropdown.onchange = () => {
+            if (!dropdown.value) return; // Don't process if prompt is selected
             const selectedCity = JSON.parse(dropdown.value);
             this.initializePlayerTrain(
                 playerId,
@@ -416,7 +438,6 @@ export class UIManager {
                 selectedCity.col
             );
             document.body.removeChild(dropdown);
-            container.destroy();
         };
 
         document.body.appendChild(dropdown);
