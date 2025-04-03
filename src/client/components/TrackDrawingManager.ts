@@ -510,7 +510,7 @@ export class TrackDrawingManager {
         //console.debug('Preview path drawn');
     }
 
-    private getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
+    public getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
         // Define maximum distance for point selection
         const MAX_DISTANCE = 15; // pixels
         

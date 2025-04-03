@@ -50,7 +50,10 @@ export class UIManager {
     private setupTrainInteraction(): void {
         // Listen for pointer down events on the scene
         this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            // Only handle train placement if we're in train movement mode
             if (this.isTrainMovementMode) {
+                // Stop event propagation to prevent other handlers
+                pointer.event.stopPropagation();
                 this.handleTrainPlacement(pointer);
             }
         });
@@ -59,15 +62,18 @@ export class UIManager {
     private handleTrainPlacement(pointer: Phaser.Input.Pointer): void {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
+        // Convert pointer position to world coordinates
+        const worldPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        
         // Find the nearest milepost to the click that belongs to the current player
         const nearestMilepost = this.mapRenderer.findNearestMilepostOnOwnTrack(
-            pointer.x,
-            pointer.y,
+            worldPoint.x,
+            worldPoint.y,
             currentPlayer.id
         );
 
         if (nearestMilepost) {
-            console.log('nearestMilepost', nearestMilepost);
+            console.log('Found nearest milepost for train placement:', nearestMilepost);
             // Update train position
             this.updateTrainPosition(
                 currentPlayer.id,
@@ -79,6 +85,8 @@ export class UIManager {
             
             // Exit train movement mode
             this.exitTrainMovementMode();
+        } else {
+            console.log('No valid milepost found for train placement');
         }
     }
 
