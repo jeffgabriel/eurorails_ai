@@ -15,11 +15,15 @@ CREATE TABLE IF NOT EXISTS games (
 -- Create players table if it doesn't exist
 CREATE TABLE IF NOT EXISTS players (
     id VARCHAR(255) PRIMARY KEY,
-    game_id VARCHAR(255) REFERENCES games(id),
+    game_id VARCHAR(255) REFERENCES games(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     color VARCHAR(7) NOT NULL,
     money INTEGER NOT NULL DEFAULT 50,
     train_type VARCHAR(50) NOT NULL DEFAULT 'Freight',
+    position_x INTEGER,
+    position_y INTEGER,
+    position_row INTEGER,
+    position_col INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

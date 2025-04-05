@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, TerrainType } from '../../shared/types/GameTypes';
 import { MapRenderer } from '../components/MapRenderer';
 import { CameraController } from '../components/CameraController';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
@@ -69,6 +69,9 @@ export class GameScene extends Phaser.Scene {
         const colors = ['red', 'blue', 'green', 'yellow', 'black', 'brown'];
         colors.forEach(color => {
             this.load.image(`crayon_${color}`, `/assets/crayon_${color}.png`);
+            // Load both regular and fast/heavy train images
+            this.load.image(`train_${color}`, `/assets/train_${color}.png`);
+            this.load.image(`train_12_${color}`, `/assets/train_12_${color}.png`);
         });
     }
 
@@ -87,24 +90,42 @@ export class GameScene extends Phaser.Scene {
         this.uiContainer = this.add.container(0, 0);
         this.playerHandContainer = this.add.container(0, 0);
         
+        // Create track manager first since it's a dependency for MapRenderer
+        this.trackManager = new TrackDrawingManager(
+            this,
+            this.mapContainer,
+            this.gameState,
+            [], // Empty array initially, will be set after grid creation
+            this.gameStateService
+        );
+        
         // Initialize component managers
-        this.mapRenderer = new MapRenderer(this, this.mapContainer);
+        this.mapRenderer = new MapRenderer(this, this.mapContainer, this.gameState, this.trackManager);
         
         // Create the map
         console.debug('Creating triangular grid...');
         this.mapRenderer.createTriangularGrid();
         
+        // Now update TrackManager with the created grid points
+        this.trackManager.updateGridPoints(this.mapRenderer.gridPoints);
+        
         // Create camera controller with map dimensions
         const { width, height } = this.mapRenderer.calculateMapDimensions();
         this.cameraController = new CameraController(this, width, height, this.gameState);
         
-        // Create UI manager with callbacks
+        // Load existing tracks before creating UI
+        console.debug('Loading existing tracks...');
+        await this.trackManager.loadExistingTracks();
+        
+        // Create UI manager with callbacks after tracks are loaded
         this.uiManager = new UIManager(
-            this, 
+            this,
             this.gameState,
-            () => this.toggleDrawingMode(),
+            () => this.trackManager.toggleDrawingMode(),
             () => this.nextPlayerTurn(),
-            () => this.openSettings()
+            () => this.openSettings(),
+            this.gameStateService,
+            this.mapRenderer
         );
         
         // Set container references from UI manager
@@ -112,14 +133,8 @@ export class GameScene extends Phaser.Scene {
         this.uiContainer = containers.uiContainer;
         this.playerHandContainer = containers.playerHandContainer;
         
-        // Create track manager
-        this.trackManager = new TrackDrawingManager(
-            this,
-            this.mapContainer,
-            this.gameState,
-            this.mapRenderer.gridPoints,
-            this.gameStateService
-        );
+        // Add train container to map container
+        this.mapContainer.add(containers.trainContainer);
         
         // Register for track cost updates
         this.trackManager.onCostUpdate((cost) => {
@@ -137,9 +152,22 @@ export class GameScene extends Phaser.Scene {
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
         
-        // Load existing tracks
-        console.debug('Loading existing tracks...');
-        await this.trackManager.loadExistingTracks();
+        // Initialize or restore train positions for each player
+        this.gameState.players.forEach(player => {
+            if (!player.position) {
+                // Player needs to select a starting city
+                this.uiManager.showCitySelectionForPlayer(player.id);
+            } else {
+                // Restore existing position
+                this.uiManager.updateTrainPosition(
+                    player.id,
+                    player.position.x,
+                    player.position.y,
+                    player.position.row,
+                    player.position.col
+                );
+            }
+        });
         
         // Setup camera
         console.debug('Setting up camera...');
@@ -170,7 +198,22 @@ export class GameScene extends Phaser.Scene {
         }
         
         // Re-render the player hand with updated drawing mode state
-        const currentCost = isDrawingMode ? this.trackManager.getCurrentTurnBuildCost() : 0;
+        let currentCost = 0;
+        
+        if (isDrawingMode) {
+            // Get the current player
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            
+            // Get accumulated cost from previous sessions
+            const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+            
+            // Add current session cost (should be 0 at this point since we just entered drawing mode)
+            const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
+            
+            // Total cost to display
+            currentCost = previousSessionsCost + currentSessionCost;
+        }
+        
         this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
     }
     

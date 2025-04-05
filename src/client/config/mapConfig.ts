@@ -35,6 +35,37 @@ export const mapConfig: MapConfig = {
         { row: 21, col: 34, terrain: TerrainType.Clear },
         { row: 21, col: 35, terrain: TerrainType.Clear },
 
+        // Paris - Major City
+        {
+            row: 40,
+            col: 30,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MajorCity,
+                name: 'Paris',
+                connectedPoints: [
+                    // Center point
+                    { row: 40, col: 30 },
+                    // Top points
+                    { row: 39, col: 29 },
+                    { row: 39, col: 30 },
+                    // Middle points
+                    { row: 40, col: 29 },
+                    { row: 40, col: 31 },
+                    // Bottom points
+                    { row: 41, col: 29 },
+                    { row: 41, col: 30 }
+                ]
+            }
+        },
+        // Connected points for Paris
+        { row: 39, col: 29, terrain: TerrainType.Clear },
+        { row: 39, col: 30, terrain: TerrainType.Clear },
+        { row: 40, col: 29, terrain: TerrainType.Clear },
+        { row: 40, col: 31, terrain: TerrainType.Clear },
+        { row: 41, col: 29, terrain: TerrainType.Clear },
+        { row: 41, col: 30, terrain: TerrainType.Clear },
+
         // Example regular city (Frankfurt)
         {
             row: 25,
