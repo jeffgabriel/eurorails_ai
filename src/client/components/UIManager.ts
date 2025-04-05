@@ -92,10 +92,6 @@ export class UIManager {
     );
 
     if (nearestMilepost) {
-      console.log(
-        "Found nearest milepost for train placement:",
-        nearestMilepost
-      );
       try {
         // Update train position - await the async operation to complete
         await this.updateTrainPosition(
@@ -109,12 +105,8 @@ export class UIManager {
         // Exit train movement mode only after the position update completes
         this.exitTrainMovementMode();
       } catch (error) {
-        console.error("Error updating train position:", error);
-        // Keep movement mode active if an error occurred
+        throw error;
       }
-    } else {
-      console.log("No valid milepost found for train placement");
-      // Do not exit movement mode if no valid milepost found
     }
   }
 
@@ -133,7 +125,6 @@ export class UIManager {
   }
 
   public enterTrainMovementMode(): void {
-    console.log("enterTrainMovementMode");
     this.isTrainMovementMode = true;
     this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
 
@@ -200,9 +191,7 @@ export class UIManager {
   }
 
   public setDrawingMode(isDrawing: boolean): void {
-    console.log(`UIManager.setDrawingMode: ${this.isDrawingMode} -> ${isDrawing}`);
     this.isDrawingMode = isDrawing;
-    console.log('UIManager drawing mode now set to:', this.isDrawingMode);
   }
 
   public async updateTrainPosition(
@@ -640,20 +629,16 @@ export class UIManager {
         }
       })
       .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-        console.debug("Crayon button clicked!");
         if (pointer.event) {
           pointer.event.stopPropagation(); // Prevent click from propagating
         }
-        console.debug("Calling toggleDrawingCallback from crayon click");
         this.toggleDrawingCallback();
-        console.debug("toggleDrawingCallback completed");
       });
-    console.debug("isDrawingMode", isDrawingMode);
+
     // Add player info with track cost if in drawing mode
     let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
     // Add visual indicator for drawing mode
     if (isDrawingMode) {
-      console.log("UIManager.setupPlayerHand: Setting crayon to drawing mode style");
       crayonButton.setScale(0.18);
 
       // Show the cost even if zero, with more descriptive label
@@ -669,7 +654,6 @@ export class UIManager {
       );
       this.playerHandContainer.add(highlight);
     } else {
-      console.log("UIManager.setupPlayerHand: Setting crayon to normal mode style");
       crayonButton.setScale(0.15);
     }
 
@@ -695,9 +679,22 @@ export class UIManager {
     ]); // Then add UI elements
   }
 
+  public cleanupCityDropdowns(): void {
+    const existingDropdowns = document.querySelectorAll(
+      ".city-selection-dropdown"
+    );
+    existingDropdowns.forEach((dropdown) => {
+      document.body.removeChild(dropdown);
+    });
+  }
+
   public showCitySelectionForPlayer(playerId: string): void {
     // Only show selection for current player
+    console.log("playerHasTrack", this.mapRenderer.playerHasTrack(playerId));
+    // Remove any existing city selection dropdowns
+    this.cleanupCityDropdowns();
     if (
+      this.mapRenderer.playerHasTrack(playerId) ||
       this.gameState.currentPlayerIndex === undefined ||
       this.gameState.players[this.gameState.currentPlayerIndex].id !== playerId
     ) {
@@ -723,25 +720,22 @@ export class UIManager {
       ).values(),
     ];
 
-    // Find the player's info position
+    // Find the player
     const player = this.gameState.players.find((p) => p.id === playerId);
     if (!player) return;
 
-    const playerIndex = this.gameState.players.findIndex(
-      (p) => p.id === playerId
-    );
-    const yOffset = this.scene.scale.height - 180 + playerIndex * 20;
-
     // Create dropdown (using HTML overlay)
     const dropdown = document.createElement("select");
+    dropdown.className = "city-selection-dropdown"; // Add class for easy cleanup
     dropdown.style.position = "absolute";
     dropdown.style.left = "820px"; // Align with player info
-    dropdown.style.top = yOffset + 60 + "px"; // Position below money text
+    dropdown.style.top = `${this.scene.scale.height - 140}px`; // Fixed position aligned with player info
     dropdown.style.width = "180px";
     dropdown.style.padding = "5px";
     dropdown.style.backgroundColor = "#444444";
     dropdown.style.color = "#ffffff";
     dropdown.style.border = "1px solid #666666";
+    dropdown.style.zIndex = "1000"; // Ensure it appears above other elements
 
     // Add prompt option
     const promptOption = document.createElement("option");
@@ -763,6 +757,12 @@ export class UIManager {
       });
       option.text = city.name;
       dropdown.appendChild(option);
+
+      // If this city matches player's current position, select it
+      if (player.position && player.position.row === city.row && player.position.col === city.col) {
+        option.selected = true;
+        promptOption.selected = false;
+      }
     });
 
     // Handle selection
@@ -776,7 +776,7 @@ export class UIManager {
         selectedCity.row,
         selectedCity.col
       );
-      document.body.removeChild(dropdown);
+      // Note: No longer removing dropdown here - it will be removed when track is built
     };
 
     document.body.appendChild(dropdown);

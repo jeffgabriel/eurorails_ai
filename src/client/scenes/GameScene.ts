@@ -35,8 +35,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
-        console.debug('GameScene init called with data:', data);
-        
         // If we get a gameState, always use it
         if (data.gameState) {
             this.gameState = {
@@ -47,7 +45,6 @@ export class GameScene extends Phaser.Scene {
             
             // If we have camera state, apply it immediately
             if (this.gameState.cameraState) {
-                console.debug('Applying camera state in init:', this.gameState.cameraState);
                 this.cameras.main.setZoom(this.gameState.cameraState.zoom);
                 this.cameras.main.scrollX = this.gameState.cameraState.scrollX;
                 this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
@@ -76,9 +73,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     async create() {
-        console.debug('GameScene create method called');
-        console.debug('Initial game state:', this.gameState);
-        
         // Clear any existing containers
         this.children.removeAll(true);
         
@@ -103,7 +97,6 @@ export class GameScene extends Phaser.Scene {
         this.mapRenderer = new MapRenderer(this, this.mapContainer, this.gameState, this.trackManager);
         
         // Create the map
-        console.debug('Creating triangular grid...');
         this.mapRenderer.createTriangularGrid();
         
         // Now update TrackManager with the created grid points
@@ -114,7 +107,6 @@ export class GameScene extends Phaser.Scene {
         this.cameraController = new CameraController(this, width, height, this.gameState);
         
         // Load existing tracks before creating UI
-        console.debug('Loading existing tracks...');
         await this.trackManager.loadExistingTracks();
         
         // Create UI manager with callbacks after tracks are loaded
@@ -154,10 +146,7 @@ export class GameScene extends Phaser.Scene {
         
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
-            if (!player.position) {
-                // Player needs to select a starting city
-                this.uiManager.showCitySelectionForPlayer(player.id);
-            } else {
+            if (player.position) {
                 // Restore existing position
                 this.uiManager.updateTrainPosition(
                     player.id,
@@ -167,10 +156,13 @@ export class GameScene extends Phaser.Scene {
                     player.position.col
                 );
             }
+            else {
+                this.uiManager.showCitySelectionForPlayer(player.id);
+            }
+            
         });
         
         // Setup camera
-        console.debug('Setting up camera...');
         this.cameraController.setupCamera();
         
         // Setup UI elements
@@ -182,31 +174,27 @@ export class GameScene extends Phaser.Scene {
         
         // Add event handler for scene resume
         this.events.on('resume', () => {
-            console.debug('Scene resumed, refreshing UI...');
             // Clear and recreate UI elements
             this.uiManager.setupUIOverlay();
             this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+            
+            // Re-show city selection for current player if needed
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            if (!currentPlayer.position) {
+                this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
+            }
         });
     }
     
     private toggleDrawingMode(): void {
-        console.log("=== GameScene.toggleDrawingMode START ===");
-        console.log(`Before toggle - TrackManager drawing mode: ${this.trackManager.isInDrawingMode}`);
-        
         const isDrawingMode = this.trackManager.toggleDrawingMode();
-        
-        console.log(`After toggle - TrackManager returned isDrawingMode: ${isDrawingMode}`);
-        console.log(`Current state - TrackManager.isInDrawingMode: ${this.trackManager.isInDrawingMode}`);
         
         // Update UIManager's drawing mode state
         this.uiManager.setDrawingMode(isDrawingMode);
         
         // If exiting drawing mode, update the UI completely to refresh money display
         if (!isDrawingMode) {
-            console.log("Exiting drawing mode - updating UI overlay");
             this.uiManager.setupUIOverlay();
-        } else {
-            console.log("Entering drawing mode");
         }
         
         // Re-render the player hand with updated drawing mode state
@@ -224,15 +212,12 @@ export class GameScene extends Phaser.Scene {
             
             // Total cost to display
             currentCost = previousSessionsCost + currentSessionCost;
-            console.log(`Current track cost to display: ${currentCost}`);
         }
         
-        console.log(`Setting up player hand with isDrawingMode=${isDrawingMode}, cost=${currentCost}`);
         this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
-        console.log("=== GameScene.toggleDrawingMode END ===");
     }
     
-    private async nextPlayerTurn() {
+    private async nextPlayerTurn(): Promise<void> {
         // Get the current player before changing turns
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
@@ -270,8 +255,14 @@ export class GameScene extends Phaser.Scene {
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
         // Update the UI
+        this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();
         this.uiManager.setupPlayerHand(false); // Always set to false as we're exiting drawing mode
+
+        // Check if new current player needs to select a starting city
+        if (!this.mapRenderer.playerHasTrack(newCurrentPlayer.id)) {
+            this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
+        }
     }
     
     private openSettings() {

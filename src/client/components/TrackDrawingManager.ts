@@ -76,7 +76,7 @@ export class TrackDrawingManager {
             // Fetch all tracks for the current game
             const response = await fetch(`/api/tracks/${this.gameState.id}`);
             if (!response.ok) {
-                console.error('Failed to load tracks:', await response.text());
+                throw new Error(await response.text());
                 return;
             }
 
@@ -91,7 +91,7 @@ export class TrackDrawingManager {
             this.drawAllTracks();
             
         } catch (error) {
-            console.error('Error loading tracks:', error);
+            throw error;
         }
     }
 
@@ -119,18 +119,14 @@ export class TrackDrawingManager {
         // Toggle drawing mode state
         const oldMode = this.isDrawingMode;
         this.isDrawingMode = !this.isDrawingMode;
-        console.log(`TrackDrawingManager.toggleDrawingMode: ${oldMode} -> ${this.isDrawingMode}`);
         
         if (this.isDrawingMode) {
-            console.log('TrackDrawingManager: Initializing drawing mode');
             this.initializeDrawingMode();
         } else {
-            console.log('TrackDrawingManager: Saving tracks and cleaning up drawing mode');
             this.saveCurrentTracks();
             this.cleanupDrawingMode();
         }
         
-        console.log(`TrackDrawingManager.toggleDrawingMode returning: ${this.isDrawingMode}`);
         return this.isDrawingMode;
     }
     
@@ -170,10 +166,10 @@ export class TrackDrawingManager {
                 });
                 
                 if (!response.ok) {
-                    console.error('Failed to clear turn build cost in database');
+                    throw new Error('Failed to clear turn build cost in database');
                 }
             } catch (error) {
-                console.error('Error clearing turn build cost:', error);
+                throw error;
             }
         }
     }
@@ -240,8 +236,7 @@ export class TrackDrawingManager {
 
                 if (!response.ok) {
                     const errorData = await response.json();
-                    console.error('Failed to save track state:', errorData);
-                    // TODO: Show error to user and potentially revert the local state
+                    throw new Error(JSON.stringify(errorData));
                     return;
                 }
                 
@@ -257,15 +252,11 @@ export class TrackDrawingManager {
                     );
                     
                     if (!moneyUpdateSuccess) {
-                        console.error('Failed to update player money');
-                        // TODO: Show error to user
-                    } else {
-                        console.debug(`Player money updated from ${currentPlayer.money} to ${newMoney}`);
+                        throw new Error('Failed to update player money');
                     }
                 }
             } catch (error) {
-                console.error('Error saving track state:', error);
-                // TODO: Show error to user and potentially revert the local state
+                throw error;
             }
         }
     }
@@ -317,13 +308,11 @@ export class TrackDrawingManager {
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
         if (!this.isDrawingMode || !pointer.leftButtonDown()) {
-            console.debug('Drawing click ignored - not in drawing mode or not left button');
             return;
         }
 
         // Ignore clicks in UI area
         if (pointer.y > this.scene.scale.height - 200) {
-            console.debug('Drawing click ignored - in UI area');
             return;
         }
 
@@ -331,11 +320,8 @@ export class TrackDrawingManager {
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
         if (!gridPoint) {
-            console.debug('Drawing click ignored - no valid grid point found');
             return;
         }
-
-        console.debug('Valid click at grid point:', { row: gridPoint.row, col: gridPoint.col, terrain: gridPoint.terrain });
 
         // Get current player information
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
@@ -346,32 +332,19 @@ export class TrackDrawingManager {
             const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
             
-            console.debug('First click validation:', { isMajorCity, isConnectedToNetwork });
-            
             if (!isMajorCity && !isConnectedToNetwork) {
-                console.debug('Starting point must be a major city or connect to existing track network');
                 return;
             }
             
             this.lastClickedPoint = gridPoint;
             this.updateValidConnectionPoints();
-            console.debug('First point set, valid connection points updated');
             return;
         }
-
-        console.debug('Checking preview path:', { 
-            hasPreviewPath: this.previewPath.length > 0,
-            targetMatches: this.previewPath.length > 0 && 
-                this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
-                this.previewPath[this.previewPath.length - 1].col === gridPoint.col
-        });
 
         // If we have a valid preview path to this point, use it
         if (this.previewPath.length > 0 && 
             this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
-            
-            console.debug('Creating track segments from preview path');
             
             // Calculate total cost of the path to check against player's money and turn budget
             let totalPathCost = 0;
@@ -391,7 +364,6 @@ export class TrackDrawingManager {
             
             // Check if the total cost is valid
             if (!this.isValidCost(totalPathCost)) {
-                console.debug('Cannot build track - exceeds budget or available money');
                 return;
             }
             
@@ -405,7 +377,7 @@ export class TrackDrawingManager {
                     continue;
                 }
                 
-                // Calculate cost (rounding to ensure it's an integer for actual cost)
+                // Calculate cost (rounding to ensure it's an integer)
                 let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
                 // Round down to ensure we have an integer cost for the actual track
                 segmentCost = Math.floor(segmentCost);
@@ -449,9 +421,6 @@ export class TrackDrawingManager {
             // Now this includes the most recently added track segments
             this.lastClickedPoint = gridPoint;
             this.updateValidConnectionPoints();
-            console.debug('Track segments created and drawn');
-        } else {
-            console.debug('No valid preview path to create track segments');
         }
     }
 
@@ -470,14 +439,6 @@ export class TrackDrawingManager {
             return;
         }
 
-        // console.debug('Hover at grid point:', { 
-        //     row: gridPoint.row, 
-        //     col: gridPoint.col, 
-        //     terrain: gridPoint.terrain,
-        //     lastClickedPoint: this.lastClickedPoint ? 
-        //         { row: this.lastClickedPoint.row, col: this.lastClickedPoint.col } : null
-        // });
-
         // Skip if hovering over the last clicked point - compare coordinates instead of object reference
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
             this.previewGraphics.clear();
@@ -487,10 +448,6 @@ export class TrackDrawingManager {
 
         // Find path to hover point
         const path = this.findPreviewPath(gridPoint);
-        //console.debug('Preview path calculation result:', { 
-        //    found: !!path, 
-        //    length: path?.length || 0 
-        //});
 
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
@@ -512,7 +469,6 @@ export class TrackDrawingManager {
             this.previewGraphics.lineTo(path[i].x, path[i].y);
         }
         this.previewGraphics.strokePath();
-        //console.debug('Preview path drawn');
     }
 
     public getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
@@ -573,13 +529,11 @@ export class TrackDrawingManager {
         // Use lastClickedPoint as the starting point
         const startPoint = this.lastClickedPoint;
         if (!startPoint) {
-            //console.debug('No start point available for preview path');
             return null;
         }
 
         // Skip if target is the same as start point
         if (targetPoint.row === startPoint.row && targetPoint.col === startPoint.col) {
-            //console.debug('Target point is same as start point');
             return null;
         }
 
@@ -652,10 +606,6 @@ export class TrackDrawingManager {
             }
 
             if (!currentKey || minDistance === Infinity) {
-                console.debug('No more reachable points', { 
-                    iterations, 
-                    unvisitedSize: unvisited.size
-                });
                 break;
             }
 
