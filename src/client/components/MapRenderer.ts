@@ -1,6 +1,8 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
 import { TerrainType } from '../../shared/types/GameTypes';
+import { GameState } from '../../shared/types/GameTypes';
+import { TrackDrawingManager } from '../components/TrackDrawingManager';
 
 export interface GridPoint {
     x: number;  // screen x
@@ -15,6 +17,7 @@ export interface GridPoint {
         name: string;
         connectedPoints?: Array<{ row: number; col: number }>;
     };
+    tracks?: Array<{ playerId: string }>;
 }
 
 export class MapRenderer {
@@ -50,10 +53,19 @@ export class MapRenderer {
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     public gridPoints: GridPoint[][] = [];
+    private gameState: GameState;
+    private trackDrawingManager: TrackDrawingManager;
 
-    constructor(scene: Phaser.Scene, mapContainer: Phaser.GameObjects.Container) {
+    constructor(
+        scene: Phaser.Scene,
+        mapContainer: Phaser.GameObjects.Container,
+        gameState: GameState,
+        trackDrawingManager: TrackDrawingManager
+    ) {
         this.scene = scene;
         this.mapContainer = mapContainer;
+        this.gameState = gameState;
+        this.trackDrawingManager = trackDrawingManager;
     }
 
     public calculateMapDimensions() {
@@ -250,9 +262,14 @@ export class MapRenderer {
                 const cityAreaConfig = cityAreaPoints.get(`${row},${col}`);
                 
                 // Use city area config if available, otherwise use regular config
-                const terrain = config?.terrain || TerrainType.Clear;
+                let terrain = config?.terrain || TerrainType.Clear;
                 const ferryConnection = config?.ferryConnection;
                 const city = cityAreaConfig?.city || config?.city;
+                
+                // If this point has a city, use the city's type as the terrain type for cost calculations
+                if (city) {
+                    terrain = city.type;
+                }
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
@@ -396,5 +413,121 @@ export class MapRenderer {
             // Can connect to same column or one column to the left in adjacent rows
             return colDiff === 0 || colDiff === -1;
         }
+    }
+
+    public playerHasTrack(playerId: string): boolean {
+        // Get player's track state from TrackDrawingManager
+        const playerTrackState = this.trackDrawingManager.getPlayerTrackState(playerId);
+        if (!playerTrackState || !playerTrackState.segments) {
+            return false;
+        }
+        return playerTrackState.segments.length > 0;
+    }
+
+    // Also let's add a method to help debug track data
+    public debugTrackData(): void {
+        console.log('=== Track Data Debug ===');
+        this.gridPoints.forEach((row, rowIndex) => {
+            row.forEach((point, colIndex) => {
+                if (point?.tracks && point.tracks.length > 0) {
+                    console.log(`Track at [${rowIndex},${colIndex}]:`, {
+                        point,
+                        tracks: point.tracks,
+                        numTracks: point.tracks.length
+                    });
+                }
+            });
+        });
+        console.log('=== End Track Data Debug ===');
+    }
+
+    public findNearestMilepostOnOwnTrack(x: number, y: number, playerId: string): { x: number, y: number, row: number, col: number } | null {
+        // First, get the clicked point using TrackDrawingManager's method
+        const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(x, y);
+        console.log('Clicked point:', clickedPoint);
+        
+        if (!clickedPoint) {
+            console.log('No valid grid point found at click position');
+            return null;
+        }
+
+        // Get the player's track state
+        const playerTrackState = this.trackDrawingManager.getPlayerTrackState(playerId);
+        if (!playerTrackState || !playerTrackState.segments) {
+            console.log('No track state found for player');
+            return null;
+        }
+
+        // Check if the clicked point is part of any of the player's track segments
+        const isOnPlayerTrack = playerTrackState.segments.some(segment => 
+            // Check both ends of each segment
+            (segment.from.row === clickedPoint.row && segment.from.col === clickedPoint.col) ||
+            (segment.to.row === clickedPoint.row && segment.to.col === clickedPoint.col)
+        );
+
+        if (isOnPlayerTrack) {
+            console.log('Found player track at clicked point');
+            return {
+                x: clickedPoint.x,
+                y: clickedPoint.y,
+                row: clickedPoint.row,
+                col: clickedPoint.col
+            };
+        }
+
+        // If not, find the nearest point that is part of a player's track segment
+        let nearestPoint: GridPoint | null = null;
+        let minDistance = Infinity;
+
+        // Create a set of all points that are part of the player's track network
+        const trackPoints = new Set<string>();
+        playerTrackState.segments.forEach(segment => {
+            trackPoints.add(`${segment.from.row},${segment.from.col}`);
+            trackPoints.add(`${segment.to.row},${segment.to.col}`);
+        });
+
+        // Search through adjacent points first (within a reasonable radius)
+        const searchRadius = 3; // Adjust this value as needed
+        const rowStart = Math.max(0, clickedPoint.row - searchRadius);
+        const rowEnd = Math.min(this.gridPoints.length - 1, clickedPoint.row + searchRadius);
+        
+        for (let row = rowStart; row <= rowEnd; row++) {
+            if (!this.gridPoints[row]) continue;
+            
+            const colStart = Math.max(0, clickedPoint.col - searchRadius);
+            const colEnd = Math.min(this.gridPoints[row].length - 1, clickedPoint.col + searchRadius);
+            
+            for (let col = colStart; col <= colEnd; col++) {
+                const point = this.gridPoints[row][col];
+                if (!point || point.terrain === TerrainType.Water) continue;
+
+                // Check if this point is part of the player's track network
+                if (trackPoints.has(`${point.row},${point.col}`)) {
+                    // Calculate distance to this point
+                    const dx = point.x - clickedPoint.x;
+                    const dy = point.y - clickedPoint.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    // Update nearest point if this is closer
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        nearestPoint = point;
+                    }
+                }
+            }
+        }
+
+        if (nearestPoint) {
+            console.log('Found nearest point with player track:', nearestPoint);
+            return {
+                x: nearestPoint.x,
+                y: nearestPoint.y,
+                row: nearestPoint.row,
+                col: nearestPoint.col
+            };
+        }
+
+        console.log('No valid track point found within search radius');
+        return null;
     }
 }

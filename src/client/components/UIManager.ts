@@ -1,38 +1,287 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, Player, TerrainType } from '../../shared/types/GameTypes';
+import { GameStateService } from '../services/GameStateService';
+import { MapRenderer } from './MapRenderer';
 
 export class UIManager {
     private scene: Phaser.Scene;
     private gameState: GameState;
     private uiContainer: Phaser.GameObjects.Container;
     private playerHandContainer: Phaser.GameObjects.Container;
+    private trainContainer: Phaser.GameObjects.Container;
     private toggleDrawingCallback: () => void;
     private nextPlayerCallback: () => void;
     private openSettingsCallback: () => void;
+    private gameStateService: GameStateService;
+    private mapRenderer: MapRenderer;
+    private isTrainMovementMode: boolean = false;
+    private isDrawingMode: boolean = false;
 
     constructor(
         scene: Phaser.Scene, 
         gameState: GameState,
         toggleDrawingCallback: () => void,
         nextPlayerCallback: () => void,
-        openSettingsCallback: () => void
+        openSettingsCallback: () => void,
+        gameStateService: GameStateService,
+        mapRenderer: MapRenderer
     ) {
         this.scene = scene;
         this.gameState = gameState;
         this.toggleDrawingCallback = toggleDrawingCallback;
         this.nextPlayerCallback = nextPlayerCallback;
         this.openSettingsCallback = openSettingsCallback;
+        this.gameStateService = gameStateService;
+        this.mapRenderer = mapRenderer;
         
         // Create containers
         this.uiContainer = this.scene.add.container(0, 0);
         this.playerHandContainer = this.scene.add.container(0, 0);
+        this.trainContainer = this.scene.add.container(0, 0);
+        
+        // Initialize trainSprites map in gameState if not exists
+        if (!this.gameState.trainSprites) {
+            this.gameState.trainSprites = new Map();
+        }
+
+        this.setupTrainInteraction();
     }
 
-    public getContainers(): { uiContainer: Phaser.GameObjects.Container, playerHandContainer: Phaser.GameObjects.Container } {
+    // Add a flag to track if we just entered movement mode to avoid immediate placement
+    private justEnteredMovementMode: boolean = false;
+
+    private setupTrainInteraction(): void {
+        // Listen for pointer down events on the scene
+        this.scene.input.on('pointerdown', async (pointer: Phaser.Input.Pointer) => {
+            // Only handle train placement if we're in train movement mode
+            // AND we didn't just enter movement mode on this same click
+            if (this.isTrainMovementMode && !this.justEnteredMovementMode) {
+                // Stop event propagation to prevent other handlers
+                if (pointer.event) {
+                    pointer.event.stopPropagation();
+                }
+                // Use await to ensure we handle the entire train placement process
+                await this.handleTrainPlacement(pointer);
+            }
+            
+            // Reset the flag after the click is processed
+            this.justEnteredMovementMode = false;
+        });
+    }
+
+    private async handleTrainPlacement(pointer: Phaser.Input.Pointer): Promise<void> {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // Convert pointer position to world coordinates
+        const worldPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        
+        // Find the nearest milepost to the click that belongs to the current player
+        const nearestMilepost = this.mapRenderer.findNearestMilepostOnOwnTrack(
+            worldPoint.x,
+            worldPoint.y,
+            currentPlayer.id
+        );
+
+        if (nearestMilepost) {
+            console.log('Found nearest milepost for train placement:', nearestMilepost);
+            try {
+                // Update train position - await the async operation to complete
+                await this.updateTrainPosition(
+                    currentPlayer.id,
+                    nearestMilepost.x,
+                    nearestMilepost.y,
+                    nearestMilepost.row,
+                    nearestMilepost.col
+                );
+                
+                // Exit train movement mode only after the position update completes
+                this.exitTrainMovementMode();
+            } catch (error) {
+                console.error('Error updating train position:', error);
+                // Keep movement mode active if an error occurred
+            }
+        } else {
+            console.log('No valid milepost found for train placement');
+            // Do not exit movement mode if no valid milepost found
+        }
+    }
+
+    private exitTrainMovementMode(): void {
+        this.isTrainMovementMode = false;
+        // Reset cursor style
+        this.scene.input.setDefaultCursor('default');
+        
+        // Reset any visual indicators of train movement mode
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+        if (trainSprite) {
+            trainSprite.setAlpha(1);
+        }
+    }
+
+    public enterTrainMovementMode(): void {
+        console.log('enterTrainMovementMode');
+        this.isTrainMovementMode = true;
+        this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
+        
+        // Set cursor to indicate movement mode
+        this.scene.input.setDefaultCursor('pointer');
+        
+        // Add visual indicator that train is selected
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+        if (trainSprite) {
+            trainSprite.setAlpha(0.7); // Make train slightly transparent to indicate it's being moved
+        }
+    }
+
+    public getContainers(): { uiContainer: Phaser.GameObjects.Container, playerHandContainer: Phaser.GameObjects.Container, trainContainer: Phaser.GameObjects.Container } {
         return {
             uiContainer: this.uiContainer,
-            playerHandContainer: this.playerHandContainer
+            playerHandContainer: this.playerHandContainer,
+            trainContainer: this.trainContainer
         };
+    }
+
+    private updateTrainZOrders(): void {
+        // Group trains by location
+        const trainsByLocation = new Map<string, string[]>();
+        
+        this.gameState.players.forEach(player => {
+            if (player.position) {
+                const locationKey = `${player.position.row},${player.position.col}`;
+                const trains = trainsByLocation.get(locationKey) || [];
+                trains.push(player.id);
+                trainsByLocation.set(locationKey, trains);
+            }
+        });
+
+        // Update z-order for each location with multiple trains
+        trainsByLocation.forEach((trainsAtLocation) => {
+            // First, bring non-current player trains to top in their original order
+            trainsAtLocation.forEach(trainId => {
+                if (trainId !== this.gameState.players[this.gameState.currentPlayerIndex].id) {
+                    const sprite = this.gameState.trainSprites?.get(trainId);
+                    if (sprite) {
+                        this.trainContainer.bringToTop(sprite);
+                    }
+                }
+            });
+
+            // Finally, bring current player's train to the very top
+            const currentPlayerSprite = this.gameState.trainSprites?.get(
+                this.gameState.players[this.gameState.currentPlayerIndex].id
+            );
+            if (currentPlayerSprite) {
+                this.trainContainer.bringToTop(currentPlayerSprite);
+            }
+        });
+    }
+
+    public setDrawingMode(isDrawing: boolean): void {
+        this.isDrawingMode = isDrawing;
+    }
+
+    public async updateTrainPosition(playerId: string, x: number, y: number, row: number, col: number): Promise<void> {
+        const player = this.gameState.players.find(p => p.id === playerId);
+        if (!player) return;
+
+        // No longer exiting train movement mode here since we handle that in handleTrainPlacement
+        // This allows the pattern to work for multiple consecutive clicks
+
+        // Update player position in database
+        await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
+
+        // Find all trains at this location
+        const trainsAtLocation = this.gameState.players
+            .filter(p => p.position?.row === row && p.position?.col === col)
+            .map(p => p.id);
+        
+        // Calculate offset based on position in stack
+        const OFFSET_X = 5; // pixels to offset each train horizontally
+        const OFFSET_Y = 5; // pixels to offset each train vertically
+        const index = trainsAtLocation.indexOf(playerId);
+        const offsetX = index * OFFSET_X;
+        const offsetY = index * OFFSET_Y;
+
+        // Helper function to set up train sprite interaction
+        const setupTrainInteraction = (sprite: Phaser.GameObjects.Image) => {
+            sprite.setInteractive({ useHandCursor: true })
+                .on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+                    console.log('Train clicked:', {
+                        playerId,
+                        isCurrentPlayer: playerId === this.gameState.players[this.gameState.currentPlayerIndex].id,
+                        hasTrack: this.mapRenderer.playerHasTrack(playerId),
+                        isDrawingMode: this.isDrawingMode,
+                        isTrainMovementMode: this.isTrainMovementMode
+                    });
+
+                    // Debug track data
+                    console.log('=== Debugging track data on train click ===');
+                    this.mapRenderer.debugTrackData();
+                    console.log('=====================================');
+
+                    // Only allow interaction if:
+                    // 1. This is the current player's train
+                    // 2. Not in drawing mode
+                    // 3. Player has track
+                    // 4. Not already in train movement mode
+                    const isCurrentPlayer = playerId === this.gameState.players[this.gameState.currentPlayerIndex].id;
+                    const hasTrack = this.mapRenderer.playerHasTrack(playerId);
+
+                    if (isCurrentPlayer && hasTrack && !this.isDrawingMode && !this.isTrainMovementMode) {
+                        console.log('Entering train movement mode');
+                        // First stop event propagation to prevent it from being handled by the scene
+                        if (pointer.event) {
+                            pointer.event.stopPropagation();
+                        }
+                        // Then enter train movement mode
+                        this.enterTrainMovementMode();
+                    } else {
+                        console.log('Train movement mode conditions not met:', {
+                            isCurrentPlayer,
+                            hasTrack,
+                            notDrawingMode: !this.isDrawingMode,
+                            notTrainMovementMode: !this.isTrainMovementMode
+                        });
+                    }
+                });
+        };
+
+        // Update or create train sprite
+        let trainSprite = this.gameState.trainSprites?.get(playerId);
+        if (!trainSprite) {
+            const colorMap: { [key: string]: string } = {
+                '#FFD700': 'yellow',
+                '#FF0000': 'red',
+                '#0000FF': 'blue',
+                '#000000': 'black',
+                '#008000': 'green',
+                '#8B4513': 'brown'
+            };
+            
+            const trainColor = colorMap[player.color.toUpperCase()] || 'black';
+            const trainTexture = player.trainType === 'Freight' ? `train_${trainColor}` : `train_12_${trainColor}`;
+            
+            trainSprite = this.scene.add.image(x + offsetX, y + offsetY, trainTexture);
+            trainSprite.setScale(0.1); // Adjust scale as needed
+            this.trainContainer.add(trainSprite);
+            this.gameState.trainSprites?.set(playerId, trainSprite);
+        } else {
+            trainSprite.setPosition(x + offsetX, y + offsetY);
+            // Remove any existing listeners to prevent duplicates
+            trainSprite.removeAllListeners();
+        }
+
+        // Set up interaction for both new and existing sprites
+        setupTrainInteraction(trainSprite);
+
+        // Update z-ordering for all trains
+        this.updateTrainZOrders();
+    }
+
+    public async initializePlayerTrain(playerId: string, startX: number, startY: number, startRow: number, startCol: number): Promise<void> {
+        await this.updateTrainPosition(playerId, startX, startY, startRow, startCol);
     }
 
     public setupUIOverlay(): void {
@@ -163,7 +412,17 @@ export class UIManager {
             .on('pointerover', () => nextPlayerButton.setFillStyle(0x008800))
             .on('pointerout', () => nextPlayerButton.setFillStyle(0x00aa00));
         
+        // Add all UI elements to container
         this.uiContainer.add([leaderboardBg, leaderboardTitle, ...playerEntries, nextPlayerButton, nextPlayerText, settingsButton, settingsIcon]);
+
+        // Update train z-ordering for new current player
+        this.updateTrainZOrders();
+
+        // Check if current player needs to select a starting city
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        if (currentPlayer && !currentPlayer.position) {
+            this.showCitySelectionForPlayer(currentPlayer.id);
+        }
     }
 
     public setupPlayerHand(isDrawingMode: boolean = false, currentTrackCost: number = 0): void {
@@ -233,8 +492,9 @@ export class UIManager {
         // Add player info with track cost if in drawing mode
         let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
         
-        // Add track cost display when in drawing mode - just the number, no label
-        if (isDrawingMode && currentTrackCost > 0) {
+        // Add track cost display when in drawing mode
+        if (isDrawingMode) {
+            // Show the cost even if zero, with more descriptive label
             playerInfoText += `\nECU ${currentTrackCost}M`;
         }
         
@@ -308,5 +568,79 @@ export class UIManager {
         // Add elements to container in correct order
         this.playerHandContainer.add([handBackground]);  // Add background first
         this.playerHandContainer.add([trainSection, trainLabel, playerInfo, crayonButton]);  // Then add UI elements
+    }
+
+    public showCitySelectionForPlayer(playerId: string): void {
+        // Only show selection for current player
+        if (this.gameState.currentPlayerIndex === undefined || 
+            this.gameState.players[this.gameState.currentPlayerIndex].id !== playerId) {
+            return;
+        }
+
+        // Find all major cities from the grid
+        const majorCities = [...new Map(
+            this.mapRenderer.gridPoints.flat()
+                .filter(point => point?.city?.type === TerrainType.MajorCity)
+                .map(point => [
+                    point.city!.name, // use name as key for uniqueness
+                    {
+                        name: point.city!.name,
+                        x: point.x,
+                        y: point.y,
+                        row: point.row,
+                        col: point.col
+                    }
+                ])
+        ).values()];
+
+        // Find the player's info position
+        const player = this.gameState.players.find(p => p.id === playerId);
+        if (!player) return;
+
+        const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
+        const yOffset = this.scene.scale.height - 180 + (playerIndex * 20);
+
+        // Create dropdown (using HTML overlay)
+        const dropdown = document.createElement('select');
+        dropdown.style.position = 'absolute';
+        dropdown.style.left = '820px'; // Align with player info
+        dropdown.style.top = (yOffset + 60) + 'px'; // Position below money text
+        dropdown.style.width = '180px';
+        dropdown.style.padding = '5px';
+        dropdown.style.backgroundColor = '#444444';
+        dropdown.style.color = '#ffffff';
+        dropdown.style.border = '1px solid #666666';
+
+        // Add prompt option
+        const promptOption = document.createElement('option');
+        promptOption.value = '';
+        promptOption.text = 'Choose Starting City...';
+        promptOption.disabled = true;
+        promptOption.selected = true;
+        dropdown.appendChild(promptOption);
+
+        // Add options for each major city
+        majorCities.forEach(city => {
+            const option = document.createElement('option');
+            option.value = JSON.stringify({ name: city.name, x: city.x, y: city.y, row: city.row, col: city.col });
+            option.text = city.name;
+            dropdown.appendChild(option);
+        });
+
+        // Handle selection
+        dropdown.onchange = () => {
+            if (!dropdown.value) return; // Don't process if prompt is selected
+            const selectedCity = JSON.parse(dropdown.value);
+            this.initializePlayerTrain(
+                playerId,
+                selectedCity.x,
+                selectedCity.y,
+                selectedCity.row,
+                selectedCity.col
+            );
+            document.body.removeChild(dropdown);
+        };
+
+        document.body.appendChild(dropdown);
     }
 }

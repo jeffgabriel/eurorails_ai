@@ -67,6 +67,10 @@ export class TrackDrawingManager {
         this.onCostUpdateCallback = callback;
     }
 
+    public getPlayerTrackState(playerId: string): PlayerTrackState | undefined {
+        return this.playerTracks.get(playerId);
+    }
+
     public async loadExistingTracks(): Promise<void> {
         try {
             // Fetch all tracks for the current game
@@ -174,9 +178,18 @@ export class TrackDrawingManager {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerMoney = currentPlayer.money;
         
+        // Get the current accumulated cost from previous sessions in this turn
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        
+        // Total existing cost includes previous sessions and current unsaved session
+        const totalExistingCost = previousSessionsCost + this.turnBuildCost;
+        
         // Check against both the turn budget and the player's available money
-        return (this.turnBuildCost + additionalCost <= this.MAX_TURN_BUILD_COST) && 
-               (this.turnBuildCost + additionalCost <= playerMoney);
+        const isWithinBudget = totalExistingCost + additionalCost <= this.MAX_TURN_BUILD_COST;
+        const isWithinMoney = totalExistingCost + additionalCost <= playerMoney;
+        
+        return isWithinBudget && isWithinMoney;
     }
 
     private async saveCurrentTracks(): Promise<void> {
@@ -200,7 +213,10 @@ export class TrackDrawingManager {
         if (this.currentSegments.length > 0 && playerTrackState) {
             playerTrackState.segments.push(...this.currentSegments);
             playerTrackState.totalCost += this.turnBuildCost;
-            playerTrackState.turnBuildCost = this.turnBuildCost;
+            
+            // Accumulate the turn build cost rather than overwriting it
+            playerTrackState.turnBuildCost += this.turnBuildCost;
+            
             playerTrackState.lastBuildTimestamp = new Date();
             
             try {
@@ -255,14 +271,22 @@ export class TrackDrawingManager {
         this.previewGraphics.clear();
         this.drawAllTracks();
 
-        // Reset current drawing state
+        // Reset current session's drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        
+        // Reset the current session's build cost, but keep track of the accumulated cost for the turn
+        // We'll get the current player's total build cost for the notification
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const accumulatedCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        
+        // Reset only the current session cost
         this.turnBuildCost = 0;
         
-        // Notify about cost reset
+        // Notify about the accumulated cost for the turn
         if (this.onCostUpdateCallback) {
-            this.onCostUpdateCallback(0);
+            this.onCostUpdateCallback(accumulatedCost);
         }
 
         // Set up input handlers for drawing mode
@@ -404,9 +428,15 @@ export class TrackDrawingManager {
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
                 
-                // Notify about cost update
+                // Get the current accumulated cost for this turn (reuse the playerTrackState from above)
+                const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+                
+                // Calculate the total cost including current session and previous sessions
+                const totalTurnCost = previousSessionsCost + this.turnBuildCost;
+                
+                // Notify about cost update with the total cost
                 if (this.onCostUpdateCallback) {
-                    this.onCostUpdateCallback(this.turnBuildCost);
+                    this.onCostUpdateCallback(totalTurnCost);
                 }
             }
 
@@ -480,7 +510,7 @@ export class TrackDrawingManager {
         //console.debug('Preview path drawn');
     }
 
-    private getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
+    public getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
         // Define maximum distance for point selection
         const MAX_DISTANCE = 15; // pixels
         
@@ -548,11 +578,6 @@ export class TrackDrawingManager {
             return null;
         }
 
-        console.debug('Finding preview path:', {
-            from: { row: startPoint.row, col: startPoint.col },
-            to: { row: targetPoint.row, col: targetPoint.col }
-        });
-
         // Calculate search area with larger margins to cover potential network connections
         const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 10;  // Add larger margin
         const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 10;  // Add larger margin
@@ -574,11 +599,6 @@ export class TrackDrawingManager {
                 pointCount++;
             }
         }
-
-        console.debug('Initialized path finding:', { 
-            pointCount,
-            searchArea: { minRow, maxRow, minCol, maxCol }
-        });
 
         // Build a set of all nodes in the player's network (for quick lookup)
         const networkNodes = new Set<string>();
@@ -609,10 +629,6 @@ export class TrackDrawingManager {
                 distances.set(nodeKey, 0);
             }
         }
-        
-        console.debug('Starting pathfinding with network nodes:', { 
-            networkNodeCount: networkNodes.size,
-        });
 
         let iterations = 0;
         while (unvisited.size > 0) {
@@ -652,7 +668,6 @@ export class TrackDrawingManager {
                 
                 // Use our helper method to check against both budget and money
                 if (!this.isValidCost(totalCost)) {
-                    console.debug('Path found but exceeds budget or available money');
                     return null;
                 }
 
@@ -668,12 +683,6 @@ export class TrackDrawingManager {
                     }
                 }
 
-                console.debug('Path found:', { 
-                    length: path.length,
-                    cost: totalCost,
-                    iterations,
-                    startingFromNetwork: path.length > 0 && networkNodes.has(getPointKey(path[0]))
-                });
                 return path;
             }
 
@@ -756,7 +765,6 @@ export class TrackDrawingManager {
             }
         }
 
-        console.debug('No path found', { iterations });
         return null;
     }
 
@@ -787,15 +795,8 @@ export class TrackDrawingManager {
     private isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
         // Prevent null/undefined points
         if (!point1 || !point2) {
-            console.debug('isAdjacent: null/undefined points');
             return false;
         }
-
-        // Log the points being checked
-        console.debug('Checking adjacency:', {
-            point1: { row: point1.row, col: point1.col },
-            point2: { row: point2.row, col: point2.col }
-        });
 
         // Calculate differences
         const rowDiff = point2.row - point1.row;  // Use directed difference
@@ -804,13 +805,11 @@ export class TrackDrawingManager {
         // Same row adjacency - must be consecutive columns
         if (rowDiff === 0) {
             const isAdjacent = Math.abs(colDiff) === 1;
-            console.debug('Same row check:', { rowDiff, colDiff, isAdjacent });
             return isAdjacent;
         }
 
         // Must be adjacent rows
         if (Math.abs(rowDiff) !== 1) {
-            console.debug('Not adjacent rows:', { rowDiff });
             return false;
         }
 
@@ -835,24 +834,16 @@ export class TrackDrawingManager {
             }
         }
 
-        console.debug('Hex grid check:', {
-            rowDiff,
-            colDiff,
-            isFromOddRow,
-            isAdjacent
-        });
-
         return isAdjacent;
     }
 
     private calculateTrackCost(from: GridPoint, to: GridPoint): number {
-        // Base cost is the cost of the destination terrain
+        // Get the base cost from the terrain type
         let cost = this.TERRAIN_COSTS[to.terrain];
+
 
         // Add river/water crossing costs if applicable
         // TODO: Implement water crossing detection and costs
-        // Add river/water crossing costs if applicable
-        
         
         // Add a very small additional cost for diagonal movement to prefer straight paths when costs are equal
         // This ensures the algorithm prefers horizontal/vertical paths when multiple paths have the same terrain cost
@@ -936,5 +927,10 @@ export class TrackDrawingManager {
         this.drawingGraphics.moveTo(segment.from.x, segment.from.y);
         this.drawingGraphics.lineTo(segment.to.x, segment.to.y);
         this.drawingGraphics.strokePath();
+    }
+
+    // Method to update grid points after initialization
+    public updateGridPoints(gridPoints: GridPoint[][]): void {
+        this.gridPoints = gridPoints;
     }
 }

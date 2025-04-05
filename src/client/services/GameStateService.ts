@@ -99,4 +99,48 @@ export class GameStateService {
             return false;
         }
     }
+
+    public async updatePlayerPosition(
+        playerId: string, 
+        x: number, 
+        y: number, 
+        row: number, 
+        col: number
+    ): Promise<boolean> {
+        // Find player in the local state and update position
+        const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
+        if (playerIndex === -1) {
+            console.error('Player not found in game state:', playerId);
+            return false;
+        }
+        
+        // Update local state
+        this.gameState.players[playerIndex].position = { x, y, row, col };
+        
+        try {
+            // Update the player in the database
+            const player = this.gameState.players[playerIndex];
+            const response = await fetch('/api/players/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    player: player
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to update player position:', errorData);
+                return false;
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Error updating player position:', error);
+            return false;
+        }
+    }
 }

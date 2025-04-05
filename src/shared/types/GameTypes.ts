@@ -13,6 +13,12 @@ export interface Player {
     color: string;  // Hex color code
     money: number;
     trainType: string;  // We'll expand this later with proper train types
+    position?: {
+        x: number;
+        y: number;
+        row: number;
+        col: number;
+    };
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';
@@ -38,6 +44,7 @@ export interface GameState {
         scrollX: number;
         scrollY: number;
     };
+    trainSprites?: Map<string, Phaser.GameObjects.Image>; // Map of player ID to train sprite
 }
 
 export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
