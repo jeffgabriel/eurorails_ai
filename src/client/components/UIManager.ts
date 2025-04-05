@@ -47,19 +47,29 @@ export class UIManager {
         this.setupTrainInteraction();
     }
 
+    // Add a flag to track if we just entered movement mode to avoid immediate placement
+    private justEnteredMovementMode: boolean = false;
+
     private setupTrainInteraction(): void {
         // Listen for pointer down events on the scene
-        this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+        this.scene.input.on('pointerdown', async (pointer: Phaser.Input.Pointer) => {
             // Only handle train placement if we're in train movement mode
-            if (this.isTrainMovementMode) {
+            // AND we didn't just enter movement mode on this same click
+            if (this.isTrainMovementMode && !this.justEnteredMovementMode) {
                 // Stop event propagation to prevent other handlers
-                pointer.event.stopPropagation();
-                this.handleTrainPlacement(pointer);
+                if (pointer.event) {
+                    pointer.event.stopPropagation();
+                }
+                // Use await to ensure we handle the entire train placement process
+                await this.handleTrainPlacement(pointer);
             }
+            
+            // Reset the flag after the click is processed
+            this.justEnteredMovementMode = false;
         });
     }
 
-    private handleTrainPlacement(pointer: Phaser.Input.Pointer): void {
+    private async handleTrainPlacement(pointer: Phaser.Input.Pointer): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
         // Convert pointer position to world coordinates
@@ -74,19 +84,25 @@ export class UIManager {
 
         if (nearestMilepost) {
             console.log('Found nearest milepost for train placement:', nearestMilepost);
-            // Update train position
-            this.updateTrainPosition(
-                currentPlayer.id,
-                nearestMilepost.x,
-                nearestMilepost.y,
-                nearestMilepost.row,
-                nearestMilepost.col
-            );
-            
-            // Exit train movement mode
-            this.exitTrainMovementMode();
+            try {
+                // Update train position - await the async operation to complete
+                await this.updateTrainPosition(
+                    currentPlayer.id,
+                    nearestMilepost.x,
+                    nearestMilepost.y,
+                    nearestMilepost.row,
+                    nearestMilepost.col
+                );
+                
+                // Exit train movement mode only after the position update completes
+                this.exitTrainMovementMode();
+            } catch (error) {
+                console.error('Error updating train position:', error);
+                // Keep movement mode active if an error occurred
+            }
         } else {
             console.log('No valid milepost found for train placement');
+            // Do not exit movement mode if no valid milepost found
         }
     }
 
@@ -106,6 +122,8 @@ export class UIManager {
     public enterTrainMovementMode(): void {
         console.log('enterTrainMovementMode');
         this.isTrainMovementMode = true;
+        this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
+        
         // Set cursor to indicate movement mode
         this.scene.input.setDefaultCursor('pointer');
         
@@ -168,10 +186,8 @@ export class UIManager {
         const player = this.gameState.players.find(p => p.id === playerId);
         if (!player) return;
 
-        // Exit train movement mode if we're updating the current player's position
-        if (playerId === this.gameState.players[this.gameState.currentPlayerIndex].id) {
-            this.exitTrainMovementMode();
-        }
+        // No longer exiting train movement mode here since we handle that in handleTrainPlacement
+        // This allows the pattern to work for multiple consecutive clicks
 
         // Update player position in database
         await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
@@ -215,7 +231,11 @@ export class UIManager {
 
                     if (isCurrentPlayer && hasTrack && !this.isDrawingMode && !this.isTrainMovementMode) {
                         console.log('Entering train movement mode');
-                        pointer.event.stopPropagation();
+                        // First stop event propagation to prevent it from being handled by the scene
+                        if (pointer.event) {
+                            pointer.event.stopPropagation();
+                        }
+                        // Then enter train movement mode
                         this.enterTrainMovementMode();
                     } else {
                         console.log('Train movement mode conditions not met:', {

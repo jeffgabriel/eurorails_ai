@@ -28,8 +28,21 @@ export async function cleanDatabase() {
         return;
     }
     console.log('Database cleaned for testing');
-    await pool.query('DELETE FROM players');
-    await pool.query('DELETE FROM games');
+    try {
+        // Delete in order that respects foreign key constraints
+        await pool.query('DELETE FROM player_track_networks');
+        await pool.query('DELETE FROM tracks');
+        await pool.query('DELETE FROM load_chips');
+        await pool.query('DELETE FROM demand_cards');
+        await pool.query('DELETE FROM event_cards');
+        await pool.query('DELETE FROM game_logs');
+        // Set winner_id to null before deleting players
+        await pool.query('UPDATE games SET winner_id = NULL');
+        await pool.query('DELETE FROM players');
+        await pool.query('DELETE FROM games');
+    } catch (err) {
+        console.error('Error cleaning database:', err);
+    }
 }
 
 // Check database connection and schema version

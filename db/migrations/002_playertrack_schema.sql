@@ -7,3 +7,6 @@ CREATE TABLE player_track_networks (
     last_build_timestamp TIMESTAMP,
     PRIMARY KEY (player_id, game_id)
 );
+
+-- Insert schema version
+INSERT INTO schema_migrations (version) VALUES (2);
