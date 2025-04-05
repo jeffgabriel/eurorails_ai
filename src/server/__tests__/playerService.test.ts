@@ -30,10 +30,26 @@ describe('PlayerService Integration Tests', () => {
         // Additional cleanup for any data that might have been committed
         // Order matters due to foreign key constraints
         try {
-            // First delete tracks as they depend on players
+            // First check if we have any player_track_networks table
+            const tableExists = await db.query(`
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'player_track_networks'
+                );
+            `);
+
+            // If player_track_networks exists, clean it first
+            if (tableExists.rows[0].exists) {
+                await db.query('DELETE FROM player_track_networks');
+            }
+            
+            // Clean player_tracks table
             await db.query('DELETE FROM player_tracks');
+            
             // Then delete players as they depend on games
             await db.query('DELETE FROM players');
+            
             // Finally delete games
             await db.query('DELETE FROM games');
         } catch (error) {
