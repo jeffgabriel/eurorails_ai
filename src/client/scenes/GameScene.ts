@@ -121,7 +121,7 @@ export class GameScene extends Phaser.Scene {
         this.uiManager = new UIManager(
             this,
             this.gameState,
-            () => this.trackManager.toggleDrawingMode(),
+            () => this.toggleDrawingMode(), // Call GameScene's method instead of directly accessing TrackManager
             () => this.nextPlayerTurn(),
             () => this.openSettings(),
             this.gameStateService,
@@ -190,11 +190,23 @@ export class GameScene extends Phaser.Scene {
     }
     
     private toggleDrawingMode(): void {
+        console.log("=== GameScene.toggleDrawingMode START ===");
+        console.log(`Before toggle - TrackManager drawing mode: ${this.trackManager.isInDrawingMode}`);
+        
         const isDrawingMode = this.trackManager.toggleDrawingMode();
+        
+        console.log(`After toggle - TrackManager returned isDrawingMode: ${isDrawingMode}`);
+        console.log(`Current state - TrackManager.isInDrawingMode: ${this.trackManager.isInDrawingMode}`);
+        
+        // Update UIManager's drawing mode state
+        this.uiManager.setDrawingMode(isDrawingMode);
         
         // If exiting drawing mode, update the UI completely to refresh money display
         if (!isDrawingMode) {
+            console.log("Exiting drawing mode - updating UI overlay");
             this.uiManager.setupUIOverlay();
+        } else {
+            console.log("Entering drawing mode");
         }
         
         // Re-render the player hand with updated drawing mode state
@@ -212,9 +224,12 @@ export class GameScene extends Phaser.Scene {
             
             // Total cost to display
             currentCost = previousSessionsCost + currentSessionCost;
+            console.log(`Current track cost to display: ${currentCost}`);
         }
         
+        console.log(`Setting up player hand with isDrawingMode=${isDrawingMode}, cost=${currentCost}`);
         this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
+        console.log("=== GameScene.toggleDrawingMode END ===");
     }
     
     private async nextPlayerTurn() {

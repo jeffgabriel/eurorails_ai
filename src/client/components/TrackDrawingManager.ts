@@ -117,15 +117,20 @@ export class TrackDrawingManager {
 
     public toggleDrawingMode(): boolean {
         // Toggle drawing mode state
+        const oldMode = this.isDrawingMode;
         this.isDrawingMode = !this.isDrawingMode;
+        console.log(`TrackDrawingManager.toggleDrawingMode: ${oldMode} -> ${this.isDrawingMode}`);
         
         if (this.isDrawingMode) {
+            console.log('TrackDrawingManager: Initializing drawing mode');
             this.initializeDrawingMode();
         } else {
+            console.log('TrackDrawingManager: Saving tracks and cleaning up drawing mode');
             this.saveCurrentTracks();
             this.cleanupDrawingMode();
         }
         
+        console.log(`TrackDrawingManager.toggleDrawingMode returning: ${this.isDrawingMode}`);
         return this.isDrawingMode;
     }
     
