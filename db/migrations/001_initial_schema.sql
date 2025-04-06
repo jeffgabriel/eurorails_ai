@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 CREATE TABLE IF NOT EXISTS games (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    status TEXT CHECK (status IN ('setup', 'initialBuild', 'playing', 'completed')),
+    status TEXT CHECK (status IN ('setup', 'initialBuild', 'active', 'completed')),
     current_player_index INTEGER DEFAULT 0,
     max_players INTEGER DEFAULT 6,
     winner_id UUID,  -- Will be linked to players.id
@@ -23,7 +23,6 @@ CREATE TABLE IF NOT EXISTS players (
     color TEXT CHECK (color ~ '^#[0-9A-Fa-f]{6}$'),  -- Hex color code validation
     money INTEGER DEFAULT 50,
     train_type TEXT DEFAULT 'Freight',
-    turn_order INTEGER,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
