@@ -1,4 +1,6 @@
-CREATE TABLE player_track_networks (
+DROP TABLE IF EXISTS tracks;
+
+CREATE TABLE IF NOT EXISTS player_track_networks (
     player_id UUID REFERENCES players(id),
     game_id UUID REFERENCES games(id),
     network_state JSONB NOT NULL,  -- Stores serialized TrackNetwork

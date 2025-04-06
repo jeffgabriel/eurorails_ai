@@ -28,32 +28,48 @@ describe('PlayerService Integration Tests', () => {
         await client.query('ROLLBACK');
         
         // Additional cleanup for any data that might have been committed
-        // Order matters due to foreign key constraints
+        // Use the centralized cleanDatabase function to handle foreign key constraints
         try {
-            // First check if we have any player_tracks table
-            const tableExists = await db.query(`
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name = 'player_tracks'
-                );
-            `);
-
-            // If player_tracks exists, clean it first
-            if (tableExists.rows[0].exists) {
-                await db.query('DELETE FROM player_tracks');
-            }
-            
-            // Clean player_tracks table
-            await db.query('DELETE FROM player_tracks');
-            
-            // Then delete players as they depend on games
-            await db.query('DELETE FROM players');
-            
-            // Finally delete games
-            await db.query('DELETE FROM games');
+            // Clean the database using the shared function that handles constraints
+            const { cleanDatabase } = require('../db/index');
+            await cleanDatabase();
         } catch (error) {
             console.error('Cleanup error:', error);
+            
+            // Fallback manual cleanup if the centralized method fails
+            try {
+                // Set winner_id to null to avoid foreign key issues
+                await db.query('UPDATE games SET winner_id = NULL WHERE winner_id IS NOT NULL');
+                
+                // Delete from tables in the correct order
+                const tablesToDelete = [
+                    'player_track_networks',
+                    'player_tracks', 
+                    'movement_history',
+                    'players',
+                    'games'
+                ];
+                
+                for (const table of tablesToDelete) {
+                    try {
+                        const tableExists = await db.query(`
+                            SELECT EXISTS (
+                                SELECT FROM information_schema.tables 
+                                WHERE table_schema = 'public' 
+                                AND table_name = $1
+                            );
+                        `, [table]);
+                        
+                        if (tableExists.rows[0].exists) {
+                            await db.query(`DELETE FROM ${table}`);
+                        }
+                    } catch (err) {
+                        console.warn(`Failed to clean table ${table}:`, err);
+                    }
+                }
+            } catch (fallbackError) {
+                console.error('Fallback cleanup also failed:', fallbackError);
+            }
         }
     });
 
