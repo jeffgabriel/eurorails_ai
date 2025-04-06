@@ -637,13 +637,11 @@ export class UIManager {
 
     // Add player info with track cost if in drawing mode
     let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
+     // Show the cost even if zero, with more descriptive label
+    playerInfoText += `\nBuild Cost: ${currentTrackCost}M`;
     // Add visual indicator for drawing mode
     if (isDrawingMode) {
       crayonButton.setScale(0.18);
-
-      // Show the cost even if zero, with more descriptive label
-      playerInfoText += `\nECU ${currentTrackCost}M`;
-
       // Add glowing effect or highlight around the crayon
       const highlight = this.scene.add.circle(
         crayonButton.x,

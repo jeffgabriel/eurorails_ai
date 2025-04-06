@@ -197,24 +197,14 @@ export class GameScene extends Phaser.Scene {
             this.uiManager.setupUIOverlay();
         }
         
-        // Re-render the player hand with updated drawing mode state
-        let currentCost = 0;
+        // Get the current cost to display regardless of drawing mode
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
+        const totalCost = previousSessionsCost + currentSessionCost;
         
-        if (isDrawingMode) {
-            // Get the current player
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            
-            // Get accumulated cost from previous sessions
-            const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
-            
-            // Add current session cost (should be 0 at this point since we just entered drawing mode)
-            const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
-            
-            // Total cost to display
-            currentCost = previousSessionsCost + currentSessionCost;
-        }
-        
-        this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
+        // Always show the current cost until turn changes
+        this.uiManager.setupPlayerHand(isDrawingMode, totalCost);
     }
     
     private async nextPlayerTurn(): Promise<void> {
