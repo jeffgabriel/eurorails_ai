@@ -227,7 +227,9 @@ export class GameScene extends Phaser.Scene {
         // If in drawing mode, finalize track drawing first by toggling it off
         // This will handle saving tracks and cleanup through TrackDrawingManager
         if (this.trackManager.isInDrawingMode) {
-            this.trackManager.toggleDrawingMode();
+            const isDrawingMode = this.trackManager.toggleDrawingMode();
+            // Make sure UIManager's drawing mode state stays in sync
+            this.uiManager.setDrawingMode(isDrawingMode);
             
             // Get the updated build cost after saving track state
             buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
@@ -257,7 +259,9 @@ export class GameScene extends Phaser.Scene {
         // Update the UI
         this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();
-        this.uiManager.setupPlayerHand(false); // Always set to false as we're exiting drawing mode
+        // Ensure drawing mode is off for the new player and sync the state
+        this.uiManager.setDrawingMode(false);
+        this.uiManager.setupPlayerHand(false);
 
         // Check if new current player needs to select a starting city
         if (!this.mapRenderer.playerHasTrack(newCurrentPlayer.id)) {
