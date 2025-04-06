@@ -246,6 +246,7 @@ export class GameScene extends Phaser.Scene {
         // Get the new current player after the turn change
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
+        console.log('newCurrentPlayer', newCurrentPlayer);
         // Update the UI
         this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();

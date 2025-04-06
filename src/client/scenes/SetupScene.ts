@@ -241,7 +241,13 @@ export class SetupScene extends Phaser.Scene {
                         name,
                         color: this.selectedColor,
                         money: INITIAL_PLAYER_MONEY,
-                        trainType: 'Freight'  // Default train type
+                        trainType: 'Freight',  // Default train type
+                        turnNumber: 1,
+                        trainState: {
+                            position: {x: 0, y: 0, row: 0, col: 0},
+                            movementHistory: [],
+                            remainingMovement: 9
+                        }
                     }
                 })
             });
