@@ -144,9 +144,18 @@ export class GameScene extends Phaser.Scene {
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
         
+        // Setup camera
+        this.cameraController.setupCamera();
+        
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
-            if (player.trainState.position) {
+            console.log("Checking player position for initialization:", player.id, {
+                trainState: player.trainState,
+                hasPosition: Boolean(player.trainState?.position)
+            });
+            
+            if (player.trainState?.position) {
+                console.log("Restoring existing player position:", player.id, player.trainState.position);
                 // Restore existing position
                 this.uiManager.updateTrainPosition(
                     player.id,
@@ -155,19 +164,25 @@ export class GameScene extends Phaser.Scene {
                     player.trainState.position.row,
                     player.trainState.position.col
                 );
+            } else {
+                console.log("Player has no position yet:", player.id);
             }
-            else {
-                this.uiManager.showCitySelectionForPlayer(player.id);
-            }
-            
         });
-        
-        // Setup camera
-        this.cameraController.setupCamera();
-        
+
         // Setup UI elements
         this.uiManager.setupUIOverlay();
         this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+
+        // Show city selection for current player if needed - do this last to prevent cleanup
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        
+        // Check safely if the player has a position
+        if (!currentPlayer.trainState?.position) {
+            console.log("Current player needs to select a starting city");
+            this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
+        } else {
+            console.log("Current player already has a position:", currentPlayer.trainState.position);
+        }
         
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
@@ -255,7 +270,7 @@ export class GameScene extends Phaser.Scene {
         this.uiManager.setupPlayerHand(false);
 
         // Check if new current player needs to select a starting city
-        if (!this.mapRenderer.playerHasTrack(newCurrentPlayer.id)) {
+        if (!newCurrentPlayer.trainState.position) {
             this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
         }
     }

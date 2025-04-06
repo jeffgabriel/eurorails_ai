@@ -23,6 +23,8 @@ beforeAll(async () => {
 // Clean up after each test
 beforeEach(async () => {
     try {
+        await db.query('DELETE FROM movement_history');
+        await db.query('DELETE FROM player_tracks');
         await db.query('DELETE FROM players');
         await db.query('DELETE FROM games');
     } catch (err) {

@@ -238,7 +238,7 @@ export class PlayerService {
         try {
             const query = `
                 SELECT 
-                    id, 
+                    players.id, 
                     name, 
                     color, 
                     money, 
@@ -249,16 +249,25 @@ export class PlayerService {
                     position_col,
                     current_turn_number as "turnNumber",
                     movement_path as "movementHistory"
-                FROM players JOIN movement_history ON players.id = movement_history.player_id
-                WHERE game_id = $1
+                FROM players 
+                LEFT JOIN movement_history ON players.id = movement_history.player_id
+                WHERE players.game_id = $1
             `;
             const values = [gameId];
             console.log('Executing select query:', { query, values });
 
             const result = await client.query(query, values);
-            console.log('Query result:', { rowCount: result.rowCount });
+            console.log('Query result:', { 
+                rowCount: result.rowCount, 
+                firstRow: result.rows[0] ? {
+                    id: result.rows[0].id,
+                    name: result.rows[0].name,
+                    color: result.rows[0].color,
+                    hasMovementHistory: !!result.rows[0].movementHistory
+                } : null 
+            });
 
-            return result.rows.map(row => ({
+            const players = result.rows.map(row => ({
                 ...row,
                 trainState: {
                     position: row.position_x !== null ? {
@@ -267,10 +276,22 @@ export class PlayerService {
                         row: row.position_row,
                         col: row.position_col
                     } : undefined,
-                    turnNumber: row.turnNumber,
+                    turnNumber: row.turnNumber || 1,
                     movementHistory: row.movementHistory ? JSON.parse(row.movementHistory) : []
                 }
             }));
+
+            console.log('Processed players:', {
+                count: players.length,
+                playerIds: players.map(p => p.id),
+                samplePlayer: players[0] ? {
+                    id: players[0].id,
+                    hasPosition: !!players[0].trainState.position,
+                    hasMovementHistory: players[0].trainState.movementHistory.length > 0
+                } : null
+            });
+
+            return players;
         } catch (err) {
             console.error('Database error during players query:', err);
             throw err;
@@ -364,6 +385,7 @@ export class PlayerService {
     }
 
     static async getActiveGame(): Promise<Game | null> {
+        console.log('Fetching active game...');
         const query = `
             SELECT id, status, current_player_index as "currentPlayerIndex", camera_state as "cameraState",
                    created_at as "createdAt", updated_at as "updatedAt"
@@ -373,6 +395,15 @@ export class PlayerService {
             LIMIT 1
         `;
         const result = await db.query(query);
+        console.log('Active game query result:', {
+            found: result.rows.length > 0,
+            gameData: result.rows[0] ? {
+                id: result.rows[0].id,
+                status: result.rows[0].status,
+                currentPlayerIndex: result.rows[0].currentPlayerIndex,
+                hasCameraState: !!result.rows[0].cameraState
+            } : null
+        });
         return result.rows[0] || null;
     }
 

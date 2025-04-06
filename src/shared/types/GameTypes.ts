@@ -18,7 +18,7 @@ export interface Player {
 }
 
 export interface TrainState {
-    position: Point;
+    position: Point | null;
     remainingMovement: number;
     movementHistory: TrackSegment[];
 }

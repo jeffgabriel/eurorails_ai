@@ -115,6 +115,16 @@ export class GameStateService {
         }
         
         // Update local state
+        // Make sure trainState exists before attempting to set position
+        if (!this.gameState.players[playerIndex].trainState) {
+            this.gameState.players[playerIndex].trainState = {
+                position: null,  // Type is Point | null
+                remainingMovement: 0,
+                movementHistory: []
+            };
+        }
+        
+        // Now safely set the position
         this.gameState.players[playerIndex].trainState.position = { x, y, row, col };
         
         try {

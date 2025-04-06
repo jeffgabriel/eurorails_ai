@@ -216,7 +216,7 @@ export class UIManager {
 
     // Find all trains at this location
     const trainsAtLocation = this.gameState.players
-      .filter((p) => p.trainState.position?.row === row && p.trainState.position?.col === col)
+      .filter((p) => p.trainState?.position?.row === row && p.trainState?.position?.col === col)
       .map((p) => p.id);
 
     // Calculate offset based on position in stack
@@ -344,7 +344,11 @@ export class UIManager {
       return;
     }
 
-    // Clear existing UI
+    // Store existing dropdown if any
+    const existingDropdown = document.querySelector(".city-selection-dropdown") as HTMLSelectElement;
+    const selectedValue = existingDropdown?.value;
+
+    // Clear existing UI (but don't remove dropdowns)
     this.uiContainer.removeAll(true);
 
     const LEADERBOARD_WIDTH = 150;
@@ -507,13 +511,6 @@ export class UIManager {
 
     // Update train z-ordering for new current player
     this.updateTrainZOrders();
-
-    // Check if current player needs to select a starting city
-    const currentPlayer =
-      this.gameState.players[this.gameState.currentPlayerIndex];
-    if (currentPlayer && !currentPlayer.trainState.position) {
-      this.showCitySelectionForPlayer(currentPlayer.id);
-    }
   }
 
   public setupPlayerHand(
@@ -692,16 +689,33 @@ export class UIManager {
 
   public showCitySelectionForPlayer(playerId: string): void {
     // Only show selection for current player
-    console.log("playerHasTrack", this.mapRenderer.playerHasTrack(playerId));
-    // Remove any existing city selection dropdowns
-    this.cleanupCityDropdowns();
-    if (
-      this.mapRenderer.playerHasTrack(playerId) ||
-      this.gameState.currentPlayerIndex === undefined ||
-      this.gameState.players[this.gameState.currentPlayerIndex].id !== playerId
-    ) {
+    console.log("Showing city selection for player:", playerId);
+    
+    // Find the player
+    const player = this.gameState.players.find((p) => p.id === playerId);
+    if (!player) {
+      console.log("Player not found");
       return;
     }
+
+    // Check if this is the current player
+    const isCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex].id === playerId;
+    if (!isCurrentPlayer) {
+      console.log("Not current player");
+      return;
+    }
+
+    // Check if player already has a position
+    // Handle cases where trainState might be undefined or position might be null/undefined
+    if (player.trainState && player.trainState.position) {
+      console.log("Player already has position:", player.trainState.position);
+      return;
+    }
+    
+    console.log("Player needs to select a starting position - no position found");
+
+    // Remove any existing city selection dropdowns
+    this.cleanupCityDropdowns();
 
     // Find all major cities from the grid
     const majorCities = [
@@ -721,10 +735,6 @@ export class UIManager {
           ])
       ).values(),
     ];
-
-    // Find the player
-    const player = this.gameState.players.find((p) => p.id === playerId);
-    if (!player) return;
 
     // Create dropdown (using HTML overlay)
     const dropdown = document.createElement("select");
@@ -761,7 +771,9 @@ export class UIManager {
       dropdown.appendChild(option);
 
       // If this city matches player's current position, select it
-      if (player.trainState.position && player.trainState.position.row === city.row && player.trainState.position.col === city.col) {
+      if (player.trainState?.position && 
+          player.trainState.position.row === city.row && 
+          player.trainState.position.col === city.col) {
         option.selected = true;
         promptOption.selected = false;
       }
@@ -781,6 +793,12 @@ export class UIManager {
       // Note: No longer removing dropdown here - it will be removed when track is built
     };
 
+    console.log("Adding dropdown to document body", {
+      top: dropdown.style.top,
+      left: dropdown.style.left,
+      width: dropdown.style.width
+    });
     document.body.appendChild(dropdown);
+    console.log("Dropdown added to document body, element count:", document.querySelectorAll('.city-selection-dropdown').length);
   }
 }
