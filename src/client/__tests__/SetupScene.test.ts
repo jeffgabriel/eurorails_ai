@@ -145,7 +145,13 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Test Player',
                 color: PlayerColor.BLUE,
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             }];
 
             scene['nameInput']!.value = 'Test Player';
@@ -159,7 +165,13 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Player 1',
                 color: PlayerColor.RED,
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             }];
 
             scene['nameInput']!.value = 'Player 2';
@@ -176,7 +188,13 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Player 1',
                 color: PlayerColor.RED,
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             }];
 
             await scene['startGame']();
@@ -190,14 +208,26 @@ describe('SetupScene Unit Tests', () => {
                     name: 'Player 1',
                     color: PlayerColor.RED,
                     money: 50,
-                    trainType: 'Freight'
+                    trainType: 'Freight',
+                    turnNumber: 1,
+                    trainState: {
+                        position: {x: 0, y: 0, row: 0, col: 0},
+                        movementHistory: [],
+                        remainingMovement: 9
+                    }
                 },
                 {
                     id: 'player2',
                     name: 'Player 2',
                     color: PlayerColor.BLUE,
                     money: 50,
-                    trainType: 'Freight'
+                    trainType: 'Freight',
+                    turnNumber: 1,
+                    trainState: {
+                        position: {x: 0, y: 0, row: 0, col: 0},
+                        movementHistory: [],
+                        remainingMovement: 9
+                    }
                 }
             ];
 

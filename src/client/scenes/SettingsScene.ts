@@ -212,7 +212,13 @@ export class SettingsScene extends Phaser.Scene {
             name: '',
             color: PlayerColor.YELLOW, // Default color
             money: 50,
-            trainType: 'Freight'
+            trainType: 'Freight',
+            turnNumber: 1,
+            trainState: {
+                position: {x: 0, y: 0, row: 0, col: 0},
+                movementHistory: [],
+                remainingMovement: 9
+            }
         };
         
         // Use the existing edit player UI but with different save behavior

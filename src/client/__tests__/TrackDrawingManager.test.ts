@@ -1,8 +1,7 @@
 import 'jest-canvas-mock';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 import { MockScene } from './setupTests';
-import { GridPoint } from '../components/MapRenderer';
-import { TerrainType, GameState } from '../../shared/types/GameTypes';
+import { TerrainType, GameState, GridPoint } from '../../shared/types/GameTypes';
 
 describe('TrackDrawingManager', () => {
     let scene: MockScene;
@@ -20,7 +19,19 @@ describe('TrackDrawingManager', () => {
         gameState = {
             id: 'test-game-id',
             players: [
-                { id: 'player1', name: 'Player 1', color: '#FF0000', money: 50, trainType: 'basic' }
+                { 
+                    id: 'player1', 
+                    name: 'Player 1', 
+                    color: '#FF0000', 
+                    money: 50, 
+                    trainType: 'basic',
+                    turnNumber: 1,
+                    trainState: {
+                        position: {x: 0, y: 0, row: 0, col: 0},
+                        movementHistory: [],
+                        remainingMovement: 9
+                    }
+                }
             ],
             currentPlayerIndex: 0,
             status: 'active',

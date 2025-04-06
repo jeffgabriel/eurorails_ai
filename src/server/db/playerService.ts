@@ -305,12 +305,12 @@ export class PlayerService {
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
-                    movementHistory: []
+                    movementHistory: [],
+                    remainingMovement: 9
                 }
             };
 
-            const createPlayerQuery = `
-                INSERT INTO players (id, game_id, name, color, money, train_type, position_x, position_y, position_row, position_col, current_turn_number)
+            const createPlayerQuery = `                INSERT INTO players (id, game_id, name, color, money, train_type, position_x, position_y, position_row, position_col, current_turn_number)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (id) DO NOTHING
             `;
