@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, TerrainType } from "../../shared/types/GameTypes";
+import { GameState, Player, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -96,7 +96,60 @@ export class UIManager {
         //where the train is coming from
         const previousPosition = currentPlayer.trainState.position;
         //check if the selected point is a valid move 
-        this.trainMovementManager.canMoveTo(nearestMilepost);
+        const canMove =  this.trainMovementManager.canMoveTo(nearestMilepost);
+        if (!canMove) {
+          // Display the movement problem to the player
+          const movementProblemText = this.scene.add.text(
+            pointer.x,
+            pointer.y,
+            "Invalid move. You cannot move to this point.",
+            {
+              fontSize: "16px",
+              color: "#ff0000",
+              backgroundColor: "#ffffff",
+              padding: { x: 10, y: 5 },
+              align: "center",
+            }
+          );
+
+          // Set a timeout to remove the text after a few seconds
+          this.scene.time.addEvent({
+            delay: 3000, // 3 seconds
+            callback: () => {
+              movementProblemText.destroy();
+            },
+          });
+          console.log("Invalid move");
+          return;
+        }
+
+        // Create a track segment for the movement history
+        if (previousPosition) {
+          const movementSegment: TrackSegment = {
+            from: {
+              x: previousPosition.x,
+              y: previousPosition.y,
+              row: previousPosition.row,
+              col: previousPosition.col,
+              terrain: TerrainType.Clear // We'll use Clear as default since we don't track terrain for movement
+            },
+            to: {
+              x: nearestMilepost.x,
+              y: nearestMilepost.y,
+              row: nearestMilepost.row,
+              col: nearestMilepost.col,
+              terrain: nearestMilepost.terrain
+            },
+            cost: 0 // Movement cost is handled separately from track building cost
+          };
+
+          // Add to movement history
+          if (!currentPlayer.trainState.movementHistory) {
+            currentPlayer.trainState.movementHistory = [];
+          }
+          currentPlayer.trainState.movementHistory.push(movementSegment);
+        }
+
         // Update train position - await the async operation to complete
         await this.updateTrainPosition(
           currentPlayer.id,
@@ -208,8 +261,17 @@ export class UIManager {
     const player = this.gameState.players.find((p) => p.id === playerId);
     if (!player) return;
 
-    // No longer exiting train movement mode here since we handle that in handleTrainPlacement
-    // This allows the pattern to work for multiple consecutive clicks
+    // Initialize trainState if it doesn't exist
+    if (!player.trainState) {
+      player.trainState = {
+        position: null,
+        remainingMovement: 0,
+        movementHistory: []
+      };
+    }
+
+    // Store the previous position before updating
+    const previousPosition = player.trainState.position;
 
     // Update player position in database
     await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
