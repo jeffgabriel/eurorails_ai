@@ -2,7 +2,7 @@ import "phaser";
 import { GameState, Player, TerrainType } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
-
+import { TrainMovementManager } from "./TrainMovementManager";
 export class UIManager {
   private scene: Phaser.Scene;
   private gameState: GameState;
@@ -16,7 +16,7 @@ export class UIManager {
   private mapRenderer: MapRenderer;
   private isTrainMovementMode: boolean = false;
   private isDrawingMode: boolean = false;
-
+  private trainMovementManager: TrainMovementManager;
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
@@ -43,7 +43,7 @@ export class UIManager {
     if (!this.gameState.trainSprites) {
       this.gameState.trainSprites = new Map();
     }
-
+    this.trainMovementManager = new TrainMovementManager(this.gameState);
     this.setupTrainInteraction();
   }
 
@@ -93,6 +93,10 @@ export class UIManager {
 
     if (nearestMilepost) {
       try {
+        //where the train is coming from
+        const previousPosition = currentPlayer.trainState.position;
+        //check if the selected point is a valid move 
+        this.trainMovementManager.canMoveTo(nearestMilepost);
         // Update train position - await the async operation to complete
         await this.updateTrainPosition(
           currentPlayer.id,
@@ -157,8 +161,8 @@ export class UIManager {
     const trainsByLocation = new Map<string, string[]>();
 
     this.gameState.players.forEach((player) => {
-      if (player.position) {
-        const locationKey = `${player.position.row},${player.position.col}`;
+      if (player.trainState.position) {
+        const locationKey = `${player.trainState.position.row},${player.trainState.position.col}`;
         const trains = trainsByLocation.get(locationKey) || [];
         trains.push(player.id);
         trainsByLocation.set(locationKey, trains);
@@ -212,7 +216,7 @@ export class UIManager {
 
     // Find all trains at this location
     const trainsAtLocation = this.gameState.players
-      .filter((p) => p.position?.row === row && p.position?.col === col)
+      .filter((p) => p.trainState.position?.row === row && p.trainState.position?.col === col)
       .map((p) => p.id);
 
     // Calculate offset based on position in stack
@@ -507,7 +511,7 @@ export class UIManager {
     // Check if current player needs to select a starting city
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
-    if (currentPlayer && !currentPlayer.position) {
+    if (currentPlayer && !currentPlayer.trainState.position) {
       this.showCitySelectionForPlayer(currentPlayer.id);
     }
   }
@@ -757,7 +761,7 @@ export class UIManager {
       dropdown.appendChild(option);
 
       // If this city matches player's current position, select it
-      if (player.position && player.position.row === city.row && player.position.col === city.col) {
+      if (player.trainState.position && player.trainState.position.row === city.row && player.trainState.position.col === city.col) {
         option.selected = true;
         promptOption.selected = false;
       }

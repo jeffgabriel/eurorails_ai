@@ -30,12 +30,11 @@ export async function cleanDatabase() {
     console.log('Database cleaned for testing');
     try {
         // Delete in order that respects foreign key constraints
-        await pool.query('DELETE FROM player_track_networks');
-        await pool.query('DELETE FROM tracks');
-        await pool.query('DELETE FROM load_chips');
-        await pool.query('DELETE FROM demand_cards');
-        await pool.query('DELETE FROM event_cards');
-        await pool.query('DELETE FROM game_logs');
+        await pool.query('DELETE FROM player_tracks');
+        await pool.query('DELETE FROM movement_history');
+//        await pool.query('DELETE FROM load_chips');
+//        await pool.query('DELETE FROM demand_cards');
+//        await pool.query('DELETE FROM event_cards');
         // Set winner_id to null before deleting players
         await pool.query('UPDATE games SET winner_id = NULL');
         await pool.query('DELETE FROM players');

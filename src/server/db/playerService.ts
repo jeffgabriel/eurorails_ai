@@ -64,9 +64,9 @@ export class PlayerService {
         const query = `
             INSERT INTO players (
                 id, game_id, name, color, money, train_type,
-                position_x, position_y, position_row, position_col
+                position_x, position_y, position_row, position_col, current_turn_number
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         `;
         const values = [
             player.id,
@@ -75,10 +75,11 @@ export class PlayerService {
             normalizedColor,
             typeof player.money === 'number' ? player.money : 50,
             player.trainType || 'Freight',
-            player.position?.x || null,
-            player.position?.y || null,
-            player.position?.row || null,
-            player.position?.col || null
+            player.trainState.position?.x || null,
+            player.trainState.position?.y || null,
+            player.trainState.position?.row || null,
+            player.trainState.position?.col || null,
+            player.turnNumber || 1,
         ];
         try {
             await db.query(query, values);
@@ -145,7 +146,7 @@ export class PlayerService {
                     position_y = $6,
                     position_row = $7,
                     position_col = $8,
-                    updated_at = CURRENT_TIMESTAMP
+                    current_turn_number = $11
                 WHERE game_id = $9 AND id = $10
                 RETURNING *
             `;
@@ -157,12 +158,13 @@ export class PlayerService {
                 normalizedColor, 
                 moneyValue,
                 trainType,
-                player.position?.x ? Math.round(player.position.x) : null,
-                player.position?.y ? Math.round(player.position.y) : null,
-                player.position?.row ? Math.round(player.position.row) : null,
-                player.position?.col ? Math.round(player.position.col) : null,
+                player.trainState.position?.x ? Math.round(player.trainState.position.x) : null,
+                player.trainState.position?.y ? Math.round(player.trainState.position.y) : null,
+                player.trainState.position?.row ? Math.round(player.trainState.position.row) : null,
+                player.trainState.position?.col ? Math.round(player.trainState.position.col) : null,
                 gameId, 
-                player.id
+                player.id,
+                player.turnNumber
             ];
             console.log('Executing update query');
 
@@ -171,6 +173,15 @@ export class PlayerService {
 
             if (result.rows.length === 0) {
                 throw new Error('Player update failed');
+            }
+
+            if(player.trainState.movementHistory && player.trainState.movementHistory.length > 0) {
+                const movement_query = `
+                    INSERT INTO movement_history (player_id, movement_path, turn_number)
+                    VALUES ($1, $2, $3)
+                `;
+                const movement_values = [player.id, JSON.stringify(player.trainState.movementHistory), player.turnNumber];
+                await client.query(movement_query, movement_values);
             }
 
             await client.query('COMMIT');
@@ -200,6 +211,10 @@ export class PlayerService {
         try {
             await client.query('BEGIN');
             
+            // First delete the player's movement history
+            const deleteMovementHistoryQuery = 'DELETE FROM movement_history WHERE player_id = $1';
+            await client.query(deleteMovementHistoryQuery, [playerId]);
+
             // First delete the player's tracks
             const deleteTracksQuery = 'DELETE FROM player_tracks WHERE player_id = $1';
             await client.query(deleteTracksQuery, [playerId]);
@@ -231,8 +246,10 @@ export class PlayerService {
                     position_x,
                     position_y,
                     position_row,
-                    position_col
-                FROM players 
+                    position_col,
+                    current_turn_number as "turnNumber",
+                    movement_path as "movementHistory"
+                FROM players JOIN movement_history ON players.id = movement_history.player_id
                 WHERE game_id = $1
             `;
             const values = [gameId];
@@ -243,12 +260,16 @@ export class PlayerService {
 
             return result.rows.map(row => ({
                 ...row,
-                position: row.position_x !== null ? {
-                    x: row.position_x,
-                    y: row.position_y,
-                    row: row.position_row,
-                    col: row.position_col
-                } : undefined
+                trainState: {
+                    position: row.position_x !== null ? {
+                        x: row.position_x,
+                        y: row.position_y,
+                        row: row.position_row,
+                        col: row.position_col
+                    } : undefined,
+                    turnNumber: row.turnNumber,
+                    movementHistory: row.movementHistory ? JSON.parse(row.movementHistory) : []
+                }
             }));
         } catch (err) {
             console.error('Database error during players query:', err);
@@ -280,12 +301,17 @@ export class PlayerService {
                 name: 'Player 1',
                 color: '#ff0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: []
+                }
             };
 
             const createPlayerQuery = `
-                INSERT INTO players (id, game_id, name, color, money, train_type)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO players (id, game_id, name, color, money, train_type, position_x, position_y, position_row, position_col, current_turn_number)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ON CONFLICT (id) DO NOTHING
             `;
             await client.query(createPlayerQuery, [
@@ -294,7 +320,12 @@ export class PlayerService {
                 defaultPlayer.name,
                 defaultPlayer.color,
                 defaultPlayer.money,
-                defaultPlayer.trainType
+                defaultPlayer.trainType,
+                null,
+                null,
+                null,
+                null,
+                null
             ]);
 
             await client.query('COMMIT');

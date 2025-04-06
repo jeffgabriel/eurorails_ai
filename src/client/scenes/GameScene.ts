@@ -146,14 +146,14 @@ export class GameScene extends Phaser.Scene {
         
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
-            if (player.position) {
+            if (player.trainState.position) {
                 // Restore existing position
                 this.uiManager.updateTrainPosition(
                     player.id,
-                    player.position.x,
-                    player.position.y,
-                    player.position.row,
-                    player.position.col
+                    player.trainState.position.x,
+                    player.trainState.position.y,
+                    player.trainState.position.row,
+                    player.trainState.position.col
                 );
             }
             else {
@@ -180,7 +180,7 @@ export class GameScene extends Phaser.Scene {
             
             // Re-show city selection for current player if needed
             const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            if (!currentPlayer.position) {
+            if (!currentPlayer.trainState.position) {
                 this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
             }
         });
@@ -245,7 +245,7 @@ export class GameScene extends Phaser.Scene {
         
         // Get the new current player after the turn change
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        
+        newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
         // Update the UI
         this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();

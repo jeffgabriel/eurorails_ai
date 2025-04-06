@@ -88,7 +88,8 @@ router.post('/create', async (req, res) => {
             ...player,
             id: uuidv4(),
             money: player.money || 50,
-            trainType: player.trainType || 'Freight'
+            trainType: player.trainType || 'Freight',
+            turnNumber: player.turnNumber || 1
         };
 
         console.log('Creating new player in database:', { gameId, player: newPlayer });

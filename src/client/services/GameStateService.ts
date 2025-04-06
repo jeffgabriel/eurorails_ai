@@ -115,7 +115,7 @@ export class GameStateService {
         }
         
         // Update local state
-        this.gameState.players[playerIndex].position = { x, y, row, col };
+        this.gameState.players[playerIndex].trainState.position = { x, y, row, col };
         
         try {
             // Update the player in the database

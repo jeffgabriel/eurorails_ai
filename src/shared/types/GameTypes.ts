@@ -13,12 +13,14 @@ export interface Player {
     color: string;  // Hex color code
     money: number;
     trainType: string;  // We'll expand this later with proper train types
-    position?: {
-        x: number;
-        y: number;
-        row: number;
-        col: number;
-    };
+    turnNumber: number;
+    trainState: TrainState;
+}
+
+export interface TrainState {
+    position: Point;
+    remainingMovement: number;
+    movementHistory: TrackSegment[];
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';
@@ -127,3 +129,21 @@ export interface PlayerTrackState {
     turnBuildCost: number;
     lastBuildTimestamp: Date;
 } 
+export interface GridPoint extends Point {
+    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
+    terrain: TerrainType;
+    ferryConnection?: { row: number; col: number };
+    city?: {
+        type: TerrainType;
+        name: string;
+        connectedPoints?: Array<{ row: number; col: number }>;
+    };
+    tracks?: Array<{ playerId: string }>;
+}
+
+export interface Point {
+    x: number;  // screen x
+    y: number;  // screen y
+    row: number;  // grid row
+    col: number;  // grid column
+}
