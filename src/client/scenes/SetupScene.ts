@@ -241,7 +241,13 @@ export class SetupScene extends Phaser.Scene {
                         name,
                         color: this.selectedColor,
                         money: INITIAL_PLAYER_MONEY,
-                        trainType: 'Freight'  // Default train type
+                        trainType: 'Freight',  // Default train type
+                        turnNumber: 1,
+                        trainState: {
+                            position: {x: 0, y: 0, row: 0, col: 0},
+                            movementHistory: [],
+                            remainingMovement: 9
+                        }
                     }
                 })
             });
@@ -254,6 +260,8 @@ export class SetupScene extends Phaser.Scene {
             // Get the created player with server-generated ID
             const newPlayer = await response.json();
             this.gameState.players.push(newPlayer);
+            // Update the train movement which isn't stored in the database.
+            newPlayer.trainType == 'Fast Freight' || newPlayer.trainType == 'Superfreight' ? newPlayer.trainState.remainingMovement = 12 : newPlayer.trainState.remainingMovement = 9;
             this.updatePlayerList();
 
             // Reset input

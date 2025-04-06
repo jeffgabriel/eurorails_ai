@@ -1,24 +1,9 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType } from '../../shared/types/GameTypes';
+import { TerrainType, GridPoint } from '../../shared/types/GameTypes';
 import { GameState } from '../../shared/types/GameTypes';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 
-export interface GridPoint {
-    x: number;  // screen x
-    y: number;  // screen y
-    row: number;  // grid row
-    col: number;  // grid column
-    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
-    terrain: TerrainType;
-    ferryConnection?: { row: number; col: number };
-    city?: {
-        type: TerrainType;
-        name: string;
-        connectedPoints?: Array<{ row: number; col: number }>;
-    };
-    tracks?: Array<{ playerId: string }>;
-}
 
 export class MapRenderer {
     // Grid configuration
@@ -441,10 +426,9 @@ export class MapRenderer {
         console.log('=== End Track Data Debug ===');
     }
 
-    public findNearestMilepostOnOwnTrack(x: number, y: number, playerId: string): { x: number, y: number, row: number, col: number } | null {
+    public findNearestMilepostOnOwnTrack(x: number, y: number, playerId: string): GridPoint | null {
         // First, get the clicked point using TrackDrawingManager's method
         const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(x, y);
-        console.log('Clicked point:', clickedPoint);
         
         if (!clickedPoint) {
             console.log('No valid grid point found at click position');
@@ -467,12 +451,7 @@ export class MapRenderer {
 
         if (isOnPlayerTrack) {
             console.log('Found player track at clicked point');
-            return {
-                x: clickedPoint.x,
-                y: clickedPoint.y,
-                row: clickedPoint.row,
-                col: clickedPoint.col
-            };
+            return clickedPoint;
         }
 
         // If not, find the nearest point that is part of a player's track segment
@@ -519,12 +498,7 @@ export class MapRenderer {
 
         if (nearestPoint) {
             console.log('Found nearest point with player track:', nearestPoint);
-            return {
-                x: nearestPoint.x,
-                y: nearestPoint.y,
-                row: nearestPoint.row,
-                col: nearestPoint.col
-            };
+            return nearestPoint;
         }
 
         console.log('No valid track point found within search radius');

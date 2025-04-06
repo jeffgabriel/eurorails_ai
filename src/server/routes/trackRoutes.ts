@@ -1,5 +1,5 @@
 import express from 'express';
-import { TrackService } from '../db/trackService';
+import { TrackService } from '../services/trackService';
 
 const router = express.Router();
 

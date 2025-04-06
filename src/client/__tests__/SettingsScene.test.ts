@@ -111,7 +111,13 @@ describe('SettingsScene Unit Tests', () => {
             name: 'Test Player',
             color: PlayerColor.RED,
             money: 50,
-            trainType: 'Freight'
+            trainType: 'Freight',
+            turnNumber: 1,
+            trainState: {
+                position: {x: 0, y: 0, row: 0, col: 0},
+                movementHistory: [],
+                remainingMovement: 9
+            }
         };
 
         beforeEach(() => {
@@ -127,7 +133,13 @@ describe('SettingsScene Unit Tests', () => {
                 name: '',
                 color: '#0000FF',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             scene['nameInput'] = document.createElement('input');
             scene['nameInput'].value = '';  // Empty name to trigger validation
@@ -141,7 +153,13 @@ describe('SettingsScene Unit Tests', () => {
                 name: 'Test',
                 color: '#0000FF',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             scene['nameInput'] = document.createElement('input');
             scene['nameInput'].value = 'Updated Name';

@@ -35,8 +35,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
-        console.debug('GameScene init called with data:', data);
-        
         // If we get a gameState, always use it
         if (data.gameState) {
             this.gameState = {
@@ -47,7 +45,6 @@ export class GameScene extends Phaser.Scene {
             
             // If we have camera state, apply it immediately
             if (this.gameState.cameraState) {
-                console.debug('Applying camera state in init:', this.gameState.cameraState);
                 this.cameras.main.setZoom(this.gameState.cameraState.zoom);
                 this.cameras.main.scrollX = this.gameState.cameraState.scrollX;
                 this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
@@ -76,9 +73,6 @@ export class GameScene extends Phaser.Scene {
     }
 
     async create() {
-        console.debug('GameScene create method called');
-        console.debug('Initial game state:', this.gameState);
-        
         // Clear any existing containers
         this.children.removeAll(true);
         
@@ -103,7 +97,6 @@ export class GameScene extends Phaser.Scene {
         this.mapRenderer = new MapRenderer(this, this.mapContainer, this.gameState, this.trackManager);
         
         // Create the map
-        console.debug('Creating triangular grid...');
         this.mapRenderer.createTriangularGrid();
         
         // Now update TrackManager with the created grid points
@@ -114,21 +107,20 @@ export class GameScene extends Phaser.Scene {
         this.cameraController = new CameraController(this, width, height, this.gameState);
         
         // Load existing tracks before creating UI
-        console.debug('Loading existing tracks...');
         await this.trackManager.loadExistingTracks();
         
         // Create UI manager with callbacks after tracks are loaded
         this.uiManager = new UIManager(
             this,
             this.gameState,
-            () => this.trackManager.toggleDrawingMode(),
+            () => this.toggleDrawingMode(), // Call GameScene's method instead of directly accessing TrackManager
             () => this.nextPlayerTurn(),
             () => this.openSettings(),
             this.gameStateService,
             this.mapRenderer
         );
         
-        // Set container references from UI manager
+        // Get container references from UI manager
         const containers = this.uiManager.getContainers();
         this.uiContainer = containers.uiContainer;
         this.playerHandContainer = containers.playerHandContainer;
@@ -152,72 +144,72 @@ export class GameScene extends Phaser.Scene {
         // Main camera ignores UI elements
         this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
         
+        // Setup camera
+        this.cameraController.setupCamera();
+        
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
-            if (!player.position) {
-                // Player needs to select a starting city
-                this.uiManager.showCitySelectionForPlayer(player.id);
-            } else {
+            if (player.trainState?.position) {
                 // Restore existing position
                 this.uiManager.updateTrainPosition(
                     player.id,
-                    player.position.x,
-                    player.position.y,
-                    player.position.row,
-                    player.position.col
+                    player.trainState.position.x,
+                    player.trainState.position.y,
+                    player.trainState.position.row,
+                    player.trainState.position.col
                 );
             }
         });
-        
-        // Setup camera
-        console.debug('Setting up camera...');
-        this.cameraController.setupCamera();
-        
+
         // Setup UI elements
         this.uiManager.setupUIOverlay();
         this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+
+        // Show city selection for current player if needed - do this last to prevent cleanup
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        if (!currentPlayer.trainState?.position) {
+            this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
+        }
         
         // Set a low frame rate for the scene
         this.game.loop.targetFps = 30;
         
         // Add event handler for scene resume
         this.events.on('resume', () => {
-            console.debug('Scene resumed, refreshing UI...');
             // Clear and recreate UI elements
             this.uiManager.setupUIOverlay();
             this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+            
+            // Re-show city selection for current player if needed
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            if (!currentPlayer.trainState?.position) {
+                this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
+            }
         });
     }
     
     private toggleDrawingMode(): void {
         const isDrawingMode = this.trackManager.toggleDrawingMode();
         
+        // Update UIManager's drawing mode state
+        this.uiManager.setDrawingMode(isDrawingMode);
+        
         // If exiting drawing mode, update the UI completely to refresh money display
         if (!isDrawingMode) {
             this.uiManager.setupUIOverlay();
         }
         
-        // Re-render the player hand with updated drawing mode state
-        let currentCost = 0;
+        // Get the current cost to display regardless of drawing mode
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
+        const totalCost = previousSessionsCost + currentSessionCost;
         
-        if (isDrawingMode) {
-            // Get the current player
-            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            
-            // Get accumulated cost from previous sessions
-            const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
-            
-            // Add current session cost (should be 0 at this point since we just entered drawing mode)
-            const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
-            
-            // Total cost to display
-            currentCost = previousSessionsCost + currentSessionCost;
-        }
-        
-        this.uiManager.setupPlayerHand(isDrawingMode, currentCost);
+        // Always show the current cost until turn changes
+        this.uiManager.setupPlayerHand(isDrawingMode, totalCost);
     }
     
-    private async nextPlayerTurn() {
+    private async nextPlayerTurn(): Promise<void> {
         // Get the current player before changing turns
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         
@@ -227,7 +219,9 @@ export class GameScene extends Phaser.Scene {
         // If in drawing mode, finalize track drawing first by toggling it off
         // This will handle saving tracks and cleanup through TrackDrawingManager
         if (this.trackManager.isInDrawingMode) {
-            this.trackManager.toggleDrawingMode();
+            const isDrawingMode = this.trackManager.toggleDrawingMode();
+            // Make sure UIManager's drawing mode state stays in sync
+            this.uiManager.setDrawingMode(isDrawingMode);
             
             // Get the updated build cost after saving track state
             buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
@@ -253,10 +247,32 @@ export class GameScene extends Phaser.Scene {
         
         // Get the new current player after the turn change
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        
+        newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
+
+        // Reset movement points for the new player
+        const maxMovement = newCurrentPlayer.trainType === "Fast Freight" || newCurrentPlayer.trainType === "Superfreight" 
+            ? 12  // Fast trains
+            : 9;  // Regular trains
+
+        // If at a ferry port, movement is halved
+        const isAtFerry = newCurrentPlayer.trainState?.movementHistory?.length > 0 
+            && newCurrentPlayer.trainState.movementHistory[newCurrentPlayer.trainState.movementHistory.length - 1].to.terrain === TerrainType.FerryPort;
+        newCurrentPlayer.trainState.remainingMovement = isAtFerry ? Math.floor(maxMovement / 2) : maxMovement;
+
+        // Reset train movement mode
+        this.uiManager.resetTrainMovementMode();
+
         // Update the UI
+        this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();
-        this.uiManager.setupPlayerHand(false); // Always set to false as we're exiting drawing mode
+        // Ensure drawing mode is off for the new player and sync the state
+        this.uiManager.setDrawingMode(false);
+        this.uiManager.setupPlayerHand(false);
+
+        // Check if new current player needs to select a starting city
+        if (!newCurrentPlayer.trainState.position) {
+            this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
+        }
     }
     
     private openSettings() {

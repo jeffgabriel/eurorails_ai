@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { PlayerService } from '../db/playerService';
+import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
 
@@ -30,18 +30,18 @@ describe('PlayerService Integration Tests', () => {
         // Additional cleanup for any data that might have been committed
         // Order matters due to foreign key constraints
         try {
-            // First check if we have any player_track_networks table
+            // First check if we have any player_tracks table
             const tableExists = await db.query(`
                 SELECT EXISTS (
                     SELECT FROM information_schema.tables 
                     WHERE table_schema = 'public' 
-                    AND table_name = 'player_track_networks'
+                    AND table_name = 'player_tracks'
                 );
             `);
 
-            // If player_track_networks exists, clean it first
+            // If player_tracks exists, clean it first
             if (tableExists.rows[0].exists) {
-                await db.query('DELETE FROM player_track_networks');
+                await db.query('DELETE FROM player_tracks');
             }
             
             // Clean player_tracks table
@@ -77,7 +77,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await PlayerService.createPlayer(gameId, player);
             const result = await db.query('SELECT * FROM players WHERE id = $1', [player.id]);
@@ -91,7 +97,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await PlayerService.createPlayer(gameId, player);
 
@@ -113,7 +125,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Player 1',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await PlayerService.createPlayer(gameId, player1);
 
@@ -122,7 +140,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Player 2',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await expect(PlayerService.createPlayer(gameId, player2))
                 .rejects.toThrow('Color already taken by another player');
@@ -134,7 +158,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: 'invalid-color',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await expect(PlayerService.createPlayer(gameId, player))
                 .rejects.toThrow('Invalid color format');
@@ -147,7 +177,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await PlayerService.createPlayer(gameId, player);
             await PlayerService.deletePlayer(gameId, playerId);
@@ -163,7 +199,13 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9
+                }
             };
             await PlayerService.createPlayer(gameId, player);
             

@@ -1,5 +1,5 @@
 import express from 'express';
-import { PlayerService } from '../db/playerService';
+import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 
@@ -88,7 +88,14 @@ router.post('/create', async (req, res) => {
             ...player,
             id: uuidv4(),
             money: player.money || 50,
-            trainType: player.trainType || 'Freight'
+            trainType: player.trainType || 'Freight',
+            turnNumber: player.turnNumber || 1,
+            // Initialize trainState with position explicitly set to null
+            trainState: {
+                position: null,  // Now properly typed as Point | null
+                remainingMovement: 0,
+                movementHistory: []
+            }
         };
 
         console.log('Creating new player in database:', { gameId, player: newPlayer });
