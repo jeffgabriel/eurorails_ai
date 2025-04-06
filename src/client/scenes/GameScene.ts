@@ -259,6 +259,9 @@ export class GameScene extends Phaser.Scene {
             && newCurrentPlayer.trainState.movementHistory[newCurrentPlayer.trainState.movementHistory.length - 1].to.terrain === TerrainType.FerryPort;
         newCurrentPlayer.trainState.remainingMovement = isAtFerry ? Math.floor(maxMovement / 2) : maxMovement;
 
+        // Reset train movement mode
+        this.uiManager.resetTrainMovementMode();
+
         // Update the UI
         this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();

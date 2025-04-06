@@ -181,13 +181,10 @@ export class UIManager {
     // Reset cursor style
     this.scene.input.setDefaultCursor("default");
 
-    // Reset any visual indicators of train movement mode
-    const currentPlayer =
-      this.gameState.players[this.gameState.currentPlayerIndex];
-    const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
-    if (trainSprite) {
-      trainSprite.setAlpha(1);
-    }
+    // Reset opacity for all train sprites
+    this.gameState.trainSprites?.forEach((sprite) => {
+      sprite.setAlpha(1);
+    });
   }
 
   public enterTrainMovementMode(): void {
@@ -406,6 +403,12 @@ export class UIManager {
     );
   }
 
+  public resetTrainMovementMode(): void {
+    if (this.isTrainMovementMode) {
+      this.exitTrainMovementMode();
+    }
+  }
+
   public setupUIOverlay(): void {
     if (
       !this.gameState ||
@@ -415,12 +418,15 @@ export class UIManager {
       return;
     }
 
-    // Store existing dropdown if any
-    const existingDropdown = document.querySelector(".city-selection-dropdown") as HTMLSelectElement;
-    const selectedValue = existingDropdown?.value;
+    // Reset train movement mode when UI is refreshed
+    this.resetTrainMovementMode();
 
     // Clear existing UI (but don't remove dropdowns)
     this.uiContainer.removeAll(true);
+
+    // Store existing dropdown if any
+    const existingDropdown = document.querySelector(".city-selection-dropdown") as HTMLSelectElement;
+    const selectedValue = existingDropdown?.value;
 
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
