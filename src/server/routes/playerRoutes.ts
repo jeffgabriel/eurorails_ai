@@ -1,5 +1,5 @@
 import express from 'express';
-import { PlayerService } from '../db/playerService';
+import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 

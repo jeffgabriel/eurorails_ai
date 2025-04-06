@@ -17,6 +17,7 @@ export class UIManager {
   private isTrainMovementMode: boolean = false;
   private isDrawingMode: boolean = false;
   private trainMovementManager: TrainMovementManager;
+
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
@@ -47,7 +48,6 @@ export class UIManager {
     this.setupTrainInteraction();
   }
 
-  // Add a flag to track if we just entered movement mode to avoid immediate placement
   private justEnteredMovementMode: boolean = false;
 
   private setupTrainInteraction(): void {
@@ -77,6 +77,9 @@ export class UIManager {
   ): Promise<void> {
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
+
+    console.log('Before movement - Player count:', this.gameState.players.length);
+    console.log('Current players:', this.gameState.players.map(p => ({ id: p.id, name: p.name })));
 
     // Convert pointer position to world coordinates
     const worldPoint = this.scene.cameras.main.getWorldPoint(
@@ -150,6 +153,9 @@ export class UIManager {
           currentPlayer.trainState.movementHistory.push(movementSegment);
         }
 
+        console.log('Before updateTrainPosition - Player count:', this.gameState.players.length);
+        console.log('Current players:', this.gameState.players.map(p => ({ id: p.id, name: p.name })));
+
         // Update train position - await the async operation to complete
         await this.updateTrainPosition(
           currentPlayer.id,
@@ -158,6 +164,9 @@ export class UIManager {
           nearestMilepost.row,
           nearestMilepost.col
         );
+
+        console.log('After updateTrainPosition - Player count:', this.gameState.players.length);
+        console.log('Current players:', this.gameState.players.map(p => ({ id: p.id, name: p.name })));
 
         // Exit train movement mode only after the position update completes
         this.exitTrainMovementMode();

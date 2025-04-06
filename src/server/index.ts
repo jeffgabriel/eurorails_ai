@@ -5,7 +5,7 @@ import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
 import { checkDatabase } from './db';
-import { PlayerService } from './db/playerService';
+import { PlayerService } from './services/playerService';
 
 const app = express();
 const port = process.env.PORT || 3001;

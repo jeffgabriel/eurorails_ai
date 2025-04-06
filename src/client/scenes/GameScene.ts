@@ -120,7 +120,7 @@ export class GameScene extends Phaser.Scene {
             this.mapRenderer
         );
         
-        // Set container references from UI manager
+        // Get container references from UI manager
         const containers = this.uiManager.getContainers();
         this.uiContainer = containers.uiContainer;
         this.playerHandContainer = containers.playerHandContainer;
@@ -149,13 +149,7 @@ export class GameScene extends Phaser.Scene {
         
         // Initialize or restore train positions for each player
         this.gameState.players.forEach(player => {
-            console.log("Checking player position for initialization:", player.id, {
-                trainState: player.trainState,
-                hasPosition: Boolean(player.trainState?.position)
-            });
-            
             if (player.trainState?.position) {
-                console.log("Restoring existing player position:", player.id, player.trainState.position);
                 // Restore existing position
                 this.uiManager.updateTrainPosition(
                     player.id,
@@ -164,8 +158,6 @@ export class GameScene extends Phaser.Scene {
                     player.trainState.position.row,
                     player.trainState.position.col
                 );
-            } else {
-                console.log("Player has no position yet:", player.id);
             }
         });
 
@@ -175,13 +167,8 @@ export class GameScene extends Phaser.Scene {
 
         // Show city selection for current player if needed - do this last to prevent cleanup
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        
-        // Check safely if the player has a position
         if (!currentPlayer.trainState?.position) {
-            console.log("Current player needs to select a starting city");
             this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
-        } else {
-            console.log("Current player already has a position:", currentPlayer.trainState.position);
         }
         
         // Set a low frame rate for the scene
@@ -195,7 +182,7 @@ export class GameScene extends Phaser.Scene {
             
             // Re-show city selection for current player if needed
             const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-            if (!currentPlayer.trainState.position) {
+            if (!currentPlayer.trainState?.position) {
                 this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
             }
         });
@@ -261,7 +248,17 @@ export class GameScene extends Phaser.Scene {
         // Get the new current player after the turn change
         const newCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
-        console.log('newCurrentPlayer', newCurrentPlayer);
+
+        // Reset movement points for the new player
+        const maxMovement = newCurrentPlayer.trainType === "Fast Freight" || newCurrentPlayer.trainType === "Superfreight" 
+            ? 12  // Fast trains
+            : 9;  // Regular trains
+
+        // If at a ferry port, movement is halved
+        const isAtFerry = newCurrentPlayer.trainState?.movementHistory?.length > 0 
+            && newCurrentPlayer.trainState.movementHistory[newCurrentPlayer.trainState.movementHistory.length - 1].to.terrain === TerrainType.FerryPort;
+        newCurrentPlayer.trainState.remainingMovement = isAtFerry ? Math.floor(maxMovement / 2) : maxMovement;
+
         // Update the UI
         this.uiManager.cleanupCityDropdowns();
         this.uiManager.setupUIOverlay();

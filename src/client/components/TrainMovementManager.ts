@@ -1,5 +1,11 @@
 import "phaser";
-import { GameState, GridPoint, Point, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
+import {
+  GameState,
+  GridPoint,
+  Point,
+  TerrainType,
+  TrackSegment,
+} from "../../shared/types/GameTypes";
 
 export class TrainMovementManager {
   private gameState: GameState;
@@ -38,7 +44,7 @@ export class TrainMovementManager {
   }
 
   private canReverseDirection(
-    currentPoint: TrackSegment,
+    lastSegment: TrackSegment,
     proposedDirection: { rowDiff: number; colDiff: number },
     lastDirection: { rowDiff: number; colDiff: number }
   ): boolean {
@@ -48,10 +54,15 @@ export class TrainMovementManager {
         proposedDirection.colDiff * lastDirection.colDiff <
       0;
 
-    // Can only reverse at cities or ferry ports
+    // If trying to reverse, check if we're currently at a city or ferry port
+    // lastSegment.to is our current position
     if (isReversing) {
-      //last track segment's 'to' is the starting point for movement in this turn.
-      return this.isTerrainCityOrFerry(currentPoint.to.terrain);
+      const currentTerrain = lastSegment.to.terrain;
+      const canReverse = this.isTerrainCityOrFerry(currentTerrain);
+      if (!canReverse) {
+        console.log("Cannot reverse direction - not at a city or ferry port. Current terrain:", currentTerrain);
+      }
+      return canReverse;
     }
 
     return true;
@@ -62,23 +73,14 @@ export class TrainMovementManager {
       TerrainType.MajorCity,
       TerrainType.MediumCity,
       TerrainType.SmallCity,
-      TerrainType.FerryPort
+      TerrainType.FerryPort,
     ].includes(terrain);
   }
 
-  private isCity(point: GridPoint): boolean {
-    return [
-      TerrainType.MajorCity,
-      TerrainType.MediumCity,
-      TerrainType.SmallCity,
-    ].includes(point.terrain);
-  }
-
-  private isFerryPort(point: GridPoint): boolean {
-    return point.terrain === TerrainType.FerryPort;
-  }
-
-  private getLastDirection(movementHistory: TrackSegment[]): { rowDiff: number; colDiff: number } {
+  private getLastDirection(movementHistory: TrackSegment[]): {
+    rowDiff: number;
+    colDiff: number;
+  } {
     if (movementHistory.length < 1) return { rowDiff: 0, colDiff: 0 };
 
     const last = movementHistory[movementHistory.length - 1];
@@ -89,31 +91,49 @@ export class TrainMovementManager {
   }
 
   private calculateDistance(from: Point, to: Point): number {
-    // For now, using Manhattan distance as a simple approximation
-    // Could be enhanced with actual track distance calculation
-    return Math.abs(to.row - from.row) + Math.abs(to.col - from.col);
+    // For diagonal moves, we want to count it as 1 movement point
+    // since it's still just one track segment
+    const dx = Math.abs(to.col - from.col);
+    const dy = Math.abs(to.row - from.row);
+    
+    // If either dx or dy is 0, or if they're equal (diagonal),
+    // it's a single track segment
+    return Math.max(dx, dy);
   }
 
   private hasEnoughMovement(currentPlayer: any, proposedPoint: Point): boolean {
     if (!currentPlayer.trainState.position) return true; // First move is always allowed
-
-    const distance = this.calculateDistance(currentPlayer.trainState.position, proposedPoint);
-    const maxMovement = currentPlayer.trainType === "Fast Freight" || currentPlayer.trainType === "Superfreight" 
-      ? 12  // Fast trains
-      : 9;  // Regular trains
+    
+    const distance = this.calculateDistance(
+      currentPlayer.trainState.position,
+      proposedPoint
+    );
+    
+    let maxMovement = currentPlayer.trainState.remainingMovement;
+    console.log("Checking movement - Distance:", distance, "Max Movement:", maxMovement);
 
     // If at a ferry port, movement is halved
-    const isAtFerry = this.isFerryPort(this.toGridPoint(currentPlayer.trainState.position));
-    const effectiveMaxMovement = isAtFerry ? Math.floor(maxMovement / 2) : maxMovement;
+    const lastTrackPoint = currentPlayer.trainState.movementHistory.length > 0
+      ? currentPlayer.trainState.movementHistory[
+          currentPlayer.trainState.movementHistory.length - 1
+        ].to
+      : null;
+    if (lastTrackPoint && lastTrackPoint.terrain === TerrainType.FerryPort) {
+      maxMovement = Math.floor(maxMovement / 2);
+    }
+    
+    return distance <= maxMovement;
+  }
 
-    // Check if we have enough remaining movement
-    const remainingMovement = currentPlayer.trainState.remainingMovement ?? effectiveMaxMovement;
-    return distance <= remainingMovement;
+  private deductMovement(currentPlayer: any, distance: number): void {
+    currentPlayer.trainState.remainingMovement -= distance;
+    console.log("Deducted movement points:", distance, "Remaining:", currentPlayer.trainState.remainingMovement);
   }
 
   canMoveTo(point: GridPoint): boolean {
     // Get current player
-    const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    const currentPlayer =
+      this.gameState.players[this.gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.trainState) {
       console.log("Current player or train state is undefined");
       return false;
@@ -128,19 +148,29 @@ export class TrainMovementManager {
     if (!currentPlayer.trainState.position) {
       const isStartingCity = point.terrain == TerrainType.MajorCity;
       if (!isStartingCity) {
-        console.log("Invalid starting point - must start first move from a major city");
+        console.log(
+          "Invalid starting point - must start first move from a major city"
+        );
       }
       return isStartingCity; // Can only start at cities
     }
 
     // Convert current position to GridPoint
-    const priorPosition = this.toGridPoint(currentPlayer.trainState.position);
+    const priorPosition = currentPlayer.trainState.position;
 
     // Calculate proposed direction
     const proposedDirection = this.calculateMoveVector(priorPosition, point);
 
     // Get last direction from movement history
-    const lastDirection = this.getLastDirection(currentPlayer.trainState.movementHistory);
+    const lastDirection = this.getLastDirection(
+      currentPlayer.trainState.movementHistory
+    );
+
+    // Calculate distance for this move
+    const distance = this.calculateDistance(
+      currentPlayer.trainState.position,
+      point
+    );
 
     // Check movement points
     if (!this.hasEnoughMovement(currentPlayer, point)) {
@@ -150,24 +180,32 @@ export class TrainMovementManager {
 
     // Check if this is a valid track connection
     // TODO: Implement track connectivity check using MapRenderer or TrackManager
-    const lastTrackSegment = currentPlayer.trainState.movementHistory[currentPlayer.trainState.movementHistory.length - 1];
+    const lastTrackSegment =
+      currentPlayer.trainState.movementHistory.length > 0
+        ? currentPlayer.trainState.movementHistory[
+            currentPlayer.trainState.movementHistory.length - 1
+          ]
+        : null;
     console.debug("lastTrackSegment", lastTrackSegment);
+
     // Check reversal rules
-    if (!this.canReverseDirection(lastTrackSegment, proposedDirection, lastDirection)) {
-      console.log("Invalid direction change - can only reverse at cities or ferry ports");
+    if (
+      lastTrackSegment &&
+      !this.canReverseDirection(
+        lastTrackSegment,
+        proposedDirection,
+        lastDirection
+      )
+    ) {
+      console.log(
+        "Invalid direction change - can only reverse at cities or ferry ports"
+      );
       return false;
     }
 
-    return true;
-  }
+    // If we got here, the move is valid - deduct the movement points
+    this.deductMovement(currentPlayer, distance);
 
-  private toGridPoint(point: { row: number, col: number, x: number; y: number }): GridPoint {
-    return {
-      x: point.x,
-      y: point.y,
-      row: point.row,
-      col: point.col,
-      terrain: TerrainType.Clear // Default terrain, should be updated with actual terrain if needed
-    };
+    return true;
   }
 }

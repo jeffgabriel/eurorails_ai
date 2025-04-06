@@ -260,6 +260,8 @@ export class SetupScene extends Phaser.Scene {
             // Get the created player with server-generated ID
             const newPlayer = await response.json();
             this.gameState.players.push(newPlayer);
+            // Update the train movement which isn't stored in the database.
+            newPlayer.trainType == 'Fast Freight' || newPlayer.trainType == 'Superfreight' ? newPlayer.trainState.remainingMovement = 12 : newPlayer.trainState.remainingMovement = 9;
             this.updatePlayerList();
 
             // Reset input
