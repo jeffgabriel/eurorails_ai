@@ -87,31 +87,93 @@ export const mapConfig: MapConfig = {
                 name: 'Heidelberg'
             }
         },
-
-        // Example ferry ports with connection (English Channel)
-        { 
-            row: 40, 
-            col: 20, 
-            terrain: TerrainType.FerryPort,
-            ferryConnection: { row: 40, col: 25 }
-        },
-        { 
-            row: 40, 
-            col: 25, 
-            terrain: TerrainType.FerryPort,
-            ferryConnection: { row: 40, col: 20 }
-        },
-        
-        // Example water points for a lake
-        { row: 50, col: 50, terrain: TerrainType.Water },
-        { row: 50, col: 51, terrain: TerrainType.Water },
-        { row: 51, col: 50, terrain: TerrainType.Water },
-        { row: 51, col: 51, terrain: TerrainType.Water },
         
         // Example mountain range
         { row: 45, col: 30, terrain: TerrainType.Mountain },
         { row: 45, col: 31, terrain: TerrainType.Mountain },
         { row: 46, col: 30, terrain: TerrainType.Mountain },
-        { row: 46, col: 31, terrain: TerrainType.Alpine }
+        { row: 46, col: 31, terrain: TerrainType.Alpine },
+        
+        // Small city (Saarbrücken) with surrounding clear terrain
+        {
+            row: 32,
+            col: 32,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.SmallCity,
+                name: 'Saarbrücken'
+            }
+        },
+        
+        // Mountain range in central region
+        { row: 30, col: 33, terrain: TerrainType.Mountain },
+        { row: 29, col: 33, terrain: TerrainType.Mountain },
+        { row: 28, col: 33, terrain: TerrainType.Alpine },
+        { row: 28, col: 34, terrain: TerrainType.Mountain },
+
+        // Ferry ports across the lake
+        { 
+            row: 28, 
+            col: 39, 
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 36, col: 38 }
+        },
+        { 
+            row: 36, 
+            col: 38, 
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 28, col: 39 }
+        },
+
+        // Lake points (from coordinate list)
+        { row: 29, col: 30, terrain: TerrainType.Water },
+        { row: 29, col: 37, terrain: TerrainType.Water },
+        { row: 29, col: 38, terrain: TerrainType.Water },
+        { row: 29, col: 39, terrain: TerrainType.Water },
+        { row: 29, col: 40, terrain: TerrainType.Water },
+        { row: 30, col: 37, terrain: TerrainType.Water },
+        { row: 30, col: 38, terrain: TerrainType.Water },
+        { row: 30, col: 39, terrain: TerrainType.Water },
+        { row: 30, col: 40, terrain: TerrainType.Water },
+        { row: 30, col: 41, terrain: TerrainType.Water },
+        { row: 31, col: 35, terrain: TerrainType.Water },
+        { row: 31, col: 36, terrain: TerrainType.Water },
+        { row: 31, col: 37, terrain: TerrainType.Water },
+        { row: 31, col: 38, terrain: TerrainType.Water },
+        { row: 31, col: 39, terrain: TerrainType.Water },
+        { row: 31, col: 40, terrain: TerrainType.Water },
+        { row: 31, col: 41, terrain: TerrainType.Water },
+        { row: 32, col: 35, terrain: TerrainType.Water },
+        { row: 32, col: 36, terrain: TerrainType.Water },
+        { row: 32, col: 37, terrain: TerrainType.Water },
+        { row: 32, col: 38, terrain: TerrainType.Water },
+        { row: 32, col: 39, terrain: TerrainType.Water },
+        { row: 32, col: 40, terrain: TerrainType.Water },
+        { row: 32, col: 41, terrain: TerrainType.Water },
+        { row: 32, col: 42, terrain: TerrainType.Water },
+        { row: 32, col: 43, terrain: TerrainType.Water },
+        { row: 33, col: 35, terrain: TerrainType.Water },
+        { row: 33, col: 36, terrain: TerrainType.Water },
+        { row: 33, col: 37, terrain: TerrainType.Water },
+        { row: 33, col: 38, terrain: TerrainType.Water },
+        { row: 33, col: 39, terrain: TerrainType.Water },
+        { row: 33, col: 40, terrain: TerrainType.Water },
+        { row: 33, col: 41, terrain: TerrainType.Water },
+        { row: 33, col: 42, terrain: TerrainType.Water },
+        { row: 34, col: 29, terrain: TerrainType.Water },
+        { row: 34, col: 36, terrain: TerrainType.Water },
+        { row: 34, col: 37, terrain: TerrainType.Water },
+        { row: 34, col: 38, terrain: TerrainType.Water },
+        { row: 34, col: 39, terrain: TerrainType.Water },
+        { row: 34, col: 40, terrain: TerrainType.Water },
+        { row: 34, col: 41, terrain: TerrainType.Water },
+        { row: 34, col: 42, terrain: TerrainType.Water },
+        { row: 35, col: 36, terrain: TerrainType.Water },
+        { row: 35, col: 37, terrain: TerrainType.Water },
+        { row: 35, col: 38, terrain: TerrainType.Water },
+        { row: 35, col: 39, terrain: TerrainType.Water },
+        { row: 35, col: 40, terrain: TerrainType.Water },
+        { row: 35, col: 41, terrain: TerrainType.Water },
+        { row: 36, col: 39, terrain: TerrainType.Water }
     ]
 }; 
