@@ -201,6 +201,7 @@ export class MapRenderer {
         const mountainPoints = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         const hillPoints = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         const ferryConnections = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        ferryConnections.setDepth(0);  // Set ferry line depth lower than circle
 
         // Set styles
         landPoints.lineStyle(1, 0x000000);
@@ -356,18 +357,18 @@ export class MapRenderer {
                 }
 
                 // Add coordinate label for each point
-                const coordLabel = this.scene.add.text(
-                    x + this.GRID_MARGIN + 5,  // Offset slightly to the right
-                    y + this.GRID_MARGIN - 10, // Offset slightly above
-                    `${row},${col}`,
-                    { 
-                        color: '#000000',
-                        fontSize: '8px',
-                        backgroundColor: '#ffffff80' // Semi-transparent white background
-                    }
-                );
-                coordLabel.setOrigin(0, 1);
-                this.mapContainer.add(coordLabel);
+                // const coordLabel = this.scene.add.text(
+                //     x + this.GRID_MARGIN + 5,  // Offset slightly to the right
+                //     y + this.GRID_MARGIN - 10, // Offset slightly above
+                //     `${row},${col}`,
+                //     { 
+                //         color: '#000000',
+                //         fontSize: '8px',
+                //         backgroundColor: '#ffffff80' // Semi-transparent white background
+                //     }
+                // );
+                // coordLabel.setOrigin(0, 1);
+                // this.mapContainer.add(coordLabel);
 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
@@ -428,10 +429,18 @@ export class MapRenderer {
                     (isToOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                 const toY = point.ferryConnection.row * this.VERTICAL_SPACING;
                 
+                // Draw the ferry connection line
                 ferryConnections.beginPath();
                 ferryConnections.moveTo(fromX, fromY);
                 ferryConnections.lineTo(toX, toY);
                 ferryConnections.stroke();
+
+                // Calculate midpoint for the cost circle
+                const midX = (fromX + toX) / 2;
+                const midY = (fromY + toY) / 2;
+
+                // Draw the circled cost (5 ECU)
+                this.drawCircledNumber(ferryConnections, midX, midY, 5);
             }
         });
 
@@ -463,6 +472,40 @@ export class MapRenderer {
         graphics.fill();
         graphics.lineStyle(1, 0x000000);
         graphics.stroke();
+    }
+
+    private drawCircledNumber(graphics: Phaser.GameObjects.Graphics, x: number, y: number, number: number): void {
+        const CIRCLE_RADIUS = 12;
+        
+        // Create a new graphics object for the circle and text with higher depth
+        const circleGraphics = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        circleGraphics.setDepth(1);  // Set higher depth to appear above ferry line
+        
+        // Draw white circle background
+        circleGraphics.lineStyle(2, 0x000000, 1);  // Black border
+        circleGraphics.fillStyle(0xFFFFFF, 1);     // White fill
+        circleGraphics.beginPath();
+        circleGraphics.arc(x, y, CIRCLE_RADIUS, 0, Math.PI * 2);
+        circleGraphics.closePath();
+        circleGraphics.fill();
+        circleGraphics.stroke();
+
+        // Add the number with even higher depth
+        const text = this.scene.add.text(
+            x + this.GRID_MARGIN,
+            y + this.GRID_MARGIN,
+            number.toString(),
+            {
+                color: '#000000',
+                fontSize: '14px',
+                fontStyle: 'bold'
+            }
+        );
+        text.setDepth(2);  // Set even higher depth to ensure text appears above circle
+        text.setOrigin(0.5, 0.5);
+        
+        // Add both to the container
+        this.mapContainer.add([circleGraphics, text]);
     }
 
     public getGridPointAtPosition(screenX: number, screenY: number, camera: Phaser.Cameras.Scene2D.Camera): GridPoint | null {
