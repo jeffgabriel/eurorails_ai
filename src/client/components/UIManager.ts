@@ -618,38 +618,105 @@ export class UIManager {
         0x333333,
         0.8
       )
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setDepth(0); // Set background to lowest depth
+
+    this.playerHandContainer.add(handBackground);
 
     // Add sections for demand cards (3 slots)
     for (let i = 0; i < 3; i++) {
-      // Create card background
-      const cardSlot = this.scene.add
-        .rectangle(
-          30 + i * 180, // Space cards horizontally
-          this.scene.scale.height - 180, // Position relative to bottom
-          150, // Card width
-          160, // Card height
-          0x666666
-        )
-        .setOrigin(0, 0);
+      console.log(`Creating card slot ${i}`);
 
-      // Add card label
-      const cardLabel = this.scene.add
-        .text(
-          30 + i * 180 + 75, // Center text above card
-          this.scene.scale.height - 195, // Position above card
-          `Demand Card ${i + 1}`,
-          {
-            color: "#ffffff",
-            fontSize: "14px",
+      // Debug log for hand data
+      console.log('Current player hand:', {
+        playerName: currentPlayer.name,
+        handLength: currentPlayer.hand?.length || 0,
+        cardAtIndex: JSON.stringify(currentPlayer.hand?.[i]),
+        allCards: JSON.stringify(currentPlayer.hand)
+      });
+
+      // Add card content if there's a card in this slot
+      if (currentPlayer.hand?.[i]) {
+        const card = currentPlayer.hand[i];
+        console.log('Raw card data:', JSON.stringify(card));
+        
+        try {
+          // Validate card data before displaying
+          if (!card || !card.destinationCity || !card.resource || typeof card.payment !== 'number') {
+            console.error('Invalid card data:', card);
+            continue;
           }
-        )
-        .setOrigin(0.5, 0);
 
-      this.playerHandContainer.add([cardSlot, cardLabel]);
+          // Simple text display for debugging
+          const cardText = 
+            `CARD ${i + 1}:\n` +
+            `City: ${card.destinationCity}\n` +
+            `Resource: ${card.resource}\n` +
+            `Payment: ${card.payment}M`;
+          
+          console.log('About to create text with:', cardText);
+          
+          const CARD_WIDTH = 160;
+          const CARD_SPACING = 20;
+          const CARD_START_X = 30;
+          
+          const cardContent = this.scene.add.text(
+            CARD_START_X + i * (CARD_WIDTH + CARD_SPACING), // Space cards evenly
+            this.scene.scale.height - 150, // Position from bottom
+            cardText,
+            {
+              color: "#000000", // Black text
+              fontSize: "16px",
+              backgroundColor: "#F5F5DC", // Cream color
+              padding: { x: 15, y: 15 },
+              fixedWidth: CARD_WIDTH,
+              align: 'left',
+              wordWrap: { width: CARD_WIDTH - 30 } // Account for padding
+            }
+          ).setDepth(1); // Set cards to higher depth than background
+
+          this.playerHandContainer.add(cardContent);
+          console.log(`Added card content for slot ${i}:`, {
+            x: cardContent.x,
+            y: cardContent.y,
+            text: cardContent.text,
+            visible: cardContent.visible,
+            alpha: cardContent.alpha,
+            depth: cardContent.depth,
+            cardData: card
+          });
+        } catch (error) {
+          console.error('Error creating card content:', error);
+          console.error('Problem card data:', card);
+        }
+      } else {
+        console.log(`No card data for slot ${i}`);
+        
+        // Display empty card slot
+        const CARD_WIDTH = 160;
+        const CARD_SPACING = 20;
+        const CARD_START_X = 30;
+        
+        const emptyCardText = this.scene.add.text(
+          CARD_START_X + i * (CARD_WIDTH + CARD_SPACING),
+          this.scene.scale.height - 150,
+          'Empty\nCard\nSlot',
+          {
+            color: "#666666", // Gray text
+            fontSize: "16px",
+            backgroundColor: "#EEEEEE", // Light gray background
+            padding: { x: 15, y: 15 },
+            fixedWidth: CARD_WIDTH,
+            align: 'center',
+            wordWrap: { width: CARD_WIDTH - 30 }
+          }
+        ).setDepth(1);
+        
+        this.playerHandContainer.add(emptyCardText);
+      }
     }
 
-    // Create train card section
+    // Create train card section with higher depth
     const trainSection = this.scene.add
       .rectangle(
         600, // Position after demand cards
@@ -658,7 +725,8 @@ export class UIManager {
         160, // Height
         0x666666
       )
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setDepth(1);
 
     const trainLabel = this.scene.add
       .text(
@@ -670,7 +738,8 @@ export class UIManager {
           fontSize: "14px",
         }
       )
-      .setOrigin(0.5, 0);
+      .setOrigin(0.5, 0)
+      .setDepth(1);
 
     // Add crayon button
     const colorMap: { [key: string]: string } = {
@@ -746,7 +815,6 @@ export class UIManager {
       )
       .setOrigin(0, 0);
     // Add elements to container in correct order
-    this.playerHandContainer.add([handBackground]); // Add background first
     this.playerHandContainer.add([
       trainSection,
       trainLabel,

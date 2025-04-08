@@ -151,7 +151,8 @@ describe('SetupScene Unit Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             }];
 
             scene['nameInput']!.value = 'Test Player';
@@ -171,7 +172,8 @@ describe('SetupScene Unit Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             }];
 
             scene['nameInput']!.value = 'Player 2';
@@ -194,7 +196,8 @@ describe('SetupScene Unit Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             }];
 
             await scene['startGame']();
@@ -214,7 +217,8 @@ describe('SetupScene Unit Tests', () => {
                         position: {x: 0, y: 0, row: 0, col: 0},
                         movementHistory: [],
                         remainingMovement: 9
-                    }
+                    },
+                    hand: []
                 },
                 {
                     id: 'player2',
@@ -227,7 +231,8 @@ describe('SetupScene Unit Tests', () => {
                         position: {x: 0, y: 0, row: 0, col: 0},
                         movementHistory: [],
                         remainingMovement: 9
-                    }
+                    },
+                    hand: []
                 }
             ];
 

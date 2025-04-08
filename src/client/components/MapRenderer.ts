@@ -40,6 +40,7 @@ export class MapRenderer {
     public gridPoints: GridPoint[][] = [];
     private gameState: GameState;
     private trackDrawingManager: TrackDrawingManager;
+    private backgroundGraphics: Phaser.GameObjects.Graphics;
 
     constructor(
         scene: Phaser.Scene,
@@ -51,6 +52,11 @@ export class MapRenderer {
         this.mapContainer = mapContainer;
         this.gameState = gameState;
         this.trackDrawingManager = trackDrawingManager;
+        
+        // Initialize background graphics with lowest depth
+        this.backgroundGraphics = this.scene.add.graphics();
+        this.backgroundGraphics.setDepth(-1);
+        this.mapContainer.add(this.backgroundGraphics);
     }
 
     public calculateMapDimensions() {
@@ -59,7 +65,100 @@ export class MapRenderer {
         return { width, height };
     }
 
+    private drawBackgroundTerrain(): void {
+        // Clear any existing background
+        this.backgroundGraphics.clear();
+        
+        // Draw the lake with a natural, irregular shape
+        this.backgroundGraphics.lineStyle(2, 0x4444ff, 0.3); // Light blue border
+        this.backgroundGraphics.fillStyle(0x1cb2f5, 0.2);    // Lighter blue fill with transparency
+        
+        // Create a natural-looking lake shape using curves
+        const lakeCenter = {
+            x: (39 * this.HORIZONTAL_SPACING) + this.GRID_MARGIN,
+            y: (32 * this.VERTICAL_SPACING) + this.GRID_MARGIN
+        };
+        
+        // Draw a series of curves to create an irregular shape
+        this.backgroundGraphics.beginPath();
+        
+        // Create points for the lake shape
+        const points = [
+            { x: lakeCenter.x - 100, y: lakeCenter.y - 50 },  // Start
+            { x: lakeCenter.x - 50, y: lakeCenter.y - 120 },  // Top control
+            { x: lakeCenter.x + 50, y: lakeCenter.y - 120 },  // Top control
+            { x: lakeCenter.x + 100, y: lakeCenter.y - 50 },  // Top right
+            { x: lakeCenter.x + 150, y: lakeCenter.y },       // Right control
+            { x: lakeCenter.x + 120, y: lakeCenter.y + 100 }, // Right control
+            { x: lakeCenter.x + 50, y: lakeCenter.y + 120 },  // Bottom right
+            { x: lakeCenter.x, y: lakeCenter.y + 150 },       // Bottom control
+            { x: lakeCenter.x - 100, y: lakeCenter.y + 100 }, // Bottom control
+            { x: lakeCenter.x - 120, y: lakeCenter.y + 50 },  // Bottom left
+            { x: lakeCenter.x - 150, y: lakeCenter.y },       // Left control
+            { x: lakeCenter.x - 150, y: lakeCenter.y - 50 },  // Left control
+            { x: lakeCenter.x - 100, y: lakeCenter.y - 50 }   // Back to start
+        ];
+
+        // Draw the lake shape
+        this.backgroundGraphics.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) {
+            this.backgroundGraphics.lineTo(points[i].x, points[i].y);
+        }
+        
+        this.backgroundGraphics.closePath();
+        this.backgroundGraphics.fill();
+        this.backgroundGraphics.stroke();
+        
+        // Add some detail to the lake
+        // Inner curves for depth perception
+        this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.1);
+        
+        // Draw inner shapes for depth
+        const innerPoints = [
+            { x: lakeCenter.x - 60, y: lakeCenter.y - 30 },
+            { x: lakeCenter.x + 60, y: lakeCenter.y - 30 },
+            { x: lakeCenter.x + 60, y: lakeCenter.y + 30 },
+            { x: lakeCenter.x - 60, y: lakeCenter.y + 30 }
+        ];
+        
+        this.backgroundGraphics.beginPath();
+        this.backgroundGraphics.moveTo(innerPoints[0].x, innerPoints[0].y);
+        for (let i = 1; i < innerPoints.length; i++) {
+            this.backgroundGraphics.lineTo(innerPoints[i].x, innerPoints[i].y);
+        }
+        this.backgroundGraphics.closePath();
+        this.backgroundGraphics.stroke();
+        
+        // Add some subtle ripple effects using small shapes
+        for (let i = 0; i < 5; i++) {
+            const rippleX = lakeCenter.x + Math.random() * 40 - 20;
+            const rippleY = lakeCenter.y + Math.random() * 40 - 20;
+            const rippleWidth = 20 + Math.random() * 30;
+            const rippleHeight = 10 + Math.random() * 20;
+            
+            this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.05);
+            this.backgroundGraphics.beginPath();
+            
+            // Draw oval ripples using line segments
+            for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 16) {
+                const x = rippleX + Math.cos(angle) * rippleWidth;
+                const y = rippleY + Math.sin(angle) * rippleHeight;
+                if (angle === 0) {
+                    this.backgroundGraphics.moveTo(x, y);
+                } else {
+                    this.backgroundGraphics.lineTo(x, y);
+                }
+            }
+            
+            this.backgroundGraphics.closePath();
+            this.backgroundGraphics.stroke();
+        }
+    }
+
     public createTriangularGrid(): void {
+        // Draw background terrain first
+        this.drawBackgroundTerrain();
+        
         // Create lookup maps
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
@@ -102,6 +201,7 @@ export class MapRenderer {
         const mountainPoints = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         const hillPoints = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
         const ferryConnections = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        ferryConnections.setDepth(0);  // Set ferry line depth lower than circle
 
         // Set styles
         landPoints.lineStyle(1, 0x000000);
@@ -109,7 +209,7 @@ export class MapRenderer {
         mountainPoints.lineStyle(1, 0x000000);
         hillPoints.lineStyle(1, 0x000000);
         hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
-        ferryConnections.lineStyle(2, 0xffa500, 0.5);
+        ferryConnections.lineStyle(6, 0x808080, 0.8); // Increased thickness to 6, using gray color, 0.8 opacity
 
         // First pass: Draw city areas
         const majorCities = new Set<string>(); // Track major city points
@@ -256,6 +356,20 @@ export class MapRenderer {
                     terrain = city.type;
                 }
 
+                // Add coordinate label for each point
+                // const coordLabel = this.scene.add.text(
+                //     x + this.GRID_MARGIN + 5,  // Offset slightly to the right
+                //     y + this.GRID_MARGIN - 10, // Offset slightly above
+                //     `${row},${col}`,
+                //     { 
+                //         color: '#000000',
+                //         fontSize: '8px',
+                //         backgroundColor: '#ffffff80' // Semi-transparent white background
+                //     }
+                // );
+                // coordLabel.setOrigin(0, 1);
+                // this.mapContainer.add(coordLabel);
+
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
                 // Skip drawing point for water terrain
@@ -301,6 +415,35 @@ export class MapRenderer {
             }
         }
 
+        // Draw ferry connections
+        mapConfig.points.forEach(point => {
+            if (point.ferryConnection) {
+                const isFromOffsetRow = point.row % 2 === 1;
+                const isToOffsetRow = point.ferryConnection.row % 2 === 1;
+                
+                const fromX = point.col * this.HORIZONTAL_SPACING + 
+                    (isFromOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+                const fromY = point.row * this.VERTICAL_SPACING;
+                
+                const toX = point.ferryConnection.col * this.HORIZONTAL_SPACING + 
+                    (isToOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+                const toY = point.ferryConnection.row * this.VERTICAL_SPACING;
+                
+                // Draw the ferry connection line
+                ferryConnections.beginPath();
+                ferryConnections.moveTo(fromX, fromY);
+                ferryConnections.lineTo(toX, toY);
+                ferryConnections.stroke();
+
+                // Calculate midpoint for the cost circle
+                const midX = (fromX + toX) / 2;
+                const midY = (fromY + toY) / 2;
+
+                // Draw the circled cost (5 ECU)
+                this.drawCircledNumber(ferryConnections, midX, midY, 5);
+            }
+        });
+
         // Add all graphics objects to the map container in correct order
         this.mapContainer.add([cityAreas, landPoints, mountainPoints, hillPoints, ferryConnections]);
     }
@@ -329,6 +472,40 @@ export class MapRenderer {
         graphics.fill();
         graphics.lineStyle(1, 0x000000);
         graphics.stroke();
+    }
+
+    private drawCircledNumber(graphics: Phaser.GameObjects.Graphics, x: number, y: number, number: number): void {
+        const CIRCLE_RADIUS = 12;
+        
+        // Create a new graphics object for the circle and text with higher depth
+        const circleGraphics = this.scene.add.graphics({ x: this.GRID_MARGIN, y: this.GRID_MARGIN });
+        circleGraphics.setDepth(1);  // Set higher depth to appear above ferry line
+        
+        // Draw white circle background
+        circleGraphics.lineStyle(2, 0x000000, 1);  // Black border
+        circleGraphics.fillStyle(0xFFFFFF, 1);     // White fill
+        circleGraphics.beginPath();
+        circleGraphics.arc(x, y, CIRCLE_RADIUS, 0, Math.PI * 2);
+        circleGraphics.closePath();
+        circleGraphics.fill();
+        circleGraphics.stroke();
+
+        // Add the number with even higher depth
+        const text = this.scene.add.text(
+            x + this.GRID_MARGIN,
+            y + this.GRID_MARGIN,
+            number.toString(),
+            {
+                color: '#000000',
+                fontSize: '14px',
+                fontStyle: 'bold'
+            }
+        );
+        text.setDepth(2);  // Set even higher depth to ensure text appears above circle
+        text.setOrigin(0.5, 0.5);
+        
+        // Add both to the container
+        this.mapContainer.add([circleGraphics, text]);
     }
 
     public getGridPointAtPosition(screenX: number, screenY: number, camera: Phaser.Cameras.Scene2D.Camera): GridPoint | null {
