@@ -4,6 +4,7 @@ import cors from 'cors';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
+import deckRoutes from './routes/deckRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './services/playerService';
 
@@ -34,6 +35,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/players', playerRoutes);
 app.use('/api/tracks', trackRoutes);
 app.use('/api/game', gameRoutes);
+app.use('/api/deck', deckRoutes);
 
 // Log registered routes
 console.log('Registered routes:');

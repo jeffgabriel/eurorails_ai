@@ -1,35 +1,32 @@
-import { DemandCard, RawDemandCard } from '../types/DemandCard';
-import * as fs from 'fs';
-import * as path from 'path';
+import { DemandCard } from '../types/DemandCard';
 
 export class DemandDeckService {
   private cards: DemandCard[] = [];
   private drawPile: number[] = [];  // Array of card IDs in the draw pile
   private discardPile: number[] = [];  // Array of card IDs in the discard pile
   private dealtCards: Set<number> = new Set();  // Set of card IDs currently dealt to players
+  private isLoaded: boolean = false;
   
-  constructor() {
-    this.loadCards();
-  }
+  constructor() {}
 
-  private loadCards(): void {
+  /**
+   * Load demand cards from the server API
+   */
+  public async loadCards(): Promise<void> {
     try {
-      // Read the JSON file
-      const configPath = path.resolve(__dirname, '../../../configuration/demand_cards.json');
-      const rawData = fs.readFileSync(configPath, 'utf8');
-      const jsonData = JSON.parse(rawData);
+      if (this.isLoaded) return;
       
-      // Transform raw cards into our internal format with IDs
-      this.cards = jsonData.DemandCards.map((card: RawDemandCard, index: number): DemandCard => ({
-        id: index + 1,  // 1-based IDs
-        destinationCity: card.DestinationCity,
-        resource: card.Resource,
-        payment: parseInt(card.Payment, 10)  // Convert payment to number
-      }));
-
+      const response = await fetch('/api/deck/demand');
+      if (!response.ok) {
+        throw new Error(`Failed to fetch demand cards: ${response.statusText}`);
+      }
+      
+      this.cards = await response.json();
+      
       // Initialize draw pile with all card IDs
       this.drawPile = this.cards.map(card => card.id);
       this.shuffleDrawPile();
+      this.isLoaded = true;
     } catch (error) {
       console.error('Failed to load demand cards:', error);
       throw error;
@@ -44,7 +41,12 @@ export class DemandDeckService {
     }
   }
 
-  public drawCard(): DemandCard | null {
+  public async drawCard(): Promise<DemandCard | null> {
+    // Ensure cards are loaded
+    if (!this.isLoaded) {
+      await this.loadCards();
+    }
+    
     // If draw pile is empty, shuffle discard pile into draw pile
     if (this.drawPile.length === 0) {
       if (this.discardPile.length === 0) {
@@ -104,4 +106,4 @@ export class DemandDeckService {
       dealtCardsCount: this.dealtCards.size
     };
   }
-} 
+}

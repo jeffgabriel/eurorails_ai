@@ -117,7 +117,8 @@ describe('SettingsScene Unit Tests', () => {
                 position: {x: 0, y: 0, row: 0, col: 0},
                 movementHistory: [],
                 remainingMovement: 9
-            }
+            },
+            hand: []
         };
 
         beforeEach(() => {
@@ -139,7 +140,8 @@ describe('SettingsScene Unit Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             scene['nameInput'] = document.createElement('input');
             scene['nameInput'].value = '';  // Empty name to trigger validation
@@ -159,7 +161,8 @@ describe('SettingsScene Unit Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             scene['nameInput'] = document.createElement('input');
             scene['nameInput'].value = 'Updated Name';

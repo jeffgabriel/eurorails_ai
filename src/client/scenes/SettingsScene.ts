@@ -218,7 +218,8 @@ export class SettingsScene extends Phaser.Scene {
                 position: {x: 0, y: 0, row: 0, col: 0},
                 movementHistory: [],
                 remainingMovement: 9
-            }
+            },
+            hand: []
         };
         
         // Use the existing edit player UI but with different save behavior

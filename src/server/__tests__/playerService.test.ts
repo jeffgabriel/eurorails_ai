@@ -99,7 +99,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await PlayerService.createPlayer(gameId, player);
             const result = await db.query('SELECT * FROM players WHERE id = $1', [player.id]);
@@ -119,7 +120,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await PlayerService.createPlayer(gameId, player);
 
@@ -147,7 +149,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await PlayerService.createPlayer(gameId, player1);
 
@@ -162,7 +165,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await expect(PlayerService.createPlayer(gameId, player2))
                 .rejects.toThrow('Color already taken by another player');
@@ -180,7 +184,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await expect(PlayerService.createPlayer(gameId, player))
                 .rejects.toThrow('Invalid color format');
@@ -199,7 +204,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await PlayerService.createPlayer(gameId, player);
             await PlayerService.deletePlayer(gameId, playerId);
@@ -221,7 +227,8 @@ describe('PlayerService Integration Tests', () => {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
                     remainingMovement: 9
-                }
+                },
+                hand: []
             };
             await PlayerService.createPlayer(gameId, player);
             

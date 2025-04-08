@@ -2,6 +2,7 @@ import 'phaser';
 import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { IdService } from '../../shared/services/IdService';
+import { DemandDeckService } from '../../shared/services/DemandDeckService';
 
 export class SetupScene extends Phaser.Scene {
     private gameState: GameState;
@@ -10,20 +11,22 @@ export class SetupScene extends Phaser.Scene {
     private selectedColor?: PlayerColor;
     private errorText?: Phaser.GameObjects.Text;
     private playerList?: Phaser.GameObjects.Text;
+    private demandDeckService: DemandDeckService;
 
     constructor() {
         super({ 
             key: 'SetupScene',
             active: true
         });
+        this.demandDeckService = new DemandDeckService();
         // Initialize with default state
         this.gameState = {
             id: IdService.generateGameId(),
             players: [],
             currentPlayerIndex: 0,
             status: 'setup',
-            maxPlayers: 6
-        };
+            maxPlayers: 6        };
+        
     }
 
     init(data: { gameState?: GameState }) {
@@ -247,7 +250,8 @@ export class SetupScene extends Phaser.Scene {
                             position: {x: 0, y: 0, row: 0, col: 0},
                             movementHistory: [],
                             remainingMovement: 9
-                        }
+                        },
+                        hand: []  // Initialize empty hand
                     }
                 })
             });
@@ -299,6 +303,23 @@ export class SetupScene extends Phaser.Scene {
         }
 
         try {
+            // Ensure demand cards are loaded
+            await this.demandDeckService.loadCards();
+            
+            // Deal initial hands to all players
+            for (const player of this.gameState.players) {
+                player.hand = [];
+                // Draw 3 cards for each player
+                for (let i = 0; i < 3; i++) {
+                    const card = await this.demandDeckService.drawCard();
+                    if (card) {
+                        player.hand.push(card);
+                    } else {
+                        throw new Error('Not enough demand cards in deck');
+                    }
+                }
+            }
+
             // Update game status to active
             const response = await fetch(`/api/players/game/${this.gameState.id}/status`, {
                 method: 'POST',

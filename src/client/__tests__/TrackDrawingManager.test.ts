@@ -30,8 +30,9 @@ describe('TrackDrawingManager', () => {
                         position: {x: 0, y: 0, row: 0, col: 0},
                         movementHistory: [],
                         remainingMovement: 9
-                    }
-                }
+                    },
+                    hand: []
+                }   
             ],
             currentPlayerIndex: 0,
             status: 'active',

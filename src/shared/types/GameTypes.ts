@@ -1,3 +1,5 @@
+import { DemandCard } from './DemandCard';
+
 export enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
@@ -15,6 +17,7 @@ export interface Player {
     trainType: string;  // We'll expand this later with proper train types
     turnNumber: number;
     trainState: TrainState;
+    hand: DemandCard[];  // Array of demand cards in player's hand
 }
 
 export interface TrainState {
@@ -46,7 +49,7 @@ export interface GameState {
         scrollX: number;
         scrollY: number;
     };
-    trainSprites?: Map<string, Phaser.GameObjects.Image>; // Map of player ID to train sprite
+    trainSprites?: Map<string, Phaser.GameObjects.Image>; // Map of player ID to train sprite}
 }
 
 export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
