@@ -6,6 +6,7 @@ export class DemandDeckService {
   private cards: DemandCard[] = [];
   private drawPile: number[] = [];  // Array of card IDs in the draw pile
   private discardPile: number[] = [];  // Array of card IDs in the discard pile
+  private dealtCards: Set<number> = new Set();  // Set of card IDs currently dealt to players
   
   constructor() {
     this.loadCards();
@@ -55,6 +56,7 @@ export class DemandDeckService {
     }
 
     const cardId = this.drawPile.pop()!;
+    this.dealtCards.add(cardId);  // Mark card as dealt
     return this.cards.find(card => card.id === cardId) || null;
   }
 
@@ -62,7 +64,26 @@ export class DemandDeckService {
     if (!this.cards.find(card => card.id === cardId)) {
       throw new Error(`Invalid card ID: ${cardId}`);
     }
+    if (!this.dealtCards.has(cardId)) {
+      throw new Error(`Card ${cardId} is not currently dealt to any player`);
+    }
+    this.dealtCards.delete(cardId);  // Remove from dealt cards
     this.discardPile.push(cardId);
+  }
+
+  public returnCardToDeck(cardId: number): void {
+    if (!this.cards.find(card => card.id === cardId)) {
+      throw new Error(`Invalid card ID: ${cardId}`);
+    }
+    if (!this.dealtCards.has(cardId)) {
+      throw new Error(`Card ${cardId} is not currently dealt to any player`);
+    }
+    this.dealtCards.delete(cardId);
+    this.drawPile.push(cardId);
+  }
+
+  public isCardDealt(cardId: number): boolean {
+    return this.dealtCards.has(cardId);
   }
 
   public getCard(cardId: number): DemandCard | undefined {
@@ -73,12 +94,14 @@ export class DemandDeckService {
   public getDeckState(): { 
     totalCards: number, 
     drawPileSize: number, 
-    discardPileSize: number 
+    discardPileSize: number,
+    dealtCardsCount: number
   } {
     return {
       totalCards: this.cards.length,
       drawPileSize: this.drawPile.length,
-      discardPileSize: this.discardPile.length
+      discardPileSize: this.discardPile.length,
+      dealtCardsCount: this.dealtCards.size
     };
   }
 } 
