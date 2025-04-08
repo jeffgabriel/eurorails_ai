@@ -2,6 +2,7 @@ import { db } from "../db/index";
 import { Player, Game, GameStatus } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
+import { demandDeckService } from "./demandDeckService";
 
 interface PlayerRow {
   id: string;
@@ -72,9 +73,9 @@ export class PlayerService {
     const query = `
             INSERT INTO players (
                 id, game_id, name, color, money, train_type,
-                position_x, position_y, position_row, position_col, current_turn_number
+                position_x, position_y, position_row, position_col, current_turn_number, hand
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         `;
     const values = [
       player.id,
@@ -88,6 +89,7 @@ export class PlayerService {
       player.trainState.position?.row || null,
       player.trainState.position?.col || null,
       player.turnNumber || 1,
+      player.hand.map(card => card.id),
     ];
     try {
       await db.query(query, values);
@@ -164,7 +166,8 @@ export class PlayerService {
                     position_y = $6,
                     position_row = $7,
                     position_col = $8,
-                    current_turn_number = $11
+                    current_turn_number = $11,
+                    hand = $12
                 WHERE game_id = $9 AND id = $10
                 RETURNING *
             `;
@@ -191,6 +194,7 @@ export class PlayerService {
         gameId,
         player.id,
         player.turnNumber,
+        player.hand.map(card => card.id),
       ];
       console.log("Executing update query");
 
@@ -289,7 +293,8 @@ export class PlayerService {
                     position_row,
                     position_col,
                     current_turn_number as "turnNumber",
-                    mh.movement_path as "movementHistory"
+                    mh.movement_path as "movementHistory",
+                    hand
                 FROM players 
                 LEFT JOIN LATERAL (
                     SELECT movement_path 
@@ -330,6 +335,7 @@ export class PlayerService {
               : undefined,
           turnNumber: row.turnNumber || 1,
           movementHistory: row.movementHistory ? row.movementHistory : [],
+          hand: row.hand ? row.hand.map((cardId: number) => demandDeckService.getCard(cardId)) : [],
         },
       }));
 

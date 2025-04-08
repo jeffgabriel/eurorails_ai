@@ -3,7 +3,7 @@ import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY } from '../../shar
 import { GameScene } from './GameScene';
 import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
-
+import { DemandCard } from '../../shared/types/DemandCard';
 export class SetupScene extends Phaser.Scene {
     private gameState: GameState;
     private nameInput?: HTMLInputElement;
@@ -25,7 +25,8 @@ export class SetupScene extends Phaser.Scene {
             players: [],
             currentPlayerIndex: 0,
             status: 'setup',
-            maxPlayers: 6        };
+            maxPlayers: 6        
+        };
         
     }
 
@@ -251,7 +252,7 @@ export class SetupScene extends Phaser.Scene {
                             movementHistory: [],
                             remainingMovement: 9
                         },
-                        hand: []  // Initialize empty hand
+                        hand: await this.getPlayerHand()
                     }
                 })
             });
@@ -296,6 +297,20 @@ export class SetupScene extends Phaser.Scene {
         }
     }
 
+    private async getPlayerHand(): Promise<DemandCard[]> {
+        // Draw 3 cards for each player
+        let cards: DemandCard[] = [];
+        for (let i = 0; i < 3; i++) {
+            const card = await this.demandDeckService.drawCard();
+            if (card) {
+                cards.push(card);
+            } else {
+                throw new Error('Not enough demand cards in deck');
+            }
+        }
+        return cards;
+    }
+
     private async startGame() {
         if (this.gameState.players.length < 2) {
             this.showError('At least 2 players are required to start');
@@ -308,15 +323,8 @@ export class SetupScene extends Phaser.Scene {
             
             // Deal initial hands to all players
             for (const player of this.gameState.players) {
-                player.hand = [];
-                // Draw 3 cards for each player
-                for (let i = 0; i < 3; i++) {
-                    const card = await this.demandDeckService.drawCard();
-                    if (card) {
-                        player.hand.push(card);
-                    } else {
-                        throw new Error('Not enough demand cards in deck');
-                    }
+                if (player.hand.length === 0) {
+                    player.hand = await this.getPlayerHand();
                 }
             }
 
