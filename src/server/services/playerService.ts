@@ -321,23 +321,45 @@ export class PlayerService {
           : null,
       });
 
-      const players = result.rows.map((row) => ({
-        ...row,
-        trainState: {
-          position:
-            row.position_x !== null
-              ? {
-                  x: row.position_x,
-                  y: row.position_y,
-                  row: row.position_row,
-                  col: row.position_col,
-                }
-              : undefined,
-          turnNumber: row.turnNumber || 1,
-          movementHistory: row.movementHistory ? row.movementHistory : [],
-          hand: row.hand ? row.hand.map((cardId: number) => demandDeckService.getCard(cardId)) : [],
-        },
-      }));
+      // Log the raw hand data before processing
+      console.log("Raw hand data from database:", result.rows.map(row => ({
+        playerId: row.id,
+        handIds: row.hand
+      })));
+
+      const players = result.rows.map((row) => {
+        // Convert hand IDs to actual cards, with better error handling
+        const handCards = row.hand ? row.hand.map((cardId: number) => {
+          const card = demandDeckService.getCard(cardId);
+          if (!card) {
+            console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
+            return null;
+          }
+          return card;
+        }).filter(Boolean) : []; // Remove any null entries
+
+        // Log the processed hand data
+        console.log(`Processed hand for player ${row.id}:`, handCards);
+
+        return {
+          ...row,
+          trainState: {
+            position:
+              row.position_x !== null
+                ? {
+                    x: row.position_x,
+                    y: row.position_y,
+                    row: row.position_row,
+                    col: row.position_col,
+                  }
+                : undefined,
+            turnNumber: row.turnNumber || 1,
+            movementHistory: row.movementHistory ? row.movementHistory : [],
+            remainingMovement: 9, // Default to 9 for Freight trains
+          },
+          hand: handCards,
+        };
+      });
 
       console.log("Processed players:", {
         count: players.length,
@@ -348,6 +370,8 @@ export class PlayerService {
               hasPosition: !!players[0].trainState.position,
               hasMovementHistory:
                 players[0].trainState.movementHistory.length > 0,
+              handSize: players[0].hand.length,
+              handExample: players[0].hand[0],
             }
           : null,
       });
