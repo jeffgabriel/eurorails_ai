@@ -1,6 +1,6 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType, GridPoint } from '../../shared/types/GameTypes';
+import { TerrainType, GridPoint, CityData } from '../../shared/types/GameTypes';
 import { GameState } from '../../shared/types/GameTypes';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 
@@ -163,11 +163,14 @@ export class MapRenderer {
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
             ferryConnection?: { row: number; col: number },
-            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
+            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }>, availableLoads?: string[] }
         }>();
         
         // Create a map to store connected city points
-        const cityAreaPoints = new Map<string, { city: { type: TerrainType; name: string }, terrain: TerrainType }>();
+        const cityAreaPoints = new Map<string, { 
+            city: CityData,  // Use CityData type which includes connectedPoints
+            terrain: TerrainType 
+        }>();
         
         // First pass: Build lookup maps and identify city areas
         mapConfig.points.forEach(point => {
@@ -410,7 +413,12 @@ export class MapRenderer {
                     sprite, 
                     terrain,
                     ferryConnection,
-                    city 
+                    city: city ? {
+                        type: city.type,
+                        name: city.name,
+                        connectedPoints: city.connectedPoints || [],
+                        availableLoads: city.availableLoads || []
+                    } : undefined
                 };
             }
         }

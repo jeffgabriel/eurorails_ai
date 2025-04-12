@@ -82,28 +82,47 @@ export interface TrackNetwork {
     nodes: Set<string>;  // Set of milepost IDs
     edges: Map<string, Set<string>>;  // Adjacency list
 }
-export interface CityConfig {
+
+// Load types from configuration
+export interface LoadCityConfig {
+    [loadType: string]: string[];  // Maps load type to array of city names
+}
+
+// City data including available loads
+export interface CityData {
     type: TerrainType;
     name: string;
-    // For major cities, we need to know which points form the hexagon
     connectedPoints?: Array<{ row: number; col: number }>;
+    availableLoads: string[];  // List of load types available at this city
 }
 
-export interface GridPointConfig {
-    row: number;
-    col: number;
+// Base point interface
+export interface Point {
+    x: number;      // screen x
+    y: number;      // screen y
+    row: number;    // grid row
+    col: number;    // grid column
+}
+
+// Unified GridPoint type
+export interface GridPoint extends Point {
     terrain: TerrainType;
-    ferryConnection?: {
-        row: number;
-        col: number;
+    ferryConnection?: { 
+        row: number; 
+        col: number; 
     };
-    city?: CityConfig;
+    city?: CityData;
+    
+    // Runtime properties
+    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
+    tracks?: Array<{ playerId: string }>;
 }
 
+// Updated MapConfig
 export interface MapConfig {
     width: number;
     height: number;
-    points: GridPointConfig[];
+    points: GridPoint[];  // Now using the unified GridPoint type
 }
 
 export interface TrackSegment {
@@ -131,22 +150,4 @@ export interface PlayerTrackState {
     totalCost: number;
     turnBuildCost: number;
     lastBuildTimestamp: Date;
-} 
-export interface GridPoint extends Point {
-    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
-    terrain: TerrainType;
-    ferryConnection?: { row: number; col: number };
-    city?: {
-        type: TerrainType;
-        name: string;
-        connectedPoints?: Array<{ row: number; col: number }>;
-    };
-    tracks?: Array<{ playerId: string }>;
-}
-
-export interface Point {
-    x: number;  // screen x
-    y: number;  // screen y
-    row: number;  // grid row
-    col: number;  // grid column
 }
