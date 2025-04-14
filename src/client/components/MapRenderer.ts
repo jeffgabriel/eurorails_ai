@@ -1,8 +1,9 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType, GridPoint } from '../../shared/types/GameTypes';
+import { TerrainType, GridPoint, CityData } from '../../shared/types/GameTypes';
 import { GameState } from '../../shared/types/GameTypes';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
+import { LoadService } from '../services/LoadService';
 
 
 export class MapRenderer {
@@ -35,12 +36,17 @@ export class MapRenderer {
         [TerrainType.SmallCity]: 8     // Reduced size for small city square
     };
 
+    private readonly LOAD_SPRITE_SIZE = 24;  // Increased from 16 to 24 (50% larger)
+    private readonly LOAD_SPRITE_OPACITY = 0.7;  // Opacity for load sprites
+    private readonly LOAD_SPRITE_SPACING = 30;  // Increased spacing to accommodate larger sprites
+
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     public gridPoints: GridPoint[][] = [];
     private gameState: GameState;
     private trackDrawingManager: TrackDrawingManager;
     private backgroundGraphics: Phaser.GameObjects.Graphics;
+    private loadService: LoadService;
 
     constructor(
         scene: Phaser.Scene,
@@ -52,6 +58,7 @@ export class MapRenderer {
         this.mapContainer = mapContainer;
         this.gameState = gameState;
         this.trackDrawingManager = trackDrawingManager;
+        this.loadService = LoadService.getInstance();
         
         // Initialize background graphics with lowest depth
         this.backgroundGraphics = this.scene.add.graphics();
@@ -155,6 +162,221 @@ export class MapRenderer {
         }
     }
 
+    private addLoadSpritesToCity(
+        cityX: number,
+        cityY: number,
+        cityName: string,
+        cityType: TerrainType
+    ): void {
+        const loadDetails = this.loadService.getCityLoadDetails(cityName);
+        if (!loadDetails || loadDetails.length === 0) return;
+
+        // Calculate starting position for load sprites
+        // Position them in a semi-circle above the city
+        const radius = cityType === TerrainType.MajorCity ? 45 : 30;
+        const startAngle = -Math.PI / 4; // Start from -45 degrees
+        const angleStep = Math.PI / 2 / (loadDetails.length + 1); // Spread over 90 degrees
+
+        loadDetails.forEach((load, index) => {
+            try {
+                if (!load || !load.loadType) {
+                    console.warn(`Invalid load data for city ${cityName} at index ${index}`);
+                    return;
+                }
+
+                const angle = startAngle + angleStep * (index + 1);
+                const spriteX = cityX + radius * Math.cos(angle);
+                const spriteY = cityY + radius * Math.sin(angle);
+
+                const spriteKey = `load-${load.loadType.toLowerCase()}`;
+                
+                // Check if the sprite texture exists before creating the image
+                if (!this.scene.textures.exists(spriteKey)) {
+                    console.warn(`Missing sprite texture for load type: ${spriteKey}`);
+                    return;
+                }
+
+                // Create sprite for the load
+                const sprite = this.scene.add.image(
+                    spriteX,
+                    spriteY,
+                    spriteKey
+                );
+
+                // Configure sprite
+                sprite.setDisplaySize(this.LOAD_SPRITE_SIZE, this.LOAD_SPRITE_SIZE);
+                sprite.setAlpha(this.LOAD_SPRITE_OPACITY);
+                sprite.setDepth(1); // Ensure it appears above the city but below UI elements
+
+                // Add to container
+                this.mapContainer.add(sprite);
+
+                // Add count indicator if more than 1 available
+                if (load.count > 1) {
+                    try {
+                        const countText = this.scene.add.text(
+                            spriteX + this.LOAD_SPRITE_SIZE/2,
+                            spriteY - this.LOAD_SPRITE_SIZE/2,
+                            load.count.toString(),
+                            {
+                                fontSize: '10px',
+                                color: '#000000',
+                                backgroundColor: '#ffffff',
+                                padding: { x: 2, y: 2 }
+                            }
+                        );
+                        countText.setOrigin(0.5);
+                        countText.setDepth(2);
+                        this.mapContainer.add(countText);
+                    } catch (textError) {
+                        console.warn(`Failed to add count text for ${load.loadType} at ${cityName}:`, textError);
+                    }
+                }
+            } catch (error) {
+                console.warn(`Failed to add load sprite for ${cityName}:`, error);
+                // Continue with the next load
+            }
+        });
+    }
+
+    private drawCityWithLoads(
+        graphics: Phaser.GameObjects.Graphics,
+        x: number,
+        y: number,
+        config: { city: CityData; terrain: TerrainType }
+    ): void {
+        const { city } = config;
+
+        // Draw the city based on its type
+        if (city.type === TerrainType.MajorCity && city.connectedPoints) {
+            // Draw hexagonal area
+            graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
+            graphics.lineStyle(2, 0x000000, 0.7);
+            graphics.beginPath();
+            
+            // Find center point (first point in the array) and outer points
+            const centerPoint = city.connectedPoints[0];
+            const outerPoints = city.connectedPoints.slice(1);
+            
+            // Calculate center coordinates
+            const centerIsOffsetRow = centerPoint.row % 2 === 1;
+            const centerX = centerPoint.col * this.HORIZONTAL_SPACING + 
+                         (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
+            const centerY = centerPoint.row * this.VERTICAL_SPACING;
+
+            // Sort outer points clockwise around the center
+            const sortedPoints = outerPoints
+                .map(p => ({
+                    point: p,
+                    angle: Math.atan2(
+                        p.row - centerPoint.row,
+                        p.col - centerPoint.col
+                    )
+                }))
+                .sort((a, b) => a.angle - b.angle)
+                .map(p => {
+                    const pIsOffsetRow = p.point.row % 2 === 1;
+                    return {
+                        x: p.point.col * this.HORIZONTAL_SPACING + 
+                           (pIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0),
+                        y: p.point.row * this.VERTICAL_SPACING
+                    };
+                });
+            
+            // Draw the hexagon
+            graphics.moveTo(sortedPoints[0].x, sortedPoints[0].y);
+            for (let i = 1; i < sortedPoints.length; i++) {
+                graphics.lineTo(sortedPoints[i].x, sortedPoints[i].y);
+            }
+            graphics.closePath();
+            graphics.fill();
+            graphics.stroke();
+
+            // Draw star at center point
+            this.drawStar(graphics, centerX, centerY, 8);
+
+            // Add city name centered in the hexagon
+            const cityName = this.scene.add.text(
+                centerX + this.GRID_MARGIN,
+                centerY + this.GRID_MARGIN + 15,  // Added offset to move below center point
+                city.name,
+                { 
+                    color: '#000000',
+                    fontSize: '12px',
+                    fontStyle: 'bold'
+                }
+            );
+            cityName.setOrigin(0.5, 0.5);
+            this.mapContainer.add(cityName);
+
+            // Add load sprites using the center coordinates with margin
+            this.addLoadSpritesToCity(
+                centerX + this.GRID_MARGIN,
+                centerY + this.GRID_MARGIN,
+                city.name,
+                city.type
+            );
+        } else if (city.type === TerrainType.MediumCity) {
+            // Draw medium city circle
+            graphics.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);
+            graphics.lineStyle(2, 0x000000, 0.7);
+            graphics.beginPath();
+            graphics.arc(x, y, this.CITY_RADIUS[TerrainType.MediumCity], 0, Math.PI * 2);
+            graphics.closePath();
+            graphics.fill();
+            graphics.stroke();
+
+            // Add city name
+            const cityName = this.scene.add.text(
+                x + this.GRID_MARGIN,
+                y + this.GRID_MARGIN - 15,
+                city.name,
+                {
+                    color: '#000000',
+                    fontSize: '10px'
+                }
+            );
+            cityName.setOrigin(0.5, 0.5);
+            this.mapContainer.add(cityName);
+
+            // Add load sprites
+            this.addLoadSpritesToCity(
+                x + this.GRID_MARGIN,
+                y + this.GRID_MARGIN,
+                city.name,
+                city.type
+            );
+        } else if (city.type === TerrainType.SmallCity) {
+            // Draw small city square
+            graphics.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);
+            graphics.lineStyle(2, 0x000000, 0.7);
+            const radius = this.CITY_RADIUS[TerrainType.SmallCity];
+            graphics.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+            graphics.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+
+            // Add city name
+            const cityName = this.scene.add.text(
+                x + this.GRID_MARGIN,
+                y + this.GRID_MARGIN - 15,
+                city.name,
+                {
+                    color: '#000000',
+                    fontSize: '8px'
+                }
+            );
+            cityName.setOrigin(0.5, 0.5);
+            this.mapContainer.add(cityName);
+
+            // Add load sprites
+            this.addLoadSpritesToCity(
+                x + this.GRID_MARGIN,
+                y + this.GRID_MARGIN,
+                city.name,
+                city.type
+            );
+        }
+    }
+
     public createTriangularGrid(): void {
         // Draw background terrain first
         this.drawBackgroundTerrain();
@@ -163,11 +385,14 @@ export class MapRenderer {
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
             ferryConnection?: { row: number; col: number },
-            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }> }
+            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }>, availableLoads?: string[] }
         }>();
         
         // Create a map to store connected city points
-        const cityAreaPoints = new Map<string, { city: { type: TerrainType; name: string }, terrain: TerrainType }>();
+        const cityAreaPoints = new Map<string, { 
+            city: CityData,  // Use CityData type which includes connectedPoints
+            terrain: TerrainType 
+        }>();
         
         // First pass: Build lookup maps and identify city areas
         mapConfig.points.forEach(point => {
@@ -212,7 +437,7 @@ export class MapRenderer {
         ferryConnections.lineStyle(6, 0x808080, 0.8); // Increased thickness to 6, using gray color, 0.8 opacity
 
         // First pass: Draw city areas
-        const majorCities = new Set<string>(); // Track major city points
+        const majorCities = new Set<string>();
         for (let row = 0; row < this.GRID_HEIGHT; row++) {
             for (let col = 0; col < this.GRID_WIDTH; col++) {
                 const config = terrainLookup.get(`${row},${col}`);
@@ -221,114 +446,25 @@ export class MapRenderer {
                     const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                     const y = row * this.VERTICAL_SPACING;
 
+                    const cityConfig = {
+                        city: {
+                            type: config.city.type,
+                            name: config.city.name,
+                            connectedPoints: config.city.connectedPoints || [],
+                            availableLoads: config.city.availableLoads || []
+                        },
+                        terrain: config.terrain
+                    };
+
                     if (config.city.type === TerrainType.MajorCity && config.city.connectedPoints) {
                         // Only draw major city once
                         const cityKey = `${config.city.name}`;
                         if (!majorCities.has(cityKey)) {
                             majorCities.add(cityKey);
-                            
-                            // Draw hexagonal area
-                            cityAreas.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
-                            cityAreas.lineStyle(2, 0x000000, 0.7);
-                            cityAreas.beginPath();
-                            
-                            // Find center point (first point in the array) and outer points
-                            const centerPoint = config.city.connectedPoints[0];
-                            const outerPoints = config.city.connectedPoints.slice(1);
-                            
-                            // Calculate center coordinates
-                            const centerIsOffsetRow = centerPoint.row % 2 === 1;
-                            const centerX = centerPoint.col * this.HORIZONTAL_SPACING + 
-                                         (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-                            const centerY = centerPoint.row * this.VERTICAL_SPACING;
-
-                            // Sort outer points clockwise around the center
-                            const sortedPoints = outerPoints
-                                .map(p => ({
-                                    point: p,
-                                    angle: Math.atan2(
-                                        p.row - centerPoint.row,
-                                        p.col - centerPoint.col
-                                    )
-                                }))
-                                .sort((a, b) => a.angle - b.angle)
-                                .map(p => {
-                                    const pIsOffsetRow = p.point.row % 2 === 1;
-                                    return {
-                                        x: p.point.col * this.HORIZONTAL_SPACING + 
-                                           (pIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0),
-                                        y: p.point.row * this.VERTICAL_SPACING
-                                    };
-                                });
-                            
-                            // Draw the hexagon
-                            cityAreas.moveTo(sortedPoints[0].x, sortedPoints[0].y);
-                            for (let i = 1; i < sortedPoints.length; i++) {
-                                cityAreas.lineTo(sortedPoints[i].x, sortedPoints[i].y);
-                            }
-                            cityAreas.closePath();
-                            cityAreas.fill();
-                            cityAreas.stroke();
-
-                            // Draw star at center point
-                            this.drawStar(cityAreas, centerX, centerY, 8);
-
-                            // Add city name centered in the hexagon
-                            const cityName = this.scene.add.text(
-                                centerX + this.GRID_MARGIN,
-                                centerY + this.GRID_MARGIN + 15,  // Added offset to move below center point
-                                config.city.name,
-                                { 
-                                    color: '#000000',
-                                    fontSize: '12px',
-                                    fontStyle: 'bold'
-                                }
-                            );
-                            cityName.setOrigin(0.5, 0.5);
-                            this.mapContainer.add(cityName);
+                            this.drawCityWithLoads(cityAreas, x, y, cityConfig);
                         }
-                    } else if (config.city.type === TerrainType.MediumCity) {
-                        // Draw circle for regular city
-                        cityAreas.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);  // Increased opacity
-                        cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
-                        cityAreas.beginPath();
-                        cityAreas.arc(x, y, this.CITY_RADIUS[TerrainType.MediumCity], 0, Math.PI * 2);
-                        cityAreas.closePath();
-                        cityAreas.fill();
-                        cityAreas.stroke();
-
-                        // Add city name with adjusted position
-                        const cityName = this.scene.add.text(
-                            x + this.GRID_MARGIN,
-                            y + this.GRID_MARGIN - 15,
-                            config.city.name,
-                            { 
-                                color: '#000000',
-                                fontSize: '10px'
-                            }
-                        );
-                        cityName.setOrigin(0.5, 0.5);
-                        this.mapContainer.add(cityName);
-                    } else if (config.city.type === TerrainType.SmallCity) {
-                        // Draw square for small city
-                        cityAreas.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);  // Increased opacity
-                        cityAreas.lineStyle(2, 0x000000, 0.7);  // Darker border
-                        const radius = this.CITY_RADIUS[TerrainType.SmallCity];
-                        cityAreas.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-                        cityAreas.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
-
-                        // Add city name with adjusted position
-                        const cityName = this.scene.add.text(
-                            x + this.GRID_MARGIN,
-                            y + this.GRID_MARGIN - 15,
-                            config.city.name,
-                            { 
-                                color: '#000000',
-                                fontSize: '8px'
-                            }
-                        );
-                        cityName.setOrigin(0.5, 0.5);
-                        this.mapContainer.add(cityName);
+                    } else {
+                        this.drawCityWithLoads(cityAreas, x, y, cityConfig);
                     }
                 }
             }
@@ -410,7 +546,12 @@ export class MapRenderer {
                     sprite, 
                     terrain,
                     ferryConnection,
-                    city 
+                    city: city ? {
+                        type: city.type,
+                        name: city.name,
+                        connectedPoints: city.connectedPoints || [],
+                        availableLoads: city.availableLoads || []
+                    } : undefined
                 };
             }
         }

@@ -96,7 +96,8 @@ describe('TrackDrawingManager', () => {
                 if ([TerrainType.SmallCity, TerrainType.MediumCity, TerrainType.MajorCity].includes(testCase.terrain)) {
                     toPoint.city = {
                         type: testCase.terrain,
-                        name: `Test ${testCase.name}`
+                        name: `Test ${testCase.name}`,
+                        availableLoads: []  // Add empty array for test purposes
                     };
                 }
 
@@ -171,7 +172,8 @@ describe('TrackDrawingManager', () => {
                     terrain: cityType.type,
                     city: {
                         type: cityType.type,
-                        name: cityType.name
+                        name: cityType.name,
+                        availableLoads: []  // Add empty array for test purposes
                     }
                 };
                 
