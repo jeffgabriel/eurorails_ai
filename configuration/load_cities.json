@@ -1,5 +1,5 @@
 {
-  "LoadCities": [
+  "LoadConfiguration": [
     {
       "Bauxite": [
         "Budapest",
@@ -8,7 +8,8 @@
         "Wroclaw",
         "Aberdeen",
         "Newcastle"
-      ]
+      ],
+      "count": 5
     },
     {
       "Beer": [
@@ -20,7 +21,8 @@
         "Lisboa",
         "Sevilla",
         "Valencia"
-      ]
+      ],
+      "count": 3
     },
     {
       "Cars": [
@@ -30,12 +32,14 @@
         "Stuttgart",
         "Torino",
         "Szczecin"
-      ]
+      ],
+      "count": 3
     },
     {
       "Flowers": [
         "Holland"
-      ]
+      ],
+      "count": 3
     },
     {
       "Sheep": [
@@ -45,7 +49,8 @@
         "Nantes",
         "Glasgow",
         "Warszawa"
-      ]
+      ],
+      "count": 3
     },
     {
       "Cattle": [
@@ -55,37 +60,43 @@
         "Nantes",
         "Glasgow",
         "Warszawa"
-      ]
+      ],
+      "count": 4
     },
     {
       "Cheese": [
         "Bern",
         "Holland",
         "København"
-      ]
+      ],
+      "count": 3
     },
     {
       "Ham": [
         "Glasgow",
         "Warszawa"
-      ]
+      ],
+      "count": 3
     },
     {
       "Steel": [
         "Birmingham"
-      ]
+      ],
+      "count": 3
     },
     {
       "Hops": [
         "Bern",
         "Holland",
         "København"
-      ]
+      ],
+      "count": 3
     },
     {
       "Imports": [
         "Antwerpen"
-      ]
+      ],
+      "count": 3
     },
     {
       "China": [
@@ -93,7 +104,8 @@
         "Hamburg",
         "Napoli",
         "Leipzig"
-      ]
+      ],
+      "count": 3
     },
     {
       "Tobacco": [
@@ -101,7 +113,8 @@
         "Hamburg",
         "Napoli",
         "Leipzig"
-      ]
+      ],
+      "count": 3
     },
     {
       "Iron": [
@@ -110,7 +123,8 @@
         "Ruhr",
         "Zürich",
         "Stockholm"
-      ]
+      ],
+      "count": 3
     },
     {
       "Tourists": [
@@ -118,7 +132,8 @@
         "London",
         "Kaliningrad",
         "Stockholm"
-      ]
+      ],
+      "count": 3
     },
     {
       "Wheat": [
@@ -127,7 +142,8 @@
         "Toulouse",
         "Krakow",
         "Sarajevo"
-      ]
+      ],
+      "count": 3
     },
     {
       "Coal": [
@@ -136,7 +152,8 @@
         "Toulouse",
         "Krakow",
         "Sarajevo"
-      ]
+      ],
+      "count": 6
     },
     {
       "Wine": [
@@ -144,7 +161,8 @@
         "Madrid",
         "Milano",
         "Rondeaux"
-      ]
+      ],
+      "count": 3
     },
     {
       "Machinery": [
@@ -152,13 +170,15 @@
         "Barcelona",
         "Porto",
         "Nantes"
-      ]
+      ],
+      "count": 5
     },
     {
       "Marble": [
         "Oslo",
         "Sarajevo"
-      ]
+      ],
+      "count": 3
     }
   ]
 }
