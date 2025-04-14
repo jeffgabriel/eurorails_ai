@@ -12,11 +12,28 @@ export interface LoadState {
   cities: string[];
 }
 
-// Raw interface matching the JSON structure
-export type LoadType = 'Bauxite' | 'Beer' | 'Cars' | 'Flowers' | 'Sheep' | 'Cattle' | 
-                      'Cheese' | 'Ham' | 'Steel' | 'Hops' | 'Imports' | 'China' | 
-                      'Tobacco' | 'Iron' | 'Tourists' | 'Wheat' | 'Coal' | 'Wine' | 
-                      'Machinery' | 'Marble';
+export enum LoadType {
+  Bauxite = 'Bauxite',
+  Beer = 'Beer',
+  Cars = 'Cars',
+  Flowers = 'Flowers',
+  Sheep = 'Sheep',
+  Cattle = 'Cattle',
+  Cheese = 'Cheese',
+  Ham = 'Ham',
+  Steel = 'Steel',
+  Hops = 'Hops',
+  Imports = 'Imports',
+  China = 'China',
+  Tobacco = 'Tobacco',
+  Iron = 'Iron',
+  Tourists = 'Tourists',
+  Wheat = 'Wheat',
+  Coal = 'Coal',
+  Wine = 'Wine',
+  Machinery = 'Machinery',
+  Marble = 'Marble'
+}
 
 export interface RawLoadConfigItem extends Record<string, unknown> {
   count: number;

@@ -5,6 +5,8 @@ import { CameraController } from '../components/CameraController';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 import { UIManager } from '../components/UIManager';
 import { GameStateService } from '../services/GameStateService';
+import { LoadType } from '../../shared/types/LoadTypes';
+import { LoadService } from '../services/LoadService';
 
 export class GameScene extends Phaser.Scene {
     // Main containers
@@ -18,6 +20,7 @@ export class GameScene extends Phaser.Scene {
     private trackManager!: TrackDrawingManager;
     private uiManager!: UIManager;
     private gameStateService!: GameStateService;
+    private loadService: LoadService;
     
     // Game state
     public gameState: GameState;  // Keep public for compatibility with SettingsScene
@@ -32,6 +35,7 @@ export class GameScene extends Phaser.Scene {
             status: 'setup',
             maxPlayers: 6
         };
+        this.loadService = LoadService.getInstance();
     }
 
     init(data: { gameState?: GameState }) {
@@ -70,14 +74,19 @@ export class GameScene extends Phaser.Scene {
             this.load.image(`train_${color}`, `/assets/train_${color}.png`);
             this.load.image(`train_12_${color}`, `/assets/train_12_${color}.png`);
         });
+
+        Object.values(LoadType).forEach(loadType => {
+            this.load.image(`load-${loadType.toLowerCase()}`, `assets/loads/${loadType.toLowerCase()}.png`);
+        });
     }
 
     async create() {
         // Clear any existing containers
         this.children.removeAll(true);
         
-        // Initialize services
+        // Initialize services and load initial state
         this.gameStateService = new GameStateService(this.gameState);
+        await this.loadService.loadInitialState();
         
         // Create containers in the right order
         this.mapContainer = this.add.container(0, 0);
