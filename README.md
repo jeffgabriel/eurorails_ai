@@ -1,3 +1,6 @@
+#Intro
+This is a test project for building with AI tools. Pretty much everything in this repo was coded by prompting the AI tools, including the rest of this readme. The current result is functional (but very much incomplete) and with little to no attempt to refactor other than what I've asked the AI tools to do.
+
 # Eurorails Digital
 
 A digital implementation of the Eurorails board game using modern web technologies.
