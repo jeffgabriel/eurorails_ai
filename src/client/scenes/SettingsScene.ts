@@ -217,7 +217,8 @@ export class SettingsScene extends Phaser.Scene {
             trainState: {
                 position: {x: 0, y: 0, row: 0, col: 0},
                 movementHistory: [],
-                remainingMovement: 9
+                remainingMovement: 9,
+                loads: [] // Initialize empty loads array
             },
             hand: []
         };
@@ -518,7 +519,14 @@ export class SettingsScene extends Phaser.Scene {
                 name: newName,
                 color: this.selectedColor || PlayerColor.YELLOW,
                 money: 50,
-                trainType: 'Freight'
+                trainType: 'Freight',
+                trainState: {
+                    position: null,
+                    remainingMovement: 9,
+                    movementHistory: [],
+                    loads: [] // Initialize empty loads array
+                },
+                hand: []
             };
 
             console.log('Creating new player with data:', playerData);

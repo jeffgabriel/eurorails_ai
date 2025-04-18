@@ -2,6 +2,7 @@ import 'phaser';
 import { GameScene } from './scenes/GameScene';
 import { SetupScene } from './scenes/SetupScene';
 import { SettingsScene } from './scenes/SettingsScene';
+import { LoadDialogScene } from './scenes/LoadDialogScene';
 
 const config: Phaser.Types.Core.GameConfig = {
     type: Phaser.AUTO,
@@ -17,7 +18,7 @@ const config: Phaser.Types.Core.GameConfig = {
         height: '100%',
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
-    scene: [SetupScene, GameScene, SettingsScene],
+    scene: [SetupScene, GameScene, SettingsScene, LoadDialogScene],
     physics: {
         default: 'none'
     },

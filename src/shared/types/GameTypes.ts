@@ -1,5 +1,5 @@
 import { DemandCard } from './DemandCard';
-
+import { LoadType } from './LoadTypes';
 export enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
@@ -24,6 +24,7 @@ export interface TrainState {
     position: Point | null;
     remainingMovement: number;
     movementHistory: TrackSegment[];
+    loads: LoadType[];
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';

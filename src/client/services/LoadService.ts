@@ -36,13 +36,13 @@ export class LoadService {
     }
   }
 
-  public getCityLoadDetails(city: string): Array<{ loadType: string; count: number }> {
-    const loadDetails: Array<{ loadType: string; count: number }> = [];
+  public getCityLoadDetails(city: string): Array<{ loadType: LoadType; count: number }> {
+    const loadDetails: Array<{ loadType: LoadType; count: number }> = [];
     
     this.loadStates.forEach(state => {
       if (state.cities.includes(city)) {
         loadDetails.push({
-          loadType: state.loadType,
+          loadType: state.loadType as LoadType,
           count: state.availableCount
         });
       }

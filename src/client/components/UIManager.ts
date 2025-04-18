@@ -272,7 +272,8 @@ export class UIManager {
       player.trainState = {
         position: null,
         remainingMovement: 0,
-        movementHistory: []
+        movementHistory: [],
+        loads: [] // Initialize empty loads array
       };
     }
 

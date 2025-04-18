@@ -2,6 +2,7 @@ import { db } from '../db';
 import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
+import { LoadType } from '../../shared/types/LoadTypes';
 
 describe('PlayerService Integration Tests', () => {
     let gameId: string;
@@ -98,7 +99,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -119,7 +121,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -148,7 +151,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -164,7 +168,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -183,7 +188,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -203,7 +209,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };
@@ -226,7 +233,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             };

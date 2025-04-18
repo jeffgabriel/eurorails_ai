@@ -1,5 +1,5 @@
 import { LoadService } from '../services/loadService';
-import { LoadState } from '../../shared/types/LoadTypes';
+import { LoadState, LoadType } from '../../shared/types/LoadTypes';
 
 describe('LoadService', () => {
   let loadService: LoadService;
@@ -16,19 +16,14 @@ describe('LoadService', () => {
       
       // Verify we have all expected load types
       expect(allStates.map(state => state.loadType)).toEqual(
-        expect.arrayContaining([
-          'Bauxite', 'Beer', 'Cars', 'Flowers', 'Sheep', 'Cattle',
-          'Cheese', 'Ham', 'Steel', 'Hops', 'Imports', 'China',
-          'Tobacco', 'Iron', 'Tourists', 'Wheat', 'Coal', 'Wine',
-          'Machinery', 'Marble'
-        ])
+        expect.arrayContaining(Object.values(LoadType))
       );
     });
 
     it('should initialize correct counts for loads', () => {
-      const bauxiteState = loadService.getLoadState('Bauxite');
-      const beerState = loadService.getLoadState('Beer');
-      const coalState = loadService.getLoadState('Coal');
+      const bauxiteState = loadService.getLoadState(LoadType.Bauxite);
+      const beerState = loadService.getLoadState(LoadType.Beer);
+      const coalState = loadService.getLoadState(LoadType.Coal);
 
       expect(bauxiteState?.totalCount).toBe(5);
       expect(beerState?.totalCount).toBe(3);
@@ -40,16 +35,16 @@ describe('LoadService', () => {
     it('should correctly identify loads available in specific cities', () => {
       // Test München's available loads
       const münchenLoads = loadService.getAvailableLoadsForCity('München');
-      expect(münchenLoads).toContain('Beer');
-      expect(münchenLoads).toContain('Cars');
-      expect(münchenLoads).not.toContain('Bauxite');
+      expect(münchenLoads).toContain(LoadType.Beer);
+      expect(münchenLoads).toContain(LoadType.Cars);
+      expect(münchenLoads).not.toContain(LoadType.Bauxite);
 
       // Test Birmingham's available loads
       const birminghamLoads = loadService.getAvailableLoadsForCity('Birmingham');
-      expect(birminghamLoads).toContain('China');
-      expect(birminghamLoads).toContain('Steel');
-      expect(birminghamLoads).toContain('Tobacco');
-      expect(birminghamLoads).toContain('Tourists');
+      expect(birminghamLoads).toContain(LoadType.China);
+      expect(birminghamLoads).toContain(LoadType.Steel);
+      expect(birminghamLoads).toContain(LoadType.Tobacco);
+      expect(birminghamLoads).toContain(LoadType.Tourists);
     });
 
     it('should return empty array for unknown cities', () => {
@@ -59,18 +54,18 @@ describe('LoadService', () => {
 
     it('should correctly check if specific loads are available at cities', () => {
       // Test valid combinations
-      expect(loadService.isLoadAvailableAtCity('Beer', 'München')).toBe(true);
-      expect(loadService.isLoadAvailableAtCity('Cars', 'München')).toBe(true);
+      expect(loadService.isLoadAvailableAtCity(LoadType.Beer, 'München')).toBe(true);
+      expect(loadService.isLoadAvailableAtCity(LoadType.Cars, 'München')).toBe(true);
       
       // Test invalid combinations
-      expect(loadService.isLoadAvailableAtCity('Beer', 'Birmingham')).toBe(false);
-      expect(loadService.isLoadAvailableAtCity('Bauxite', 'München')).toBe(false);
+      expect(loadService.isLoadAvailableAtCity(LoadType.Beer, 'Birmingham')).toBe(false);
+      expect(loadService.isLoadAvailableAtCity(LoadType.Bauxite, 'München')).toBe(false);
     });
   });
 
   describe('Load Pickup and Return', () => {
     it('should allow picking up available loads', () => {
-      const loadType = 'Beer';
+      const loadType = LoadType.Beer;
       const initialState = loadService.getLoadState(loadType);
       const initialCount = initialState?.availableCount ?? 0;
 
@@ -82,7 +77,7 @@ describe('LoadService', () => {
     });
 
     it('should prevent picking up unavailable loads', () => {
-      const loadType = 'Beer';
+      const loadType = LoadType.Beer;
       // Pickup all available loads
       for (let i = 0; i < 3; i++) {
         loadService.pickupLoad(loadType);
@@ -97,7 +92,7 @@ describe('LoadService', () => {
     });
 
     it('should allow returning previously picked up loads', () => {
-      const loadType = 'Beer';
+      const loadType = LoadType.Beer;
       // First pickup a load
       loadService.pickupLoad(loadType);
       
@@ -112,7 +107,7 @@ describe('LoadService', () => {
     });
 
     it('should prevent returning loads beyond total count', () => {
-      const loadType = 'Beer';
+      const loadType = LoadType.Beer;
       const state = loadService.getLoadState(loadType);
       const totalCount = state?.totalCount ?? 0;
 
@@ -127,7 +122,7 @@ describe('LoadService', () => {
 
   describe('Reset Functionality', () => {
     it('should reset all load states to initial values', () => {
-      const loadType = 'Beer';
+      const loadType = LoadType.Beer;
       
       // Pickup some loads
       loadService.pickupLoad(loadType);

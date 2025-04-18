@@ -150,7 +150,8 @@ describe('SetupScene Unit Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             }];
@@ -171,7 +172,8 @@ describe('SetupScene Unit Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             }];
@@ -195,7 +197,8 @@ describe('SetupScene Unit Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: []
                 },
                 hand: []
             }];
@@ -216,7 +219,8 @@ describe('SetupScene Unit Tests', () => {
                     trainState: {
                         position: {x: 0, y: 0, row: 0, col: 0},
                         movementHistory: [],
-                        remainingMovement: 9
+                        remainingMovement: 9,
+                        loads: []
                     },
                     hand: []
                 },
@@ -230,7 +234,8 @@ describe('SetupScene Unit Tests', () => {
                     trainState: {
                         position: {x: 0, y: 0, row: 0, col: 0},
                         movementHistory: [],
-                        remainingMovement: 9
+                        remainingMovement: 9,
+                        loads: []
                     },
                     hand: []
                 }
