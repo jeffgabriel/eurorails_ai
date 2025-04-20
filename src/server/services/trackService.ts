@@ -49,6 +49,7 @@ export class TrackService {
             await client.query('COMMIT');
         } catch (error) {
             await client.query('ROLLBACK');
+            console.error('Error saving track state:', error);
             throw error;
         } finally {
             client.release();
