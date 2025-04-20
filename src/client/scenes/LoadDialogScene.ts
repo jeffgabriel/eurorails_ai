@@ -12,6 +12,12 @@ interface LoadDialogConfig {
     onClose: () => void;
 }
 
+interface LoadOperation {
+    type: 'pickup' | 'delivery';
+    loadType: LoadType;
+    timestamp: number;
+}
+
 export class LoadDialogScene extends Scene {
     private city!: CityData;
     private player!: Player;
@@ -20,17 +26,19 @@ export class LoadDialogScene extends Scene {
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
+    private loadOperations: LoadOperation[] = []; // Track operations this turn
 
     constructor() {
         super({ key: 'LoadDialogScene' });
         this.loadService = LoadService.getInstance();
-        this.gameStateService = new GameStateService(this.gameState);
+        this.gameStateService = null!;
     }
 
     init(data: LoadDialogConfig) {
         this.city = data.city;
         this.player = data.player;
         this.gameState = data.gameState;
+        this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
     }
 
@@ -52,14 +60,14 @@ export class LoadDialogScene extends Scene {
             this.cameras.main.centerY
         );
 
-        // Create dialog background - make it wider
+        // Create dialog background - make it wider and taller
         const dialogBg = this.add.rectangle(
-            0, 0, 500, 300, 0x333333, 0.95  // Increased width from 400 to 500
+            0, 0, 500, 400, 0x333333, 0.95  // Increased height from 300 to 400
         ).setOrigin(0.5);
 
-        // Add title - moved down slightly
+        // Add title
         const title = this.add.text(
-            0, -120,  // Changed from -130 to -120
+            0, -170,  // Moved up to make room for operations section
             `${this.city.name} - Load Operations`,
             {
                 color: "#ffffff",
@@ -68,18 +76,20 @@ export class LoadDialogScene extends Scene {
             }
         ).setOrigin(0.5);
 
-        // Add close button - moved right to account for wider dialog
+        // Add close button
         const closeButton = this.createCloseButton();
 
         this.dialogContainer.add([dialogBg, title, closeButton]);
 
         // Add available loads section
         this.createLoadSections();
+        
+        // Initialize the operations section
+        this.refreshLoadOperationsUI();
     }
 
     private createCloseButton() {
-        // Move button further right to match wider dialog
-        const container = this.add.container(230, -120);  // Changed x from 180 to 230, y from -130 to -120
+        const container = this.add.container(230, -170);  // Adjusted y position to match title
 
         const button = this.add.rectangle(0, 0, 30, 30, 0x666666)
             .setInteractive({ useHandCursor: true });
@@ -107,8 +117,8 @@ export class LoadDialogScene extends Scene {
         const currentLoads = this.player.trainState.loads || [];
         const hasSpace = currentLoads.length < maxCapacity;
 
-        // Create sections container
-        const sectionsContainer = this.add.container(-180, -80);
+        // Create sections container - moved up to make room for operations
+        const sectionsContainer = this.add.container(-180, -130);
 
         // Show available loads if train has space
         if (hasSpace) {
@@ -207,6 +217,11 @@ export class LoadDialogScene extends Scene {
 
     private async handleLoadPickup(loadType: LoadType) {
         try {
+            if (!this.gameStateService) {
+                console.error('GameStateService not initialized');
+                return;
+            }
+
             if (!this.player.trainState.loads) {
                 this.player.trainState.loads = [];
             }
@@ -221,17 +236,40 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
+            // Add load to train
             this.player.trainState.loads.push(loadType);
             
-            await this.gameStateService.updatePlayerLoads(
+            // Track this operation
+            this.loadOperations.push({
+                type: 'pickup',
+                loadType,
+                timestamp: Date.now()
+            });
+            
+            // Update UI to show undo button for this operation
+            this.refreshLoadOperationsUI();
+            
+            // Update game state
+            const success = await this.gameStateService.updatePlayerLoads(
                 this.player.id,
                 this.player.trainState.loads
             );
-            
-            this.closeDialog();
+
+            if (!success) {
+                // If update failed, revert the changes
+                this.player.trainState.loads.pop();
+                this.loadOperations.pop();
+                this.refreshLoadOperationsUI();
+                console.error('Failed to update player loads in game state');
+            }
         } catch (error) {
             console.error('Failed to pickup load:', error);
-            // Show error message to user
+            // Revert changes on error
+            if (this.player.trainState.loads) {
+                this.player.trainState.loads.pop();
+            }
+            this.loadOperations.pop();
+            this.refreshLoadOperationsUI();
         }
     }
 
@@ -273,7 +311,84 @@ export class LoadDialogScene extends Scene {
         }
     }
 
+    private async undoLoadOperation(operation: LoadOperation) {
+        try {
+            if (!this.player.trainState.loads) return;
+
+            if (operation.type === 'pickup') {
+                // Remove the load from train
+                this.player.trainState.loads = this.player.trainState.loads.filter(
+                    l => l !== operation.loadType
+                );
+
+                // Remove the operation from our tracking
+                this.loadOperations = this.loadOperations.filter(
+                    op => op !== operation
+                );
+
+                // Update game state
+                await this.gameStateService.updatePlayerLoads(
+                    this.player.id,
+                    this.player.trainState.loads
+                );
+
+                // Refresh the UI
+                this.refreshLoadOperationsUI();
+            }
+        } catch (error) {
+            console.error('Failed to undo load operation:', error);
+        }
+    }
+
+    private refreshLoadOperationsUI() {
+        // Remove existing operations UI if any
+        const existingOps = this.dialogContainer.getAll('name', 'operationsSection');
+        existingOps.forEach(op => op.destroy());
+
+        // Create new operations section
+        const operationsSection = this.add.container(0, 100);
+        operationsSection.setName('operationsSection');
+
+        // Add title for operations this turn
+        if (this.loadOperations.length > 0) {
+            const title = this.add.text(0, 0, "Operations this turn:", {
+                color: "#ffffff",
+                fontSize: "18px"
+            });
+            operationsSection.add(title);
+
+            // Add each operation with undo button
+            this.loadOperations.forEach((operation, index) => {
+                const opContainer = this.add.container(0, 40 + index * 40);
+                
+                const text = this.add.text(0, 0, 
+                    `${operation.type === 'pickup' ? 'Picked up' : 'Delivered'} ${operation.loadType}`, 
+                    { color: "#ffffff", fontSize: "16px" }
+                );
+
+                const undoButton = this.add.rectangle(200, 0, 60, 30, 0x666666)
+                    .setInteractive({ useHandCursor: true });
+                
+                const undoText = this.add.text(200, 0, "Undo", {
+                    color: "#ffffff",
+                    fontSize: "14px"
+                }).setOrigin(0.5);
+
+                undoButton.on('pointerdown', () => this.undoLoadOperation(operation));
+                undoButton.on('pointerover', () => undoButton.setFillStyle(0x777777));
+                undoButton.on('pointerout', () => undoButton.setFillStyle(0x666666));
+
+                opContainer.add([text, undoButton, undoText]);
+                operationsSection.add(opContainer);
+            });
+        }
+
+        this.dialogContainer.add(operationsSection);
+    }
+
     private closeDialog() {
+        // Clear operations tracking when dialog closes
+        this.loadOperations = [];
         this.onClose();
     }
 }

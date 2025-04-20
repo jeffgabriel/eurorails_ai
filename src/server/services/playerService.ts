@@ -14,6 +14,7 @@ interface PlayerRow {
   position_y: number | null;
   position_row: number | null;
   position_col: number | null;
+  loads: string[];
 }
 
 export class PlayerService {
@@ -73,9 +74,10 @@ export class PlayerService {
     const query = `
             INSERT INTO players (
                 id, game_id, name, color, money, train_type,
-                position_x, position_y, position_row, position_col, current_turn_number, hand
+                position_x, position_y, position_row, position_col,
+                current_turn_number, hand, loads
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         `;
     const values = [
       player.id,
@@ -90,6 +92,7 @@ export class PlayerService {
       player.trainState.position?.col || null,
       player.turnNumber || 1,
       player.hand.map(card => card.id),
+      player.trainState.loads || []
     ];
     try {
       await db.query(query, values);
@@ -167,7 +170,8 @@ export class PlayerService {
                     position_row = $7,
                     position_col = $8,
                     current_turn_number = $11,
-                    hand = $12
+                    hand = $12,
+                    loads = $13
                 WHERE game_id = $9 AND id = $10
                 RETURNING *
             `;
@@ -195,6 +199,7 @@ export class PlayerService {
         player.id,
         player.turnNumber,
         player.hand.map(card => card.id),
+        player.trainState.loads || [],
       ];
       console.log("Executing update query");
 
@@ -294,7 +299,8 @@ export class PlayerService {
                     position_col,
                     current_turn_number as "turnNumber",
                     mh.movement_path as "movementHistory",
-                    hand
+                    hand,
+                    loads
                 FROM players 
                 LEFT JOIN LATERAL (
                     SELECT movement_path 
@@ -358,6 +364,7 @@ export class PlayerService {
             remainingMovement: 9, // Default to 9 for Freight trains
           },
           hand: handCards,
+          loads: row.loads || [],
         };
       });
 
@@ -415,10 +422,16 @@ export class PlayerService {
           remainingMovement: 9,
         },
         hand: [],
+        loads: [],
       };
 
-      const createPlayerQuery = `                INSERT INTO players (id, game_id, name, color, money, train_type, position_x, position_y, position_row, position_col, current_turn_number, hand)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      const createPlayerQuery = `
+                INSERT INTO players (
+                    id, game_id, name, color, money, train_type,
+                    position_x, position_y, position_row, position_col,
+                    current_turn_number, hand, loads
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (id) DO NOTHING
             `;
       await client.query(createPlayerQuery, [
@@ -434,6 +447,7 @@ export class PlayerService {
         null,
         null,
         defaultPlayer.hand,
+        defaultPlayer.loads || []
       ]);
 
       await client.query("COMMIT");
