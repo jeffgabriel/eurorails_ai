@@ -52,14 +52,14 @@ export class LoadDialogScene extends Scene {
             this.cameras.main.centerY
         );
 
-        // Create dialog background
+        // Create dialog background - make it wider
         const dialogBg = this.add.rectangle(
-            0, 0, 400, 300, 0x333333, 0.95
+            0, 0, 500, 300, 0x333333, 0.95  // Increased width from 400 to 500
         ).setOrigin(0.5);
 
-        // Add title
+        // Add title - moved down slightly
         const title = this.add.text(
-            0, -130,
+            0, -120,  // Changed from -130 to -120
             `${this.city.name} - Load Operations`,
             {
                 color: "#ffffff",
@@ -68,7 +68,7 @@ export class LoadDialogScene extends Scene {
             }
         ).setOrigin(0.5);
 
-        // Add close button
+        // Add close button - moved right to account for wider dialog
         const closeButton = this.createCloseButton();
 
         this.dialogContainer.add([dialogBg, title, closeButton]);
@@ -78,7 +78,8 @@ export class LoadDialogScene extends Scene {
     }
 
     private createCloseButton() {
-        const container = this.add.container(180, -130);
+        // Move button further right to match wider dialog
+        const container = this.add.container(230, -120);  // Changed x from 180 to 230, y from -130 to -120
 
         const button = this.add.rectangle(0, 0, 30, 30, 0x666666)
             .setInteractive({ useHandCursor: true });

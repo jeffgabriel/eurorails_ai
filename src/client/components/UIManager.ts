@@ -3,6 +3,8 @@ import { GameState, Player, TerrainType, TrackSegment } from "../../shared/types
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
+import { LoadService } from "../services/LoadService";
+
 export class UIManager {
   private scene: Phaser.Scene;
   private gameState: GameState;
@@ -168,7 +170,38 @@ export class UIManager {
         console.log('After updateTrainPosition - Player count:', this.gameState.players.length);
         console.log('Current players:', this.gameState.players.map(p => ({ id: p.id, name: p.name })));
 
-        // Exit train movement mode only after the position update completes
+        // Check if arrived at any city
+        if (nearestMilepost.terrain === TerrainType.MajorCity || 
+            nearestMilepost.terrain === TerrainType.MediumCity ||
+            nearestMilepost.terrain === TerrainType.SmallCity) {
+          
+          // Get the LoadService instance to check available loads
+          const loadService = LoadService.getInstance();
+          
+          // Check if train has any loads that could potentially be delivered
+          const hasLoads = currentPlayer.trainState.loads && currentPlayer.trainState.loads.length > 0;
+          
+          // Check if city has any loads available for pickup
+          const cityLoads = await loadService.getCityLoadDetails(nearestMilepost.city!.name);
+          const cityHasLoads = cityLoads && cityLoads.length > 0;
+          
+          // Show dialog if either:
+          // 1. Train has loads (could be delivered or dropped)
+          // 2. City has loads (can be picked up, possibly after dropping current loads)
+          if (hasLoads || cityHasLoads) {
+            // Show the load dialog
+            this.scene.scene.launch('LoadDialogScene', {
+              city: nearestMilepost.city,
+              player: currentPlayer,
+              gameState: this.gameState,
+              onClose: () => {
+                this.scene.scene.stop('LoadDialogScene');
+              }
+            });
+          }
+        }
+
+        // Exit train movement mode
         this.exitTrainMovementMode();
       } catch (error) {
         throw error;
