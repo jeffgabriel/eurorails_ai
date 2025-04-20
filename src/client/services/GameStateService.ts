@@ -1,3 +1,4 @@
+import { LoadType } from '@/shared/types/LoadTypes';
 import { GameState } from '../../shared/types/GameTypes';
 
 export class GameStateService {
@@ -125,7 +126,8 @@ export class GameStateService {
             this.gameState.players[playerIndex].trainState = {
                 position: null,  // Type is Point | null
                 remainingMovement: 0,
-                movementHistory: []
+                movementHistory: [],
+                loads: []
             };
         }
         
@@ -160,6 +162,111 @@ export class GameStateService {
             return true;
         } catch (error) {
             console.error('Error updating player position:', error);
+            return false;
+        }
+    }
+
+    public async updatePlayerLoads(playerId: string, loads: LoadType[]): Promise<boolean> {
+        // Find player in the local state
+        const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
+        if (playerIndex === -1) {
+            console.error('Player not found in game state:', playerId);
+            return false;
+        }
+        
+        // Initialize trainState if it doesn't exist
+        if (!this.gameState.players[playerIndex].trainState) {
+            this.gameState.players[playerIndex].trainState = {
+                position: null,
+                remainingMovement: 0,
+                movementHistory: [],
+                loads: []
+            };
+        }
+        
+        // Update local state
+        this.gameState.players[playerIndex].trainState.loads = loads;
+        
+        try {
+            // Update the player in the database
+            const player = this.gameState.players[playerIndex];
+            const response = await fetch('/api/players/update', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    player: player
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to update player loads:', errorData);
+                return false;
+            }
+            
+            return true;
+        } catch (error) {
+            console.error('Error updating player loads:', error);
+            return false;
+        }
+    }
+
+    public async fulfillDemandCard(
+        playerId: string,
+        city: string,
+        loadType: LoadType
+    ): Promise<boolean> {
+        // Find player in the local state
+        const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
+        if (playerIndex === -1) {
+            console.error('Player not found in game state:', playerId);
+            return false;
+        }
+
+        const player = this.gameState.players[playerIndex];
+
+        try {
+            // Make API call to fulfill demand card and return load
+            const response = await fetch('/api/players/fulfill-demand', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    playerId: playerId,
+                    city: city,
+                    loadType: loadType
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to fulfill demand card:', errorData);
+                return false;
+            }
+
+            // Get the response which should include the new demand card
+            const result = await response.json();
+            
+            // Update the player's hand by replacing the fulfilled card with the new one
+            const cardIndex = player.hand.findIndex(
+                card => card.destinationCity === city && card.resource === loadType
+            );
+
+            if (cardIndex >= 0 && result.newCard) {
+                player.hand[cardIndex] = result.newCard;
+            } else {
+                console.error('Could not find card to replace or no new card provided');
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Error fulfilling demand card:', error);
             return false;
         }
     }

@@ -1,24 +1,25 @@
 import { PlayerHand } from "../PlayerHand";
 import { DemandCard } from "../DemandCard";
+import { LoadType } from "../LoadTypes";
 
 describe("PlayerHand", () => {
   let hand: PlayerHand;
   const mockCard1: DemandCard = {
     id: 1,
     destinationCity: "Berlin",
-    resource: "Cattle",
+    resource: LoadType.Cattle,
     payment: 17,
   };
   const mockCard2: DemandCard = {
     id: 2,
     destinationCity: "Lyon",
-    resource: "Copper",
+    resource: LoadType.Iron,
     payment: 26,
   };
   const mockCard3: DemandCard = {
     id: 3,
     destinationCity: "Budapest",
-    resource: "Machinery",
+    resource: LoadType.Machinery,
     payment: 22,
   };
 

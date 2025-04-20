@@ -2,6 +2,7 @@ import { db } from '../db';
 import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
+import { LoadType } from '../../shared/types/LoadTypes';
 
 describe('PlayerService Integration Tests', () => {
     let gameId: string;
@@ -98,13 +99,15 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
             await PlayerService.createPlayer(gameId, player);
             const result = await db.query('SELECT * FROM players WHERE id = $1', [player.id]);
             expect(result.rows.length).toBe(1);
+            expect(result.rows[0].loads).toEqual([]);
         });
 
         it('should update an existing player', async () => {
@@ -119,7 +122,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
@@ -128,13 +132,18 @@ describe('PlayerService Integration Tests', () => {
             const updatedPlayer = {
                 ...player,
                 name: 'Updated Name',
-                money: 100
+                money: 100,
+                trainState: {
+                    ...player.trainState,
+                    loads: [LoadType.Wheat]
+                }
             };
             await PlayerService.updatePlayer(gameId, updatedPlayer);
 
             const result = await db.query('SELECT * FROM players WHERE id = $1', [playerId]);
             expect(result.rows[0].name).toBe('Updated Name');
             expect(result.rows[0].money).toBe(100);
+            expect(result.rows[0].loads).toEqual([LoadType.Wheat]);
         });
 
         it('should prevent duplicate colors in the same game', async () => {
@@ -148,7 +157,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
@@ -164,7 +174,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
@@ -183,7 +194,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
@@ -203,7 +215,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
@@ -226,7 +239,8 @@ describe('PlayerService Integration Tests', () => {
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
                     movementHistory: [],
-                    remainingMovement: 9
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
                 },
                 hand: []
             };
