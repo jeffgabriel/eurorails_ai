@@ -1,6 +1,6 @@
 import "phaser";
-import { GameState, TerrainType } from "../../../shared/types/GameTypes";
-import { MapRenderer } from "../MapRenderer";
+import { GameState, TerrainType } from "../../shared/types/GameTypes";
+import { MapRenderer } from "./MapRenderer";
 
 export class CitySelectionManager {
   private scene: Phaser.Scene;

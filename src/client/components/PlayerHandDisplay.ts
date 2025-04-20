@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../../shared/types/GameTypes";
+import { GameState } from "../../shared/types/GameTypes";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -228,9 +228,4 @@ export class PlayerHandDisplay {
       
     targetContainer.add([playerInfo, crayonButton]);
   }
-  
-  // No longer needed - we're adding directly to the target container
-  // public getContainer(): Phaser.GameObjects.Container {
-  //   return this.container;
-  // }
 }

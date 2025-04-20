@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../../shared/types/GameTypes";
+import { GameState } from "../../shared/types/GameTypes";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -169,9 +169,4 @@ export class LeaderboardManager {
     buttonContainer.add([nextPlayerButton, nextPlayerText]);
     return buttonContainer;
   }
-  
-  // No longer needed since we're rendering directly to the provided container
-  // public getContainer(): Phaser.GameObjects.Container {
-  //   return this.container;
-  // }
 }

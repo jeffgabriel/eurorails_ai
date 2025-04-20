@@ -4,9 +4,9 @@ import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { TrainInteractionManager } from "./TrainInteractionManager";
-import { LeaderboardManager } from "./ui/LeaderboardManager";
-import { PlayerHandDisplay } from "./ui/PlayerHandDisplay";
-import { CitySelectionManager } from "./ui/CitySelectionManager";
+import { LeaderboardManager } from "./LeaderboardManager";
+import { PlayerHandDisplay } from "./PlayerHandDisplay";
+import { CitySelectionManager } from "./CitySelectionManager";
 
 export class UIManager {
   private scene: Phaser.Scene;
