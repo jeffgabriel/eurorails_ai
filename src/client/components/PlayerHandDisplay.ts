@@ -1,11 +1,13 @@
 import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
+import { TrainCard } from "./TrainCard";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
   private gameState: GameState;
   private toggleDrawingCallback: () => void;
+  private trainCard: TrainCard | null = null;
   
   constructor(
     scene: Phaser.Scene,
@@ -23,6 +25,12 @@ export class PlayerHandDisplay {
       return;
     }
 
+    // Clean up old train card if it exists
+    if (this.trainCard) {
+      this.trainCard.destroy();
+      this.trainCard = null;
+    }
+
     // Clear target container
     targetContainer.removeAll(true);
 
@@ -38,9 +46,9 @@ export class PlayerHandDisplay {
     const handBackground = this.scene.add
       .rectangle(
         0,
-        this.scene.scale.height - 200, // Position from bottom of screen
+        this.scene.scale.height - 280, // Increased from -250 to -280 for more height
         this.scene.scale.width,
-        200,
+        280, // Increased from 250 to 280
         0x333333,
         0.8
       )
@@ -120,32 +128,19 @@ export class PlayerHandDisplay {
   private createTrainSection(targetContainer: Phaser.GameObjects.Container): void {
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
 
-    // Create train card section with higher depth
-    const trainSection = this.scene.add
-      .rectangle(
-        600, // Position after demand cards
-        this.scene.scale.height - 180, // Align with demand cards
-        180, // Width
-        160, // Height
-        0x666666
-      )
-      .setOrigin(0, 0)
-      .setDepth(1);
+    // Create train card using the TrainCard component
+    this.trainCard = new TrainCard(
+      this.scene,
+      600, // Position after demand cards
+      this.scene.scale.height - 270, // Moved up further from -250
+      currentPlayer
+    );
 
-    const trainLabel = this.scene.add
-      .text(
-        690, // Center above train card
-        this.scene.scale.height - 195, // Align with other labels
-        `${currentPlayer.trainType}`,
-        {
-          color: "#ffffff",
-          fontSize: "14px",
-        }
-      )
-      .setOrigin(0.5, 0)
-      .setDepth(1);
+    // Update the loads display
+    this.trainCard.updateLoads();
 
-    targetContainer.add([trainSection, trainLabel]);
+    // Add the train card's container to the target container
+    targetContainer.add(this.trainCard.getContainer());
   }
 
   private createPlayerInfoSection(isDrawingMode: boolean, currentTrackCost: number, targetContainer: Phaser.GameObjects.Container): void {
@@ -227,5 +222,12 @@ export class PlayerHandDisplay {
       .setOrigin(0, 0);
       
     targetContainer.add([playerInfo, crayonButton]);
+  }
+
+  public destroy(): void {
+    if (this.trainCard) {
+      this.trainCard.destroy();
+    }
+    this.container.destroy();
   }
 }

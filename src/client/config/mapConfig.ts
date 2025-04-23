@@ -27,7 +27,7 @@ export const mapConfig: MapConfig = {
                     { row: 21, col: 34 },
                     { row: 21, col: 35 }
                 ],
-                availableLoads: ['Beer', 'Cars', 'Coal', 'Iron', 'Steel', 'Sugar', 'Tin']
+                availableLoads: ['Beer', 'Cars']
             }
         },
         // Connected points for Berlin
@@ -195,7 +195,7 @@ export const mapConfig: MapConfig = {
         { row: 35, col: 41, terrain: TerrainType.Water, x: 35, y: 41 },
         { row: 36, col: 39, terrain: TerrainType.Water, x: 36, y: 39 },
 
-        // New major city: Hamburg
+        // Hamburg - Major City (regular hexagon like Berlin)
         {
             row: 15,
             col: 32,
@@ -206,56 +206,64 @@ export const mapConfig: MapConfig = {
                 type: TerrainType.MajorCity,
                 name: 'Hamburg',
                 connectedPoints: [
+                    // Center point
                     { row: 15, col: 32 },
-                    { row: 14, col: 31 },
+                    // Top points
                     { row: 14, col: 32 },
+                    { row: 14, col: 33 },
+                    // Middle points
                     { row: 15, col: 31 },
                     { row: 15, col: 33 },
-                    { row: 16, col: 31 },
-                    { row: 16, col: 32 }
+                    // Bottom points
+                    { row: 16, col: 32 },
+                    { row: 16, col: 33 }
                 ],
                 availableLoads: ['Fish', 'Cars', 'Steel', 'Oil']
             }
         },
-        // Connected points for Hamburg
-        { row: 14, col: 31, terrain: TerrainType.Clear, x: 14, y: 31 },
+        // Connected points for Hamburg (regular hexagon)
         { row: 14, col: 32, terrain: TerrainType.Clear, x: 14, y: 32 },
+        { row: 14, col: 33, terrain: TerrainType.Clear, x: 14, y: 33 },
         { row: 15, col: 31, terrain: TerrainType.Clear, x: 15, y: 31 },
         { row: 15, col: 33, terrain: TerrainType.Clear, x: 15, y: 33 },
-        { row: 16, col: 31, terrain: TerrainType.Clear, x: 16, y: 31 },
         { row: 16, col: 32, terrain: TerrainType.Clear, x: 16, y: 32 },
+        { row: 16, col: 33, terrain: TerrainType.Clear, x: 16, y: 33 },
 
-        // New major city: Munich (München)
+        // Munich (München) - Major City (moved away from lake, fixed hexagonal pattern)
         {
-            row: 35,
+            row: 42,
             col: 40,
-            x: 35,
+            x: 42,
             y: 40,
             terrain: TerrainType.Clear,
             city: {
                 type: TerrainType.MajorCity,
                 name: 'Munich',
                 connectedPoints: [
-                    { row: 35, col: 40 },
-                    { row: 34, col: 39 },
-                    { row: 34, col: 40 },
-                    { row: 35, col: 39 },
-                    { row: 35, col: 41 },
-                    { row: 36, col: 39 },
-                    { row: 36, col: 40 }
+                    // Center point
+                    { row: 42, col: 40 },
+                    // Top points (2)
+                    { row: 41, col: 39 },
+                    { row: 41, col: 40 },
+                    // Middle points (2)
+                    { row: 42, col: 39 },
+                    { row: 42, col: 41 },
+                    // Bottom points (2)
+                    { row: 43, col: 39 },
+                    { row: 43, col: 40 }
                 ],
                 availableLoads: ['Beer', 'Cars', 'Electronics', 'Steel']
             }
         },
-        // Connected points for Munich
-        { row: 34, col: 39, terrain: TerrainType.Clear, x: 34, y: 39 },
-        { row: 34, col: 40, terrain: TerrainType.Clear, x: 34, y: 40 },
-        { row: 35, col: 39, terrain: TerrainType.Clear, x: 35, y: 39 },
-        { row: 35, col: 41, terrain: TerrainType.Clear, x: 35, y: 41 },
-        { row: 36, col: 39, terrain: TerrainType.Clear, x: 36, y: 39 },
-        { row: 36, col: 40, terrain: TerrainType.Clear, x: 36, y: 40 },
+        // Connected points for Munich (hexagonal)
+        { row: 41, col: 39, terrain: TerrainType.Clear, x: 41, y: 39 },
+        { row: 41, col: 40, terrain: TerrainType.Clear, x: 41, y: 40 },
+        { row: 42, col: 39, terrain: TerrainType.Clear, x: 42, y: 39 },
+        { row: 42, col: 41, terrain: TerrainType.Clear, x: 42, y: 41 },
+        { row: 43, col: 39, terrain: TerrainType.Clear, x: 43, y: 39 },
+        { row: 43, col: 40, terrain: TerrainType.Clear, x: 43, y: 40 },
 
-        // New medium cities
+        // Medium cities
         {
             row: 28,
             col: 45,
@@ -281,7 +289,7 @@ export const mapConfig: MapConfig = {
             }
         },
 
-        // New small cities
+        // Small cities
         {
             row: 22,
             col: 38,
@@ -307,13 +315,13 @@ export const mapConfig: MapConfig = {
             }
         },
 
-        // Additional mountain ranges
+        // Mountain ranges
         // Alpine range near Munich
-        { row: 37, col: 43, terrain: TerrainType.Mountain, x: 37, y: 43 },
-        { row: 37, col: 44, terrain: TerrainType.Alpine, x: 37, y: 44 },
-        { row: 38, col: 43, terrain: TerrainType.Alpine, x: 38, y: 43 },
-        { row: 38, col: 44, terrain: TerrainType.Mountain, x: 38, y: 44 },
-        { row: 39, col: 43, terrain: TerrainType.Mountain, x: 39, y: 43 },
+        { row: 44, col: 43, terrain: TerrainType.Mountain, x: 44, y: 43 },
+        { row: 44, col: 44, terrain: TerrainType.Alpine, x: 44, y: 44 },
+        { row: 45, col: 43, terrain: TerrainType.Alpine, x: 45, y: 43 },
+        { row: 45, col: 44, terrain: TerrainType.Mountain, x: 45, y: 44 },
+        { row: 46, col: 43, terrain: TerrainType.Mountain, x: 46, y: 43 },
 
         // Mountain range between Dresden and Berlin
         { row: 23, col: 40, terrain: TerrainType.Mountain, x: 23, y: 40 },
@@ -321,7 +329,7 @@ export const mapConfig: MapConfig = {
         { row: 24, col: 41, terrain: TerrainType.Alpine, x: 24, y: 41 },
         { row: 25, col: 41, terrain: TerrainType.Mountain, x: 25, y: 41 },
 
-        // New ferry connection across Baltic Sea
+        // Ferry connection across Baltic Sea
         { 
             row: 12, 
             col: 45, 

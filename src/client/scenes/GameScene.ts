@@ -75,6 +75,12 @@ export class GameScene extends Phaser.Scene {
             this.load.image(`train_12_${color}`, `/assets/train_12_${color}.png`);
         });
 
+        // Load train card images for each train type
+        const trainTypes = ['freight', 'fastfreight', 'heavyfreight', 'superfreight'];
+        trainTypes.forEach(type => {
+            this.load.image(`train_card_${type}`, `/assets/${type}.png`);
+        });
+
         // Load SVG files for loads
         Object.values(LoadType).forEach(loadType => {
             this.load.image(`load-${loadType.toLowerCase()}`, `assets/loads/${loadType.toLowerCase()}.svg`);
