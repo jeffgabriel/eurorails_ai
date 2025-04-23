@@ -193,6 +193,161 @@ export const mapConfig: MapConfig = {
         { row: 35, col: 39, terrain: TerrainType.Water, x: 35, y: 39 },
         { row: 35, col: 40, terrain: TerrainType.Water, x: 35, y: 40 },
         { row: 35, col: 41, terrain: TerrainType.Water, x: 35, y: 41 },
-        { row: 36, col: 39, terrain: TerrainType.Water, x: 36, y: 39 }
+        { row: 36, col: 39, terrain: TerrainType.Water, x: 36, y: 39 },
+
+        // New major city: Hamburg
+        {
+            row: 15,
+            col: 32,
+            x: 15,
+            y: 32,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MajorCity,
+                name: 'Hamburg',
+                connectedPoints: [
+                    { row: 15, col: 32 },
+                    { row: 14, col: 31 },
+                    { row: 14, col: 32 },
+                    { row: 15, col: 31 },
+                    { row: 15, col: 33 },
+                    { row: 16, col: 31 },
+                    { row: 16, col: 32 }
+                ],
+                availableLoads: ['Fish', 'Cars', 'Steel', 'Oil']
+            }
+        },
+        // Connected points for Hamburg
+        { row: 14, col: 31, terrain: TerrainType.Clear, x: 14, y: 31 },
+        { row: 14, col: 32, terrain: TerrainType.Clear, x: 14, y: 32 },
+        { row: 15, col: 31, terrain: TerrainType.Clear, x: 15, y: 31 },
+        { row: 15, col: 33, terrain: TerrainType.Clear, x: 15, y: 33 },
+        { row: 16, col: 31, terrain: TerrainType.Clear, x: 16, y: 31 },
+        { row: 16, col: 32, terrain: TerrainType.Clear, x: 16, y: 32 },
+
+        // New major city: Munich (München)
+        {
+            row: 35,
+            col: 40,
+            x: 35,
+            y: 40,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MajorCity,
+                name: 'Munich',
+                connectedPoints: [
+                    { row: 35, col: 40 },
+                    { row: 34, col: 39 },
+                    { row: 34, col: 40 },
+                    { row: 35, col: 39 },
+                    { row: 35, col: 41 },
+                    { row: 36, col: 39 },
+                    { row: 36, col: 40 }
+                ],
+                availableLoads: ['Beer', 'Cars', 'Electronics', 'Steel']
+            }
+        },
+        // Connected points for Munich
+        { row: 34, col: 39, terrain: TerrainType.Clear, x: 34, y: 39 },
+        { row: 34, col: 40, terrain: TerrainType.Clear, x: 34, y: 40 },
+        { row: 35, col: 39, terrain: TerrainType.Clear, x: 35, y: 39 },
+        { row: 35, col: 41, terrain: TerrainType.Clear, x: 35, y: 41 },
+        { row: 36, col: 39, terrain: TerrainType.Clear, x: 36, y: 39 },
+        { row: 36, col: 40, terrain: TerrainType.Clear, x: 36, y: 40 },
+
+        // New medium cities
+        {
+            row: 28,
+            col: 45,
+            x: 28,
+            y: 45,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Dresden',
+                availableLoads: ['Coal', 'Electronics', 'Textiles']
+            }
+        },
+        {
+            row: 45,
+            col: 35,
+            x: 45,
+            y: 35,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Stuttgart',
+                availableLoads: ['Cars', 'Steel', 'Wine']
+            }
+        },
+
+        // New small cities
+        {
+            row: 22,
+            col: 38,
+            x: 22,
+            y: 38,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.SmallCity,
+                name: 'Leipzig',
+                availableLoads: ['Books', 'Coal']
+            }
+        },
+        {
+            row: 38,
+            col: 42,
+            x: 38,
+            y: 42,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.SmallCity,
+                name: 'Nuremberg',
+                availableLoads: ['Toys', 'Beer']
+            }
+        },
+
+        // Additional mountain ranges
+        // Alpine range near Munich
+        { row: 37, col: 43, terrain: TerrainType.Mountain, x: 37, y: 43 },
+        { row: 37, col: 44, terrain: TerrainType.Alpine, x: 37, y: 44 },
+        { row: 38, col: 43, terrain: TerrainType.Alpine, x: 38, y: 43 },
+        { row: 38, col: 44, terrain: TerrainType.Mountain, x: 38, y: 44 },
+        { row: 39, col: 43, terrain: TerrainType.Mountain, x: 39, y: 43 },
+
+        // Mountain range between Dresden and Berlin
+        { row: 23, col: 40, terrain: TerrainType.Mountain, x: 23, y: 40 },
+        { row: 24, col: 40, terrain: TerrainType.Mountain, x: 24, y: 40 },
+        { row: 24, col: 41, terrain: TerrainType.Alpine, x: 24, y: 41 },
+        { row: 25, col: 41, terrain: TerrainType.Mountain, x: 25, y: 41 },
+
+        // New ferry connection across Baltic Sea
+        { 
+            row: 12, 
+            col: 45, 
+            x: 12,
+            y: 45,
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 12, col: 55 }
+        },
+        { 
+            row: 12, 
+            col: 55, 
+            x: 12,
+            y: 55,
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 12, col: 45 }
+        },
+
+        // Baltic Sea water points
+        { row: 12, col: 46, terrain: TerrainType.Water, x: 12, y: 46 },
+        { row: 12, col: 47, terrain: TerrainType.Water, x: 12, y: 47 },
+        { row: 12, col: 48, terrain: TerrainType.Water, x: 12, y: 48 },
+        { row: 12, col: 49, terrain: TerrainType.Water, x: 12, y: 49 },
+        { row: 12, col: 50, terrain: TerrainType.Water, x: 12, y: 50 },
+        { row: 12, col: 51, terrain: TerrainType.Water, x: 12, y: 51 },
+        { row: 12, col: 52, terrain: TerrainType.Water, x: 12, y: 52 },
+        { row: 12, col: 53, terrain: TerrainType.Water, x: 12, y: 53 },
+        { row: 12, col: 54, terrain: TerrainType.Water, x: 12, y: 54 },
     ]
 }; 

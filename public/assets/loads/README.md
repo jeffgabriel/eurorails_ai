@@ -1,32 +1,32 @@
 # Load Sprites
 
-This directory contains sprite images for each load type in the game. Each sprite should be a PNG file with the following specifications:
+This directory contains sprite images for each load type in the game. Each sprite should be a svg file with the following specifications:
 
 ## File Names
 All filenames should be lowercase versions of the load type:
-- bauxite.png
-- beer.png
-- cars.png
-- flowers.png
-- sheep.png
-- cattle.png
-- cheese.png
-- ham.png
-- steel.png
-- hops.png
-- imports.png
-- china.png
-- tobacco.png
-- iron.png
-- tourists.png
-- wheat.png
-- coal.png
-- wine.png
-- machinery.png
-- marble.png
+- bauxite.svg
+- beer.svg
+- cars.svg
+- flowers.svg
+- sheep.svg
+- cattle.svg
+- cheese.svg
+- ham.svg
+- steel.svg
+- hops.svg
+- imports.svg
+- china.svg
+- tobacco.svg
+- iron.svg
+- tourists.svg
+- wheat.svg
+- coal.svg
+- wine.svg
+- machinery.svg
+- marble.svg
 
 ## Image Requirements
-- Format: PNG with transparency
+- Format: svg with transparency
 - Size: 32x32 pixels (will be scaled down in game)
 - Style: Simple, iconic representation of the load type
 - Background: Transparent
