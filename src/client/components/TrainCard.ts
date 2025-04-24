@@ -1,11 +1,13 @@
 import "phaser";
 import { Player } from "../../shared/types/GameTypes";
+import { LoadType } from "../../shared/types/LoadTypes";
 
 export class TrainCard {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
   private player: Player;
   private loadSlots: Phaser.GameObjects.Rectangle[] = [];
+  private loadTokens: Phaser.GameObjects.Container[] = [];
   private trainCard: Phaser.GameObjects.Image;
 
   constructor(scene: Phaser.Scene, x: number, y: number, player: Player) {
@@ -16,7 +18,7 @@ export class TrainCard {
     this.container = scene.add.container(x, y);
     
     // Create train card using the appropriate image
-    const trainType = player.trainType.toLowerCase().replace(/\s+/g, '');
+    const trainType = player.trainType.toLowerCase().replace(/[\s-]+/g, '');
     this.trainCard = scene.add.image(0, 0, `train_card_${trainType}`);
     this.trainCard.setOrigin(0, 0);
     this.trainCard.setScale(0.18); // Scale down to 18% of original size
@@ -58,12 +60,42 @@ export class TrainCard {
   public updateLoads() {
     const currentLoads = this.player.trainState.loads || [];
     
-    // Clear any existing load visuals
+    // Clear any existing load tokens
+    this.loadTokens.forEach(token => token.destroy());
+    this.loadTokens = [];
+    
+    // Update slots and add load tokens
     this.loadSlots.forEach((slot, index) => {
       if (currentLoads[index]) {
-        slot.setFillStyle(0x888888, 0.5); // Filled slot, semi-transparent
+        // When occupied, make slot fully transparent
+        slot.setFillStyle(0x444444, 0);
+        
+        // Create a container for the token and its background
+        const tokenContainer = this.scene.add.container(slot.x, slot.y);
+        
+        // Add white circular background - increased radius
+        const background = this.scene.add.circle(0, 0, 14, 0xffffff);
+        tokenContainer.add(background);
+        
+        // Create load token sprite
+        const loadToken = this.scene.add.image(
+          0,
+          0,
+          `loadtoken-${currentLoads[index].toLowerCase()}`
+        );
+        
+        // Scale the token to fit in the slot
+        loadToken.setScale(0.45); // Slightly increased scale to match larger circle
+        
+        // Add token to container
+        tokenContainer.add(loadToken);
+        
+        // Add token container to tracking array and main container
+        this.loadTokens.push(tokenContainer);
+        this.container.add(tokenContainer);
       } else {
-        slot.setFillStyle(0x444444, 0.3); // Empty slot, more transparent
+        // Empty slot
+        slot.setFillStyle(0x444444, 0.3);
       }
     });
   }
@@ -71,7 +103,7 @@ export class TrainCard {
   // Method to update train card when train type changes
   public updateTrainType() {
     // Update train card image
-    const trainType = this.player.trainType.toLowerCase().replace(/\s+/g, '');
+    const trainType = this.player.trainType.toLowerCase().replace(/[\s-]+/g, '');
     this.trainCard.setTexture(`train_card_${trainType}`);
     
     // Update load slots
@@ -79,10 +111,20 @@ export class TrainCard {
     const currentCapacity = this.loadSlots.length;
     
     if (currentCapacity !== capacity) {
+      // Clear existing load tokens
+      this.loadTokens.forEach(token => token.destroy());
+      this.loadTokens = [];
+      
+      // Clear existing slots
       this.loadSlots.forEach(slot => slot.destroy());
       this.loadSlots = [];
+      
+      // Create new slots
       this.createLoadSlots(capacity);
       this.loadSlots.forEach(slot => this.container.add(slot));
+      
+      // Update loads to show tokens in new slots
+      this.updateLoads();
     }
   }
 
@@ -98,6 +140,8 @@ export class TrainCard {
 
   // Method to destroy the train card
   public destroy() {
+    // Clean up load tokens
+    this.loadTokens.forEach(token => token.destroy());
     this.container.destroy();
   }
 } 

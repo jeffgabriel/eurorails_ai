@@ -83,7 +83,10 @@ export class GameScene extends Phaser.Scene {
 
         // Load SVG files for loads
         Object.values(LoadType).forEach(loadType => {
-            this.load.image(`load-${loadType.toLowerCase()}`, `assets/loads/${loadType.toLowerCase()}.svg`);
+            //loading with scale to preserve the quality of the svg.
+            this.load.svg(`load-${loadType.toLowerCase()}`, `assets/loads/${loadType.toLowerCase()}.svg`,{scale: 0.03});
+            //load again but scaled larger for tokens as we cannot use the dynamic scaling of the svg.
+            this.load.svg(`loadtoken-${loadType.toLowerCase()}`, `assets/loads/${loadType.toLowerCase()}.svg`,{scale: 0.1});
         });
     }
 

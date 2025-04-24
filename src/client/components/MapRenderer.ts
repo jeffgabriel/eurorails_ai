@@ -204,7 +204,6 @@ export class MapRenderer {
                 );
 
                 // Configure sprite
-                sprite.setDisplaySize(this.LOAD_SPRITE_SIZE, this.LOAD_SPRITE_SIZE);
                 sprite.setAlpha(this.LOAD_SPRITE_OPACITY);
                 sprite.setDepth(1); // Ensure it appears above the city but below UI elements
 
@@ -215,8 +214,8 @@ export class MapRenderer {
                 if (load.count > 1) {
                     try {
                         const countText = this.scene.add.text(
-                            spriteX + this.LOAD_SPRITE_SIZE/2,
-                            spriteY - this.LOAD_SPRITE_SIZE/2,
+                            spriteX + this.LOAD_SPRITE_SIZE + 1, // Moved to the right of the sprite with 5px padding
+                            spriteY,                             // Centered vertically with the sprite
                             load.count.toString(),
                             {
                                 fontSize: '10px',
@@ -225,7 +224,7 @@ export class MapRenderer {
                                 padding: { x: 2, y: 2 }
                             }
                         );
-                        countText.setOrigin(0.5);
+                        countText.setOrigin(1, 0.5); // Left-aligned and vertically centered
                         countText.setDepth(2);
                         this.mapContainer.add(countText);
                     } catch (textError) {
