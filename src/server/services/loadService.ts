@@ -97,6 +97,40 @@ export class LoadService {
     return config?.cities.includes(city) ?? false;
   }
 
+  public setLoadInCity(loadType: string, city: string): boolean {
+    // First check if there's already a load in this city
+    const existingLoad = this.getLoadInCity(city);
+    if (existingLoad) {
+      // Return the existing load to the tray
+      this.returnLoad(existingLoad);
+    }
+
+    // Set the new load in the city
+    const state = this.loadStates.get(loadType);
+    if (!state) {
+      return false;
+    }
+
+    // If this city produces this load type, we don't need to track it separately
+    if (this.isLoadAvailableAtCity(loadType, city)) {
+      return true;
+    }
+
+    // Otherwise, we need to track that this load is now in this city
+    state.cityLoads = state.cityLoads || new Map();
+    state.cityLoads.set(city, loadType);
+    return true;
+  }
+
+  public getLoadInCity(city: string): string | undefined {
+    for (const state of this.loadStates.values()) {
+      if (state.cityLoads?.get(city)) {
+        return state.loadType;
+      }
+    }
+    return undefined;
+  }
+
   public reset(): void {
     this.initializeLoadStates();
   }

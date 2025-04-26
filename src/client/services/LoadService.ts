@@ -54,4 +54,73 @@ export class LoadService {
   public getAllLoadStates(): LoadState[] {
     return Array.from(this.loadStates.values());
   }
+
+  public async pickupLoad(loadType: LoadType): Promise<boolean> {
+    try {
+      const response = await fetch('/api/loads/pickup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ loadType }),
+      });
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const updatedState: LoadState = await response.json();
+      this.loadStates.set(loadType, updatedState);
+      return true;
+    } catch (error) {
+      console.error('Failed to pick up load:', error);
+      return false;
+    }
+  }
+
+  public async returnLoad(loadType: LoadType): Promise<boolean> {
+    try {
+      const response = await fetch('/api/loads/return', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ loadType }),
+      });
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const updatedState: LoadState = await response.json();
+      this.loadStates.set(loadType, updatedState);
+      return true;
+    } catch (error) {
+      console.error('Failed to return load:', error);
+      return false;
+    }
+  }
+
+  public async setLoadInCity(city: string, loadType: LoadType): Promise<boolean> {
+    try {
+      const response = await fetch('/api/loads/setInCity', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ city, loadType }),
+      });
+
+      if (!response.ok) {
+        return false;
+      }
+
+      const updatedState: LoadState = await response.json();
+      this.loadStates.set(loadType, updatedState);
+      return true;
+    } catch (error) {
+      console.error('Failed to set load in city:', error);
+      return false;
+    }
+  }
 } 
