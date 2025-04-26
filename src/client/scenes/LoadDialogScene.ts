@@ -68,7 +68,7 @@ export class LoadDialogScene extends Scene {
 
         // Create dialog background - make it wider and taller
         const dialogBg = this.add.rectangle(
-            0, 0, 500, 400, 0x333333, 0.95  // Increased height from 300 to 400
+            0, 0, 700, 400, 0x333333, 0.95  // Increased width from 500 to 700
         ).setOrigin(0.5);
 
         // Add title
@@ -95,7 +95,7 @@ export class LoadDialogScene extends Scene {
     }
 
     private createCloseButton() {
-        const container = this.add.container(230, -170);  // Adjusted y position to match title
+        const container = this.add.container(330, -170);  // Adjusted x position from 230 to 330
 
         const button = this.add.rectangle(0, 0, 30, 30, 0x666666)
             .setInteractive({ useHandCursor: true });
@@ -192,7 +192,7 @@ export class LoadDialogScene extends Scene {
         container: Phaser.GameObjects.Container,
         currentLoads: LoadType[]
     ) {
-        const title = this.add.text(400, 0, "Drop Loads:", {
+        const title = this.add.text(320, 0, "Drop Loads:", {
             color: "#ffffff",
             fontSize: "18px"
         });
@@ -200,7 +200,7 @@ export class LoadDialogScene extends Scene {
 
         currentLoads.forEach((load, index) => {
             const button = this.createLoadButton(
-                400, 40 + index * 50,
+                320, 40 + index * 50,
                 load,
                 1,
                 () => this.handleLoadDrop(load)
