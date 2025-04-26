@@ -187,8 +187,8 @@ export class UIManager {
       .on("pointerdown", () => this.openSettingsCallback())
       .on("pointerover", () => settingsButton.setFillStyle(0x555555))
       .on("pointerout", () => settingsButton.setFillStyle(0x444444));
-      
-    container.add([settingsButton, settingsIcon]);
+      container.setScrollFactor(0);
+      container.setDepth(9998);
     return container;
   }
 

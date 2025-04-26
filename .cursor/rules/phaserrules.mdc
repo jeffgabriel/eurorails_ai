@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
 # Phaser Engine Rules and Behaviors
 
 ## SVG Handling in Phaser
@@ -35,3 +40,23 @@
    - Runtime performance is identical to PNG/JPG sprites
    - Memory usage is based on the converted texture size
    - Choose appropriate SVG complexity for target texture resolution 
+
+
+5. **Container visibility**
+   - Containers which need to show above others should use container.setDepth(9998);
+   - Containers which should not interact with zoom or pan should use container.setScrollFactor(0);
+   
+
+
+
+
+
+
+
+
+
+
+
+
+
+
