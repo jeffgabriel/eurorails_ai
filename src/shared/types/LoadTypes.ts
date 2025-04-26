@@ -10,6 +10,7 @@ export interface LoadState {
   availableCount: number;
   totalCount: number;
   cities: string[];
+  cityLoads?: Map<string, string>; // Maps city name to load type for loads dropped in cities that don't produce them
 }
 
 export enum LoadType {

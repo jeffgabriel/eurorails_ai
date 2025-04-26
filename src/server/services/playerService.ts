@@ -315,23 +315,23 @@ export class PlayerService {
       console.log("Executing select query:", { query, values });
 
       const result = await client.query(query, values);
-      console.log("Query result:", {
-        rowCount: result.rowCount,
-        firstRow: result.rows[0]
-          ? {
-              id: result.rows[0].id,
-              name: result.rows[0].name,
-              color: result.rows[0].color,
-              hasMovementHistory: !!result.rows[0].movementHistory,
-            }
-          : null,
-      });
+      // console.log("Query result:", {
+      //   rowCount: result.rowCount,
+      //   firstRow: result.rows[0]
+      //     ? {
+      //         id: result.rows[0].id,
+      //         name: result.rows[0].name,
+      //         color: result.rows[0].color,
+      //         hasMovementHistory: !!result.rows[0].movementHistory,
+      //       }
+      //     : null,
+      // });
 
-      // Log the raw hand data before processing
-      console.log("Raw hand data from database:", result.rows.map(row => ({
-        playerId: row.id,
-        handIds: row.hand
-      })));
+      // // Log the raw hand data before processing
+      // console.log("Raw hand data from database:", result.rows.map(row => ({
+      //   playerId: row.id,
+      //   handIds: row.hand
+      // })));
 
       const players = result.rows.map((row) => {
         // Convert hand IDs to actual cards, with better error handling
@@ -362,9 +362,9 @@ export class PlayerService {
             turnNumber: row.turnNumber || 1,
             movementHistory: row.movementHistory ? row.movementHistory : [],
             remainingMovement: 9, // Default to 9 for Freight trains
+            loads: row.loads || [],
           },
           hand: handCards,
-          loads: row.loads || [],
         };
       });
 

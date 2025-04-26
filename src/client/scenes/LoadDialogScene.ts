@@ -10,10 +10,11 @@ interface LoadDialogConfig {
     player: Player;
     gameState: GameState;
     onClose: () => void;
+    onUpdateTrainCard: () => void;
 }
 
 interface LoadOperation {
-    type: 'pickup' | 'delivery';
+    type: 'pickup' | 'delivery' | 'drop';
     loadType: LoadType;
     timestamp: number;
 }
@@ -23,6 +24,7 @@ export class LoadDialogScene extends Scene {
     private player!: Player;
     private gameState!: GameState;
     private onClose!: () => void;
+    private onUpdateTrainCard!: () => void;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
@@ -40,6 +42,7 @@ export class LoadDialogScene extends Scene {
         this.gameState = data.gameState;
         this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
+        this.onUpdateTrainCard = data.onUpdateTrainCard;
     }
 
     create() {
@@ -62,7 +65,7 @@ export class LoadDialogScene extends Scene {
 
         // Create dialog background - make it wider and taller
         const dialogBg = this.add.rectangle(
-            0, 0, 500, 400, 0x333333, 0.95  // Increased height from 300 to 400
+            0, 0, 700, 400, 0x333333, 0.95  // Increased width from 500 to 700
         ).setOrigin(0.5);
 
         // Add title
@@ -89,7 +92,7 @@ export class LoadDialogScene extends Scene {
     }
 
     private createCloseButton() {
-        const container = this.add.container(230, -170);  // Adjusted y position to match title
+        const container = this.add.container(330, -170);  // Adjusted x position from 230 to 330
 
         const button = this.add.rectangle(0, 0, 30, 30, 0x666666)
             .setInteractive({ useHandCursor: true });
@@ -119,6 +122,7 @@ export class LoadDialogScene extends Scene {
 
         // Create sections container - moved up to make room for operations
         const sectionsContainer = this.add.container(-180, -130);
+        sectionsContainer.setName('sectionsContainer');  // Add name for easy lookup
 
         // Show available loads if train has space
         if (hasSpace) {
@@ -127,6 +131,11 @@ export class LoadDialogScene extends Scene {
 
         // Show deliverable loads
         this.createDeliverySection(sectionsContainer, currentLoads);
+
+        // Show droppable loads if train has any loads
+        if (currentLoads.length > 0) {
+            this.createDropSection(sectionsContainer, currentLoads);
+        }
 
         this.dialogContainer.add(sectionsContainer);
     }
@@ -175,6 +184,27 @@ export class LoadDialogScene extends Scene {
                 container.add(button);
             });
         }
+    }
+
+    private createDropSection(
+        container: Phaser.GameObjects.Container,
+        currentLoads: LoadType[]
+    ) {
+        const title = this.add.text(320, 0, "Drop Loads:", {
+            color: "#ffffff",
+            fontSize: "18px"
+        });
+        container.add(title);
+
+        currentLoads.forEach((load, index) => {
+            const button = this.createLoadButton(
+                320, 40 + index * 50,
+                load,
+                1,
+                () => this.handleLoadDrop(load)
+            );
+            container.add(button);
+        });
     }
 
     private createLoadButton(
@@ -236,6 +266,13 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
+            // Try to pick up the load from the city
+            const pickupSuccess = await this.loadService.pickupLoad(loadType);
+            if (!pickupSuccess) {
+                console.error('Failed to pick up load from city');
+                return;
+            }
+
             // Add load to train
             this.player.trainState.loads.push(loadType);
             
@@ -246,17 +283,28 @@ export class LoadDialogScene extends Scene {
                 timestamp: Date.now()
             });
             
-            // Update UI to show undo button for this operation
-            this.refreshLoadOperationsUI();
-            
             // Update game state
             const success = await this.gameStateService.updatePlayerLoads(
                 this.player.id,
                 this.player.trainState.loads
             );
 
-            if (!success) {
-                // If update failed, revert the changes
+            if (success) {
+                // Update displays
+                this.onUpdateTrainCard();
+                
+                // Update just the load sections container
+                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+                if (sectionsContainer) {
+                    sectionsContainer.destroy();
+                }
+                this.createLoadSections();
+                
+                // Update operations UI
+                this.refreshLoadOperationsUI();
+            } else {
+                // If update failed, revert all changes
+                await this.loadService.returnLoad(loadType);
                 this.player.trainState.loads.pop();
                 this.loadOperations.pop();
                 this.refreshLoadOperationsUI();
@@ -267,6 +315,7 @@ export class LoadDialogScene extends Scene {
             // Revert changes on error
             if (this.player.trainState.loads) {
                 this.player.trainState.loads.pop();
+                await this.loadService.returnLoad(loadType);
             }
             this.loadOperations.pop();
             this.refreshLoadOperationsUI();
@@ -288,26 +337,99 @@ export class LoadDialogScene extends Scene {
             // Add payment
             const newMoney = this.player.money + load.payment;
             
-            await Promise.all([
-                this.gameStateService.updatePlayerLoads(
-                    this.player.id,
-                    this.player.trainState.loads
-                ),
-                this.gameStateService.updatePlayerMoney(
-                    this.player.id,
-                    newMoney
-                ),
-                this.gameStateService.fulfillDemandCard(
-                    this.player.id,
-                    this.city.name,
-                    load.type
-                )
-            ]);
-            
-            this.closeDialog();
+            try {
+                // Return the load to the city's available loads
+                await this.loadService.returnLoad(load.type);
+
+                await Promise.all([
+                    this.gameStateService.updatePlayerLoads(
+                        this.player.id,
+                        this.player.trainState.loads
+                    ),
+                    this.gameStateService.updatePlayerMoney(
+                        this.player.id,
+                        newMoney
+                    ),
+                    this.gameStateService.fulfillDemandCard(
+                        this.player.id,
+                        this.city.name,
+                        load.type
+                    )
+                ]);
+                
+                // Update displays
+                this.onUpdateTrainCard();
+                this.closeDialog();
+            } catch (error) {
+                // Revert changes on error
+                console.error('Failed to update game state:', error);
+                // Restore the load to the train
+                this.player.trainState.loads.push(load.type);
+            }
         } catch (error) {
             console.error('Failed to deliver load:', error);
             // Show error message to user
+        }
+    }
+
+    private async handleLoadDrop(loadType: LoadType) {
+        try {
+            if (!this.player.trainState.loads) {
+                console.error('No loads found on train');
+                return;
+            }
+            
+            // Remove load from train
+            this.player.trainState.loads = this.player.trainState.loads.filter(
+                l => l !== loadType
+            );
+            
+            try {
+                // Return the load to the city's available loads if the city produces this load type
+                const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
+                const cityProducesLoad = availableLoads.some(l => l.loadType === loadType);
+                
+                if (cityProducesLoad) {
+                    await this.loadService.returnLoad(loadType);
+                } else {
+                    // If city doesn't produce this load, it stays in the city
+                    // and any existing load of the same type goes back to the tray
+                    await this.loadService.setLoadInCity(this.city.name, loadType);
+                }
+
+                // Update game state with new train loads
+                await this.gameStateService.updatePlayerLoads(
+                    this.player.id,
+                    this.player.trainState.loads
+                );
+                
+                // Track this operation
+                this.loadOperations.push({
+                    type: 'drop',
+                    loadType,
+                    timestamp: Date.now()
+                });
+                
+                // Update displays
+                this.onUpdateTrainCard();
+                
+                // Update just the load sections container
+                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+                if (sectionsContainer) {
+                    sectionsContainer.destroy();
+                }
+                this.createLoadSections();
+                
+                // Update operations UI
+                this.refreshLoadOperationsUI();
+            } catch (error) {
+                // Revert changes on error
+                console.error('Failed to update game state:', error);
+                // Restore the load to the train
+                this.player.trainState.loads.push(loadType);
+            }
+        } catch (error) {
+            console.error('Failed to drop load:', error);
         }
     }
 
@@ -332,8 +454,35 @@ export class LoadDialogScene extends Scene {
                     this.player.trainState.loads
                 );
 
+                // Update the train card display
+                this.onUpdateTrainCard();
+
                 // Refresh the UI
                 this.refreshLoadOperationsUI();
+            } else if (operation.type === 'drop') {
+                // Try to pick the load back up from the city
+                const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
+                const loadAvailable = availableLoads.some(l => l.loadType === operation.loadType);
+                
+                if (loadAvailable) {
+                    // Add load back to train
+                    this.player.trainState.loads.push(operation.loadType);
+                    
+                    // Remove the operation from tracking
+                    this.loadOperations = this.loadOperations.filter(
+                        op => op !== operation
+                    );
+
+                    // Update game state
+                    await this.gameStateService.updatePlayerLoads(
+                        this.player.id,
+                        this.player.trainState.loads
+                    );
+
+                    // Update displays
+                    this.onUpdateTrainCard();
+                    this.refreshLoadOperationsUI();
+                }
             }
         } catch (error) {
             console.error('Failed to undo load operation:', error);
@@ -362,7 +511,7 @@ export class LoadDialogScene extends Scene {
                 const opContainer = this.add.container(0, 40 + index * 40);
                 
                 const text = this.add.text(0, 0, 
-                    `${operation.type === 'pickup' ? 'Picked up' : 'Delivered'} ${operation.loadType}`, 
+                    `${operation.type === 'pickup' ? 'Picked up' : operation.type === 'drop' ? 'Dropped' : 'Delivered'} ${operation.loadType}`, 
                     { color: "#ffffff", fontSize: "16px" }
                 );
 
@@ -389,6 +538,7 @@ export class LoadDialogScene extends Scene {
     private closeDialog() {
         // Clear operations tracking when dialog closes
         this.loadOperations = [];
+        this.onUpdateTrainCard();
         this.onClose();
     }
 }

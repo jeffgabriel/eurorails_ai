@@ -27,7 +27,7 @@ export const mapConfig: MapConfig = {
                     { row: 21, col: 34 },
                     { row: 21, col: 35 }
                 ],
-                availableLoads: ['Beer', 'Cars', 'Coal', 'Iron', 'Steel', 'Sugar', 'Tin']
+                availableLoads: ['Beer', 'Cars']
             }
         },
         // Connected points for Berlin
@@ -193,6 +193,169 @@ export const mapConfig: MapConfig = {
         { row: 35, col: 39, terrain: TerrainType.Water, x: 35, y: 39 },
         { row: 35, col: 40, terrain: TerrainType.Water, x: 35, y: 40 },
         { row: 35, col: 41, terrain: TerrainType.Water, x: 35, y: 41 },
-        { row: 36, col: 39, terrain: TerrainType.Water, x: 36, y: 39 }
+        { row: 36, col: 39, terrain: TerrainType.Water, x: 36, y: 39 },
+
+        // Hamburg - Major City (regular hexagon like Berlin)
+        {
+            row: 15,
+            col: 32,
+            x: 15,
+            y: 32,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MajorCity,
+                name: 'Hamburg',
+                connectedPoints: [
+                    // Center point
+                    { row: 15, col: 32 },
+                    // Top points
+                    { row: 14, col: 32 },
+                    { row: 14, col: 33 },
+                    // Middle points
+                    { row: 15, col: 31 },
+                    { row: 15, col: 33 },
+                    // Bottom points
+                    { row: 16, col: 32 },
+                    { row: 16, col: 33 }
+                ],
+                availableLoads: ['Fish', 'Cars', 'Steel', 'Oil']
+            }
+        },
+        // Connected points for Hamburg (regular hexagon)
+        { row: 14, col: 32, terrain: TerrainType.Clear, x: 14, y: 32 },
+        { row: 14, col: 33, terrain: TerrainType.Clear, x: 14, y: 33 },
+        { row: 15, col: 31, terrain: TerrainType.Clear, x: 15, y: 31 },
+        { row: 15, col: 33, terrain: TerrainType.Clear, x: 15, y: 33 },
+        { row: 16, col: 32, terrain: TerrainType.Clear, x: 16, y: 32 },
+        { row: 16, col: 33, terrain: TerrainType.Clear, x: 16, y: 33 },
+
+        // Munich (München) - Major City (moved away from lake, fixed hexagonal pattern)
+        {
+            row: 42,
+            col: 40,
+            x: 42,
+            y: 40,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MajorCity,
+                name: 'Munich',
+                connectedPoints: [
+                    // Center point
+                    { row: 42, col: 40 },
+                    // Top points (2)
+                    { row: 41, col: 39 },
+                    { row: 41, col: 40 },
+                    // Middle points (2)
+                    { row: 42, col: 39 },
+                    { row: 42, col: 41 },
+                    // Bottom points (2)
+                    { row: 43, col: 39 },
+                    { row: 43, col: 40 }
+                ],
+                availableLoads: ['Beer', 'Cars', 'Electronics', 'Steel']
+            }
+        },
+        // Connected points for Munich (hexagonal)
+        { row: 41, col: 39, terrain: TerrainType.Clear, x: 41, y: 39 },
+        { row: 41, col: 40, terrain: TerrainType.Clear, x: 41, y: 40 },
+        { row: 42, col: 39, terrain: TerrainType.Clear, x: 42, y: 39 },
+        { row: 42, col: 41, terrain: TerrainType.Clear, x: 42, y: 41 },
+        { row: 43, col: 39, terrain: TerrainType.Clear, x: 43, y: 39 },
+        { row: 43, col: 40, terrain: TerrainType.Clear, x: 43, y: 40 },
+
+        // Medium cities
+        {
+            row: 28,
+            col: 45,
+            x: 28,
+            y: 45,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Dresden',
+                availableLoads: ['Coal', 'Electronics', 'Textiles']
+            }
+        },
+        {
+            row: 45,
+            col: 35,
+            x: 45,
+            y: 35,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Stuttgart',
+                availableLoads: ['Cars', 'Steel', 'Wine']
+            }
+        },
+
+        // Small cities
+        {
+            row: 22,
+            col: 38,
+            x: 22,
+            y: 38,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.SmallCity,
+                name: 'Leipzig',
+                availableLoads: ['Books', 'Coal']
+            }
+        },
+        {
+            row: 38,
+            col: 42,
+            x: 38,
+            y: 42,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.SmallCity,
+                name: 'Nuremberg',
+                availableLoads: ['Toys', 'Beer']
+            }
+        },
+
+        // Mountain ranges
+        // Alpine range near Munich
+        { row: 44, col: 43, terrain: TerrainType.Mountain, x: 44, y: 43 },
+        { row: 44, col: 44, terrain: TerrainType.Alpine, x: 44, y: 44 },
+        { row: 45, col: 43, terrain: TerrainType.Alpine, x: 45, y: 43 },
+        { row: 45, col: 44, terrain: TerrainType.Mountain, x: 45, y: 44 },
+        { row: 46, col: 43, terrain: TerrainType.Mountain, x: 46, y: 43 },
+
+        // Mountain range between Dresden and Berlin
+        { row: 23, col: 40, terrain: TerrainType.Mountain, x: 23, y: 40 },
+        { row: 24, col: 40, terrain: TerrainType.Mountain, x: 24, y: 40 },
+        { row: 24, col: 41, terrain: TerrainType.Alpine, x: 24, y: 41 },
+        { row: 25, col: 41, terrain: TerrainType.Mountain, x: 25, y: 41 },
+
+        // Ferry connection across Baltic Sea
+        { 
+            row: 12, 
+            col: 45, 
+            x: 12,
+            y: 45,
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 12, col: 55 }
+        },
+        { 
+            row: 12, 
+            col: 55, 
+            x: 12,
+            y: 55,
+            terrain: TerrainType.FerryPort,
+            ferryConnection: { row: 12, col: 45 }
+        },
+
+        // Baltic Sea water points
+        { row: 12, col: 46, terrain: TerrainType.Water, x: 12, y: 46 },
+        { row: 12, col: 47, terrain: TerrainType.Water, x: 12, y: 47 },
+        { row: 12, col: 48, terrain: TerrainType.Water, x: 12, y: 48 },
+        { row: 12, col: 49, terrain: TerrainType.Water, x: 12, y: 49 },
+        { row: 12, col: 50, terrain: TerrainType.Water, x: 12, y: 50 },
+        { row: 12, col: 51, terrain: TerrainType.Water, x: 12, y: 51 },
+        { row: 12, col: 52, terrain: TerrainType.Water, x: 12, y: 52 },
+        { row: 12, col: 53, terrain: TerrainType.Water, x: 12, y: 53 },
+        { row: 12, col: 54, terrain: TerrainType.Water, x: 12, y: 54 },
     ]
 }; 
