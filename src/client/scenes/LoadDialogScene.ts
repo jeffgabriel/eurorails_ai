@@ -10,6 +10,7 @@ interface LoadDialogConfig {
     player: Player;
     gameState: GameState;
     onClose: () => void;
+    onUpdateTrainCard: () => void;
 }
 
 interface LoadOperation {
@@ -23,6 +24,7 @@ export class LoadDialogScene extends Scene {
     private player!: Player;
     private gameState!: GameState;
     private onClose!: () => void;
+    private onUpdateTrainCard!: () => void;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
@@ -40,6 +42,7 @@ export class LoadDialogScene extends Scene {
         this.gameState = data.gameState;
         this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
+        this.onUpdateTrainCard = data.onUpdateTrainCard;
     }
 
     create() {
@@ -255,7 +258,10 @@ export class LoadDialogScene extends Scene {
                 this.player.trainState.loads
             );
 
-            if (!success) {
+            if (success) {
+                // Update the train card display on successful pickup
+                this.onUpdateTrainCard();
+            } else {
                 // If update failed, revert the changes
                 this.player.trainState.loads.pop();
                 this.loadOperations.pop();
@@ -288,23 +294,32 @@ export class LoadDialogScene extends Scene {
             // Add payment
             const newMoney = this.player.money + load.payment;
             
-            await Promise.all([
-                this.gameStateService.updatePlayerLoads(
-                    this.player.id,
-                    this.player.trainState.loads
-                ),
-                this.gameStateService.updatePlayerMoney(
-                    this.player.id,
-                    newMoney
-                ),
-                this.gameStateService.fulfillDemandCard(
-                    this.player.id,
-                    this.city.name,
-                    load.type
-                )
-            ]);
-            
-            this.closeDialog();
+            try {
+                await Promise.all([
+                    this.gameStateService.updatePlayerLoads(
+                        this.player.id,
+                        this.player.trainState.loads
+                    ),
+                    this.gameStateService.updatePlayerMoney(
+                        this.player.id,
+                        newMoney
+                    ),
+                    this.gameStateService.fulfillDemandCard(
+                        this.player.id,
+                        this.city.name,
+                        load.type
+                    )
+                ]);
+                
+                // Update the train card display on successful delivery
+                this.onUpdateTrainCard();
+                this.closeDialog();
+            } catch (error) {
+                // Revert changes on error
+                console.error('Failed to update game state:', error);
+                // Restore the load to the train
+                this.player.trainState.loads.push(load.type);
+            }
         } catch (error) {
             console.error('Failed to deliver load:', error);
             // Show error message to user
@@ -331,6 +346,9 @@ export class LoadDialogScene extends Scene {
                     this.player.id,
                     this.player.trainState.loads
                 );
+
+                // Update the train card display
+                this.onUpdateTrainCard();
 
                 // Refresh the UI
                 this.refreshLoadOperationsUI();
@@ -389,6 +407,7 @@ export class LoadDialogScene extends Scene {
     private closeDialog() {
         // Clear operations tracking when dialog closes
         this.loadOperations = [];
+        this.onUpdateTrainCard();
         this.onClose();
     }
 }

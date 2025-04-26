@@ -7,7 +7,7 @@ export class PlayerHandDisplay {
   private container: Phaser.GameObjects.Container;
   private gameState: GameState;
   private toggleDrawingCallback: () => void;
-  private trainCard: TrainCard | null = null;
+  public trainCard: TrainCard | null = null;
   
   constructor(
     scene: Phaser.Scene,

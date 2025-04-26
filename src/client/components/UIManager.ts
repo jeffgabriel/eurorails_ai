@@ -81,6 +81,9 @@ export class UIManager {
       this.toggleDrawingCallback
     );
 
+    // Connect PlayerHandDisplay to TrainInteractionManager
+    this.trainInteractionManager.setPlayerHandDisplay(this.playerHandDisplay);
+
     // Initialize the city selection manager
     this.citySelectionManager = new CitySelectionManager(
       this.scene,

@@ -4,6 +4,7 @@ import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { LoadService } from "../services/LoadService";
+import { PlayerHandDisplay } from "./PlayerHandDisplay";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -15,6 +16,7 @@ export class TrainInteractionManager {
   private isTrainMovementMode: boolean = false;
   private justEnteredMovementMode: boolean = false;
   private isDrawingMode: boolean = false;
+  private playerHandDisplay: PlayerHandDisplay | null = null;
   
   constructor(
     scene: Phaser.Scene,
@@ -194,6 +196,12 @@ export class TrainInteractionManager {
       gameState: this.gameState,
       onClose: () => {
         this.scene.scene.stop('LoadDialogScene');
+      },
+      onUpdateTrainCard: () => {
+        // Update the train card display through PlayerHandDisplay
+        if (this.playerHandDisplay?.trainCard) {
+          this.playerHandDisplay.trainCard.updateLoads();
+        }
       }
     });
   }
@@ -428,5 +436,9 @@ export class TrainInteractionManager {
     if (isDrawing && this.isTrainMovementMode) {
       this.exitTrainMovementMode();
     }
+  }
+
+  public setPlayerHandDisplay(playerHandDisplay: PlayerHandDisplay): void {
+    this.playerHandDisplay = playerHandDisplay;
   }
 }
