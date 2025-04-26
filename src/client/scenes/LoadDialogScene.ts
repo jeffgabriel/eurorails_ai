@@ -11,7 +11,6 @@ interface LoadDialogConfig {
     gameState: GameState;
     onClose: () => void;
     onUpdateTrainCard: () => void;
-    onUpdateMapDisplay: () => void;
 }
 
 interface LoadOperation {
@@ -26,7 +25,6 @@ export class LoadDialogScene extends Scene {
     private gameState!: GameState;
     private onClose!: () => void;
     private onUpdateTrainCard!: () => void;
-    private onUpdateMapDisplay!: () => void;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
@@ -45,7 +43,6 @@ export class LoadDialogScene extends Scene {
         this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
         this.onUpdateTrainCard = data.onUpdateTrainCard;
-        this.onUpdateMapDisplay = data.onUpdateMapDisplay;
     }
 
     create() {
@@ -125,6 +122,7 @@ export class LoadDialogScene extends Scene {
 
         // Create sections container - moved up to make room for operations
         const sectionsContainer = this.add.container(-180, -130);
+        sectionsContainer.setName('sectionsContainer');  // Add name for easy lookup
 
         // Show available loads if train has space
         if (hasSpace) {
@@ -294,13 +292,19 @@ export class LoadDialogScene extends Scene {
             if (success) {
                 // Update displays
                 this.onUpdateTrainCard();
-                this.onUpdateMapDisplay();
-                // Refresh the load sections to show updated counts
-                this.dialogContainer.removeAll(true);
-                this.create();
+                
+                // Update just the load sections container
+                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+                if (sectionsContainer) {
+                    sectionsContainer.destroy();
+                }
+                this.createLoadSections();
+                
+                // Update operations UI
+                this.refreshLoadOperationsUI();
             } else {
                 // If update failed, revert all changes
-                await this.loadService.returnLoad(loadType); // Return the load to the city
+                await this.loadService.returnLoad(loadType);
                 this.player.trainState.loads.pop();
                 this.loadOperations.pop();
                 this.refreshLoadOperationsUI();
@@ -311,7 +315,7 @@ export class LoadDialogScene extends Scene {
             // Revert changes on error
             if (this.player.trainState.loads) {
                 this.player.trainState.loads.pop();
-                await this.loadService.returnLoad(loadType); // Return the load to the city
+                await this.loadService.returnLoad(loadType);
             }
             this.loadOperations.pop();
             this.refreshLoadOperationsUI();
@@ -355,7 +359,6 @@ export class LoadDialogScene extends Scene {
                 
                 // Update displays
                 this.onUpdateTrainCard();
-                this.onUpdateMapDisplay();
                 this.closeDialog();
             } catch (error) {
                 // Revert changes on error
@@ -409,11 +412,16 @@ export class LoadDialogScene extends Scene {
                 
                 // Update displays
                 this.onUpdateTrainCard();
-                this.onUpdateMapDisplay();
                 
-                // Refresh the dialog to show updated state
-                this.dialogContainer.removeAll(true);
-                this.create();
+                // Update just the load sections container
+                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+                if (sectionsContainer) {
+                    sectionsContainer.destroy();
+                }
+                this.createLoadSections();
+                
+                // Update operations UI
+                this.refreshLoadOperationsUI();
             } catch (error) {
                 // Revert changes on error
                 console.error('Failed to update game state:', error);

@@ -202,12 +202,6 @@ export class TrainInteractionManager {
         if (this.playerHandDisplay?.trainCard) {
           this.playerHandDisplay.trainCard.updateLoads();
         }
-      },
-      onUpdateMapDisplay: () => {
-        // Update the map display by recreating the grid with updated load sprites
-        if (this.mapRenderer) {
-          this.mapRenderer.createTriangularGrid();
-        }
       }
     });
   }
