@@ -31,6 +31,15 @@ router.post('/game/create', async (req, res) => {
         await PlayerService.createGame(gameId);
         console.log('Successfully created game:', gameId);
 
+        // Set the game ID in the session
+        req.session.gameId = gameId;
+        await new Promise<void>((resolve, reject) => {
+            req.session.save((err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
+
         return res.status(200).json({ message: 'Game created successfully', gameId });
     } catch (error: any) {
         console.error('Error in /game/create route:', error);
@@ -321,6 +330,15 @@ router.get('/game/active', async (req, res) => {
 
         // Get all players for this game
         const players = await PlayerService.getPlayers(activeGame.id);
+        
+        // Set the game ID in the session
+        req.session.gameId = activeGame.id;
+        await new Promise<void>((resolve, reject) => {
+            req.session.save((err) => {
+                if (err) reject(err);
+                else resolve();
+            });
+        });
         
         return res.status(200).json({
             ...activeGame,

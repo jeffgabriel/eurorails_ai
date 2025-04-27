@@ -1,58 +1,94 @@
-import express from 'express';
-import { LoadService } from '../services/loadService';
+import express, { Request, Response, RequestHandler } from 'express';
+import { LoadType } from '../../shared/types/LoadTypes';
+import { loadService } from '../services/loadService';
+import { Session } from 'express-session';
+
+declare module 'express-session' {
+  interface SessionData {
+    gameId: string;
+  }
+}
 
 const router = express.Router();
-const loadService = LoadService.getInstance();
 
-// GET /api/loads/state
-router.get('/state', (req, res) => {
-    console.log('Received request for load states');
-    try {
-        const loadStates = loadService.getAllLoadStates();
-        console.log('Returning load states:', loadStates);
-        res.json(loadStates);
-    } catch (error) {
-        console.error('Error fetching load states:', error);
-        res.status(500).json({ error: 'Failed to fetch load states' });
-    }
-});
+// Get initial load state including dropped loads
+const getLoadState: RequestHandler = async (_req: Request, res: Response) => {
+  console.log('Received request for load state');
+  try {
+    const loadStates = await loadService.getAllLoadStates();
+    console.log('Sending load states:', loadStates);
+    res.json(loadStates);
+  } catch (error) {
+    console.error('Error getting load state:', error);
+    res.status(500).json({ error: 'Failed to get load state' });
+  }
+};
 
-// POST /api/loads/pickup
-router.post('/pickup', (req, res) => {
-    const { loadType } = req.body;
-    console.log('Received request to pick up load:', loadType);
-    
-    try {
-        const success = loadService.pickupLoad(loadType);
-        if (success) {
-            const updatedState = loadService.getLoadState(loadType);
-            res.json(updatedState);
-        } else {
-            res.status(400).json({ error: 'Failed to pick up load' });
-        }
-    } catch (error) {
-        console.error('Error picking up load:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
+// Get all dropped loads
+const getDroppedLoads: RequestHandler = async (_req: Request, res: Response) => {
+  try {
+    const droppedLoads = await loadService.getDroppedLoads();
+    res.json(droppedLoads);
+  } catch (error) {
+    console.error('Error getting dropped loads:', error);
+    res.status(500).json({ error: 'Failed to get dropped loads' });
+  }
+};
 
-// POST /api/loads/return
-router.post('/return', (req, res) => {
-    const { loadType } = req.body;
-    console.log('Received request to return load:', loadType);
-    
-    try {
-        const success = loadService.returnLoad(loadType);
-        if (success) {
-            const updatedState = loadService.getLoadState(loadType);
-            res.json(updatedState);
-        } else {
-            res.status(400).json({ error: 'Failed to return load' });
-        }
-    } catch (error) {
-        console.error('Error returning load:', error);
-        res.status(500).json({ error: 'Internal server error' });
+// Handle load pickup
+const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => {
+  const { loadType, city } = req.body;
+  const gameId = req.session.gameId;
+  
+  try {
+    if (!gameId) {
+      return res.status(400).json({ error: 'No game ID in session' });
     }
-});
+
+    const result = await loadService.pickupDroppedLoad(city, loadType, gameId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error picking up load:', error);
+    res.status(500).json({ error: 'Failed to pick up load' });
+  }
+};
+
+// Handle load return to tray
+const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => {
+  const { loadType, city } = req.body;
+  
+  try {
+    const result = await loadService.returnLoad(city, loadType);
+    res.json(result);
+  } catch (error) {
+    console.error('Error returning load:', error);
+    res.status(500).json({ error: 'Failed to return load' });
+  }
+};
+
+// Handle setting a load in a city (dropping)
+const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) => {
+  const { city, loadType } = req.body;
+  const gameId = req.session.gameId;
+  
+  try {
+    if (!gameId) {
+      return res.status(400).json({ error: 'No game ID in session' });
+    }
+
+    const result = await loadService.setLoadInCity(city, loadType, gameId);
+    res.json(result);
+  } catch (error) {
+    console.error('Error setting load in city:', error);
+    res.status(500).json({ error: 'Failed to set load in city' });
+  }
+};
+
+// Register routes
+router.get('/state', getLoadState);
+router.get('/dropped', getDroppedLoads);
+router.post('/pickup', handleLoadPickup);
+router.post('/return', handleLoadReturn);
+router.post('/setInCity', handleSetLoadInCity);
 
 export default router; 
