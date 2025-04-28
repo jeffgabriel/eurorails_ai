@@ -490,29 +490,38 @@ export class PlayerService {
     };
   }
 
-  static async getActiveGame(): Promise<Game | null> {
-    console.log("Fetching active game...");
+  static async getActiveGame(): Promise<{ id: string; status: string; currentPlayerIndex: number } | null> {
     const query = `
-            SELECT id, status, current_player_index as "currentPlayerIndex", camera_state as "cameraState",
-                   created_at as "createdAt", updated_at as "updatedAt"
+            SELECT id, status, current_player_index
             FROM games 
             WHERE status = 'active'
-            ORDER BY created_at DESC 
+            ORDER BY updated_at DESC
             LIMIT 1
         `;
-    const result = await db.query(query);
-    console.log("Active game query result:", {
-      found: result.rows.length > 0,
-      gameData: result.rows[0]
-        ? {
+        
+        const result = await db.query(query);
+        
+        if (result.rows.length === 0) {
+            return null;
+        }
+
+        // If there are other active games, set them to 'interrupted'
+        if (result.rows.length > 0) {
+            const keepActiveId = result.rows[0].id;
+            await db.query(
+                `UPDATE games 
+                 SET status = 'interrupted' 
+                 WHERE status = 'active' 
+                 AND id != $1`,
+                [keepActiveId]
+            );
+        }
+
+        return {
             id: result.rows[0].id,
             status: result.rows[0].status,
-            currentPlayerIndex: result.rows[0].currentPlayerIndex,
-            hasCameraState: !!result.rows[0].cameraState,
-          }
-        : null,
-    });
-    return result.rows[0] || null;
+            currentPlayerIndex: result.rows[0].current_player_index
+        };
   }
 
   static async updateGameStatus(

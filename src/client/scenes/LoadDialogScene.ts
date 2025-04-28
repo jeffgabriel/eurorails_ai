@@ -45,50 +45,60 @@ export class LoadDialogScene extends Scene {
         this.onUpdateTrainCard = data.onUpdateTrainCard;
     }
 
-    create() {
-        // Create a semi-transparent background overlay
-        const overlay = this.add.rectangle(
-            0, 0,
-            this.cameras.main.width,
-            this.cameras.main.height,
-            0x000000, 0.7
-        ).setOrigin(0);
+    async create() {
+        try {
+            // Ensure LoadService is initialized before proceeding
+            await this.loadService.loadInitialState();
+            console.log('LoadService initialized successfully');
 
-        // Make overlay interactive to prevent clicking through
-        overlay.setInteractive();
+            // Create a semi-transparent background overlay
+            const overlay = this.add.rectangle(
+                0, 0,
+                this.cameras.main.width,
+                this.cameras.main.height,
+                0x000000, 0.7
+            ).setOrigin(0);
 
-        // Create the dialog container
-        this.dialogContainer = this.add.container(
-            this.cameras.main.centerX,
-            this.cameras.main.centerY
-        );
+            // Make overlay interactive to prevent clicking through
+            overlay.setInteractive();
 
-        // Create dialog background - make it wider and taller
-        const dialogBg = this.add.rectangle(
-            0, 0, 700, 400, 0x333333, 0.95  // Increased width from 500 to 700
-        ).setOrigin(0.5);
+            // Create the dialog container
+            this.dialogContainer = this.add.container(
+                this.cameras.main.centerX,
+                this.cameras.main.centerY
+            );
 
-        // Add title
-        const title = this.add.text(
-            0, -170,  // Moved up to make room for operations section
-            `${this.city.name} - Load Operations`,
-            {
-                color: "#ffffff",
-                fontSize: "24px",
-                fontStyle: "bold"
-            }
-        ).setOrigin(0.5);
+            // Create dialog background - make it wider and taller
+            const dialogBg = this.add.rectangle(
+                0, 0, 700, 400, 0x333333, 0.95  // Increased width from 500 to 700
+            ).setOrigin(0.5);
 
-        // Add close button
-        const closeButton = this.createCloseButton();
+            // Add title
+            const title = this.add.text(
+                0, -170,  // Moved up to make room for operations section
+                `${this.city.name} - Load Operations`,
+                {
+                    color: "#ffffff",
+                    fontSize: "24px",
+                    fontStyle: "bold"
+                }
+            ).setOrigin(0.5);
 
-        this.dialogContainer.add([dialogBg, title, closeButton]);
+            // Add close button
+            const closeButton = this.createCloseButton();
 
-        // Add available loads section
-        this.createLoadSections();
-        
-        // Initialize the operations section
-        this.refreshLoadOperationsUI();
+            this.dialogContainer.add([dialogBg, title, closeButton]);
+
+            // Add available loads section
+            await this.createLoadSections();
+            
+            // Initialize the operations section
+            this.refreshLoadOperationsUI();
+        } catch (error) {
+            console.error('Error in LoadDialogScene create:', error);
+            // Handle the error appropriately - maybe show an error message to the user
+            this.onClose();
+        }
     }
 
     private createCloseButton() {
@@ -111,72 +121,63 @@ export class LoadDialogScene extends Scene {
     }
 
     private async createLoadSections() {
-        // Get available loads at this city
-        const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
-
-        // Calculate train capacity
-        const maxCapacity = this.player.trainType === "Heavy Freight" || 
-                          this.player.trainType === "Superfreight" ? 3 : 2;
-        const currentLoads = this.player.trainState.loads || [];
-        const hasSpace = currentLoads.length < maxCapacity;
-
-        // Create sections container - moved up to make room for operations
-        const sectionsContainer = this.add.container(-180, -130);
-        sectionsContainer.setName('sectionsContainer');  // Add name for easy lookup
-
-        // Show available loads if train has space
-        if (hasSpace) {
-            this.createPickupSection(sectionsContainer, availableLoads);
-        }
-
-        // Show deliverable loads
-        this.createDeliverySection(sectionsContainer, currentLoads);
-
-        // Show droppable loads if train has any loads
-        if (currentLoads.length > 0) {
-            this.createDropSection(sectionsContainer, currentLoads);
-        }
-
+        console.log('Creating load sections for city:', this.city.name);
+        const sectionsContainer = this.add.container(0, 0);
         this.dialogContainer.add(sectionsContainer);
-    }
-
-    private createPickupSection(
-        container: Phaser.GameObjects.Container,
-        availableLoads: Array<{ loadType: LoadType; count: number }>
-    ) {
-        const title = this.add.text(0, 0, "Available for Pickup:", {
-            color: "#ffffff",
-            fontSize: "18px"
-        });
-        container.add(title);
-
-        availableLoads.forEach((load, index) => {
-            const button = this.createLoadButton(
-                0, 40 + index * 50,
-                load.loadType,
-                load.count,
-                () => this.handleLoadPickup(load.loadType)
-            );
-            container.add(button);
-        });
-    }
-
-    private createDeliverySection(
-        container: Phaser.GameObjects.Container,
-        currentLoads: LoadType[]
-    ) {
-        const deliverableLoads = this.getDeliverableLoads(currentLoads);
+        sectionsContainer.setName('sectionsContainer');
         
-        if (deliverableLoads.length > 0) {
-            const title = this.add.text(200, 0, "Available for Delivery:", {
+        await this.createPickupSection(sectionsContainer);
+        await this.createDeliverySection(sectionsContainer);
+        await this.createDropSection(sectionsContainer);
+    }
+
+    private async createPickupSection(container: Phaser.GameObjects.Container) {
+        console.log('Creating pickup section...');
+        const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
+        console.log('City load details for pickup:', cityLoadDetails);
+        
+        if (cityLoadDetails.length > 0) {
+            const title = this.add.text(-300, -100, "Available for Pickup:", {
                 color: "#ffffff",
                 fontSize: "18px"
             });
+            
             container.add(title);
+            
+            cityLoadDetails.forEach((load, index) => {
+                const button = this.createLoadButton(
+                    -300,
+                    -60 + (index * 50),
+                    load.loadType,
+                    load.count,
+                    () => this.handleLoadPickup(load.loadType)
+                );
+                container.add(button);
+            });
+        }
+    }
 
+    private async createDeliverySection(container: Phaser.GameObjects.Container) {
+        console.log('Creating delivery section...');
+        const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
+        console.log('City load details for delivery:', cityLoadDetails);
+        
+        // Get deliverable loads (loads on train that have a demand card for this city)
+        const deliverableLoads = this.getDeliverableLoads(this.player.trainState.loads || []);
+        console.log('Deliverable loads:', deliverableLoads);
+        
+        if (deliverableLoads.length > 0) {
+            const title = this.add.text(0, -100, "Can be Delivered:", {
+                color: "#ffffff",
+                fontSize: "18px"
+            });
+            
+            container.add(title);
+            
             deliverableLoads.forEach((load, index) => {
                 const button = this.createLoadButton(
-                    200, 40 + index * 50,
+                    0,
+                    -60 + (index * 50),
                     load.type,
                     1,
                     () => this.handleLoadDelivery(load)
@@ -186,25 +187,34 @@ export class LoadDialogScene extends Scene {
         }
     }
 
-    private createDropSection(
-        container: Phaser.GameObjects.Container,
-        currentLoads: LoadType[]
-    ) {
-        const title = this.add.text(320, 0, "Drop Loads:", {
-            color: "#ffffff",
-            fontSize: "18px"
-        });
-        container.add(title);
-
-        currentLoads.forEach((load, index) => {
-            const button = this.createLoadButton(
-                320, 40 + index * 50,
-                load,
-                1,
-                () => this.handleLoadDrop(load)
-            );
-            container.add(button);
-        });
+    private async createDropSection(container: Phaser.GameObjects.Container) {
+        console.log('Creating drop section...');
+        const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
+        console.log('City load details for drop:', cityLoadDetails);
+        
+        // Get droppable loads (all loads currently on the train)
+        const droppableLoads = this.player.trainState.loads || [];
+        console.log('Droppable loads:', droppableLoads);
+        
+        if (droppableLoads.length > 0) {
+            const title = this.add.text(320, -100, "Drop Loads:", {
+                color: "#ffffff",
+                fontSize: "18px"
+            });
+            
+            container.add(title);
+            
+            droppableLoads.forEach((load, index) => {
+                const button = this.createLoadButton(
+                    320,
+                    -60 + (index * 50),
+                    load,
+                    1,
+                    () => this.handleLoadDrop(load)
+                );
+                container.add(button);
+            });
+        }
     }
 
     private createLoadButton(
@@ -267,7 +277,7 @@ export class LoadDialogScene extends Scene {
             }
             
             // Try to pick up the load from the city
-            const pickupSuccess = await this.loadService.pickupLoad(loadType);
+            const pickupSuccess = await this.loadService.pickupLoad(loadType, this.city.name);
             if (!pickupSuccess) {
                 console.error('Failed to pick up load from city');
                 return;

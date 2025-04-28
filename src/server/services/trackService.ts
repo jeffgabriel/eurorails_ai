@@ -8,6 +8,16 @@ export class TrackService {
         try {
             await client.query('BEGIN');
 
+            // First verify the player exists
+            const playerExists = await client.query(
+                'SELECT id FROM players WHERE game_id = $1 AND id = $2',
+                [gameId, playerId]
+            );
+
+            if (playerExists.rows.length === 0) {
+                throw new Error('Player does not exist in the database');
+            }
+
             // Check if track state exists
             const existingResult = await client.query(
                 'SELECT id FROM player_tracks WHERE game_id = $1 AND player_id = $2',
@@ -47,10 +57,9 @@ export class TrackService {
             }
 
             await client.query('COMMIT');
-        } catch (error) {
+        } catch (err) {
             await client.query('ROLLBACK');
-            console.error('Error saving track state:', error);
-            throw error;
+            throw err;
         } finally {
             client.release();
         }

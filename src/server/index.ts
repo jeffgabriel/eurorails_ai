@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
+import session from 'express-session';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
@@ -31,6 +32,47 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Session configuration
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'your-secret-key',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: process.env.NODE_ENV === 'production',
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
+}));
+
+// Add middleware to restore game ID from active game if session is lost
+app.use(async (req, res, next) => {
+    if (!req.session.gameId) {
+        try {
+            const PlayerService = require('./services/playerService').PlayerService;
+            const activeGame = await PlayerService.getActiveGame();
+            if (activeGame) {
+                // Verify game has valid players
+                const players = await PlayerService.getPlayers(activeGame.id);
+                if (players && players.length > 0) {
+                    req.session.gameId = activeGame.id;
+                    await new Promise<void>((resolve, reject) => {
+                        req.session.save((err) => {
+                            if (err) reject(err);
+                            else resolve();
+                        });
+                    });
+                } else {
+                    // No valid players, mark game as interrupted
+                    await PlayerService.updateGameStatus(activeGame.id, 'interrupted');
+                }
+            }
+        } catch (error) {
+            console.error('Error restoring game ID from active game:', error);
+        }
+    }
+    next();
+});
 
 // API Routes - make sure this comes before static file serving
 app.use('/api/players', playerRoutes);
