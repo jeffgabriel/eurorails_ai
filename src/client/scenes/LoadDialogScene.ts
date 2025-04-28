@@ -17,6 +17,7 @@ interface LoadOperation {
     type: 'pickup' | 'delivery' | 'drop';
     loadType: LoadType;
     timestamp: number;
+    id: string;
 }
 
 export class LoadDialogScene extends Scene {
@@ -167,7 +168,7 @@ export class LoadDialogScene extends Scene {
         console.log('Deliverable loads:', deliverableLoads);
         
         if (deliverableLoads.length > 0) {
-            const title = this.add.text(0, -100, "Can be Delivered:", {
+            const title = this.add.text(-50, -100, "Can be Delivered:", {
                 color: "#ffffff",
                 fontSize: "18px"
             });
@@ -176,7 +177,7 @@ export class LoadDialogScene extends Scene {
             
             deliverableLoads.forEach((load, index) => {
                 const button = this.createLoadButton(
-                    0,
+                    -50,
                     -60 + (index * 50),
                     load.type,
                     1,
@@ -197,7 +198,7 @@ export class LoadDialogScene extends Scene {
         console.log('Droppable loads:', droppableLoads);
         
         if (droppableLoads.length > 0) {
-            const title = this.add.text(320, -100, "Drop Loads:", {
+            const title = this.add.text(150, -100, "Drop Loads:", {
                 color: "#ffffff",
                 fontSize: "18px"
             });
@@ -206,7 +207,7 @@ export class LoadDialogScene extends Scene {
             
             droppableLoads.forEach((load, index) => {
                 const button = this.createLoadButton(
-                    320,
+                    150,
                     -60 + (index * 50),
                     load,
                     1,
@@ -286,11 +287,12 @@ export class LoadDialogScene extends Scene {
             // Add load to train
             this.player.trainState.loads.push(loadType);
             
-            // Track this operation
+            // Track this operation with unique ID
             this.loadOperations.push({
                 type: 'pickup',
                 loadType,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                id: `${Date.now()}-${Math.random()}`
             });
             
             // Update game state
@@ -413,11 +415,12 @@ export class LoadDialogScene extends Scene {
                     this.player.trainState.loads
                 );
                 
-                // Track this operation
+                // Track this operation with unique ID
                 this.loadOperations.push({
                     type: 'drop',
                     loadType,
-                    timestamp: Date.now()
+                    timestamp: Date.now(),
+                    id: `${Date.now()}-${Math.random()}`
                 });
                 
                 // Update displays
@@ -448,14 +451,19 @@ export class LoadDialogScene extends Scene {
             if (!this.player.trainState.loads) return;
 
             if (operation.type === 'pickup') {
-                // Remove the load from train
-                this.player.trainState.loads = this.player.trainState.loads.filter(
-                    l => l !== operation.loadType
-                );
+                // Find the index of this specific load in the train's loads
+                const loadIndex = this.player.trainState.loads.lastIndexOf(operation.loadType);
+                if (loadIndex === -1) return;
 
-                // Remove the operation from our tracking
+                // Remove only this specific instance of the load
+                this.player.trainState.loads.splice(loadIndex, 1);
+
+                // Return the load to the city
+                await this.loadService.returnLoad(operation.loadType);
+
+                // Remove only this specific operation from tracking
                 this.loadOperations = this.loadOperations.filter(
-                    op => op !== operation
+                    op => op.id !== operation.id
                 );
 
                 // Update game state
@@ -478,9 +486,9 @@ export class LoadDialogScene extends Scene {
                     // Add load back to train
                     this.player.trainState.loads.push(operation.loadType);
                     
-                    // Remove the operation from tracking
+                    // Remove only this specific operation from tracking
                     this.loadOperations = this.loadOperations.filter(
-                        op => op !== operation
+                        op => op.id !== operation.id
                     );
 
                     // Update game state
