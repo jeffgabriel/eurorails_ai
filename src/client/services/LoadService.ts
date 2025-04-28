@@ -4,7 +4,7 @@ export class LoadService {
   private static instance: LoadService;
   private loadStates: Map<string, LoadState> = new Map();
   private isLoaded: boolean = false;
-  private droppedLoads: Map<string, LoadType> = new Map(); // city name -> load type
+  private droppedLoads: Map<string, LoadType[]> = new Map(); // city name -> array of load types
 
   private constructor() {}
 
@@ -23,7 +23,6 @@ export class LoadService {
 
     try {
       console.log('Fetching initial load state...');
-      // Load both initial load state and dropped loads
       const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
         fetch('/api/loads/state'),
         fetch('/api/loads/dropped')
@@ -44,9 +43,11 @@ export class LoadService {
         this.loadStates.set(state.loadType, state);
       });
 
-      // Initialize dropped loads map
+      // Initialize dropped loads map - group by city
       droppedLoads.forEach(drop => {
-        this.droppedLoads.set(drop.city_name, drop.type as LoadType);
+        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
+        cityLoads.push(drop.type);
+        this.droppedLoads.set(drop.city_name, cityLoads);
       });
       
       console.log('Initialized load states:', this.loadStates);
@@ -67,33 +68,50 @@ export class LoadService {
       return [];
     }
     
-    console.log('Current load states:', this.loadStates);
-    const loadDetails: Array<{ loadType: LoadType; count: number }> = [];
+    const loadDetails = new Map<LoadType, { loadType: LoadType; count: number }>();
     
-    // First check natural city loads
+    // First check configured loads (static city configuration)
     this.loadStates.forEach(state => {
-      console.log(`Checking state for ${state.loadType}:`, state);
       if (state && state.cities && state.cities.includes(city)) {
-        console.log(`Found load ${state.loadType} available in ${city}`);
-        loadDetails.push({
-          loadType: state.loadType as LoadType,
-          count: state.availableCount
-        });
+        console.log(`Found configured load ${state.loadType} in ${city} with ${state.availableCount} available`);
+        if (state.availableCount > 0) {
+          loadDetails.set(state.loadType as LoadType, {
+            loadType: state.loadType as LoadType,
+            count: state.availableCount
+          });
+        }
       }
     });
 
-    // Then check if there's a dropped load in this city
-    const droppedLoad = this.droppedLoads.get(city);
-    if (droppedLoad) {
-      console.log(`Found dropped load in ${city}:`, droppedLoad);
-      loadDetails.push({
-        loadType: droppedLoad,
-        count: 1
+    // Then check dropped loads in this city
+    const droppedLoadsInCity = this.droppedLoads.get(city) || [];
+    if (droppedLoadsInCity.length > 0) {
+      // Count occurrences of each load type
+      const dropCounts = new Map<LoadType, number>();
+      droppedLoadsInCity.forEach(loadType => {
+        const currentCount = dropCounts.get(loadType) || 0;
+        dropCounts.set(loadType, currentCount + 1);
+      });
+
+      // Add dropped loads to the result
+      dropCounts.forEach((count, loadType) => {
+        const existing = loadDetails.get(loadType);
+        if (existing) {
+          // If this load type is also configured for this city, add to available count
+          existing.count += count;
+        } else {
+          // If this is just a dropped load, add it as new
+          loadDetails.set(loadType, {
+            loadType,
+            count
+          });
+        }
       });
     }
 
-    console.log(`Load details for ${city}:`, loadDetails);
-    return loadDetails;
+    const result = Array.from(loadDetails.values());
+    console.log(`Final load details for ${city}:`, result);
+    return result;
   }
 
   public getAllLoadStates(): LoadState[] {
@@ -102,20 +120,46 @@ export class LoadService {
 
   public async pickupLoad(loadType: LoadType, city: string): Promise<boolean> {
     try {
-      const response = await fetch('/api/loads/pickup', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ loadType, city }),
-      });
+      // First check if this is a dropped load
+      const droppedLoadsInCity = this.droppedLoads.get(city) || [];
+      const isDroppedLoad = droppedLoadsInCity.includes(loadType);
 
-      if (!response.ok) {
-        return false;
+      if (isDroppedLoad) {
+        // Handle picking up a dropped load
+        const response = await fetch('/api/loads/pickup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ loadType, city, isDropped: true }),
+        });
+
+        if (!response.ok) return false;
+
+        // Update local state for dropped loads
+        const updatedDrops = droppedLoadsInCity.filter((type, index) => 
+          index !== droppedLoadsInCity.indexOf(loadType));
+        if (updatedDrops.length === 0) {
+          this.droppedLoads.delete(city);
+        } else {
+          this.droppedLoads.set(city, updatedDrops);
+        }
+      } else {
+        // Handle picking up a configured load
+        const response = await fetch('/api/loads/pickup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ loadType, city, isDropped: false }),
+        });
+
+        if (!response.ok) return false;
+
+        // Update the available count in load states
+        const state = this.loadStates.get(loadType);
+        if (state) {
+          state.availableCount--;
+          this.loadStates.set(loadType, state);
+        }
       }
 
-      const updatedState: LoadState = await response.json();
-      this.loadStates.set(loadType, updatedState);
       return true;
     } catch (error) {
       console.error('Failed to pick up load:', error);
@@ -127,18 +171,19 @@ export class LoadService {
     try {
       const response = await fetch('/api/loads/return', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ loadType }),
       });
 
-      if (!response.ok) {
-        return false;
+      if (!response.ok) return false;
+
+      // Update the available count in load states
+      const state = this.loadStates.get(loadType);
+      if (state) {
+        state.availableCount++;
+        this.loadStates.set(loadType, state);
       }
 
-      const updatedState: LoadState = await response.json();
-      this.loadStates.set(loadType, updatedState);
       return true;
     } catch (error) {
       console.error('Failed to return load:', error);
@@ -150,25 +195,16 @@ export class LoadService {
     try {
       const response = await fetch('/api/loads/setInCity', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city, loadType }),
       });
 
-      if (!response.ok) {
-        return false;
-      }
+      if (!response.ok) return false;
 
-      // Update both the load state and dropped loads map
-      const { loadState, droppedLoads } = await response.json();
-      this.loadStates.set(loadType, loadState);
-      
-      // Update dropped loads map
-      this.droppedLoads.clear();
-      droppedLoads.forEach((drop: {city_name: string, type: LoadType}) => {
-        this.droppedLoads.set(drop.city_name, drop.type);
-      });
+      // Update local state for dropped loads
+      const cityLoads = this.droppedLoads.get(city) || [];
+      cityLoads.push(loadType);
+      this.droppedLoads.set(city, cityLoads);
 
       return true;
     } catch (error) {
