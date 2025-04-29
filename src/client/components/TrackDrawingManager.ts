@@ -574,7 +574,6 @@ export class TrackDrawingManager {
         }
 
         // Set distance to 0 for the clicked point and all nodes in the player's network
-        // This makes Dijkstra search from all network nodes simultaneously
         distances.set(getPointKey(startPoint), 0);
         if (!unvisited.has(getPointKey(startPoint))) {
             unvisited.add(getPointKey(startPoint));
@@ -637,6 +636,13 @@ export class TrackDrawingManager {
                     }
                 }
 
+                // Validate that no segment in the path overlaps with other players' tracks
+                for (let i = 0; i < path.length - 1; i++) {
+                    if (this.isSegmentInAnyOtherNetwork(path[i], path[i + 1], currentPlayer.id)) {
+                        return null; // Path is invalid if any segment overlaps with other players' tracks
+                    }
+                }
+
                 return path;
             }
 
@@ -688,16 +694,14 @@ export class TrackDrawingManager {
                 const neighborKey = getPointKey(neighbor);
                 if (!unvisited.has(neighborKey)) continue;
                 
-                // Skip this neighbor if the segment already exists in the player's network
+                // Skip this neighbor if the segment exists in any player's network (including current player)
                 // EXCEPT if the current point is part of the network - then we allow travel via existing tracks
                 const isCurrentInNetwork = networkNodes.has(currentKey);
                 const isNeighborInNetwork = networkNodes.has(neighborKey);
                 
-                if (!isCurrentInNetwork && !isNeighborInNetwork) {
-                    // Only check for existing segment if neither point is in the network
-                    if (this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
-                        continue;
-                    }
+                // Skip if the segment exists in any other player's network
+                if (this.isSegmentInAnyOtherNetwork(currentPoint, neighbor, currentPlayer.id)) {
+                    continue;
                 }
                 
                 // Calculate the cost for a segment
@@ -808,9 +812,32 @@ export class TrackDrawingManager {
         return cost;
     }
 
-    // Helper method to check if a segment already exists in player's track network
+    private isSegmentInAnyOtherNetwork(point1: GridPoint, point2: GridPoint, currentPlayerId: string): boolean {
+        // Check all player networks except the current player
+        for (const [playerId, trackState] of this.playerTracks.entries()) {
+            if (playerId !== currentPlayerId) {
+                // Check if segment exists in this player's network
+                if (trackState.segments.some(segment => 
+                    (segment.from.row === point1.row && segment.from.col === point1.col &&
+                     segment.to.row === point2.row && segment.to.col === point2.col) ||
+                    (segment.from.row === point2.row && segment.from.col === point2.col &&
+                     segment.to.row === point1.row && segment.to.col === point1.col)
+                )) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private isSegmentInNetwork(point1: GridPoint, point2: GridPoint, trackState?: PlayerTrackState): boolean {
         if (!trackState) return false;
+        
+        // First check if the segment exists in any other player's network
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        if (this.isSegmentInAnyOtherNetwork(point1, point2, currentPlayer.id)) {
+            return true;
+        }
         
         // Check both directions since track segments are bidirectional
         return trackState.segments.some(segment => 
