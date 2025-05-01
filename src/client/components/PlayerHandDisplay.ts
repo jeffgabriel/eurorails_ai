@@ -1,6 +1,8 @@
 import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrainCard } from "./TrainCard";
+import { DemandCard } from './DemandCard';
+import { PlayerHand } from '../../shared/types/PlayerHand';
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -8,6 +10,11 @@ export class PlayerHandDisplay {
   private gameState: GameState;
   private toggleDrawingCallback: () => void;
   public trainCard: TrainCard | null = null;
+  private readonly CARD_SPACING = 180;
+  private readonly START_X = 110;
+  private readonly START_Y = 140;
+  private cards: DemandCard[] = [];
+  private readonly HAND_HEIGHT = 280;
   
   constructor(
     scene: Phaser.Scene,
@@ -34,11 +41,15 @@ export class PlayerHandDisplay {
     // Clear target container
     targetContainer.removeAll(true);
 
-    // Create the background, cards, and player info sections and add directly to target container
-    this.createHandBackground(targetContainer);
-    this.createDemandCardSection(targetContainer);
-    this.createTrainSection(targetContainer);
-    this.createPlayerInfoSection(isDrawingMode, currentTrackCost, targetContainer);
+    // Create a container for the hand area that will hold all elements
+    const handArea = this.scene.add.container(0, this.scene.scale.height - this.HAND_HEIGHT);
+    targetContainer.add(handArea);
+
+    // Create the background, cards, and player info sections and add to handArea
+    this.createHandBackground(handArea);
+    this.createDemandCardSection(handArea);
+    this.createTrainSection(handArea);
+    this.createPlayerInfoSection(isDrawingMode, currentTrackCost, handArea);
   }
 
   private createHandBackground(targetContainer: Phaser.GameObjects.Container): void {
@@ -46,9 +57,9 @@ export class PlayerHandDisplay {
     const handBackground = this.scene.add
       .rectangle(
         0,
-        this.scene.scale.height - 280, // Increased from -250 to -280 for more height
+        0, // Position relative to hand area container
         this.scene.scale.width,
-        280, // Increased from 250 to 280
+        this.HAND_HEIGHT,
         0x333333,
         0.8
       )
@@ -61,67 +72,25 @@ export class PlayerHandDisplay {
   private createDemandCardSection(targetContainer: Phaser.GameObjects.Container): void {
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
 
-    // Add sections for demand cards (3 slots)
-    for (let i = 0; i < 3; i++) {
-      // Add card content if there's a card in this slot
-      if (currentPlayer.hand?.[i]) {
-        const card = currentPlayer.hand[i];
-        
-        // Validate card data before displaying
-        if (!card || !card.demands || card.demands.length !== 3) {
-          continue;
-        }
+    // Clear existing cards
+    this.cards.forEach(card => card.destroy());
+    this.cards = [];
 
-        // Build text for all demands on the card
-        const demandsText = card.demands.map(demand => 
-          `${demand.city}: ${demand.resource} (ECU ${demand.payment}M)`
-        ).join('\n');
+    // Create new cards
+    currentPlayer.hand.forEach((card, index) => {
+      const x = this.START_X + (index * this.CARD_SPACING);
+      const demandCard = new DemandCard(this.scene, x, this.START_Y, card);
+      this.cards.push(demandCard);
+      targetContainer.add(demandCard);
+    });
 
-        const cardText = `CARD ${i + 1}:\n${demandsText}`;
-        
-        const CARD_WIDTH = 160;
-        const CARD_SPACING = 20;
-        const CARD_START_X = 30;
-        
-        const cardContent = this.scene.add.text(
-          CARD_START_X + i * (CARD_WIDTH + CARD_SPACING), // Space cards evenly
-          this.scene.scale.height - 150, // Position from bottom
-          cardText,
-          {
-            color: "#000000", // Black text
-            fontSize: "16px",
-            backgroundColor: "#F5F5DC", // Cream color
-            padding: { x: 15, y: 15 },
-            fixedWidth: CARD_WIDTH,
-            align: 'left',
-            wordWrap: { width: CARD_WIDTH - 30 } // Account for padding
-          }
-        ).setDepth(1); // Set cards to higher depth than background
-
-        targetContainer.add(cardContent);
-      } else {
-        // Display empty card slot
-        const CARD_WIDTH = 160;
-        const CARD_SPACING = 20;
-        const CARD_START_X = 30;
-        
-        const emptyCardText = this.scene.add.text(
-          CARD_START_X + i * (CARD_WIDTH + CARD_SPACING),
-          this.scene.scale.height - 150,
-          'Empty\nCard\nSlot',
-          {
-            color: "#666666", // Gray text
-            fontSize: "16px",
-            backgroundColor: "#EEEEEE", // Light gray background
-            padding: { x: 15, y: 15 },
-            fixedWidth: CARD_WIDTH,
-            align: 'center',
-            wordWrap: { width: CARD_WIDTH - 30 }
-          }
-        ).setDepth(1);
-        
-        targetContainer.add(emptyCardText);
-      }
+    // Add empty slots if needed
+    const maxCards = 3; // Maximum number of demand cards in hand (changed from 4 to 3)
+    for (let i = currentPlayer.hand.length; i < maxCards; i++) {
+      const x = this.START_X + (i * this.CARD_SPACING);
+      const emptyCard = new DemandCard(this.scene, x, this.START_Y);
+      this.cards.push(emptyCard);
+      targetContainer.add(emptyCard);
     }
   }
 
@@ -132,7 +101,7 @@ export class PlayerHandDisplay {
     this.trainCard = new TrainCard(
       this.scene,
       600, // Position after demand cards
-      this.scene.scale.height - 270, // Moved up further from -250
+      20, // Position relative to hand area
       currentPlayer
     );
 
@@ -163,7 +132,7 @@ export class PlayerHandDisplay {
     const crayonButton = this.scene.add
       .image(
         820 + 200, // Position 200 pixels right of player info start
-        this.scene.scale.height - 140, // Vertically center between player info lines
+        140, // Position relative to hand area
         crayonTexture
       )
       .setScale(0.15)
@@ -211,7 +180,7 @@ export class PlayerHandDisplay {
     const playerInfo = this.scene.add
       .text(
         820, // Position after train card
-        this.scene.scale.height - 180, // Align with cards
+        100, // Position relative to hand area
         playerInfoText,
         {
           color: "#ffffff", // Changed to white for better visibility
