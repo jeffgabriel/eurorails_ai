@@ -100,6 +100,46 @@ export const mapConfig: MapConfig = {
             }
         },
 
+         // Example regular city (Frankfurt)
+         {
+            row: 22,
+            col: 31,
+            x: 25,
+            y: 30,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Cardiff',
+                availableLoads: ['Beer', 'Cars', 'Coal', 'Iron', 'Steel', 'Sugar', 'Tin']
+            }
+        },
+
+         // Example regular city (Frankfurt)
+         {
+            row: 21,
+            col: 33,
+            x: 25,
+            y: 30,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Warsawa',
+                availableLoads: ['Beer', 'Cars', 'Coal', 'Iron', 'Steel', 'Sugar', 'Tin']
+            }
+        },
+ // Example regular city (Frankfurt)
+ {
+    row: 19,
+    col: 29,
+    x: 19,
+    y: 29,
+    terrain: TerrainType.Clear,
+    city: {
+        type: TerrainType.SmallCity,
+        name: 'Praha',
+        availableLoads: ['Beer', 'Cars', 'Coal', 'Iron', 'Steel', 'Sugar', 'Tin']
+    }
+},
         // Example small city (Heidelberg)
         {
             row: 25,
