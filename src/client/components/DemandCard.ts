@@ -5,8 +5,9 @@ import { LoadType } from '../../shared/types/LoadTypes';
 export class DemandCard extends Phaser.GameObjects.Container {
   private readonly CARD_WIDTH = 170;
   private readonly CARD_HEIGHT = 255;
-  private readonly DEMAND_SPACING = 50;
-  private readonly DEMAND_START_Y = 43;
+  private readonly DEMAND_SPACING = 70; // Space between demand sections
+  private readonly DEMAND_START_Y = -65; // Start higher to accommodate 3 sections
+  private readonly SECTION_HEIGHT = 45; // Height of each demand section
 
   constructor(scene: Scene, x: number, y: number, card?: DemandCardType) {
     super(scene, x, y);
@@ -20,24 +21,25 @@ export class DemandCard extends Phaser.GameObjects.Container {
     if (card) {
       // Add each demand to its slot
       card.demands.forEach((demand, index) => {
-        const slotY = this.DEMAND_START_Y + (index * this.DEMAND_SPACING);
+        const sectionY = this.DEMAND_START_Y + (index * this.DEMAND_SPACING);
 
-        // Add city name
-        const cityText = scene.add.text(-68, slotY - 8, demand.city, {
-          fontSize: '12px',
+        // Add city name at top of section
+        const cityText = scene.add.text(0, sectionY - 25, demand.city.toUpperCase(), {
+          fontSize: '16px',
           color: '#000000',
-          align: 'left'
-        }).setOrigin(0, 0.5);
+          fontFamily: 'Arial',
+          align: 'center'
+        }).setOrigin(0.5, 0.5);
         this.add(cityText);
 
-        // Add resource icon
-        const resourceIcon = scene.add.image(0, slotY, `load-${demand.resource.toLowerCase()}`)
-          .setDisplaySize(26, 26)
+        // Add large centered resource icon
+        const resourceIcon = scene.add.image(0, sectionY + 5, `load-${demand.resource.toLowerCase()}`)
+          .setDisplaySize(40, 40)
           .setOrigin(0.5);
         this.add(resourceIcon);
 
-        // Add payment amount
-        const paymentText = scene.add.text(51, slotY - 8, `${demand.payment}M`, {
+        // Add payment amount in bottom right
+        const paymentText = scene.add.text(50, sectionY + 20, `${demand.payment}M`, {
           fontSize: '14px',
           color: '#000000',
           align: 'right'
