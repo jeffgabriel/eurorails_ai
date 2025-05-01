@@ -38,6 +38,20 @@ export const mapConfig: MapConfig = {
         { row: 21, col: 34, terrain: TerrainType.Clear, x: 21, y: 34 },
         { row: 21, col: 35, terrain: TerrainType.Clear, x: 21, y: 35 },
 
+        // Glasgow - Medium City
+        {
+            row: 20,
+            col: 28,
+            x: 20,
+            y: 28,
+            terrain: TerrainType.Clear,
+            city: {
+                type: TerrainType.MediumCity,
+                name: 'Glasgow',
+                availableLoads: ['Coal', 'Steel', 'Machinery', 'Textiles']
+            }
+        },
+
         // Paris - Major City
         {
             row: 40,

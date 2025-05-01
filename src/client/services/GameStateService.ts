@@ -217,7 +217,8 @@ export class GameStateService {
     public async fulfillDemandCard(
         playerId: string,
         city: string,
-        loadType: LoadType
+        loadType: LoadType,
+        cardId: number
     ): Promise<boolean> {
         // Find player in the local state
         const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
@@ -239,7 +240,8 @@ export class GameStateService {
                     gameId: this.gameState.id,
                     playerId: playerId,
                     city: city,
-                    loadType: loadType
+                    loadType: loadType,
+                    cardId: cardId  // Include the specific card being fulfilled
                 })
             });
 
@@ -257,9 +259,10 @@ export class GameStateService {
                 return false;
             }
 
+            // Remove the fulfilled card from player's hand
+            player.hand = player.hand.filter(card => card.id !== cardId);
+            
             // Add the new card to the player's hand
-            // The server side will handle discarding the appropriate card
-            // and managing the demand deck
             player.hand.push(result.newCard);
 
             return true;
