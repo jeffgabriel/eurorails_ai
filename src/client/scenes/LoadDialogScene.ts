@@ -247,13 +247,21 @@ export class LoadDialogScene extends Scene {
     private getDeliverableLoads(currentLoads: LoadType[]): Array<{type: LoadType, payment: number}> {
         if (!this.player.hand) return [];
         
-        return this.player.hand
-            .filter(card => card.destinationCity === this.city.name)
-            .filter(card => currentLoads.includes(card.resource))
-            .map(card => ({
-                type: card.resource,
-                payment: card.payment
-            }));
+        // Flatten all demands from all cards that match the current city
+        const allPossibleDeliveries = this.player.hand.flatMap(card => 
+            card.demands
+                .filter(demand => demand.city === this.city.name)
+                .filter(demand => currentLoads.includes(demand.resource))
+                .map(demand => ({
+                    type: demand.resource,
+                    payment: demand.payment
+                }))
+        );
+
+        // Remove duplicates (in case multiple cards demand the same resource)
+        return Array.from(new Map(
+            allPossibleDeliveries.map(delivery => [delivery.type, delivery])
+        ).values());
     }
 
     private async handleLoadPickup(loadType: LoadType) {

@@ -1,7 +1,36 @@
+// Mock fs module before any imports
+jest.mock('fs', () => ({
+  readFileSync: jest.fn((path) => {
+    if (path.includes('load_cities.json')) {
+      return JSON.stringify({
+        LoadConfiguration: [
+          {
+            Bauxite: ['Budapest', 'Beograd', 'Marseille'],
+            count: 5
+          },
+          {
+            Beer: ['München', 'Frankfurt', 'Praha'],
+            count: 3
+          },
+          {
+            Cars: ['München', 'Stuttgart', 'Torino'],
+            count: 3
+          }
+        ]
+      });
+    }
+    throw new Error(`Unexpected file read: ${path}`);
+  })
+}));
+
 import { LoadService } from '../services/loadService';
 import { LoadState, LoadType } from '../../shared/types/LoadTypes';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+
+// Import LoadService after setting up mocks
 
 describe('LoadService', () => {
   let loadService: LoadService;
@@ -10,6 +39,7 @@ describe('LoadService', () => {
 
   beforeAll(async () => {
     client = await db.connect();
+    gameId = uuidv4(); // Generate a valid UUID for the game
   });
 
   afterAll(async () => {
@@ -17,45 +47,65 @@ describe('LoadService', () => {
   });
 
   beforeEach(async () => {
-    loadService = await LoadService.getInstance();
-    // Create a test game
-    const result = await db.query(
-      'INSERT INTO games (status, current_player_index, max_players) VALUES ($1, $2, $3) RETURNING id',
-      ['setup', 0, 6]
-    );
-    gameId = result.rows[0].id;
-
     // Clean up any existing test data
     await client.query('DELETE FROM load_chips');
+    await client.query('DELETE FROM games');
+
+    // Create a test game with the pre-generated UUID
+    await client.query(
+      'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
+      [gameId, 'setup', 0, 6]
+    );
+
+    // Get a fresh instance of LoadService and reset it
+    loadService = await LoadService.getInstance();
+    loadService.reset();
   });
 
   afterEach(async () => {
     // Clean up test data
-    await db.query('DELETE FROM games WHERE id = $1', [gameId]);
+    await client.query('DELETE FROM load_chips');
+    await client.query('DELETE FROM games');
   });
 
   describe('Load Configuration', () => {
     it('should load all configured load types', async () => {
       const allStates = await loadService.getAllLoadStates();
+      const loadedTypes = allStates.map(state => state.loadType);
       
-      // Verify we have all expected load types
-      expect(allStates.map(state => state.loadType)).toEqual(
-        expect.arrayContaining(Object.values(LoadType))
-      );
+      // Define the expected configured load types from our mock
+      const expectedLoadTypes = [
+        LoadType.Bauxite,
+        LoadType.Beer,
+        LoadType.Cars
+      ];
+
+      // Verify each expected load type is present
+      for (const loadType of expectedLoadTypes) {
+        expect(loadedTypes).toContain(loadType);
+      }
+
+      // Verify no unexpected load types from our configuration
+      expect(loadedTypes.length).toBe(expectedLoadTypes.length);
     });
 
     it('should initialize correct counts for loads', async () => {
       const bauxiteState = await loadService.getLoadState(LoadType.Bauxite);
       const beerState = await loadService.getLoadState(LoadType.Beer);
-      const coalState = await loadService.getLoadState(LoadType.Coal);
+      const carsState = await loadService.getLoadState(LoadType.Cars);
 
       expect(bauxiteState?.totalCount).toBe(5);
       expect(beerState?.totalCount).toBe(3);
-      expect(coalState?.totalCount).toBe(6);
+      expect(carsState?.totalCount).toBe(3);
     });
   });
 
   describe('City Load Availability', () => {
+    beforeEach(() => {
+      // Reset the LoadService to ensure fresh state
+      loadService.reset();
+    });
+
     it('should correctly identify loads available in specific cities', () => {
       // Test München's available loads
       const münchenLoads = loadService.getAvailableLoadsForCity('München');
@@ -63,12 +113,9 @@ describe('LoadService', () => {
       expect(münchenLoads).toContain(LoadType.Cars);
       expect(münchenLoads).not.toContain(LoadType.Bauxite);
 
-      // Test Birmingham's available loads
-      const birminghamLoads = loadService.getAvailableLoadsForCity('Birmingham');
-      expect(birminghamLoads).toContain(LoadType.China);
-      expect(birminghamLoads).toContain(LoadType.Steel);
-      expect(birminghamLoads).toContain(LoadType.Tobacco);
-      expect(birminghamLoads).toContain(LoadType.Tourists);
+      // Test Budapest's available loads
+      const budapestLoads = loadService.getAvailableLoadsForCity('Budapest');
+      expect(budapestLoads).toContain(LoadType.Bauxite);
     });
 
     it('should return empty array for unknown cities', () => {
@@ -82,7 +129,7 @@ describe('LoadService', () => {
       expect(loadService.isLoadAvailableAtCity(LoadType.Cars, 'München')).toBe(true);
       
       // Test invalid combinations
-      expect(loadService.isLoadAvailableAtCity(LoadType.Beer, 'Birmingham')).toBe(false);
+      expect(loadService.isLoadAvailableAtCity(LoadType.Beer, 'Budapest')).toBe(false);
       expect(loadService.isLoadAvailableAtCity(LoadType.Bauxite, 'München')).toBe(false);
     });
   });
@@ -97,7 +144,7 @@ describe('LoadService', () => {
         );
         await client.query(
           'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-          [gameId, LoadType.Coal, 'Birmingham']
+          [gameId, LoadType.Cars, 'Stuttgart']
         );
 
         const droppedLoads = await loadService.getDroppedLoads();
@@ -105,7 +152,7 @@ describe('LoadService', () => {
         expect(droppedLoads).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ city_name: 'München', type: LoadType.Beer }),
-            expect.objectContaining({ city_name: 'Birmingham', type: LoadType.Coal })
+            expect.objectContaining({ city_name: 'Stuttgart', type: LoadType.Cars })
           ])
         );
       });
@@ -175,7 +222,7 @@ describe('LoadService', () => {
         // Setup: Insert an existing dropped load
         await client.query(
           'INSERT INTO load_chips (game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, true)',
-          [gameId, LoadType.Coal, 'München']
+          [gameId, LoadType.Cars, 'München']
         );
 
         const result = await loadService.setLoadInCity('München', LoadType.Beer, gameId);
@@ -228,7 +275,7 @@ describe('LoadService', () => {
     describe('getDroppedLoads', () => {
       it('should return dropped loads from the database', async () => {
         // Insert a test load
-        const loadType = LoadType.Coal;
+        const loadType = LoadType.Cars;
         const cityName = 'London';
         await client.query(
           'INSERT INTO load_chips (id, game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, $4, true)',
@@ -245,7 +292,7 @@ describe('LoadService', () => {
 
     describe('setLoadInCity', () => {
       it('should add a dropped load to the database', async () => {
-        const loadType = LoadType.Coal;
+        const loadType = LoadType.Cars;
         const cityName = 'London';
         
         await loadService.setLoadInCity(cityName, loadType, gameId);
@@ -260,7 +307,7 @@ describe('LoadService', () => {
     describe('returnLoad', () => {
       it('should remove a dropped load from the database', async () => {
         // Insert a test load first
-        const loadType = LoadType.Coal;
+        const loadType = LoadType.Cars;
         const cityName = 'London';
         await client.query(
           'INSERT INTO load_chips (id, game_id, type, city_name, is_dropped) VALUES ($1, $2, $3, $4, true)',

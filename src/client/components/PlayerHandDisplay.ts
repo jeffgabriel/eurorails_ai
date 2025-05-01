@@ -68,16 +68,16 @@ export class PlayerHandDisplay {
         const card = currentPlayer.hand[i];
         
         // Validate card data before displaying
-        if (!card || !card.destinationCity || !card.resource || typeof card.payment !== 'number') {
+        if (!card || !card.demands || card.demands.length !== 3) {
           continue;
         }
 
-        // Simple text display
-        const cardText = 
-          `CARD ${i + 1}:\n` +
-          `City: ${card.destinationCity}\n` +
-          `Resource: ${card.resource}\n` +
-          `Payment: ${card.payment}M`;
+        // Build text for all demands on the card
+        const demandsText = card.demands.map(demand => 
+          `${demand.city}: ${demand.resource} (ECU ${demand.payment}M)`
+        ).join('\n');
+
+        const cardText = `CARD ${i + 1}:\n${demandsText}`;
         
         const CARD_WIDTH = 160;
         const CARD_SPACING = 20;

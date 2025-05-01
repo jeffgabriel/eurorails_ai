@@ -1,35 +1,56 @@
 import { DemandDeckService } from '../DemandDeckService';
+import { DemandCard } from '../../types/DemandCard';
+import { LoadType } from '../../types/LoadTypes';
 
 // Mock fetch for client-side implementation
+const mockCards: DemandCard[] = [
+  {
+    id: 1,
+    demands: [
+      { city: "Berlin", resource: LoadType.Cattle, payment: 17 },
+      { city: "Paris", resource: LoadType.Beer, payment: 23 },
+      { city: "London", resource: LoadType.Coal, payment: 15 }
+    ]
+  },
+  {
+    id: 2,
+    demands: [
+      { city: "Lyon", resource: LoadType.Iron, payment: 26 },
+      { city: "Madrid", resource: LoadType.Steel, payment: 19 },
+      { city: "Milano", resource: LoadType.Iron, payment: 21 }
+    ]
+  },
+  {
+    id: 3,
+    demands: [
+      { city: "Budapest", resource: LoadType.Machinery, payment: 22 },
+      { city: "Wien", resource: LoadType.Wine, payment: 18 },
+      { city: "Praha", resource: LoadType.Beer, payment: 24 }
+    ]
+  }
+];
+
 global.fetch = jest.fn().mockImplementation(() => 
   Promise.resolve({
     ok: true,
-    json: () => Promise.resolve([
-      {
-        id: 1,
-        destinationCity: "Berlin",
-        resource: "Cattle",
-        payment: 17
-      },
-      {
-        id: 2,
-        destinationCity: "Lyon",
-        resource: "Copper",
-        payment: 26
-      },
-      {
-        id: 3,
-        destinationCity: "Budapest",
-        resource: "Machinery",
-        payment: 22
-      }
-    ])
+    json: () => Promise.resolve(mockCards)
   })
 );
 
 describe('DemandDeckService', () => {
+  let originalConsoleError: typeof console.error;
+
   beforeEach(() => {
     (fetch as jest.Mock).mockClear();
+    // Store the original console.error
+    originalConsoleError = console.error;
+    // Mock console.error to prevent error output during tests
+    console.error = jest.fn();
+  });
+
+  afterEach(() => {
+    // Restore the original console.error
+    console.error = originalConsoleError;
   });
 
   it('should load cards from API', async () => {
@@ -113,9 +134,12 @@ describe('DemandDeckService', () => {
     
     expect(card).toBeTruthy();
     expect(card?.id).toBe(1);
-    expect(card?.destinationCity).toBe('Berlin');
-    expect(card?.resource).toBe('Cattle');
-    expect(card?.payment).toBe(17);
+    expect(card?.demands).toHaveLength(3);
+    expect(card?.demands[0]).toEqual({
+      city: 'Berlin',
+      resource: LoadType.Cattle,
+      payment: 17
+    });
   });
 
   it('should throw error when discarding invalid card ID', async () => {
@@ -125,5 +149,28 @@ describe('DemandDeckService', () => {
     expect(() => {
       service.discardCard(999);  // Invalid ID
     }).toThrow('Invalid card ID: 999');
+  });
+
+  it('should validate that cards have exactly 3 demands', async () => {
+    const invalidMockCards = [
+      {
+        id: 1,
+        demands: [
+          { city: "Berlin", resource: LoadType.Cattle, payment: 17 },
+          { city: "Paris", resource: LoadType.Beer, payment: 23 }
+        ]
+      }
+    ];
+
+    global.fetch = jest.fn().mockImplementation(() => 
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(invalidMockCards)
+      })
+    );
+
+    const service = new DemandDeckService();
+    await expect(service.loadCards()).rejects.toThrow('Found cards with incorrect number of demands: 1');
+    expect(console.error).toHaveBeenCalled();
   });
 });

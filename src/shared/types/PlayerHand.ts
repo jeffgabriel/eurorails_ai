@@ -8,12 +8,18 @@ export class PlayerHand {
 
   /**
    * Add a card to the player's hand
-   * @throws Error if hand is already full
+   * @throws Error if hand is already full or if card is invalid
    */
   public addCard(card: DemandCard): void {
     if (this.cards.length >= this.maxCards) {
       throw new Error(`Cannot add card: hand is full (max ${this.maxCards} cards)`);
     }
+    
+    // Validate that the card has exactly three demands
+    if (!card.demands || card.demands.length !== 3) {
+      throw new Error("Demand card must have exactly 3 demands");
+    }
+
     this.cards.push(card);
   }
 

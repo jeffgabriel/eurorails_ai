@@ -229,7 +229,7 @@ export class GameStateService {
         const player = this.gameState.players[playerIndex];
 
         try {
-            // Make API call to fulfill demand card and return load
+            // Make API call to fulfill demand and get a new card
             const response = await fetch('/api/players/fulfill-demand', {
                 method: 'POST',
                 headers: {
@@ -245,28 +245,26 @@ export class GameStateService {
 
             if (!response.ok) {
                 const errorData = await response.json();
-                console.error('Failed to fulfill demand card:', errorData);
+                console.error('Failed to fulfill demand:', errorData);
                 return false;
             }
 
             // Get the response which should include the new demand card
             const result = await response.json();
             
-            // Update the player's hand by replacing the fulfilled card with the new one
-            const cardIndex = player.hand.findIndex(
-                card => card.destinationCity === city && card.resource === loadType
-            );
-
-            if (cardIndex >= 0 && result.newCard) {
-                player.hand[cardIndex] = result.newCard;
-            } else {
-                console.error('Could not find card to replace or no new card provided');
+            if (!result.newCard) {
+                console.error('No new card provided from server');
                 return false;
             }
 
+            // Add the new card to the player's hand
+            // The server side will handle discarding the appropriate card
+            // and managing the demand deck
+            player.hand.push(result.newCard);
+
             return true;
         } catch (error) {
-            console.error('Error fulfilling demand card:', error);
+            console.error('Error fulfilling demand:', error);
             return false;
         }
     }

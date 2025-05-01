@@ -33,7 +33,16 @@ export enum LoadType {
   Coal = 'Coal',
   Wine = 'Wine',
   Machinery = 'Machinery',
-  Marble = 'Marble'
+  Marble = 'Marble',
+  Labor = 'Labor',
+  Fish = 'Fish',
+  Oranges = 'Oranges',
+  Chocolate = 'Chocolate',
+  Copper = 'Copper',
+  Potatoes = 'Potatoes',
+  Wood = 'Wood',
+  Oil = 'Oil',
+  Cork = 'Cork'
 }
 
 export interface RawLoadConfigItem extends Record<string, unknown> {

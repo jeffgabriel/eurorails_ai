@@ -24,13 +24,21 @@ export class DemandDeckService {
       const rawData = fs.readFileSync(configPath, 'utf8');
       const jsonData = JSON.parse(rawData);
       
-      // Transform raw cards into our internal format with IDs
-      this.cards = jsonData.DemandCards.map((card: RawDemandCard, index: number): DemandCard => ({
-        id: index + 1,  // 1-based IDs
-        destinationCity: card.DestinationCity,
-        resource: card.Resource,
-        payment: parseInt(card.Payment, 10)  // Convert payment to number
+      // Transform raw cards into our internal format
+      this.cards = jsonData.DemandCards.map((card: RawDemandCard): DemandCard => ({
+        id: card.id,
+        demands: card.demands.map(demand => ({
+          city: demand.city,
+          resource: demand.resource,
+          payment: demand.payment
+        }))
       }));
+
+      // Validate that each card has exactly 3 demands
+      const invalidCards = this.cards.filter(card => card.demands.length !== 3);
+      if (invalidCards.length > 0) {
+        throw new Error(`Found cards with incorrect number of demands: ${invalidCards.map(c => c.id).join(', ')}`);
+      }
     } catch (error) {
       console.error('Failed to load demand cards:', error);
       throw error;

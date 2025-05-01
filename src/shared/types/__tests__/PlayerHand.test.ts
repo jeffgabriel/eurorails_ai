@@ -6,21 +6,27 @@ describe("PlayerHand", () => {
   let hand: PlayerHand;
   const mockCard1: DemandCard = {
     id: 1,
-    destinationCity: "Berlin",
-    resource: LoadType.Cattle,
-    payment: 17,
+    demands: [
+      { city: "Berlin", resource: LoadType.Cattle, payment: 17 },
+      { city: "Paris", resource: LoadType.Beer, payment: 23 },
+      { city: "London", resource: LoadType.Coal, payment: 15 }
+    ]
   };
   const mockCard2: DemandCard = {
     id: 2,
-    destinationCity: "Lyon",
-    resource: LoadType.Iron,
-    payment: 26,
+    demands: [
+      { city: "Lyon", resource: LoadType.Iron, payment: 26 },
+      { city: "Madrid", resource: LoadType.Steel, payment: 19 },
+      { city: "Milano", resource: LoadType.Iron, payment: 21 }
+    ]
   };
   const mockCard3: DemandCard = {
     id: 3,
-    destinationCity: "Budapest",
-    resource: LoadType.Machinery,
-    payment: 22,
+    demands: [
+      { city: "Budapest", resource: LoadType.Machinery, payment: 22 },
+      { city: "Wien", resource: LoadType.Wine, payment: 18 },
+      { city: "Praha", resource: LoadType.Beer, payment: 24 }
+    ]
   };
 
   beforeEach(() => {
@@ -46,7 +52,14 @@ describe("PlayerHand", () => {
     hand.addCard(mockCard3);
 
     expect(() => {
-      hand.addCard({ ...mockCard1, id: 4 });
+      hand.addCard({
+        id: 4,
+        demands: [
+          { city: "Roma", resource: LoadType.Wine, payment: 20 },
+          { city: "Marseille", resource: LoadType.Wheat, payment: 25 },
+          { city: "Hamburg", resource: LoadType.Beer, payment: 22 }
+        ]
+      });
     }).toThrow("Cannot add card: hand is full (max 3 cards)");
   });
 
@@ -95,5 +108,20 @@ describe("PlayerHand", () => {
     
     // Verify the hand wasn't modified
     expect(hand.getCardCount()).toBe(1);
+  });
+
+  it("should verify each card has exactly three demands", () => {
+    const invalidCard = {
+      id: 4,
+      demands: [
+        { city: "Roma", resource: LoadType.Wine, payment: 20 },
+        { city: "Marseille", resource: LoadType.Wheat, payment: 25 }
+        // Missing third demand to test validation
+      ]
+    };
+
+    expect(() => {
+      hand.addCard(invalidCard as DemandCard);
+    }).toThrow("Demand card must have exactly 3 demands");
   });
 });
