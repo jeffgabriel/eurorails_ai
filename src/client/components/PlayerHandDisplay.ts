@@ -15,6 +15,7 @@ export class PlayerHandDisplay {
   private readonly START_Y = 140;
   private cards: DemandCard[] = [];
   private readonly HAND_HEIGHT = 280;
+  private currentContainer: Phaser.GameObjects.Container | null = null;
   
   constructor(
     scene: Phaser.Scene,
@@ -50,6 +51,9 @@ export class PlayerHandDisplay {
     this.createDemandCardSection(handArea);
     this.createTrainSection(handArea);
     this.createPlayerInfoSection(isDrawingMode, currentTrackCost, handArea);
+
+    // Store reference to the current container
+    this.currentContainer = targetContainer;
   }
 
   private createHandBackground(targetContainer: Phaser.GameObjects.Container): void {
@@ -85,7 +89,7 @@ export class PlayerHandDisplay {
     });
 
     // Add empty slots if needed
-    const maxCards = 3; // Maximum number of demand cards in hand (changed from 4 to 3)
+    const maxCards = 3; // Maximum number of demand cards in hand
     for (let i = currentPlayer.hand.length; i < maxCards; i++) {
       const x = this.START_X + (i * this.CARD_SPACING);
       const emptyCard = new DemandCard(this.scene, x, this.START_Y);

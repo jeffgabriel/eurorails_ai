@@ -4,6 +4,7 @@ import { CityData, Player, GameState } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
 import { LoadType } from '@/shared/types/LoadTypes';
+import { UIManager } from '../components/UIManager';
 
 interface LoadDialogConfig {
     city: CityData;
@@ -11,6 +12,8 @@ interface LoadDialogConfig {
     gameState: GameState;
     onClose: () => void;
     onUpdateTrainCard: () => void;
+    onUpdateHandDisplay: () => void;
+    uiManager: UIManager;
 }
 
 interface LoadOperation {
@@ -26,6 +29,8 @@ export class LoadDialogScene extends Scene {
     private gameState!: GameState;
     private onClose!: () => void;
     private onUpdateTrainCard!: () => void;
+    private onUpdateHandDisplay!: () => void;
+    private uiManager!: UIManager;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
@@ -44,6 +49,8 @@ export class LoadDialogScene extends Scene {
         this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
         this.onUpdateTrainCard = data.onUpdateTrainCard;
+        this.onUpdateHandDisplay = data.onUpdateHandDisplay;
+        this.uiManager = data.uiManager;
     }
 
     async create() {
@@ -400,6 +407,8 @@ export class LoadDialogScene extends Scene {
                 
                 // Update displays
                 this.onUpdateTrainCard();
+                this.onUpdateHandDisplay();
+                this.uiManager.setupUIOverlay();
                 
                 // Close dialog after successful delivery
                 this.closeDialog();
@@ -414,7 +423,7 @@ export class LoadDialogScene extends Scene {
             console.error('Failed to deliver load:', error);
             // Show error message to user using Phaser's add.text
             const errorText = new Phaser.GameObjects.Text(
-                this,  // Use 'this' since LoadDialogScene extends Scene
+                this,
                 0, 0,
                 'Failed to deliver load. Please try again.',
                 {
@@ -426,7 +435,7 @@ export class LoadDialogScene extends Scene {
             this.dialogContainer.add(errorText);
             
             // Remove error message after 3 seconds using Phaser's time events
-            this.time.addEvent({  // Use this.time since we extend Scene
+            this.time.addEvent({
                 delay: 3000,
                 callback: () => {
                     errorText.destroy();

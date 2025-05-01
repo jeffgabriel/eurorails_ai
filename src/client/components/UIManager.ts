@@ -81,8 +81,10 @@ export class UIManager {
       this.toggleDrawingCallback
     );
 
-    // Connect PlayerHandDisplay to TrainInteractionManager
+    // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
     this.trainInteractionManager.setPlayerHandDisplay(this.playerHandDisplay);
+    this.trainInteractionManager.setHandContainer(this.playerHandContainer);
+    this.trainInteractionManager.setUIManager(this);
 
     // Initialize the city selection manager
     this.citySelectionManager = new CitySelectionManager(
@@ -199,7 +201,7 @@ export class UIManager {
     isDrawingMode: boolean = false,
     currentTrackCost: number = 0
   ): void {
-    // Pass the playerHandContainer directly to the update method
+    // Update the player hand display with the current container
     this.playerHandDisplay.update(isDrawingMode, currentTrackCost, this.playerHandContainer);
   }
 
