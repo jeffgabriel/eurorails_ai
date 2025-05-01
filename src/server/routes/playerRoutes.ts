@@ -392,6 +392,53 @@ router.post('/game/:gameId/status', async (req, res) => {
     }
 });
 
+// Fulfill demand card
+router.post('/fulfill-demand', async (req, res) => {
+    console.debug('Received fulfill demand request at /api/players/fulfill-demand');
+    console.debug('Request body:', req.body);
+
+    try {
+        const { gameId, playerId, city, loadType, cardId } = req.body;
+
+        // Validate request
+        if (!gameId || !playerId || !city || !loadType || !cardId) {
+            console.error('Invalid request - missing required fields:', req.body);
+            return res.status(400).json({ 
+                error: 'Validation error',
+                details: 'Game ID, player ID, city, load type, and card ID are required'
+            });
+        }
+
+        // Call the service to handle the demand fulfillment
+        const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
+        console.log('Successfully fulfilled demand card');
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        console.error('Error in /fulfill-demand route:', error);
+        
+        // Handle specific error cases
+        if (error.message === 'Player not found') {
+            return res.status(404).json({ 
+                error: 'Not found',
+                details: error.message
+            });
+        }
+        if (error.message === 'Failed to draw new card') {
+            return res.status(500).json({ 
+                error: 'Deck error',
+                details: error.message
+            });
+        }
+        
+        // Generic error case
+        return res.status(500).json({ 
+            error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
 // Log that routes are being registered
 console.log('Player routes registered:');
 router.stack.forEach((r: any) => {

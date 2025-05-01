@@ -21,7 +21,7 @@ export class TrainCard {
     const trainType = player.trainType.toLowerCase().replace(/[\s-]+/g, '');
     this.trainCard = scene.add.image(0, 0, `train_card_${trainType}`);
     this.trainCard.setOrigin(0, 0);
-    this.trainCard.setScale(0.18); // Scale down to 18% of original size
+    this.trainCard.setScale(0.165); // Scale down to 18% of original size
     
     // Create load slots based on train capacity
     const capacity = player.trainType === "Heavy Freight" || player.trainType === "Superfreight" ? 3 : 2;
@@ -35,12 +35,12 @@ export class TrainCard {
   private createLoadSlots(capacity: number) {
     // Scale down slot size to match card scale
     const slotSize = 25; // Slightly smaller to match the circles
-    const padding = 15;  // Increased to match spacing between circles
+    const padding = 11;  // Increased to match spacing between circles
     
     // Position slots to match the white circles on the card
     // These values are relative to the scaled card size (18% of original)
-    const startX = 55;  // About 1/3 across the card width
-    const startY = 203; // Lowered to match circle position in bottom portion
+    const startX = 51;  // About 1/3 across the card width
+    const startY = 185; // Lowered to match circle position in bottom portion
     
     for (let i = 0; i < capacity; i++) {
       const slot = this.scene.add.rectangle(
@@ -85,7 +85,7 @@ export class TrainCard {
         );
         
         // Scale the token to fit in the slot
-        loadToken.setScale(0.45); // Slightly increased scale to match larger circle
+        loadToken.setScale(0.25); // Slightly increased scale to match larger circle
         
         // Add token to container
         tokenContainer.add(loadToken);

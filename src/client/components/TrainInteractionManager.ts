@@ -5,6 +5,7 @@ import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
+import { UIManager } from "./UIManager";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -17,6 +18,8 @@ export class TrainInteractionManager {
   private justEnteredMovementMode: boolean = false;
   private isDrawingMode: boolean = false;
   private playerHandDisplay: PlayerHandDisplay | null = null;
+  private handContainer: Phaser.GameObjects.Container | null = null;
+  private uiManager: UIManager | null = null;
   
   constructor(
     scene: Phaser.Scene,
@@ -190,6 +193,11 @@ export class TrainInteractionManager {
   }
   
   private showLoadDialog(player: Player, city: any): void {
+    if (!this.uiManager) {
+      console.error('UIManager not set');
+      return;
+    }
+
     this.scene.scene.launch('LoadDialogScene', {
       city: city,
       player: player,
@@ -202,7 +210,14 @@ export class TrainInteractionManager {
         if (this.playerHandDisplay?.trainCard) {
           this.playerHandDisplay.trainCard.updateLoads();
         }
-      }
+      },
+      onUpdateHandDisplay: () => {
+        // Update the entire player hand display using the existing container
+        if (this.playerHandDisplay && this.handContainer) {
+          this.playerHandDisplay.update(false, 0, this.handContainer);
+        }
+      },
+      uiManager: this.uiManager
     });
   }
   
@@ -440,5 +455,13 @@ export class TrainInteractionManager {
 
   public setPlayerHandDisplay(playerHandDisplay: PlayerHandDisplay): void {
     this.playerHandDisplay = playerHandDisplay;
+  }
+
+  public setHandContainer(container: Phaser.GameObjects.Container): void {
+    this.handContainer = container;
+  }
+
+  public setUIManager(uiManager: UIManager): void {
+    this.uiManager = uiManager;
   }
 }

@@ -65,6 +65,7 @@ export class GameScene extends Phaser.Scene {
 
     preload() {
         this.load.image('ferry-port', '/assets/ferry-port.png');
+        this.load.image('demand-template', '/assets/demand.png');
         
         // Preload crayon images for each player color
         const colors = ['red', 'blue', 'green', 'yellow', 'black', 'brown'];

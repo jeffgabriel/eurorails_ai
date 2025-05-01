@@ -4,6 +4,7 @@ import { CityData, Player, GameState } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
 import { LoadType } from '@/shared/types/LoadTypes';
+import { UIManager } from '../components/UIManager';
 
 interface LoadDialogConfig {
     city: CityData;
@@ -11,6 +12,8 @@ interface LoadDialogConfig {
     gameState: GameState;
     onClose: () => void;
     onUpdateTrainCard: () => void;
+    onUpdateHandDisplay: () => void;
+    uiManager: UIManager;
 }
 
 interface LoadOperation {
@@ -26,6 +29,8 @@ export class LoadDialogScene extends Scene {
     private gameState!: GameState;
     private onClose!: () => void;
     private onUpdateTrainCard!: () => void;
+    private onUpdateHandDisplay!: () => void;
+    private uiManager!: UIManager;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
@@ -44,6 +49,8 @@ export class LoadDialogScene extends Scene {
         this.gameStateService = new GameStateService(this.gameState);
         this.onClose = data.onClose;
         this.onUpdateTrainCard = data.onUpdateTrainCard;
+        this.onUpdateHandDisplay = data.onUpdateHandDisplay;
+        this.uiManager = data.uiManager;
     }
 
     async create() {
@@ -244,16 +251,31 @@ export class LoadDialogScene extends Scene {
         return container;
     }
 
-    private getDeliverableLoads(currentLoads: LoadType[]): Array<{type: LoadType, payment: number}> {
+    private getDeliverableLoads(currentLoads: LoadType[]): Array<{type: LoadType, payment: number, cardId: number}> {
         if (!this.player.hand) return [];
         
-        return this.player.hand
-            .filter(card => card.destinationCity === this.city.name)
-            .filter(card => currentLoads.includes(card.resource))
-            .map(card => ({
-                type: card.resource,
-                payment: card.payment
-            }));
+        // Flatten all demands from all cards that match the current city
+        const allPossibleDeliveries = this.player.hand.flatMap(card => 
+            card.demands
+                .filter(demand => demand.city === this.city.name)
+                .filter(demand => currentLoads.includes(demand.resource))
+                .map(demand => ({
+                    type: demand.resource,
+                    payment: demand.payment,
+                    cardId: card.id  // Track which card this demand came from
+                }))
+        );
+
+        // Remove duplicates but keep highest payment if same resource demanded by multiple cards
+        const deliveryMap = new Map<LoadType, {type: LoadType, payment: number, cardId: number}>();
+        allPossibleDeliveries.forEach(delivery => {
+            const existing = deliveryMap.get(delivery.type);
+            if (!existing || existing.payment < delivery.payment) {
+                deliveryMap.set(delivery.type, delivery);
+            }
+        });
+        
+        return Array.from(deliveryMap.values());
     }
 
     private async handleLoadPickup(loadType: LoadType) {
@@ -334,7 +356,7 @@ export class LoadDialogScene extends Scene {
         }
     }
 
-    private async handleLoadDelivery(load: {type: LoadType, payment: number}) {
+    private async handleLoadDelivery(load: {type: LoadType, payment: number, cardId: number}) {
         try {
             if (!this.player.trainState.loads) {
                 console.error('No loads found on train');
@@ -350,10 +372,11 @@ export class LoadDialogScene extends Scene {
             const newMoney = this.player.money + load.payment;
             
             try {
-                // Return the load to the city's available loads
+                // Return the load to global availability
                 await this.loadService.returnLoad(load.type);
 
-                await Promise.all([
+                // Update all game state in parallel
+                const [loadsUpdated, moneyUpdated, cardFulfilled] = await Promise.all([
                     this.gameStateService.updatePlayerLoads(
                         this.player.id,
                         this.player.trainState.loads
@@ -365,22 +388,59 @@ export class LoadDialogScene extends Scene {
                     this.gameStateService.fulfillDemandCard(
                         this.player.id,
                         this.city.name,
-                        load.type
+                        load.type,
+                        load.cardId
                     )
                 ]);
+
+                if (!loadsUpdated || !moneyUpdated || !cardFulfilled) {
+                    throw new Error('Failed to update game state');
+                }
+                
+                // Track this operation
+                this.loadOperations.push({
+                    type: 'delivery',
+                    loadType: load.type,
+                    timestamp: Date.now(),
+                    id: `${Date.now()}-${Math.random()}`
+                });
                 
                 // Update displays
                 this.onUpdateTrainCard();
+                this.onUpdateHandDisplay();
+                this.uiManager.setupUIOverlay();
+                
+                // Close dialog after successful delivery
                 this.closeDialog();
             } catch (error) {
-                // Revert changes on error
                 console.error('Failed to update game state:', error);
-                // Restore the load to the train
+                // Revert changes on error
                 this.player.trainState.loads.push(load.type);
+                await this.loadService.pickupLoad(load.type, this.city.name);
+                throw error;
             }
         } catch (error) {
             console.error('Failed to deliver load:', error);
-            // Show error message to user
+            // Show error message to user using Phaser's add.text
+            const errorText = new Phaser.GameObjects.Text(
+                this,
+                0, 0,
+                'Failed to deliver load. Please try again.',
+                {
+                    color: '#ff0000',
+                    fontSize: '16px'
+                }
+            ).setOrigin(0.5);
+            
+            this.dialogContainer.add(errorText);
+            
+            // Remove error message after 3 seconds using Phaser's time events
+            this.time.addEvent({
+                delay: 3000,
+                callback: () => {
+                    errorText.destroy();
+                }
+            });
         }
     }
 

@@ -32,8 +32,8 @@ export class LoadService {
       
       // Transform the raw configuration into our internal format
       for (const item of jsonData.LoadConfiguration) {
-        const loadType = Object.keys(item).find(key => key !== 'count') as LoadType;
-        if (loadType) {
+        const loadType = Object.keys(item).find(key => key !== 'count');
+        if (loadType && Object.values(LoadType).includes(loadType as LoadType)) {
           config[loadType] = {
             cities: item[loadType] as string[],
             count: item.count
@@ -236,6 +236,7 @@ export class LoadService {
   }
 
   public reset(): void {
+    this.loadConfiguration = this.loadConfigurationFromFile();
     this.initializeLoadStates();
   }
 }

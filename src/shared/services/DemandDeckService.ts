@@ -23,6 +23,12 @@ export class DemandDeckService {
       
       this.cards = await response.json();
       
+      // Validate that each card has exactly 3 demands
+      const invalidCards = this.cards.filter(card => card.demands.length !== 3);
+      if (invalidCards.length > 0) {
+        throw new Error(`Found cards with incorrect number of demands: ${invalidCards.map(c => c.id).join(', ')}`);
+      }
+      
       // Initialize draw pile with all card IDs
       this.drawPile = this.cards.map(card => card.id);
       this.shuffleDrawPile();

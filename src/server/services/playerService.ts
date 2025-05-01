@@ -555,4 +555,56 @@ export class PlayerService {
     const result = await db.query(query, [gameId]);
     return result.rows[0]?.status || "completed";
   }
+
+  static async fulfillDemand(
+    gameId: string,
+    playerId: string,
+    city: string,
+    loadType: string,
+    cardId: number
+  ): Promise<{ newCard: any }> {
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Get the player's current state
+      const playerQuery = `
+        SELECT hand, loads
+        FROM players
+        WHERE game_id = $1 AND id = $2
+      `;
+      const playerResult = await client.query(playerQuery, [gameId, playerId]);
+      if (playerResult.rows.length === 0) {
+        throw new Error('Player not found');
+      }
+
+      const player = playerResult.rows[0];
+      
+      // Draw a new card from the deck first
+      const newCard = await demandDeckService.drawCard();
+      if (!newCard) {
+        throw new Error('Failed to draw new card');
+      }
+      
+      // Create the new hand by replacing the fulfilled card with the new card
+      const newHand = player.hand.map(id => id === cardId ? newCard.id : id);
+
+      // Update player's hand in database
+      const updateQuery = `
+        UPDATE players
+        SET hand = $1
+        WHERE game_id = $2 AND id = $3
+      `;
+      await client.query(updateQuery, [newHand, gameId, playerId]);
+
+      await client.query('COMMIT');
+      
+      return { newCard };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
 }
