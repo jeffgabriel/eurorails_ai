@@ -101,7 +101,7 @@ export class PlayerHandDisplay {
     this.trainCard = new TrainCard(
       this.scene,
       600, // Position after demand cards
-      20, // Position relative to hand area
+      13, // Position relative to hand area
       currentPlayer
     );
 
