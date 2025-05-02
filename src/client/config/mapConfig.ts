@@ -100,8 +100,12 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   });
 });
 
+// Compute width and height dynamically from points
+const width = Math.max(...points.map(p => p.col)) + 1;
+const height = Math.max(...points.map(p => p.row)) + 1;
+
 export const mapConfig: MapConfig = {
-  width: 70, // Optionally compute from data
-  height: 90, // Optionally compute from data
+  width,
+  height,
   points,
 };

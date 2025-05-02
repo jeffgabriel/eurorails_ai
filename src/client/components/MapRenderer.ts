@@ -8,8 +8,6 @@ import { LoadService } from '../services/LoadService';
 
 export class MapRenderer {
     // Grid configuration
-    private readonly GRID_WIDTH = 70;
-    private readonly GRID_HEIGHT = 90;
     private readonly HORIZONTAL_SPACING = 35;
     private readonly VERTICAL_SPACING = 35;
     private readonly POINT_RADIUS = 3;
@@ -67,99 +65,99 @@ export class MapRenderer {
     }
 
     public calculateMapDimensions() {
-        const width = (this.GRID_WIDTH * this.HORIZONTAL_SPACING) + (this.GRID_MARGIN * 2);
-        const height = (this.GRID_HEIGHT * this.VERTICAL_SPACING) + (this.GRID_MARGIN * 2);
+        const width = (mapConfig.width * this.HORIZONTAL_SPACING) + (this.GRID_MARGIN * 2);
+        const height = (mapConfig.height * this.VERTICAL_SPACING) + (this.GRID_MARGIN * 2);
         return { width, height };
     }
 
     private drawBackgroundTerrain(): void {
-        // Clear any existing background
-        this.backgroundGraphics.clear();
+        // // Clear any existing background
+        // this.backgroundGraphics.clear();
         
-        // Draw the lake with a natural, irregular shape
-        this.backgroundGraphics.lineStyle(2, 0x4444ff, 0.3); // Light blue border
-        this.backgroundGraphics.fillStyle(0x1cb2f5, 0.2);    // Lighter blue fill with transparency
+        // // Draw the lake with a natural, irregular shape
+        // this.backgroundGraphics.lineStyle(2, 0x4444ff, 0.3); // Light blue border
+        // this.backgroundGraphics.fillStyle(0x1cb2f5, 0.2);    // Lighter blue fill with transparency
         
-        // Create a natural-looking lake shape using curves
-        const lakeCenter = {
-            x: (39 * this.HORIZONTAL_SPACING) + this.GRID_MARGIN,
-            y: (32 * this.VERTICAL_SPACING) + this.GRID_MARGIN
-        };
+        // // Create a natural-looking lake shape using curves
+        // const lakeCenter = {
+        //     x: (39 * this.HORIZONTAL_SPACING) + this.GRID_MARGIN,
+        //     y: (32 * this.VERTICAL_SPACING) + this.GRID_MARGIN
+        // };
         
-        // Draw a series of curves to create an irregular shape
-        this.backgroundGraphics.beginPath();
+        // // Draw a series of curves to create an irregular shape
+        // this.backgroundGraphics.beginPath();
         
-        // Create points for the lake shape
-        const points = [
-            { x: lakeCenter.x - 100, y: lakeCenter.y - 50 },  // Start
-            { x: lakeCenter.x - 50, y: lakeCenter.y - 120 },  // Top control
-            { x: lakeCenter.x + 50, y: lakeCenter.y - 120 },  // Top control
-            { x: lakeCenter.x + 100, y: lakeCenter.y - 50 },  // Top right
-            { x: lakeCenter.x + 150, y: lakeCenter.y },       // Right control
-            { x: lakeCenter.x + 120, y: lakeCenter.y + 100 }, // Right control
-            { x: lakeCenter.x + 50, y: lakeCenter.y + 120 },  // Bottom right
-            { x: lakeCenter.x, y: lakeCenter.y + 150 },       // Bottom control
-            { x: lakeCenter.x - 100, y: lakeCenter.y + 100 }, // Bottom control
-            { x: lakeCenter.x - 120, y: lakeCenter.y + 50 },  // Bottom left
-            { x: lakeCenter.x - 150, y: lakeCenter.y },       // Left control
-            { x: lakeCenter.x - 150, y: lakeCenter.y - 50 },  // Left control
-            { x: lakeCenter.x - 100, y: lakeCenter.y - 50 }   // Back to start
-        ];
+        // // Create points for the lake shape
+        // const points = [
+        //     { x: lakeCenter.x - 100, y: lakeCenter.y - 50 },  // Start
+        //     { x: lakeCenter.x - 50, y: lakeCenter.y - 120 },  // Top control
+        //     { x: lakeCenter.x + 50, y: lakeCenter.y - 120 },  // Top control
+        //     { x: lakeCenter.x + 100, y: lakeCenter.y - 50 },  // Top right
+        //     { x: lakeCenter.x + 150, y: lakeCenter.y },       // Right control
+        //     { x: lakeCenter.x + 120, y: lakeCenter.y + 100 }, // Right control
+        //     { x: lakeCenter.x + 50, y: lakeCenter.y + 120 },  // Bottom right
+        //     { x: lakeCenter.x, y: lakeCenter.y + 150 },       // Bottom control
+        //     { x: lakeCenter.x - 100, y: lakeCenter.y + 100 }, // Bottom control
+        //     { x: lakeCenter.x - 120, y: lakeCenter.y + 50 },  // Bottom left
+        //     { x: lakeCenter.x - 150, y: lakeCenter.y },       // Left control
+        //     { x: lakeCenter.x - 150, y: lakeCenter.y - 50 },  // Left control
+        //     { x: lakeCenter.x - 100, y: lakeCenter.y - 50 }   // Back to start
+        // ];
 
-        // Draw the lake shape
-        this.backgroundGraphics.moveTo(points[0].x, points[0].y);
-        for (let i = 1; i < points.length; i++) {
-            this.backgroundGraphics.lineTo(points[i].x, points[i].y);
-        }
+        // // Draw the lake shape
+        // this.backgroundGraphics.moveTo(points[0].x, points[0].y);
+        // for (let i = 1; i < points.length; i++) {
+        //     this.backgroundGraphics.lineTo(points[i].x, points[i].y);
+        // }
         
-        this.backgroundGraphics.closePath();
-        this.backgroundGraphics.fill();
-        this.backgroundGraphics.stroke();
+        // this.backgroundGraphics.closePath();
+        // this.backgroundGraphics.fill();
+        // this.backgroundGraphics.stroke();
         
-        // Add some detail to the lake
-        // Inner curves for depth perception
-        this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.1);
+        // // Add some detail to the lake
+        // // Inner curves for depth perception
+        // this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.1);
         
-        // Draw inner shapes for depth
-        const innerPoints = [
-            { x: lakeCenter.x - 60, y: lakeCenter.y - 30 },
-            { x: lakeCenter.x + 60, y: lakeCenter.y - 30 },
-            { x: lakeCenter.x + 60, y: lakeCenter.y + 30 },
-            { x: lakeCenter.x - 60, y: lakeCenter.y + 30 }
-        ];
+        // // Draw inner shapes for depth
+        // const innerPoints = [
+        //     { x: lakeCenter.x - 60, y: lakeCenter.y - 30 },
+        //     { x: lakeCenter.x + 60, y: lakeCenter.y - 30 },
+        //     { x: lakeCenter.x + 60, y: lakeCenter.y + 30 },
+        //     { x: lakeCenter.x - 60, y: lakeCenter.y + 30 }
+        // ];
         
-        this.backgroundGraphics.beginPath();
-        this.backgroundGraphics.moveTo(innerPoints[0].x, innerPoints[0].y);
-        for (let i = 1; i < innerPoints.length; i++) {
-            this.backgroundGraphics.lineTo(innerPoints[i].x, innerPoints[i].y);
-        }
-        this.backgroundGraphics.closePath();
-        this.backgroundGraphics.stroke();
+        // this.backgroundGraphics.beginPath();
+        // this.backgroundGraphics.moveTo(innerPoints[0].x, innerPoints[0].y);
+        // for (let i = 1; i < innerPoints.length; i++) {
+        //     this.backgroundGraphics.lineTo(innerPoints[i].x, innerPoints[i].y);
+        // }
+        // this.backgroundGraphics.closePath();
+        // this.backgroundGraphics.stroke();
         
-        // Add some subtle ripple effects using small shapes
-        for (let i = 0; i < 5; i++) {
-            const rippleX = lakeCenter.x + Math.random() * 40 - 20;
-            const rippleY = lakeCenter.y + Math.random() * 40 - 20;
-            const rippleWidth = 20 + Math.random() * 30;
-            const rippleHeight = 10 + Math.random() * 20;
+        // // Add some subtle ripple effects using small shapes
+        // for (let i = 0; i < 5; i++) {
+        //     const rippleX = lakeCenter.x + Math.random() * 40 - 20;
+        //     const rippleY = lakeCenter.y + Math.random() * 40 - 20;
+        //     const rippleWidth = 20 + Math.random() * 30;
+        //     const rippleHeight = 10 + Math.random() * 20;
             
-            this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.05);
-            this.backgroundGraphics.beginPath();
+        //     this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.05);
+        //     this.backgroundGraphics.beginPath();
             
-            // Draw oval ripples using line segments
-            for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 16) {
-                const x = rippleX + Math.cos(angle) * rippleWidth;
-                const y = rippleY + Math.sin(angle) * rippleHeight;
-                if (angle === 0) {
-                    this.backgroundGraphics.moveTo(x, y);
-                } else {
-                    this.backgroundGraphics.lineTo(x, y);
-                }
-            }
+        //     // Draw oval ripples using line segments
+        //     for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 16) {
+        //         const x = rippleX + Math.cos(angle) * rippleWidth;
+        //         const y = rippleY + Math.sin(angle) * rippleHeight;
+        //         if (angle === 0) {
+        //             this.backgroundGraphics.moveTo(x, y);
+        //         } else {
+        //             this.backgroundGraphics.lineTo(x, y);
+        //         }
+        //     }
             
-            this.backgroundGraphics.closePath();
-            this.backgroundGraphics.stroke();
-        }
+        //     this.backgroundGraphics.closePath();
+        //     this.backgroundGraphics.stroke();
+        // }
     }
 
     private addLoadSpritesToCity(
@@ -259,65 +257,30 @@ export class MapRenderer {
                 console.error('drawCityWithLoads: centerPoint is invalid for', city.name, centerPoint, city);
                 return;
             }
-            const outerPoints = city.connectedPoints.slice(1).filter(
-                p => p && typeof p.row === 'number' && typeof p.col === 'number'
-            );
-            if (outerPoints.length !== city.connectedPoints.length - 1) {
-                // eslint-disable-next-line no-console
-                console.error('drawCityWithLoads: Some outerPoints are invalid for', city.name, city.connectedPoints);
-            }
-            if (outerPoints.length === 0) {
-                // Not enough points to draw a hexagon
-                // eslint-disable-next-line no-console
-                console.error('drawCityWithLoads: No valid outerPoints for', city.name, city.connectedPoints);
-                return;
-            }
 
-            // Draw hexagonal area
-            graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
-            graphics.lineStyle(2, 0x000000, 0.7);
-            graphics.beginPath();
-
-            // Calculate center coordinates
+            // Draw a regular hexagon centered at the city center
             const centerIsOffsetRow = centerPoint.row % 2 === 1;
             const centerX = centerPoint.col * this.HORIZONTAL_SPACING + 
                          (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
             const centerY = centerPoint.row * this.VERTICAL_SPACING;
+            const hexRadius = 36; // Adjust as needed for visual size
 
-            // Sort outer points clockwise around the center
-            const sortedPoints = outerPoints
-                .map(p => ({
-                    point: p,
-                    angle: Math.atan2(
-                        p.row - centerPoint.row,
-                        p.col - centerPoint.col
-                    )
-                }))
-                .sort((a, b) => a.angle - b.angle)
-                .map(p => {
-                    if (!p.point || typeof p.point.row !== 'number' || typeof p.point.col !== 'number') {
-                        // eslint-disable-next-line no-console
-                        console.error('drawCityWithLoads: sortedPoints has invalid point for', city.name, p);
-                        return { x: 0, y: 0 }; // fallback
-                    }
-                    const pIsOffsetRow = p.point.row % 2 === 1;
-                    return {
-                        x: p.point.col * this.HORIZONTAL_SPACING + 
-                           (pIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0),
-                        y: p.point.row * this.VERTICAL_SPACING
-                    };
-                });
-
-            // Draw the hexagon if we have at least 2 points
-            if (sortedPoints.length > 1) {
-                graphics.moveTo(sortedPoints[0].x, sortedPoints[0].y);
-                for (let i = 1; i < sortedPoints.length; i++) {
-                    graphics.lineTo(sortedPoints[i].x, sortedPoints[i].y);
+            graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
+            graphics.lineStyle(2, 0x000000, 0.7);
+            graphics.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const angle = Math.PI / 3 * i - Math.PI / 6; // Start flat-top
+                const x_i = centerX + hexRadius * Math.cos(angle);
+                const y_i = centerY + hexRadius * Math.sin(angle);
+                if (i === 0) {
+                    graphics.moveTo(x_i, y_i);
+                } else {
+                    graphics.lineTo(x_i, y_i);
                 }
-                graphics.closePath();
-                graphics.fill();
-                graphics.stroke();
             }
+            graphics.closePath();
+            graphics.fill();
+            graphics.stroke();
 
             // Draw star at center point
             this.drawStar(graphics, centerX, centerY, 8);
@@ -477,8 +440,8 @@ export class MapRenderer {
 
         // First pass: Draw city areas
         const majorCities = new Set<string>();
-        for (let row = 0; row < this.GRID_HEIGHT; row++) {
-            for (let col = 0; col < this.GRID_WIDTH; col++) {
+        for (let row = 0; row < mapConfig.height; row++) {
+            for (let col = 0; col < mapConfig.width; col++) {
                 const config = terrainLookup.get(`${row},${col}`);
                 if (config?.city) {
                     const isOffsetRow = row % 2 === 1;
@@ -521,11 +484,11 @@ export class MapRenderer {
         }
 
         // Second pass: Draw regular grid points and terrain
-        for (let row = 0; row < this.GRID_HEIGHT; row++) {
+        for (let row = 0; row < mapConfig.height; row++) {
             this.gridPoints[row] = [];
             const isOffsetRow = row % 2 === 1;
             
-            for (let col = 0; col < this.GRID_WIDTH; col++) {
+            for (let col = 0; col < mapConfig.width; col++) {
                 const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                 const y = row * this.VERTICAL_SPACING;
 
@@ -714,8 +677,8 @@ export class MapRenderer {
         const approxCol = Math.floor((worldPoint.x - this.GRID_MARGIN) / this.HORIZONTAL_SPACING);
 
         // Search in a 3x3 area around the approximate position
-        for (let r = Math.max(0, approxRow - 1); r <= Math.min(this.GRID_HEIGHT - 1, approxRow + 1); r++) {
-            for (let c = Math.max(0, approxCol - 1); c <= Math.min(this.GRID_WIDTH - 1, approxCol + 1); c++) {
+        for (let r = Math.max(0, approxRow - 1); r <= Math.min(mapConfig.height - 1, approxRow + 1); r++) {
+            for (let c = Math.max(0, approxCol - 1); c <= Math.min(mapConfig.width - 1, approxCol + 1); c++) {
                 if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
                 
                 const point = this.gridPoints[r][c];
