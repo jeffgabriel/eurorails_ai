@@ -246,17 +246,38 @@ export class MapRenderer {
     ): void {
         const { city } = config;
 
-        // Draw the city based on its type
-        if (city.type === TerrainType.MajorCity && city.connectedPoints) {
+        // Defensive: Check connectedPoints for major cities
+        if (city.type === TerrainType.MajorCity) {
+            if (!city.connectedPoints || city.connectedPoints.length === 0) {
+                // eslint-disable-next-line no-console
+                console.error('drawCityWithLoads: city.connectedPoints is missing or empty for', city.name, city);
+                return;
+            }
+            const centerPoint = city.connectedPoints[0];
+            if (!centerPoint || typeof centerPoint.row !== 'number' || typeof centerPoint.col !== 'number') {
+                // eslint-disable-next-line no-console
+                console.error('drawCityWithLoads: centerPoint is invalid for', city.name, centerPoint, city);
+                return;
+            }
+            const outerPoints = city.connectedPoints.slice(1).filter(
+                p => p && typeof p.row === 'number' && typeof p.col === 'number'
+            );
+            if (outerPoints.length !== city.connectedPoints.length - 1) {
+                // eslint-disable-next-line no-console
+                console.error('drawCityWithLoads: Some outerPoints are invalid for', city.name, city.connectedPoints);
+            }
+            if (outerPoints.length === 0) {
+                // Not enough points to draw a hexagon
+                // eslint-disable-next-line no-console
+                console.error('drawCityWithLoads: No valid outerPoints for', city.name, city.connectedPoints);
+                return;
+            }
+
             // Draw hexagonal area
             graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             graphics.beginPath();
-            
-            // Find center point (first point in the array) and outer points
-            const centerPoint = city.connectedPoints[0];
-            const outerPoints = city.connectedPoints.slice(1);
-            
+
             // Calculate center coordinates
             const centerIsOffsetRow = centerPoint.row % 2 === 1;
             const centerX = centerPoint.col * this.HORIZONTAL_SPACING + 
@@ -274,6 +295,11 @@ export class MapRenderer {
                 }))
                 .sort((a, b) => a.angle - b.angle)
                 .map(p => {
+                    if (!p.point || typeof p.point.row !== 'number' || typeof p.point.col !== 'number') {
+                        // eslint-disable-next-line no-console
+                        console.error('drawCityWithLoads: sortedPoints has invalid point for', city.name, p);
+                        return { x: 0, y: 0 }; // fallback
+                    }
                     const pIsOffsetRow = p.point.row % 2 === 1;
                     return {
                         x: p.point.col * this.HORIZONTAL_SPACING + 
@@ -281,15 +307,17 @@ export class MapRenderer {
                         y: p.point.row * this.VERTICAL_SPACING
                     };
                 });
-            
-            // Draw the hexagon
-            graphics.moveTo(sortedPoints[0].x, sortedPoints[0].y);
-            for (let i = 1; i < sortedPoints.length; i++) {
-                graphics.lineTo(sortedPoints[i].x, sortedPoints[i].y);
+
+            // Draw the hexagon if we have at least 2 points
+            if (sortedPoints.length > 1) {
+                graphics.moveTo(sortedPoints[0].x, sortedPoints[0].y);
+                for (let i = 1; i < sortedPoints.length; i++) {
+                    graphics.lineTo(sortedPoints[i].x, sortedPoints[i].y);
+                }
+                graphics.closePath();
+                graphics.fill();
+                graphics.stroke();
             }
-            graphics.closePath();
-            graphics.fill();
-            graphics.stroke();
 
             // Draw star at center point
             this.drawStar(graphics, centerX, centerY, 8);
@@ -315,8 +343,11 @@ export class MapRenderer {
                 city.name,
                 city.type
             );
-        } else if (city.type === TerrainType.MediumCity) {
-            // Draw medium city circle
+            return;
+        }
+
+        // Medium and small cities (unchanged)
+        if (city.type === TerrainType.MediumCity) {
             graphics.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             graphics.beginPath();
@@ -345,8 +376,9 @@ export class MapRenderer {
                 city.name,
                 city.type
             );
-        } else if (city.type === TerrainType.SmallCity) {
-            // Draw small city square
+            return;
+        }
+        if (city.type === TerrainType.SmallCity) {
             graphics.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             const radius = this.CITY_RADIUS[TerrainType.SmallCity];
@@ -373,6 +405,7 @@ export class MapRenderer {
                 city.name,
                 city.type
             );
+            return;
         }
     }
 
@@ -410,12 +443,19 @@ export class MapRenderer {
                 });
                 
                 // Mark all connected points as part of the city
-                point.city.connectedPoints.forEach(connectedPoint => {
-                    cityAreaPoints.set(`${connectedPoint.row},${connectedPoint.col}`, {
-                        city: point.city!,
-                        terrain: point.terrain
+                if (point.city && point.city.connectedPoints) {
+                    point.city.connectedPoints.forEach(connectedPoint => {
+                        if (!connectedPoint || typeof connectedPoint.row !== 'number' || typeof connectedPoint.col !== 'number') {
+                            // Debug log for bad connectedPoint
+                            // eslint-disable-next-line no-console
+                            console.error('Bad connectedPoint in city:', point.city?.name, connectedPoint);
+                        }
+                        cityAreaPoints.set(`${connectedPoint.row},${connectedPoint.col}`, {
+                            city: point.city!,
+                            terrain: point.terrain
+                        });
                     });
-                });
+                }
             }
         });
 
@@ -460,9 +500,20 @@ export class MapRenderer {
                         const cityKey = `${config.city.name}`;
                         if (!majorCities.has(cityKey)) {
                             majorCities.add(cityKey);
+                            if (!config.city.connectedPoints.length) {
+                                // eslint-disable-next-line no-console
+                                console.error('Major city with empty connectedPoints:', config.city.name, config.city);
+                            } else if (config.city.connectedPoints.some(cp => !cp || typeof cp.row !== 'number' || typeof cp.col !== 'number')) {
+                                // eslint-disable-next-line no-console
+                                console.error('Major city with bad connectedPoint:', config.city.name, config.city.connectedPoints);
+                            }
                             this.drawCityWithLoads(cityAreas, x, y, cityConfig);
                         }
                     } else {
+                        if (config.city.type !== TerrainType.MajorCity && config.city.connectedPoints && config.city.connectedPoints.some(cp => !cp || typeof cp.row !== 'number' || typeof cp.col !== 'number')) {
+                            // eslint-disable-next-line no-console
+                            console.error('Non-major city with bad connectedPoint:', config.city.name, config.city.connectedPoints);
+                        }
                         this.drawCityWithLoads(cityAreas, x, y, cityConfig);
                     }
                 }
