@@ -380,7 +380,8 @@ export class MapRenderer {
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
             ferryConnection?: { row: number; col: number },
-            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }>, availableLoads?: string[] }
+            city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }>, availableLoads?: string[] },
+            ocean: string
         }>();
         
         // Create a map to store connected city points
@@ -394,7 +395,8 @@ export class MapRenderer {
             terrainLookup.set(`${point.row},${point.col}`, {
                 terrain: point.terrain,
                 ferryConnection: point.ferryConnection,
-                city: point.city
+                city: point.city,
+                ocean: (point as any).ocean
             });
             
             // If this is a city point, mark all its connected points
@@ -518,11 +520,18 @@ export class MapRenderer {
                 // );
                 // coordLabel.setOrigin(0, 1);
                 // this.mapContainer.add(coordLabel);
-
+                
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
-                // Skip drawing point for water terrain
-                if (terrain !== TerrainType.Water) {
+                // Draw ocean points in blue if they have a non-null 'ocean' property
+                if (config && config.ocean) {
+                    landPoints.beginPath();
+                    landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
+                    landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
+                    landPoints.closePath();
+                    landPoints.fill();
+                    landPoints.stroke();
+                } else if (terrain !== TerrainType.Water) {
                     if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
                         // Draw terrain features as before
                         const graphics = terrain === TerrainType.Alpine ? mountainPoints : hillPoints;
@@ -540,9 +549,10 @@ export class MapRenderer {
                         sprite = this.scene.add.image(x + this.GRID_MARGIN, y + this.GRID_MARGIN, 'ferry-port');
                         sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
                         this.mapContainer.add(sprite);
-                    } else {
+                    } else if (config) {
                         // Draw standard point
                         landPoints.beginPath();
+                        landPoints.fillStyle(this.terrainColors[TerrainType.Clear], 1); // Always set to black for land
                         landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
                         landPoints.closePath();
                         landPoints.fill();
@@ -683,9 +693,6 @@ export class MapRenderer {
                 
                 const point = this.gridPoints[r][c];
                 if (!point) continue;
-
-                // Skip water points
-                if (point.terrain === TerrainType.Water) continue;
 
                 // Calculate distance to this point
                 const dx = point.x - worldPoint.x;
