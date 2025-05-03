@@ -7,7 +7,7 @@ dotenv.config();
 // Development mode flag
 const DEV_MODE = process.env.NODE_ENV === 'development';
 const TEST_MODE = process.env.NODE_ENV === 'test';
-const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'true';
+const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'false';
 
 // Create a connection pool
 const pool = new Pool({

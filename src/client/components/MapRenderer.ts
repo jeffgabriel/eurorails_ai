@@ -523,15 +523,7 @@ export class MapRenderer {
                 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
 
-                // Draw ocean points in blue if they have a non-null 'ocean' property
-                if (config && config.ocean) {
-                    landPoints.beginPath();
-                    landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
-                    landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
-                    landPoints.closePath();
-                    landPoints.fill();
-                    landPoints.stroke();
-                } else if (terrain !== TerrainType.Water) {
+                if (terrain !== TerrainType.Water) {
                     if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
                         // Draw terrain features as before
                         const graphics = terrain === TerrainType.Alpine ? mountainPoints : hillPoints;
@@ -558,6 +550,14 @@ export class MapRenderer {
                         landPoints.fill();
                         landPoints.stroke();
                     }
+                    // else{
+                    //     landPoints.beginPath();
+                    //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
+                    //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
+                    //     landPoints.closePath();
+                    //     landPoints.fill();
+                    //     landPoints.stroke();
+                    // }
                 }
 
                 // Store point data with grid coordinates
