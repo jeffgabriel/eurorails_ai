@@ -264,12 +264,21 @@ export class MapRenderer {
                          (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
             const centerY = centerPoint.row * this.VERTICAL_SPACING;
             const hexRadius = 36; // Adjust as needed for visual size
+            
+            // Display debug info for connected points
+            console.debug(`City ${city.name} at (${centerPoint.row},${centerPoint.col}) has ${city.connectedPoints.length} connected points:`, 
+                city.connectedPoints.map(cp => `(${cp.row},${cp.col})`).join(', '));
 
             graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             graphics.beginPath();
+            
+            // For a flat-topped hexagon, the top and bottom sides are horizontal
+            // Start at the right-top vertex and go clockwise
             for (let i = 0; i < 6; i++) {
-                const angle = Math.PI / 3 * i - Math.PI / 6; // Start flat-top
+                // For flat-topped hex, angles start at 0° and go by 60° increments
+                // 0° = right-top, 60° = right, 120° = right-bottom, 180° = left-bottom, 240° = left, 300° = left-top
+                const angle = (i * Math.PI / 3);
                 const x_i = centerX + hexRadius * Math.cos(angle);
                 const y_i = centerY + hexRadius * Math.sin(angle);
                 if (i === 0) {
@@ -505,6 +514,17 @@ export class MapRenderer {
                 // If this point has a city, use the city's type as the terrain type for cost calculations
                 if (city) {
                     terrain = city.type;
+                    
+                    // For all major city connectedPoints, ensure we tag those as major city terrain too
+                    if (city.type === TerrainType.MajorCity && city.connectedPoints) {
+                        // Check if this point is one of the connected points for the major city
+                        const isConnectedPoint = city.connectedPoints.some(
+                            cp => cp.row === row && cp.col === col
+                        );
+                        if (isConnectedPoint) {
+                            terrain = TerrainType.MajorCity;
+                        }
+                    }
                 }
 
                 // Add coordinate label for each point

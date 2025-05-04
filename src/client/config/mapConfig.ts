@@ -1,14 +1,22 @@
 import { MapConfig, TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import mileposts from "../../../configuration/mileposts.json";
 
-const min_x = 45.836;
-const min_y = 319.591;
-const avg_dx = 150;
-const avg_dy = 120;
+// Compute min/max for normalization
+const xs = (mileposts as any[]).map(mp => mp.LocationX).filter((x: number) => typeof x === 'number');
+const ys = (mileposts as any[]).map(mp => mp.LocationY).filter((y: number) => typeof y === 'number');
+const min_x = Math.min(...xs);
+const max_x = Math.max(...xs);
+const min_y = Math.min(...ys);
+const max_y = Math.max(...ys);
+
+const gridRows = 61;
+const gridCols = 61;
 
 function toLocalGrid(x: number, y: number): { col: number; row: number } {
-  const col = Math.round((x - min_x) / avg_dx);
-  const row = Math.round((y - min_y) / avg_dy);
+  const normX = (x - min_x) / (max_x - min_x);
+  const normY = (y - min_y) / (max_y - min_y);
+  const col = Math.floor(normX * (gridCols - 1));
+  const row = Math.floor(normY * (gridRows - 1));
   return { col, row };
 }
 
@@ -97,21 +105,49 @@ const points: GridPoint[] = [];
     points.push(base);
   });
 
+// Helper for flat-topped hex grid (even-q offset)
+function getFlatTopHexNeighbors(col: number, row: number): { col: number; row: number }[] {
+  // Even-q offset (flat-topped)
+  // See https://www.redblobgames.com/grids/hexagons/#neighbors-offset
+  const evenq_directions = [
+    [+1,  0], [0, +1], [-1, +1],
+    [-1,  0], [0, -1], [+1, -1]
+  ];
+  const oddq_directions = [
+    [+1,  0], [+1, +1], [0, +1],
+    [-1,  0], [0, -1], [+1, -1]
+  ];
+  const directions = col % 2 === 0 ? evenq_directions : oddq_directions;
+  return directions.map(([dc, dr]) => ({ col: col + dc, row: row + dr }));
+}
+
 // Now, handle major cities as a group (center + outposts)
 Object.entries(majorCityGroups).forEach(([name, group]) => {
-  const connectedPoints = group
+  // Use the first outpost as the center
+  const center = group[0];
+  if (!center || typeof center.LocationX !== 'number' || typeof center.LocationY !== 'number') return;
+  const { col, row } = toLocalGrid(center.LocationX, center.LocationY);
+  if (col === undefined || row === undefined) return;
+
+  // Compute the 6 true hex neighbors for this center, in flat-topped hex order
+  // Order: E, SE, SW, W, NW, NE (clockwise from the right)
+  const neighborCoords = getFlatTopHexNeighbors(col, row);
+
+  // Map outpost points for quick lookup
+  const outpostSet = new Set(group
     .map(mp => {
       if (typeof mp.LocationX !== 'number' || typeof mp.LocationY !== 'number') return undefined;
-      const { col, row } = toLocalGrid(mp.LocationX, mp.LocationY);
-      if (col === undefined || row === undefined) return undefined;
-      return { col, row };
+      const outColRow = toLocalGrid(mp.LocationX, mp.LocationY);
+      if (outColRow.col === col && outColRow.row === row) return undefined; // skip center
+      return `${outColRow.col},${outColRow.row}`;
     })
-    .filter((p): p is { col: number; row: number } => Boolean(p));
-  // Use the first outpost as the "center"
-  const center = group[0];
-  if (!center || connectedPoints.length === 0) return; // skip if no valid points
-  const { col, row } = toLocalGrid(center.LocationX, center.LocationY);
-  if (col === undefined || row === undefined) return; // skip if center is invalid
+    .filter(Boolean)
+  );
+
+  // Use all 6 neighbor coordinates for a complete hexagon, even if not all are in the outpost set
+  // This ensures we have a complete hexagon for every major city
+  const connectedPoints = neighborCoords;
+
   points.push({
     x: center.LocationX,
     y: center.LocationY,
@@ -121,15 +157,15 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
     city: {
       type: TerrainType.MajorCity,
       name,
-      connectedPoints,
+      connectedPoints, // Always 6, in flat-topped hex order
       availableLoads: [],
     }
   });
 });
 
-// Compute width and height dynamically from points
-const width = Math.max(...points.map(p => p.col)) + 1;
-const height = Math.max(...points.map(p => p.row)) + 1;
+// Use fixed width and height for the grid
+const width = gridCols;
+const height = gridRows;
 
 export const mapConfig: MapConfig = {
   width,
