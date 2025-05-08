@@ -1,10 +1,11 @@
 import 'phaser';
 import { mapConfig } from '../config/mapConfig';
-import { TerrainType, GridPoint, CityData } from '../../shared/types/GameTypes';
+import { TerrainType, GridPoint, Point, CityData } from '../../shared/types/GameTypes';
 import { GameState } from '../../shared/types/GameTypes';
 import { TrackDrawingManager } from '../components/TrackDrawingManager';
 import { LoadService } from '../services/LoadService';
 
+// All coordinates in configuration and rendering are zero-based. Do not add or subtract 1 from row/col anywhere in this file.
 
 export class MapRenderer {
     // Grid configuration
@@ -36,12 +37,10 @@ export class MapRenderer {
 
     private readonly LOAD_SPRITE_SIZE = 24;  // Increased from 16 to 24 (50% larger)
     private readonly LOAD_SPRITE_OPACITY = 0.7;  // Opacity for load sprites
-    private readonly LOAD_SPRITE_SPACING = 30;  // Increased spacing to accommodate larger sprites
 
     private scene: Phaser.Scene;
     private mapContainer: Phaser.GameObjects.Container;
     public gridPoints: GridPoint[][] = [];
-    private gameState: GameState;
     private trackDrawingManager: TrackDrawingManager;
     private backgroundGraphics: Phaser.GameObjects.Graphics;
     private loadService: LoadService;
@@ -54,7 +53,6 @@ export class MapRenderer {
     ) {
         this.scene = scene;
         this.mapContainer = mapContainer;
-        this.gameState = gameState;
         this.trackDrawingManager = trackDrawingManager;
         this.loadService = LoadService.getInstance();
         
@@ -68,96 +66,6 @@ export class MapRenderer {
         const width = (mapConfig.width * this.HORIZONTAL_SPACING) + (this.GRID_MARGIN * 2);
         const height = (mapConfig.height * this.VERTICAL_SPACING) + (this.GRID_MARGIN * 2);
         return { width, height };
-    }
-
-    private drawBackgroundTerrain(): void {
-        // // Clear any existing background
-        // this.backgroundGraphics.clear();
-        
-        // // Draw the lake with a natural, irregular shape
-        // this.backgroundGraphics.lineStyle(2, 0x4444ff, 0.3); // Light blue border
-        // this.backgroundGraphics.fillStyle(0x1cb2f5, 0.2);    // Lighter blue fill with transparency
-        
-        // // Create a natural-looking lake shape using curves
-        // const lakeCenter = {
-        //     x: (39 * this.HORIZONTAL_SPACING) + this.GRID_MARGIN,
-        //     y: (32 * this.VERTICAL_SPACING) + this.GRID_MARGIN
-        // };
-        
-        // // Draw a series of curves to create an irregular shape
-        // this.backgroundGraphics.beginPath();
-        
-        // // Create points for the lake shape
-        // const points = [
-        //     { x: lakeCenter.x - 100, y: lakeCenter.y - 50 },  // Start
-        //     { x: lakeCenter.x - 50, y: lakeCenter.y - 120 },  // Top control
-        //     { x: lakeCenter.x + 50, y: lakeCenter.y - 120 },  // Top control
-        //     { x: lakeCenter.x + 100, y: lakeCenter.y - 50 },  // Top right
-        //     { x: lakeCenter.x + 150, y: lakeCenter.y },       // Right control
-        //     { x: lakeCenter.x + 120, y: lakeCenter.y + 100 }, // Right control
-        //     { x: lakeCenter.x + 50, y: lakeCenter.y + 120 },  // Bottom right
-        //     { x: lakeCenter.x, y: lakeCenter.y + 150 },       // Bottom control
-        //     { x: lakeCenter.x - 100, y: lakeCenter.y + 100 }, // Bottom control
-        //     { x: lakeCenter.x - 120, y: lakeCenter.y + 50 },  // Bottom left
-        //     { x: lakeCenter.x - 150, y: lakeCenter.y },       // Left control
-        //     { x: lakeCenter.x - 150, y: lakeCenter.y - 50 },  // Left control
-        //     { x: lakeCenter.x - 100, y: lakeCenter.y - 50 }   // Back to start
-        // ];
-
-        // // Draw the lake shape
-        // this.backgroundGraphics.moveTo(points[0].x, points[0].y);
-        // for (let i = 1; i < points.length; i++) {
-        //     this.backgroundGraphics.lineTo(points[i].x, points[i].y);
-        // }
-        
-        // this.backgroundGraphics.closePath();
-        // this.backgroundGraphics.fill();
-        // this.backgroundGraphics.stroke();
-        
-        // // Add some detail to the lake
-        // // Inner curves for depth perception
-        // this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.1);
-        
-        // // Draw inner shapes for depth
-        // const innerPoints = [
-        //     { x: lakeCenter.x - 60, y: lakeCenter.y - 30 },
-        //     { x: lakeCenter.x + 60, y: lakeCenter.y - 30 },
-        //     { x: lakeCenter.x + 60, y: lakeCenter.y + 30 },
-        //     { x: lakeCenter.x - 60, y: lakeCenter.y + 30 }
-        // ];
-        
-        // this.backgroundGraphics.beginPath();
-        // this.backgroundGraphics.moveTo(innerPoints[0].x, innerPoints[0].y);
-        // for (let i = 1; i < innerPoints.length; i++) {
-        //     this.backgroundGraphics.lineTo(innerPoints[i].x, innerPoints[i].y);
-        // }
-        // this.backgroundGraphics.closePath();
-        // this.backgroundGraphics.stroke();
-        
-        // // Add some subtle ripple effects using small shapes
-        // for (let i = 0; i < 5; i++) {
-        //     const rippleX = lakeCenter.x + Math.random() * 40 - 20;
-        //     const rippleY = lakeCenter.y + Math.random() * 40 - 20;
-        //     const rippleWidth = 20 + Math.random() * 30;
-        //     const rippleHeight = 10 + Math.random() * 20;
-            
-        //     this.backgroundGraphics.lineStyle(1, 0x4444ff, 0.05);
-        //     this.backgroundGraphics.beginPath();
-            
-        //     // Draw oval ripples using line segments
-        //     for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 16) {
-        //         const x = rippleX + Math.cos(angle) * rippleWidth;
-        //         const y = rippleY + Math.sin(angle) * rippleHeight;
-        //         if (angle === 0) {
-        //             this.backgroundGraphics.moveTo(x, y);
-        //         } else {
-        //             this.backgroundGraphics.lineTo(x, y);
-        //         }
-        //     }
-            
-        //     this.backgroundGraphics.closePath();
-        //     this.backgroundGraphics.stroke();
-        // }
     }
 
     private addLoadSpritesToCity(
@@ -238,20 +146,26 @@ export class MapRenderer {
 
     private drawCityWithLoads(
         graphics: Phaser.GameObjects.Graphics,
-        x: number,
-        y: number,
+        point: Point,
         config: { city: CityData; terrain: TerrainType }
     ): void {
         const { city } = config;
 
         // Defensive: Check connectedPoints for major cities
         if (city.type === TerrainType.MajorCity) {
+            if (city.name === 'Milano') {
+                // Output connectedPoints for Milano for debugging
+                console.log('Milano connectedPoints:', city.connectedPoints);
+            }
             if (!city.connectedPoints || city.connectedPoints.length === 0) {
                 // eslint-disable-next-line no-console
                 console.error('drawCityWithLoads: city.connectedPoints is missing or empty for', city.name, city);
                 return;
             }
-            const centerPoint = city.connectedPoints[0];
+            const centerPoint = {
+                row: point.row,
+                col: point.col
+            }
             if (!centerPoint || typeof centerPoint.row !== 'number' || typeof centerPoint.col !== 'number') {
                 // eslint-disable-next-line no-console
                 console.error('drawCityWithLoads: centerPoint is invalid for', city.name, centerPoint, city);
@@ -323,15 +237,15 @@ export class MapRenderer {
             graphics.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             graphics.beginPath();
-            graphics.arc(x, y, this.CITY_RADIUS[TerrainType.MediumCity], 0, Math.PI * 2);
+            graphics.arc(point.x, point.y, this.CITY_RADIUS[TerrainType.MediumCity], 0, Math.PI * 2);
             graphics.closePath();
             graphics.fill();
             graphics.stroke();
 
             // Add city name
             const cityName = this.scene.add.text(
-                x + this.GRID_MARGIN,
-                y + this.GRID_MARGIN - 15,
+                point.x + this.GRID_MARGIN,
+                point.y + this.GRID_MARGIN - 15,
                 city.name,
                 {
                     color: '#000000',
@@ -343,8 +257,8 @@ export class MapRenderer {
 
             // Add load sprites
             this.addLoadSpritesToCity(
-                x + this.GRID_MARGIN,
-                y + this.GRID_MARGIN,
+                point.x + this.GRID_MARGIN,
+                point.y + this.GRID_MARGIN,
                 city.name,
                 city.type
             );
@@ -354,13 +268,13 @@ export class MapRenderer {
             graphics.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);
             graphics.lineStyle(2, 0x000000, 0.7);
             const radius = this.CITY_RADIUS[TerrainType.SmallCity];
-            graphics.fillRect(x - radius, y - radius, radius * 2, radius * 2);
-            graphics.strokeRect(x - radius, y - radius, radius * 2, radius * 2);
+            graphics.fillRect(point.x - radius, point.y - radius, radius * 2, radius * 2);
+            graphics.strokeRect(point.x - radius, point.y - radius, radius * 2, radius * 2);
 
             // Add city name
             const cityName = this.scene.add.text(
-                x + this.GRID_MARGIN,
-                y + this.GRID_MARGIN - 15,
+                point.x + this.GRID_MARGIN,
+                point.y + this.GRID_MARGIN - 15,
                 city.name,
                 {
                     color: '#000000',
@@ -372,8 +286,8 @@ export class MapRenderer {
 
             // Add load sprites
             this.addLoadSpritesToCity(
-                x + this.GRID_MARGIN,
-                y + this.GRID_MARGIN,
+                point.x + this.GRID_MARGIN,
+                point.y + this.GRID_MARGIN,
                 city.name,
                 city.type
             );
@@ -382,21 +296,15 @@ export class MapRenderer {
     }
 
     public createTriangularGrid(): void {
-        // Draw background terrain first
-        this.drawBackgroundTerrain();
         
         // Create lookup maps
         const terrainLookup = new Map<string, { 
             terrain: TerrainType, 
             ferryConnection?: { row: number; col: number },
+            //TODO: Add centerPoint to the config for any city, allow saving the row/col of the center point
+            //points come from mapConfig which has this data - connected points only filled for major cities
             city?: { type: TerrainType; name: string; connectedPoints?: Array<{ row: number; col: number }>, availableLoads?: string[] },
             ocean: string
-        }>();
-        
-        // Create a map to store connected city points
-        const cityAreaPoints = new Map<string, { 
-            city: CityData,  // Use CityData type which includes connectedPoints
-            terrain: TerrainType 
         }>();
         
         // First pass: Build lookup maps and identify city areas
@@ -407,30 +315,6 @@ export class MapRenderer {
                 city: point.city,
                 ocean: (point as any).ocean
             });
-            
-            // If this is a city point, mark all its connected points
-            if (point.city?.connectedPoints) {
-                // Mark the center point
-                cityAreaPoints.set(`${point.row},${point.col}`, {
-                    city: point.city,
-                    terrain: point.terrain
-                });
-                
-                // Mark all connected points as part of the city
-                if (point.city && point.city.connectedPoints) {
-                    point.city.connectedPoints.forEach(connectedPoint => {
-                        if (!connectedPoint || typeof connectedPoint.row !== 'number' || typeof connectedPoint.col !== 'number') {
-                            // Debug log for bad connectedPoint
-                            // eslint-disable-next-line no-console
-                            console.error('Bad connectedPoint in city:', point.city?.name, connectedPoint);
-                        }
-                        cityAreaPoints.set(`${connectedPoint.row},${connectedPoint.col}`, {
-                            city: point.city!,
-                            terrain: point.terrain
-                        });
-                    });
-                }
-            }
         });
 
         // Create graphics objects for different elements
@@ -451,8 +335,8 @@ export class MapRenderer {
 
         // First pass: Draw city areas
         const majorCities = new Set<string>();
-        for (let row = 0; row < mapConfig.height; row++) {
-            for (let col = 0; col < mapConfig.width; col++) {
+        for (let row = 0; row <= mapConfig.height; row++) {
+            for (let col = 0; col <= mapConfig.width; col++) {
                 const config = terrainLookup.get(`${row},${col}`);
                 if (config?.city) {
                     const isOffsetRow = row % 2 === 1;
@@ -468,7 +352,7 @@ export class MapRenderer {
                         },
                         terrain: config.terrain
                     };
-
+                    const currentPoint = { col, row, x, y };
                     if (config.city.type === TerrainType.MajorCity && config.city.connectedPoints) {
                         // Only draw major city once
                         const cityKey = `${config.city.name}`;
@@ -481,35 +365,35 @@ export class MapRenderer {
                                 // eslint-disable-next-line no-console
                                 console.error('Major city with bad connectedPoint:', config.city.name, config.city.connectedPoints);
                             }
-                            this.drawCityWithLoads(cityAreas, x, y, cityConfig);
+                            console.log('Drawing city with loads:', cityConfig, x, y);
+                            this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
                         }
                     } else {
                         if (config.city.type !== TerrainType.MajorCity && config.city.connectedPoints && config.city.connectedPoints.some(cp => !cp || typeof cp.row !== 'number' || typeof cp.col !== 'number')) {
                             // eslint-disable-next-line no-console
                             console.error('Non-major city with bad connectedPoint:', config.city.name, config.city.connectedPoints);
                         }
-                        this.drawCityWithLoads(cityAreas, x, y, cityConfig);
+                        this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
                     }
                 }
             }
         }
 
         // Second pass: Draw regular grid points and terrain
-        for (let row = 0; row < mapConfig.height; row++) {
+        for (let row = 0; row <= mapConfig.height; row++) {
             this.gridPoints[row] = [];
             const isOffsetRow = row % 2 === 1;
             
-            for (let col = 0; col < mapConfig.width; col++) {
+            for (let col = 0; col <= mapConfig.width; col++) {
                 const x = col * this.HORIZONTAL_SPACING + (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
                 const y = row * this.VERTICAL_SPACING;
 
                 const config = terrainLookup.get(`${row},${col}`);
-                const cityAreaConfig = cityAreaPoints.get(`${row},${col}`);
                 
                 // Use city area config if available, otherwise use regular config
                 let terrain = config?.terrain || TerrainType.Clear;
                 const ferryConnection = config?.ferryConnection;
-                const city = cityAreaConfig?.city || config?.city;
+                const city = config?.city;
                 
                 // If this point has a city, use the city's type as the terrain type for cost calculations
                 if (city) {
@@ -529,9 +413,9 @@ export class MapRenderer {
 
                 // Add coordinate label for each point
                 // const coordLabel = this.scene.add.text(
-                //     x + this.GRID_MARGIN + 5,  // Offset slightly to the right
-                //     y + this.GRID_MARGIN - 10, // Offset slightly above
-                //     `${row},${col}`,
+                //     x + this.GRID_MARGIN,
+                //     y + this.GRID_MARGIN,
+                //     `${col},${row}`,
                 //     { 
                 //         color: '#000000',
                 //         fontSize: '8px',
@@ -542,6 +426,17 @@ export class MapRenderer {
                 // this.mapContainer.add(coordLabel);
                 
                 let sprite: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image | undefined;
+
+                // Check if this point is a connected point of any major city
+                let isConnectedPointOfMajorCity = false;
+                for (const [key, value] of terrainLookup.entries()) {
+                    if (value.city?.type === TerrainType.MajorCity && value.city.connectedPoints) {
+                        if (value.city.connectedPoints.some(cp => cp.row === row && cp.col === col)) {
+                            isConnectedPointOfMajorCity = true;
+                            break;
+                        }
+                    }
+                }
 
                 if (terrain !== TerrainType.Water) {
                     if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
@@ -561,10 +456,15 @@ export class MapRenderer {
                         sprite = this.scene.add.image(x + this.GRID_MARGIN, y + this.GRID_MARGIN, 'ferry-port');
                         sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
                         this.mapContainer.add(sprite);
-                    } else if (config) {
+                    } else if (config || isConnectedPointOfMajorCity) {
                         // Draw standard point
                         landPoints.beginPath();
-                        landPoints.fillStyle(this.terrainColors[TerrainType.Clear], 1); // Always set to black for land
+                        if(col === 40 && row === 40) {
+                            landPoints.fillStyle(0xff0000, 1);
+                        }
+                        else{
+                            landPoints.fillStyle(this.terrainColors[TerrainType.Clear], 1); // Always set to black for land
+                        }
                         landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
                         landPoints.closePath();
                         landPoints.fill();

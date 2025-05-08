@@ -328,10 +328,12 @@ export class TrackDrawingManager {
 
         // Handle first click (starting point) - still needed to initialize the pathfinding
         if (!this.lastClickedPoint) {
+            // Check if this point is either a major city or a connected point of a major city
             const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
+            const isConnectedPointOfMajorCity = this.isConnectedPointOfMajorCity(gridPoint);
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
             
-            if (!isMajorCity && !isConnectedToNetwork) {
+            if (!isMajorCity && !isConnectedPointOfMajorCity && !isConnectedToNetwork) {
                 return;
             }
             
@@ -913,5 +915,26 @@ export class TrackDrawingManager {
     // Method to update grid points after initialization
     public updateGridPoints(gridPoints: GridPoint[][]): void {
         this.gridPoints = gridPoints;
+    }
+
+    // Add this new helper method
+    private isConnectedPointOfMajorCity(point: GridPoint): boolean {
+        // Check all points in the grid for major cities
+        for (let r = 0; r < this.gridPoints.length; r++) {
+            if (!this.gridPoints[r]) continue;
+            
+            for (let c = 0; c < this.gridPoints[r].length; c++) {
+                const gridPoint = this.gridPoints[r][c];
+                if (!gridPoint?.city || gridPoint.city.type !== TerrainType.MajorCity) continue;
+                
+                // Check if the point is one of the connected points for this major city
+                if (gridPoint.city.connectedPoints?.some(cp => 
+                    cp.row === point.row && cp.col === point.col
+                )) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }
