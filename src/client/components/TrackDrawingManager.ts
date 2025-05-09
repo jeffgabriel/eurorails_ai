@@ -318,7 +318,7 @@ export class TrackDrawingManager {
         const clickedPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
-        if (!gridPoint) {
+        if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             return;
         }
 
@@ -346,6 +346,11 @@ export class TrackDrawingManager {
         if (this.previewPath.length > 0 && 
             this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
+            
+            // Verify no water points in the path
+            if (this.previewPath.some(point => point.terrain === TerrainType.Water)) {
+                return;
+            }
             
             // Calculate total cost of the path to check against player's money and turn budget
             let totalPathCost = 0;
@@ -515,6 +520,11 @@ export class TrackDrawingManager {
     }
 
     private findPreviewPath(targetPoint: GridPoint): GridPoint[] | null {
+        // Immediately return null if target point is water
+        if (targetPoint.terrain === TerrainType.Water) {
+            return null;
+        }
+
         // Get the current player's track state once
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);

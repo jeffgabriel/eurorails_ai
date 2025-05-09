@@ -504,7 +504,7 @@ export class MapRenderer {
           }
         }
 
-        // Add coordinate label for each point
+        //Add coordinate label for each point
         // const coordLabel = this.scene.add.text(
         //     x + this.GRID_MARGIN,
         //     y + this.GRID_MARGIN,
@@ -541,7 +541,7 @@ export class MapRenderer {
           }
         }
 
-        if (terrain !== TerrainType.Water) {
+       if (terrain !== TerrainType.Water) {
           if (
             terrain === TerrainType.Alpine ||
             terrain === TerrainType.Mountain
@@ -559,7 +559,16 @@ export class MapRenderer {
               graphics.fill();
             }
             graphics.stroke();
-          } else if (terrain === TerrainType.FerryPort) {
+          }  
+        //   else if (terrain === TerrainType.Water) {
+        //     landPoints.beginPath();
+        //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
+        //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
+        //     landPoints.closePath();
+        //     landPoints.fill();
+        //     landPoints.stroke();
+        // }
+        else if (terrain === TerrainType.FerryPort) {
             sprite = this.scene.add.image(
               x + this.GRID_MARGIN,
               y + this.GRID_MARGIN,
@@ -577,14 +586,7 @@ export class MapRenderer {
             landPoints.fill();
             landPoints.stroke();
           }
-          // else{
-          //     landPoints.beginPath();
-          //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
-          //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
-          //     landPoints.closePath();
-          //     landPoints.fill();
-          //     landPoints.stroke();
-          // }
+         
         }
 
         // Store point data with grid coordinates
