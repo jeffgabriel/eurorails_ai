@@ -29,7 +29,7 @@ export class CameraController {
 
     public setupCamera(): void {
         const { mapWidth, mapHeight } = this;
-        const GRID_MARGIN = 100; // Same as in MapRenderer
+        const GRID_MARGIN = 250; // Increased margin for more panning room
         
         // Set up main camera with extended bounds to allow for proper scrolling
         this.camera.setBounds(

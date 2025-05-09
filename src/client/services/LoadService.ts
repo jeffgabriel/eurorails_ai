@@ -17,12 +17,10 @@ export class LoadService {
 
   public async loadInitialState(): Promise<void> {
     if (this.isLoaded) {
-      console.log('LoadService already initialized');
       return;
     }
 
     try {
-      console.log('Fetching initial load state...');
       const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
         fetch('/api/loads/state'),
         fetch('/api/loads/dropped')
@@ -34,9 +32,6 @@ export class LoadService {
 
       const states: LoadState[] = await loadStateResponse.json();
       const droppedLoads: Array<{city_name: string, type: LoadType}> = await droppedLoadsResponse.json();
-      
-      console.log('Received load states:', states);
-      console.log('Received dropped loads:', droppedLoads);
       
       // Initialize the load states map
       states.forEach(state => {
@@ -50,21 +45,14 @@ export class LoadService {
         this.droppedLoads.set(drop.city_name, cityLoads);
       });
       
-      console.log('Initialized load states:', this.loadStates);
-      console.log('Initialized dropped loads:', this.droppedLoads);
-      
       this.isLoaded = true;
     } catch (error) {
-      console.error('Failed to load initial load state:', error);
       throw error;
     }
   }
 
   public getCityLoadDetails(city: string): Array<{ loadType: LoadType; count: number }> {
-    console.log(`Getting load details for city: ${city}`);
-    
     if (!this.isLoaded) {
-      console.error('LoadService not initialized. Call loadInitialState() first.');
       return [];
     }
     
@@ -73,7 +61,6 @@ export class LoadService {
     // First check configured loads (static city configuration)
     this.loadStates.forEach(state => {
       if (state && state.cities && state.cities.includes(city)) {
-        console.log(`Found configured load ${state.loadType} in ${city} with ${state.availableCount} available`);
         if (state.availableCount > 0) {
           loadDetails.set(state.loadType as LoadType, {
             loadType: state.loadType as LoadType,
@@ -110,7 +97,6 @@ export class LoadService {
     }
 
     const result = Array.from(loadDetails.values());
-    console.log(`Final load details for ${city}:`, result);
     return result;
   }
 
@@ -162,7 +148,6 @@ export class LoadService {
 
       return true;
     } catch (error) {
-      console.error('Failed to pick up load:', error);
       return false;
     }
   }
@@ -186,7 +171,6 @@ export class LoadService {
 
       return true;
     } catch (error) {
-      console.error('Failed to return load:', error);
       return false;
     }
   }
@@ -208,7 +192,6 @@ export class LoadService {
 
       return true;
     } catch (error) {
-      console.error('Failed to set load in city:', error);
       return false;
     }
   }

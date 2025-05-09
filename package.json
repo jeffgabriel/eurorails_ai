@@ -12,7 +12,6 @@
     "dev:server": "NODE_ENV=development npx ts-node-dev --respawn --transpile-only src/server/index.ts",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "test": "jest",
-    "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
   "keywords": [],

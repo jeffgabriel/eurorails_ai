@@ -23,7 +23,6 @@ export class LoadService {
 
   private loadConfigurationFromFile(): LoadConfiguration {
     try {
-      console.log('Loading load configuration from file...');
       const configPath = path.resolve(__dirname, '../../../configuration/load_cities.json');
       const rawData = fs.readFileSync(configPath, 'utf8');
       const jsonData = JSON.parse(rawData) as RawLoadConfig;
@@ -41,7 +40,6 @@ export class LoadService {
         }
       }
       
-      console.log('Loaded load configuration:', config);
       this.isLoaded = true;
       return config;
     } catch (error) {
@@ -51,7 +49,6 @@ export class LoadService {
   }
 
   private initializeLoadStates(): void {
-    console.log('Initializing load states...');
     for (const [loadType, config] of Object.entries(this.loadConfiguration)) {
       this.loadStates.set(loadType, {
         loadType,
@@ -60,7 +57,6 @@ export class LoadService {
         cities: config.cities
       });
     }
-    console.log('Initialized load states:', this.loadStates);
   }
 
   public async getLoadState(loadType: string): Promise<LoadState | undefined> {
@@ -68,9 +64,7 @@ export class LoadService {
   }
 
   public async getAllLoadStates(): Promise<LoadState[]> {
-    console.log('Getting all load states...');
     const states = Array.from(this.loadStates.values());
-    console.log('Returning load states:', states);
     return states;
   }
 

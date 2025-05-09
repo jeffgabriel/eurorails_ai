@@ -490,38 +490,35 @@ export class PlayerService {
     };
   }
 
-  static async getActiveGame(): Promise<{ id: string; status: string; currentPlayerIndex: number } | null> {
+  static async getActiveGame(): Promise<{ id: string; status: string; currentPlayerIndex: number; cameraState?: any } | null> {
     const query = `
-            SELECT id, status, current_player_index
-            FROM games 
-            WHERE status = 'active'
-            ORDER BY updated_at DESC
-            LIMIT 1
-        `;
-        
-        const result = await db.query(query);
-        
-        if (result.rows.length === 0) {
-            return null;
-        }
-
-        // If there are other active games, set them to 'interrupted'
-        if (result.rows.length > 0) {
-            const keepActiveId = result.rows[0].id;
-            await db.query(
-                `UPDATE games 
-                 SET status = 'interrupted' 
-                 WHERE status = 'active' 
-                 AND id != $1`,
-                [keepActiveId]
-            );
-        }
-
-        return {
-            id: result.rows[0].id,
-            status: result.rows[0].status,
-            currentPlayerIndex: result.rows[0].current_player_index
-        };
+        SELECT id, status, current_player_index, camera_state
+        FROM games 
+        WHERE status = 'active'
+        ORDER BY updated_at DESC
+        LIMIT 1
+    `;
+    const result = await db.query(query);
+    if (result.rows.length === 0) {
+        return null;
+    }
+    // If there are other active games, set them to 'interrupted'
+    if (result.rows.length > 0) {
+        const keepActiveId = result.rows[0].id;
+        await db.query(
+            `UPDATE games 
+             SET status = 'interrupted' 
+             WHERE status = 'active' 
+             AND id != $1`,
+            [keepActiveId]
+        );
+    }
+    return {
+        id: result.rows[0].id,
+        status: result.rows[0].status,
+        currentPlayerIndex: result.rows[0].current_player_index,
+        cameraState: result.rows[0].camera_state
+    };
   }
 
   static async updateGameStatus(

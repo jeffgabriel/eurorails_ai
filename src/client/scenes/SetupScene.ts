@@ -31,19 +31,32 @@ export class SetupScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState }) {
-        // If we receive a game state, use it to override our default state
-        if (data?.gameState) {
-            this.gameState = data.gameState;
-        } else {
-            // Reset to default state if no game state provided
-            this.gameState = {
-                id: IdService.generateGameId(),
-                players: [],
-                currentPlayerIndex: 0,
-                status: 'setup',
-                maxPlayers: 6
-            };
+        // Always try to fetch the active game from the backend
+        this.fetchAndSetActiveGame();
+    }
+
+    private async fetchAndSetActiveGame() {
+        try {
+            const response = await fetch('/api/players/game/active');
+            if (response.ok) {
+                const activeGame = await response.json();
+                this.gameState = activeGame;
+                // Start game scene with active game
+                this.scene.start('GameScene', { gameState: activeGame });
+                return;
+            }
+        } catch (error) {
+            console.error('Error checking for active game:', error);
         }
+        // No active game found, create a new one
+        const gameId = IdService.generateGameId();
+        this.gameState = {
+            id: gameId,
+            players: [],
+            currentPlayerIndex: 0,
+            status: 'setup',
+            maxPlayers: 6
+        };
     }
 
     preload() {

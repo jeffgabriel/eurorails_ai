@@ -20,17 +20,18 @@ beforeAll(async () => {
     }
 }, 30000);
 
-// Clean up after each test
-beforeEach(async () => {
-    try {
-        await db.query('DELETE FROM movement_history');
-        await db.query('DELETE FROM player_tracks');
-        await db.query('DELETE FROM players');
-        await db.query('DELETE FROM games');
-    } catch (err) {
-        console.error('Error during test cleanup:', err);
-        throw err;
-    }
+// Commented out to prevent database wipes during development
+describe('Setup', () => {
+//   beforeEach(async () => {
+//     await db.query('DELETE FROM movement_history');
+//     await db.query('DELETE FROM player_tracks');
+//     await db.query('DELETE FROM players');
+//     //await db.query('DELETE FROM games');
+//   });
+//   afterEach(async () => {
+//     await db.query('DELETE FROM players');
+//     //await db.query('DELETE FROM games');
+//   });
 });
 
 // Global teardown
@@ -38,7 +39,7 @@ afterAll(async () => {
     try {
         // Clean up all tables one last time
         await db.query('DELETE FROM players');
-        await db.query('DELETE FROM games');
+        //await db.query('DELETE FROM games');
     } catch (err) {
         console.error('Error during final table cleanup:', err);
         // Don't throw here, continue with pool end
