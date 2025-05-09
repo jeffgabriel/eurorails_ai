@@ -56,16 +56,101 @@ describe('TrackDrawingManager', () => {
             }
         }
 
-        // Initialize the track drawing manager
-        trackDrawingManager = new TrackDrawingManager(
-            scene as any,
-            mapContainer,
-            gameState,
-            gridPoints
-        );
+        // Create the TrackDrawingManager instance with our test grid
+        const mockGraphics = {
+            setDepth: jest.fn(),
+            lineStyle: jest.fn(),
+            beginPath: jest.fn(),
+            moveTo: jest.fn(),
+            lineTo: jest.fn(),
+            strokePath: jest.fn(),
+            clear: jest.fn()
+        };
+
+        const mockScene = {
+            add: {
+                graphics: () => mockGraphics
+            }
+        } as unknown as Phaser.Scene;
+
+        const mockContainer = {
+            add: jest.fn()
+        } as unknown as Phaser.GameObjects.Container;
+
+        const mockGameState = {
+            players: [{ id: 'player1', color: '#FF0000' }],
+            currentPlayerIndex: 0
+        } as GameState;
+
+        const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+        trackDrawingManager = manager;
     });
 
     describe('Track Cost Calculation', () => {
+        let calculateTrackCost: (from: GridPoint, to: GridPoint) => number;
+        let gridPoints: GridPoint[][];
+        let majorCityPoint: GridPoint;
+        let regularPoint: GridPoint;
+
+        beforeEach(() => {
+            // Create a simple grid of points for testing
+            majorCityPoint = {
+                x: 35,
+                y: 0,
+                row: 0,
+                col: 1,
+                terrain: TerrainType.MajorCity,
+                city: {
+                    type: TerrainType.MajorCity,
+                    name: 'Test Major City',
+                    availableLoads: [],
+                    connectedPoints: []
+                }
+            };
+
+            regularPoint = {
+                x: 70,
+                y: 0,
+                row: 0,
+                col: 2,
+                terrain: TerrainType.Clear
+            };
+
+            // Create a 3x3 grid with the major city and its outpost
+            gridPoints = Array(3).fill(null).map(() => Array(3).fill(null));
+            gridPoints[0][1] = majorCityPoint; // Major city at (0,1)
+            gridPoints[0][2] = regularPoint;   // Regular point at (0,2)
+
+            // Create the TrackDrawingManager instance with our test grid
+            const mockGraphics = {
+                setDepth: jest.fn(),
+                lineStyle: jest.fn(),
+                beginPath: jest.fn(),
+                moveTo: jest.fn(),
+                lineTo: jest.fn(),
+                strokePath: jest.fn(),
+                clear: jest.fn()
+            };
+
+            const mockScene = {
+                add: {
+                    graphics: () => mockGraphics
+                }
+            } as unknown as Phaser.Scene;
+
+            const mockContainer = {
+                add: jest.fn()
+            } as unknown as Phaser.GameObjects.Container;
+
+            const mockGameState = {
+                players: [{ id: 'player1', color: '#FF0000' }],
+                currentPlayerIndex: 0
+            } as GameState;
+
+            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            calculateTrackCost = manager['calculateTrackCost'].bind(manager);
+        });
+
         it('should calculate correct costs for different terrain types', () => {
             // Get access to the private calculateTrackCost method
             const calculateTrackCost = (trackDrawingManager as any).calculateTrackCost.bind(trackDrawingManager);
@@ -185,6 +270,60 @@ describe('TrackDrawingManager', () => {
                 // Verify correct city cost
                 expect(roundedCost).toBe(cityType.expected);
             }
+        });
+
+        it('should apply major city connection cost correctly', () => {
+            // Test 1: First connection to major city center (should cost exactly 5 ECU)
+            const firstConnectionCost = calculateTrackCost(regularPoint, majorCityPoint);
+            expect(Math.floor(firstConnectionCost)).toBe(5); // Exactly 5 ECU for first connection
+
+            // Test 2: Connection from major city (should use destination terrain cost)
+            const fromMajorCityCost = calculateTrackCost(majorCityPoint, regularPoint);
+            expect(Math.floor(fromMajorCityCost)).toBe(1); // Clear terrain cost
+
+            // Test 3: First connection to major city outpost (should also cost 5 ECU)
+            const outpostPoint: GridPoint = {
+                x: 35,
+                y: 35,
+                row: 1,
+                col: 1,
+                terrain: TerrainType.Clear
+            };
+            // Add the outpost to the grid and to the major city's connected points
+            gridPoints[1][1] = outpostPoint;
+            majorCityPoint.city = {
+                type: TerrainType.MajorCity,
+                name: 'Test Major City',
+                availableLoads: [],
+                connectedPoints: [{
+                    row: outpostPoint.row,
+                    col: outpostPoint.col
+                }]
+            };
+            const outpostConnectionCost = calculateTrackCost(regularPoint, outpostPoint);
+            expect(Math.floor(outpostConnectionCost)).toBe(5); // Exactly 5 ECU for first connection to outpost
+
+            // Test 4: Second connection to same major city (should still cost 5 ECU)
+            // We need to simulate that this is a second connection by adding a track segment
+            const playerTrackState = {
+                playerId: 'player1',
+                gameId: 'test-game-id',
+                segments: [{
+                    from: { row: 0, col: 2, x: 70, y: 0, terrain: TerrainType.Clear },
+                    to: { row: 0, col: 1, x: 35, y: 0, terrain: TerrainType.MajorCity },
+                    cost: 5
+                }],
+                totalCost: 5,
+                turnBuildCost: 5,
+                lastBuildTimestamp: new Date()
+            };
+
+            // Set the player's track state
+            (trackDrawingManager as any).playerTracks.set('player1', playerTrackState);
+
+            // Now test second connection to same major city
+            const secondConnectionCost = calculateTrackCost(regularPoint, majorCityPoint);
+            expect(Math.floor(secondConnectionCost)).toBe(5); // Major city terrain cost
         });
     });
 });
