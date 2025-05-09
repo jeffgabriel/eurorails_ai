@@ -45,6 +45,48 @@ alwaysApply: false
 5. **Container visibility**
    - Containers which need to show above others should use container.setDepth(9998);
    - Containers which should not interact with zoom or pan should use container.setScrollFactor(0);
+
+   ## UI Element and Camera Management
+
+### Container and Camera Organization
+1. **Single Source of Truth**
+   - Each UI element should be created in exactly one place
+   - Avoid creating the same UI element in multiple components
+   - Use a dedicated UI manager class to handle all UI element creation
+   - Example: Don't create settings button in both GameScene and UIManager
+
+2. **Camera Visibility**
+   - Create a separate UI camera that ignores the map container
+   - Main camera should ignore all UI containers
+   - When creating new UI elements, ensure they are added to the correct container AND properly configured for camera visibility
+   - Example:
+     ```typescript
+     // Create UI camera
+     const uiCamera = this.cameras.add(0, 0, width, height);
+     uiCamera.setScroll(0, 0);
+     uiCamera.ignore(this.mapContainer);
+
+     // Main camera ignores UI
+     this.cameras.main.ignore([this.uiContainer, this.playerHandContainer]);
+     ```
+
+3. **Container Hierarchy**
+   - Map container: For game world elements that move with the camera
+   - UI container: For fixed UI elements that stay on screen
+   - Player hand container: For player-specific UI elements
+   - Modal containers: For temporary overlays and dialogs
+
+4. **Common Pitfalls**
+   - Creating UI elements in multiple places (e.g., both scene and manager)
+   - Forgetting to set camera visibility for new UI elements
+   - Not properly cleaning up containers before adding new elements
+   - Mixing world and UI elements in the same container
+   - Not setting appropriate depth values for UI layers
+
+5. **Container Cleanup**
+   - Always clean up containers before adding new elements
+   - Use `container.removeAll(true)` to properly destroy children
+   - When switching scenes or updating UI, ensure old elements are properly destroyed
    
 
 

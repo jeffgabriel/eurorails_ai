@@ -159,42 +159,8 @@ export class UIManager {
     // Clear UI container
     this.uiContainer.removeAll(true);
     
-    // Add settings button directly to UI container
-    this.uiContainer.add(this.createSettingsButton());
-    
     // Update leaderboard directly on UI container
     this.leaderboardManager.update(this.uiContainer);
-  }
-
-  private createSettingsButton(): Phaser.GameObjects.Container {
-    const container = this.scene.add.container(0, 0);
-    
-    const LEADERBOARD_PADDING = 10;
-    const settingsButton = this.scene.add
-      .rectangle(
-        LEADERBOARD_PADDING,
-        LEADERBOARD_PADDING,
-        40,
-        40,
-        0x444444,
-        0.9
-      )
-      .setOrigin(0, 0);
-
-    const settingsIcon = this.scene.add
-      .text(LEADERBOARD_PADDING + 20, LEADERBOARD_PADDING + 20, "⚙️", {
-        fontSize: "24px",
-      })
-      .setOrigin(0.5);
-
-    settingsButton
-      .setInteractive({ useHandCursor: true })
-      .on("pointerdown", () => this.openSettingsCallback())
-      .on("pointerover", () => settingsButton.setFillStyle(0x555555))
-      .on("pointerout", () => settingsButton.setFillStyle(0x444444));
-      container.setScrollFactor(0);
-      container.setDepth(9998);
-    return container;
   }
 
   public setupPlayerHand(
