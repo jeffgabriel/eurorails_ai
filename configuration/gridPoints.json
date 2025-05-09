@@ -5915,8 +5915,8 @@
     "Id": "76101c61-b655-4a01-a9e1-122f32184357",
     "Type": "Major City Outpost",
     "Name": "Paris",
-    "GridX": 29,
-    "GridY": 30,
+    "GridX": 31,
+    "GridY": 28,
     "Ocean": null
   },
   {
@@ -6475,8 +6475,8 @@
     "Id": "98fccc4b-0eeb-4bac-99f5-e94d84e07979",
     "Type": "Milepost",
     "Name": null,
-    "GridX": 31,
-    "GridY": 28,
+    "GridX": 29,
+    "GridY": 30,
     "Ocean": null
   },
   {
@@ -9221,6 +9221,14 @@
     "Name": "Roma",
     "GridX": 42,
     "GridY": 53,
+    "Ocean": null
+  },
+  {
+    "Id": "75cdbf51-d2ae-4ffc-b197-519503605b98",
+    "Type": "Medium City",
+    "Name": "Napoli",
+    "GridX": 46,
+    "GridY": 58,
     "Ocean": null
   },
   {
