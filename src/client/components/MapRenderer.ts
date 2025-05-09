@@ -443,7 +443,7 @@ export class MapRenderer {
                   config.city.connectedPoints
                 );
               }
-              console.log("Drawing city with loads:", cityConfig, x, y);
+              //console.log("Drawing city with loads:", cityConfig, x, y);
               this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
             }
           } else {
@@ -495,11 +495,8 @@ export class MapRenderer {
           // For all major city connectedPoints, ensure we tag those as major city terrain too
           if (city.type === TerrainType.MajorCity && city.connectedPoints) {
             // Check if this point is one of the connected points for the major city
-            const isConnectedPoint = city.connectedPoints.some(
-              (cp) => cp.row === row && cp.col === col
-            );
-            if (isConnectedPoint) {
-              terrain = TerrainType.MajorCity;
+            for (const cp of city.connectedPoints) {
+                terrain = TerrainType.MajorCity;              
             }
           }
         }
