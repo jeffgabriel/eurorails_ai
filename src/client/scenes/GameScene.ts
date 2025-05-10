@@ -136,7 +136,7 @@ export class GameScene extends Phaser.Scene {
     );
 
     // Create the map
-    this.mapRenderer.createTriangularGrid();
+    this.mapRenderer.createHexagonalGrid();
 
     // Now update TrackManager with the created grid points
     this.trackManager.updateGridPoints(this.mapRenderer.gridPoints);

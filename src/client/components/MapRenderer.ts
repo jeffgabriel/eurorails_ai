@@ -331,7 +331,7 @@ export class MapRenderer {
     }
   }
 
-  public createTriangularGrid(): void {
+  public createHexagonalGrid(): void {
     // Create lookup maps
     const terrainLookup = new Map<
       string,
@@ -735,40 +735,51 @@ export class MapRenderer {
     let closestPoint: GridPoint | null = null;
     let minDistance = MAX_DISTANCE;
 
-    // Check all points in a 3x3 grid area around the cursor
+    // Calculate approximate position, accounting for row offset
     const approxRow = Math.floor(
       (worldPoint.y - this.GRID_MARGIN) / this.VERTICAL_SPACING
     );
+    const isOddRow = approxRow % 2 === 1;
+    const rowOffset = isOddRow ? this.HORIZONTAL_SPACING / 2 : 0;
     const approxCol = Math.floor(
-      (worldPoint.x - this.GRID_MARGIN) / this.HORIZONTAL_SPACING
+      (worldPoint.x - this.GRID_MARGIN - rowOffset) / this.HORIZONTAL_SPACING
     );
 
-    // Search in a 3x3 area around the approximate position
-    for (
-      let r = Math.max(0, approxRow - 1);
-      r <= Math.min(mapConfig.height - 1, approxRow + 1);
-      r++
-    ) {
-      for (
-        let c = Math.max(0, approxCol - 1);
-        c <= Math.min(mapConfig.width - 1, approxCol + 1);
-        c++
-      ) {
-        if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
+    // Search in a hexagonal pattern around the approximate position
+    // This covers the 6 surrounding hexes plus the center
+    const searchPattern = [
+      { dr: 0, dc: 0 },  // center
+      { dr: -1, dc: 0 }, // top
+      { dr: 1, dc: 0 },  // bottom
+      { dr: 0, dc: -1 }, // left
+      { dr: 0, dc: 1 },  // right
+      { dr: -1, dc: isOddRow ? 1 : -1 }, // top-left or top-right
+      { dr: 1, dc: isOddRow ? 1 : -1 },  // bottom-left or bottom-right
+    ];
 
-        const point = this.gridPoints[r][c];
-        if (!point) continue;
+    for (const { dr, dc } of searchPattern) {
+      const r = approxRow + dr;
+      const c = approxCol + dc;
 
-        // Calculate distance to this point
-        const dx = point.x - worldPoint.x;
-        const dy = point.y - worldPoint.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+      // Skip if out of bounds
+      if (r < 0 || r >= mapConfig.height || c < 0 || c >= mapConfig.width) {
+        continue;
+      }
 
-        // Update closest point if this is closer
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPoint = point;
-        }
+      if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
+
+      const point = this.gridPoints[r][c];
+      if (!point) continue;
+
+      // Calculate distance to this point
+      const dx = point.x - worldPoint.x;
+      const dy = point.y - worldPoint.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // Update closest point if this is closer
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPoint = point;
       }
     }
 
@@ -792,13 +803,12 @@ export class MapRenderer {
     const isPoint1OddRow = point1.row % 2 === 1;
     const colDiff = point2.col - point1.col; // Use directed difference
 
-    // If point1 is in an odd row
+    // In a hexagonal grid, each point can connect to two points in adjacent rows
     if (isPoint1OddRow) {
-      // Can connect to same column or one column to the right in adjacent rows
+      // For odd rows, can connect to same column or one column to the right
       return colDiff === 0 || colDiff === 1;
     } else {
-      // If point1 is in an even row
-      // Can connect to same column or one column to the left in adjacent rows
+      // For even rows, can connect to same column or one column to the left
       return colDiff === 0 || colDiff === -1;
     }
   }
