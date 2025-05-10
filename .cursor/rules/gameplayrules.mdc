@@ -202,8 +202,8 @@ Beginning Construction
 	•	A player may start building track from:
 		Any major city milepost, OR
 		Any milepost already connected to the player's track.
-	•	A player cannot build more than 2 track sections from a major city milepost in one turn.
-	•	No track may be built within the red area of a major city.
+	•	A player cannot build more than 2 track sections from a major city milepost in one turn. Drawing into a major city is rare - players will typically draw out of each major city.
+	•	No track may be built within the red area of a major city. Which means, the center point of a major city is not actually in play.
 
 Ferry Ports
 	•	Only 2 players may build to (and from) a single ferry line.
