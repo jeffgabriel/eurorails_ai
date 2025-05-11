@@ -12,6 +12,7 @@ alwaysApply: false
 
 * Every **odd-numbered row is offset right** (aka **odd-r offset**).
 * Coordinates are stored as `(col, row)`, but row determines offset.
+* Note that we use x and y for drawing game world coordinates which are distinct numbers, but the same points from col,row local coordinate system points in the configuration. These are not redundant in our GridPoint type.
 
 ---
 
