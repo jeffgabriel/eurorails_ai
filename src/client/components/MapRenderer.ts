@@ -85,10 +85,10 @@ export class MapRenderer {
     if (!loadDetails || loadDetails.length === 0) return;
 
     // Calculate starting position for load sprites
-    // Position them in a semi-circle above the city
+    // Position them in a full circle around the city
     const radius = cityType === TerrainType.MajorCity ? 45 : 30;
-    const startAngle = -Math.PI / 4; // Start from -45 degrees
-    const angleStep = Math.PI / 2 / (loadDetails.length + 1); // Spread over 90 degrees
+    const angleStep = (2 * Math.PI) / loadDetails.length; // Distribute evenly in a full circle
+    const startAngle = -Math.PI / 2; // Start from top (-90 degrees)
 
     loadDetails.forEach((load, index) => {
       try {
@@ -99,7 +99,7 @@ export class MapRenderer {
           return;
         }
 
-        const angle = startAngle + angleStep * (index + 1);
+        const angle = startAngle + angleStep * index;
         const spriteX = cityX + radius * Math.cos(angle);
         const spriteY = cityY + radius * Math.sin(angle);
 
@@ -125,8 +125,8 @@ export class MapRenderer {
         if (load.count > 1) {
           try {
             const countText = this.scene.add.text(
-              spriteX + this.LOAD_SPRITE_SIZE + 1, // Moved to the right of the sprite with 5px padding
-              spriteY, // Centered vertically with the sprite
+              spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
+              spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
               load.count.toString(),
               {
                 fontSize: "10px",
@@ -135,7 +135,7 @@ export class MapRenderer {
                 padding: { x: 2, y: 2 },
               }
             );
-            countText.setOrigin(1, 0.5); // Left-aligned and vertically centered
+            countText.setOrigin(0.5, 0.5); // Center the text
             countText.setDepth(2);
             this.mapContainer.add(countText);
           } catch (textError) {
