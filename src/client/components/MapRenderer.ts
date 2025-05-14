@@ -29,7 +29,7 @@ export class MapRenderer {
   };
 
   private readonly CITY_COLORS = {
-    [TerrainType.MajorCity]: 0xff9999, // Brighter red for major cities
+    [TerrainType.MajorCity]: 0xff000d,//0xff9999, // Brighter red for major cities
     [TerrainType.MediumCity]: 0x9999ff, // Brighter blue for cities
     [TerrainType.SmallCity]: 0x99ff99, // Brighter green for small cities
   };
@@ -203,7 +203,7 @@ export class MapRenderer {
         city.connectedPoints.map((cp) => `(${cp.row},${cp.col})`).join(", ")
       );
 
-      graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
+      graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], .7);
       graphics.lineStyle(2, 0x000000, 0.7);
       graphics.beginPath();
 
@@ -280,6 +280,7 @@ export class MapRenderer {
       );
       cityName.setOrigin(0.5, 0.5);
       this.mapContainer.add(cityName);
+      this.scene.children.bringToTop(cityName);
 
       // Add load sprites
       this.addLoadSpritesToCity(

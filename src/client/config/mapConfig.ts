@@ -1,8 +1,8 @@
 import { MapConfig, TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import mileposts from "../../../configuration/gridPoints.json";
 
-const gridRows = 61;
-const gridCols = 61;
+const gridRows = 58;
+const gridCols = 64;
 
 function mapTypeToTerrain(type: string): TerrainType {
   switch (type) {
