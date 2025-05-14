@@ -236,11 +236,13 @@ export class MapRenderer {
         city.name,
         {
           color: "#000000",
+          font: "Arial",
           fontSize: "12px",
           fontStyle: "bold",
         }
       );
       cityName.setOrigin(0.5, 0.5);
+      cityName.setText(cityName.text.toUpperCase());
       this.mapContainer.add(cityName);
 
       // Add load sprites using the center coordinates with margin
@@ -273,10 +275,11 @@ export class MapRenderer {
       const cityName = this.scene.add.text(
         point.x + this.GRID_MARGIN,
         point.y + this.GRID_MARGIN - 15,
-        city.name,
+        city.name.toUpperCase(),
         {
           color: "#000000",
           fontSize: "10px",
+          font: "Arial",
         }
       );
       cityName.setOrigin(0.5, 0.5);
@@ -313,10 +316,11 @@ export class MapRenderer {
       const cityName = this.scene.add.text(
         point.x + this.GRID_MARGIN,
         point.y + this.GRID_MARGIN - 15,
-        city.name,
+        city.name.toUpperCase(),
         {
           color: "#000000",
           fontSize: "8px",
+          font: "Arial",
         }
       );
       cityName.setOrigin(0.5, 0.5);
