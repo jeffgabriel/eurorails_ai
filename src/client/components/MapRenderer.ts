@@ -29,7 +29,7 @@ export class MapRenderer {
   };
 
   private readonly CITY_COLORS = {
-    [TerrainType.MajorCity]: 0xff9999, // Brighter red for major cities
+    [TerrainType.MajorCity]: 0xab0000, // Brighter red for major cities
     [TerrainType.MediumCity]: 0x9999ff, // Brighter blue for cities
     [TerrainType.SmallCity]: 0x99ff99, // Brighter green for small cities
   };
@@ -85,10 +85,10 @@ export class MapRenderer {
     if (!loadDetails || loadDetails.length === 0) return;
 
     // Calculate starting position for load sprites
-    // Position them in a semi-circle above the city
+    // Position them in a full circle around the city
     const radius = cityType === TerrainType.MajorCity ? 45 : 30;
-    const startAngle = -Math.PI / 4; // Start from -45 degrees
-    const angleStep = Math.PI / 2 / (loadDetails.length + 1); // Spread over 90 degrees
+    const angleStep = (2 * Math.PI) / loadDetails.length; // Distribute evenly in a full circle
+    const startAngle = -Math.PI / 2; // Start from top (-90 degrees)
 
     loadDetails.forEach((load, index) => {
       try {
@@ -99,7 +99,7 @@ export class MapRenderer {
           return;
         }
 
-        const angle = startAngle + angleStep * (index + 1);
+        const angle = startAngle + angleStep * index;
         const spriteX = cityX + radius * Math.cos(angle);
         const spriteY = cityY + radius * Math.sin(angle);
 
@@ -125,8 +125,8 @@ export class MapRenderer {
         if (load.count > 1) {
           try {
             const countText = this.scene.add.text(
-              spriteX + this.LOAD_SPRITE_SIZE + 1, // Moved to the right of the sprite with 5px padding
-              spriteY, // Centered vertically with the sprite
+              spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
+              spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
               load.count.toString(),
               {
                 fontSize: "10px",
@@ -135,7 +135,7 @@ export class MapRenderer {
                 padding: { x: 2, y: 2 },
               }
             );
-            countText.setOrigin(1, 0.5); // Left-aligned and vertically centered
+            countText.setOrigin(0.5, 0.5); // Center the text
             countText.setDepth(2);
             this.mapContainer.add(countText);
           } catch (textError) {
@@ -203,7 +203,8 @@ export class MapRenderer {
         city.connectedPoints.map((cp) => `(${cp.row},${cp.col})`).join(", ")
       );
 
-      graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], 0.7);
+      graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], .8);
+      graphics.blendMode = Phaser.BlendModes.MULTIPLY;
       graphics.lineStyle(2, 0x000000, 0.7);
       graphics.beginPath();
 
@@ -235,11 +236,13 @@ export class MapRenderer {
         city.name,
         {
           color: "#000000",
+          font: "Arial",
           fontSize: "12px",
           fontStyle: "bold",
         }
       );
       cityName.setOrigin(0.5, 0.5);
+      cityName.setText(cityName.text.toUpperCase());
       this.mapContainer.add(cityName);
 
       // Add load sprites using the center coordinates with margin
@@ -272,14 +275,16 @@ export class MapRenderer {
       const cityName = this.scene.add.text(
         point.x + this.GRID_MARGIN,
         point.y + this.GRID_MARGIN - 15,
-        city.name,
+        city.name.toUpperCase(),
         {
           color: "#000000",
           fontSize: "10px",
+          font: "Arial",
         }
       );
       cityName.setOrigin(0.5, 0.5);
       this.mapContainer.add(cityName);
+      this.scene.children.bringToTop(cityName);
 
       // Add load sprites
       this.addLoadSpritesToCity(
@@ -311,10 +316,11 @@ export class MapRenderer {
       const cityName = this.scene.add.text(
         point.x + this.GRID_MARGIN,
         point.y + this.GRID_MARGIN - 15,
-        city.name,
+        city.name.toUpperCase(),
         {
           color: "#000000",
           fontSize: "8px",
+          font: "Arial",
         }
       );
       cityName.setOrigin(0.5, 0.5);
@@ -331,7 +337,7 @@ export class MapRenderer {
     }
   }
 
-  public createTriangularGrid(): void {
+  public createHexagonalGrid(): void {
     // Create lookup maps
     const terrainLookup = new Map<
       string,
@@ -443,7 +449,7 @@ export class MapRenderer {
                   config.city.connectedPoints
                 );
               }
-              console.log("Drawing city with loads:", cityConfig, x, y);
+              //console.log("Drawing city with loads:", cityConfig, x, y);
               this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
             }
           } else {
@@ -495,16 +501,13 @@ export class MapRenderer {
           // For all major city connectedPoints, ensure we tag those as major city terrain too
           if (city.type === TerrainType.MajorCity && city.connectedPoints) {
             // Check if this point is one of the connected points for the major city
-            const isConnectedPoint = city.connectedPoints.some(
-              (cp) => cp.row === row && cp.col === col
-            );
-            if (isConnectedPoint) {
-              terrain = TerrainType.MajorCity;
+            for (const cp of city.connectedPoints) {
+                terrain = TerrainType.MajorCity;              
             }
           }
         }
 
-        // Add coordinate label for each point
+        //Add coordinate label for each point
         // const coordLabel = this.scene.add.text(
         //     x + this.GRID_MARGIN,
         //     y + this.GRID_MARGIN,
@@ -541,7 +544,7 @@ export class MapRenderer {
           }
         }
 
-        if (terrain !== TerrainType.Water) {
+       if (terrain !== TerrainType.Water) {
           if (
             terrain === TerrainType.Alpine ||
             terrain === TerrainType.Mountain
@@ -559,7 +562,16 @@ export class MapRenderer {
               graphics.fill();
             }
             graphics.stroke();
-          } else if (terrain === TerrainType.FerryPort) {
+          }  
+        //   else if (terrain === TerrainType.Water) {
+        //     landPoints.beginPath();
+        //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
+        //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
+        //     landPoints.closePath();
+        //     landPoints.fill();
+        //     landPoints.stroke();
+        // }
+        else if (terrain === TerrainType.FerryPort) {
             sprite = this.scene.add.image(
               x + this.GRID_MARGIN,
               y + this.GRID_MARGIN,
@@ -577,14 +589,7 @@ export class MapRenderer {
             landPoints.fill();
             landPoints.stroke();
           }
-          // else{
-          //     landPoints.beginPath();
-          //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
-          //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
-          //     landPoints.closePath();
-          //     landPoints.fill();
-          //     landPoints.stroke();
-          // }
+         
         }
 
         // Store point data with grid coordinates
@@ -736,40 +741,51 @@ export class MapRenderer {
     let closestPoint: GridPoint | null = null;
     let minDistance = MAX_DISTANCE;
 
-    // Check all points in a 3x3 grid area around the cursor
+    // Calculate approximate position, accounting for row offset
     const approxRow = Math.floor(
       (worldPoint.y - this.GRID_MARGIN) / this.VERTICAL_SPACING
     );
+    const isOddRow = approxRow % 2 === 1;
+    const rowOffset = isOddRow ? this.HORIZONTAL_SPACING / 2 : 0;
     const approxCol = Math.floor(
-      (worldPoint.x - this.GRID_MARGIN) / this.HORIZONTAL_SPACING
+      (worldPoint.x - this.GRID_MARGIN - rowOffset) / this.HORIZONTAL_SPACING
     );
 
-    // Search in a 3x3 area around the approximate position
-    for (
-      let r = Math.max(0, approxRow - 1);
-      r <= Math.min(mapConfig.height - 1, approxRow + 1);
-      r++
-    ) {
-      for (
-        let c = Math.max(0, approxCol - 1);
-        c <= Math.min(mapConfig.width - 1, approxCol + 1);
-        c++
-      ) {
-        if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
+    // Search in a hexagonal pattern around the approximate position
+    // This covers the 6 surrounding hexes plus the center
+    const searchPattern = [
+      { dr: 0, dc: 0 },  // center
+      { dr: -1, dc: 0 }, // top
+      { dr: 1, dc: 0 },  // bottom
+      { dr: 0, dc: -1 }, // left
+      { dr: 0, dc: 1 },  // right
+      { dr: -1, dc: isOddRow ? 1 : -1 }, // top-left or top-right
+      { dr: 1, dc: isOddRow ? 1 : -1 },  // bottom-left or bottom-right
+    ];
 
-        const point = this.gridPoints[r][c];
-        if (!point) continue;
+    for (const { dr, dc } of searchPattern) {
+      const r = approxRow + dr;
+      const c = approxCol + dc;
 
-        // Calculate distance to this point
-        const dx = point.x - worldPoint.x;
-        const dy = point.y - worldPoint.y;
-        const distance = Math.sqrt(dx * dx + dy * dy);
+      // Skip if out of bounds
+      if (r < 0 || r >= mapConfig.height || c < 0 || c >= mapConfig.width) {
+        continue;
+      }
 
-        // Update closest point if this is closer
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPoint = point;
-        }
+      if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
+
+      const point = this.gridPoints[r][c];
+      if (!point) continue;
+
+      // Calculate distance to this point
+      const dx = point.x - worldPoint.x;
+      const dy = point.y - worldPoint.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // Update closest point if this is closer
+      if (distance < minDistance) {
+        minDistance = distance;
+        closestPoint = point;
       }
     }
 
@@ -793,13 +809,12 @@ export class MapRenderer {
     const isPoint1OddRow = point1.row % 2 === 1;
     const colDiff = point2.col - point1.col; // Use directed difference
 
-    // If point1 is in an odd row
+    // In a hexagonal grid, each point can connect to two points in adjacent rows
     if (isPoint1OddRow) {
-      // Can connect to same column or one column to the right in adjacent rows
+      // For odd rows, can connect to same column or one column to the right
       return colDiff === 0 || colDiff === 1;
     } else {
-      // If point1 is in an even row
-      // Can connect to same column or one column to the left in adjacent rows
+      // For even rows, can connect to same column or one column to the left
       return colDiff === 0 || colDiff === -1;
     }
   }

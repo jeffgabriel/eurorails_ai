@@ -318,7 +318,7 @@ export class TrackDrawingManager {
         const clickedPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
-        if (!gridPoint) {
+        if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             return;
         }
 
@@ -346,6 +346,11 @@ export class TrackDrawingManager {
         if (this.previewPath.length > 0 && 
             this.previewPath[this.previewPath.length - 1].row === gridPoint.row && 
             this.previewPath[this.previewPath.length - 1].col === gridPoint.col) {
+            
+            // Verify no water points in the path
+            if (this.previewPath.some(point => point.terrain === TerrainType.Water)) {
+                return;
+            }
             
             // Calculate total cost of the path to check against player's money and turn budget
             let totalPathCost = 0;
@@ -515,6 +520,11 @@ export class TrackDrawingManager {
     }
 
     private findPreviewPath(targetPoint: GridPoint): GridPoint[] | null {
+        // Immediately return null if target point is water
+        if (targetPoint.terrain === TerrainType.Water) {
+            return null;
+        }
+
         // Get the current player's track state once
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
@@ -801,9 +811,32 @@ export class TrackDrawingManager {
         // Get the base cost from the terrain type
         let cost = this.TERRAIN_COSTS[to.terrain];
 
+        // Special handling for major city connections:
+        // 1. First connection TO a major city or its outpost costs exactly 5 ECU
+        // 2. Connections FROM a major city or its outpost use the destination's terrain cost
+        // 3. Subsequent connections TO a major city or its outpost use the terrain cost
+        const isToMajorCity = to.city?.type === TerrainType.MajorCity || this.isConnectedPointOfMajorCity(to);
+        const isFromMajorCity = from.city?.type === TerrainType.MajorCity || this.isConnectedPointOfMajorCity(from);
 
-        // Add river/water crossing costs if applicable
-        // TODO: Implement water crossing detection and costs
+        if (isToMajorCity && !isFromMajorCity) {
+            // Get current player's track state
+            const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+            const playerTrackState = this.playerTracks.get(currentPlayer.id);
+            
+            // Check if this is the first connection to this major city or its outpost
+            const isFirstConnection = !playerTrackState?.segments.some(segment => 
+                (segment.from.row === to.row && segment.from.col === to.col) ||
+                (segment.to.row === to.row && segment.to.col === to.col)
+            ) && !this.currentSegments.some(segment =>
+                (segment.from.row === to.row && segment.from.col === to.col) ||
+                (segment.to.row === to.row && segment.to.col === to.col)
+            );
+            
+            if (isFirstConnection) {
+                // First connection to major city or its outpost is exactly 5 ECU
+                cost = 5;
+            }
+        }
         
         // Add a very small additional cost for diagonal movement to prefer straight paths when costs are equal
         // This ensures the algorithm prefers horizontal/vertical paths when multiple paths have the same terrain cost

@@ -47,7 +47,6 @@ describe('LoadService', () => {
   });
 
   beforeEach(async () => {
-    console.warn('TEST CLEANUP RUNNING');
     // Clean up any existing test data
     await client.query('DELETE FROM load_chips');
     await client.query('DELETE FROM games');
@@ -63,9 +62,7 @@ describe('LoadService', () => {
     loadService.reset();
   });
 
-  afterEach(async () => {
-    console.warn('TEST CLEANUP RUNNING');
-    // Clean up test data
+  afterEach(async () => {    // Clean up test data
     await client.query('DELETE FROM load_chips');
     await client.query('DELETE FROM games');
   });

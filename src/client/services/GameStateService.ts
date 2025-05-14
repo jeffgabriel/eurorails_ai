@@ -108,10 +108,10 @@ export class GameStateService {
         row: number, 
         col: number
     ): Promise<boolean> {
-        console.log('GameStateService.updatePlayerPosition - Initial state:', {
-            playerCount: this.gameState.players.length,
-            players: this.gameState.players.map(p => ({ id: p.id, name: p.name }))
-        });
+        // console.log('GameStateService.updatePlayerPosition - Initial state:', {
+        //     playerCount: this.gameState.players.length,
+        //     players: this.gameState.players.map(p => ({ id: p.id, name: p.name }))
+        // });
 
         // Find player in the local state and update position
         const playerIndex = this.gameState.players.findIndex(p => p.id === playerId);
@@ -134,10 +134,10 @@ export class GameStateService {
         // Now safely set the position
         this.gameState.players[playerIndex].trainState.position = { x, y, row, col };
         
-        console.log('GameStateService.updatePlayerPosition - After local update:', {
-            playerCount: this.gameState.players.length,
-            players: this.gameState.players.map(p => ({ id: p.id, name: p.name }))
-        });
+        // console.log('GameStateService.updatePlayerPosition - After local update:', {
+        //     playerCount: this.gameState.players.length,
+        //     players: this.gameState.players.map(p => ({ id: p.id, name: p.name }))
+        // });
         
         try {
             // Update the player in the database

@@ -1,8 +1,8 @@
 import { MapConfig, TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import mileposts from "../../../configuration/gridPoints.json";
 
-const gridRows = 61;
-const gridCols = 61;
+const gridRows = 58;
+const gridCols = 64;
 
 function mapTypeToTerrain(type: string): TerrainType {
   switch (type) {
@@ -32,26 +32,6 @@ function mapTypeToTerrain(type: string): TerrainType {
 
 const assignedCells = new Set<string>();
 
-function findNearestAvailableCell(col: number, row: number): { col: number, row: number } {
-  // Try the intended cell first
-  if (!assignedCells.has(`${col},${row}`)) return { col, row };
-
-  // Spiral search for the nearest available cell
-  for (let radius = 1; radius < 20; radius++) {
-    for (let dCol = -radius; dCol <= radius; dCol++) {
-      for (let dRow = -radius; dRow <= radius; dRow++) {
-        if (Math.abs(dCol) !== radius && Math.abs(dRow) !== radius) continue; // Only check the border
-        const tryCol = col + dCol;
-        const tryRow = row + dRow;
-        if (!assignedCells.has(`${tryCol},${tryRow}`)) {
-          return { col: tryCol, row: tryRow };
-        }
-      }
-    }
-  }
-  throw new Error('No available cell found for point!');
-}
-
 // Group major city outposts by name
 const majorCityGroups: { [name: string]: any[] } = {};
 mileposts.forEach((mp: any) => {
@@ -79,7 +59,6 @@ const points: GridPoint[] = [];
     if (typeof mp.GridX !== 'number' || typeof mp.GridY !== 'number') return;
     let col = mp.GridX;
     let row = mp.GridY;
-    ({ col, row } = findNearestAvailableCell(col, row));
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
     const base: GridPoint = { x: col, y: row, col, row, terrain };
@@ -103,10 +82,9 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   if (!center || typeof center.GridX !== 'number' || typeof center.GridY !== 'number') return;
   const col = center.GridX;
   const row = center.GridY;
-  console.log('center', center);
   
   const connectedPoints = group.slice(1, 7).map(outpost => ({ col: outpost.GridX, row: outpost.GridY }));
-  console.log('connectedPoints', connectedPoints);
+
   points.push({
     x: center.GridX,
     y: center.GridY,
