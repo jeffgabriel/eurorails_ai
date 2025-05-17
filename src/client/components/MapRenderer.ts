@@ -680,18 +680,42 @@ export class MapRenderer {
           (isToOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
         const toY = pointB.row * this.VERTICAL_SPACING;
 
-        // Draw the ferry connection line
+        // Draw the ferry connection line with a gentle, smooth upward arc
         ferryConnections.beginPath();
         ferryConnections.moveTo(fromX, fromY);
-        ferryConnections.lineTo(toX, toY);
+        
+        // Calculate control point for the curve
+        const curveMidX = (fromX + toX) / 2;
+        const curveMidY = (fromY + toY) / 2;
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const offset = length * 0.08; // Smaller offset for a milder curve
+        // Perpendicular vector (flip sign on perpY for upward arc)
+        const perpX = -dy / length;
+        const perpY = -dx / length; // negative for upward
+        const controlX = curveMidX + perpX * offset;
+        const controlY = curveMidY + perpY * offset;
+        // Draw the curve using multiple segments for smoothness
+        const segments = 24;
+        let midCurveX = 0;
+        let midCurveY = 0;
+        for (let i = 1; i <= segments; i++) {
+          const t = i / segments;
+          // Quadratic Bézier formula
+          const x = (1 - t) * (1 - t) * fromX + 2 * (1 - t) * t * controlX + t * t * toX;
+          const y = (1 - t) * (1 - t) * fromY + 2 * (1 - t) * t * controlY + t * t * toY;
+          ferryConnections.lineTo(x, y);
+          // Save midpoint at t=0.5 for the cost circle
+          if (Math.abs(t - 0.5) < 1e-2) {
+            midCurveX = x;
+            midCurveY = y;
+          }
+        }
         ferryConnections.stroke();
 
-        // Calculate midpoint for the cost circle
-        const midX = (fromX + toX) / 2;
-        const midY = (fromY + toY) / 2;
-
-        // Draw the circled cost using the ferry's cost
-        const text = this.drawCircledNumber(ferryCosts, midX, midY, ferry.cost);
+        // Draw the circled cost at the midpoint of the curve
+        const text = this.drawCircledNumber(ferryCosts, midCurveX, midCurveY, ferry.cost);
         ferryCostsText.push(text);
       });
     }
