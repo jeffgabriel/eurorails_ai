@@ -18,7 +18,7 @@ export class MapRenderer {
   private readonly VERTICAL_SPACING = 35;
   private readonly POINT_RADIUS = 3;
   private readonly GRID_MARGIN = 100; // Increased margin around the grid
-  private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
+  private readonly FERRY_ICON_SIZE = 14; // Size for the ferry icon
 
   private readonly terrainColors = {
     [TerrainType.Clear]: 0x000000,
@@ -577,6 +577,9 @@ export class MapRenderer {
               y + this.GRID_MARGIN,
               "ferry-port"
             );
+            sprite.setScale(1);
+            sprite.setOrigin(0.5, 0.5);
+            this.scene.textures.get('ferry-port').setFilter(Phaser.Textures.FilterMode.LINEAR);
             sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
             this.mapContainer.add(sprite);
           } else if (config || isConnectedPointOfMajorCity) {

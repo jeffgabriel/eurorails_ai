@@ -64,7 +64,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.image("ferry-port", "/assets/ferry-port.png");
+    this.load.svg("ferry-port", "/assets/ferry-port.svg", { scale: 0.05 });
     this.load.image("demand-template", "/assets/demand.png");
 
     // Preload crayon images for each player color

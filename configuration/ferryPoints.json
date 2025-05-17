@@ -1,0 +1,76 @@
+{
+  "ferryPoints": [
+    {
+      "Name": "Belfast_Stranraer",
+      "connections": [
+        "42e3067a-af56-447d-9fef-993c7102989a",
+        "be053def-548e-465a-963b-5eb0c943a635"
+      ],
+      "cost": 4
+    },
+    {
+      "Name": "Dublin_Liverpool",
+      "connections": [
+        "fd8a31c7-2442-483c-bcf1-36f3c1b3c128",
+        "94a8a3a8-d0b3-436a-90f8-527fc8b98e71"
+      ],
+      "cost": 8
+    },
+    {
+      "Name": "Plymouth_Cherbourg",
+      "connections": [
+        "5c6e1c2a-a0c8-438c-8863-32c50034921f",
+        "9f982cd2-73bf-4aa5-b8f9-710972b1e449"
+      ],
+      "cost": 4
+    },
+    {
+      "Name": "Portsmouth_LeHavre",
+      "connections": [
+        "dd892132-7be7-4c45-873d-09d863cec733",
+        "363da834-6e2a-452b-922c-e9844275fad0"
+      ],
+      "cost": 4
+    },
+    {
+      "Name": "Dover_Calais",
+      "connections": [
+        "7b1e2373-9504-4404-ab1f-0f26724439f4",
+        "088aa69d-3be2-4232-8006-d945c8985685"
+      ],
+      "cost": 4
+    },
+    {
+      "Name": "Harwich_Ijmuiden",
+      "connections": [
+        "ff2d5e96-ae65-480a-bd37-639fd0ecaa18",
+        "ff069f4c-7d39-4c2a-bdfc-fccbf7c68297"
+      ],
+      "cost": 4
+    },
+    {
+      "Name": "Newcastle_Esbjerg",
+      "connections": [
+        "7ea87d74-44fe-45b0-9388-62cd3ebe7a82",
+        "a98856ad-73c7-4c06-8100-831000b2b405"
+      ],
+      "cost": 16
+    },
+    {
+      "Name": "Kristiansand_Hirtshals",
+      "connections": [
+        "d4d549d7-6c59-4c6e-9642-8538380cff97",
+        "d4d549d7-6c59-4c8e-9642-8538380cff97"
+      ],
+      "cost": 8
+    },
+    {
+      "Name": "Malmo_Sassnitz",
+      "connections": [
+        "2a0d3d67-ea72-492d-a74f-8b1b02989ffa",
+        "106abac8-6586-4398-b98b-5cf28a421687"
+      ],
+      "cost": 8
+    }
+  ]
+}
