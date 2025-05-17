@@ -582,6 +582,20 @@ export class MapRenderer {
             this.scene.textures.get('ferry-port').setFilter(Phaser.Textures.FilterMode.LINEAR);
             sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
             this.mapContainer.add(sprite);
+
+            // Add ferry port name
+            const portName = this.scene.add.text(
+              x + this.GRID_MARGIN - this.FERRY_ICON_SIZE/2, // Align left of the icon
+              y + this.GRID_MARGIN + this.FERRY_ICON_SIZE/2 + 3, // Position below the icon
+              config?.city?.name || "Port", // Use city name if available, otherwise "Port"
+              {
+                color: "#000000",
+                fontSize: "7px", // Smaller than small city (8px)
+                fontFamily: "sans-serif",
+              }
+            );
+            portName.setOrigin(0, 0); // Align text to top-left
+            this.mapContainer.add(portName);
           } else if (config || isConnectedPointOfMajorCity) {
             // Draw standard point
             landPoints.beginPath();

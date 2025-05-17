@@ -62,7 +62,7 @@ const points: GridPoint[] = [];
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
     const base: GridPoint = { x: col, y: row, col, row, terrain };
-    if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City")) {
+    if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port")) {
       base.city = {
         type: terrain,
         name: mp.Name,
