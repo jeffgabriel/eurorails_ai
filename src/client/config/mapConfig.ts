@@ -127,16 +127,17 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
   }
 
   // Set ferry connection on both points and update their terrain type
-  point1.ferryConnection = { row: point2.row, col: point2.col };
-  point2.ferryConnection = { row: point1.row, col: point1.col };
-  point1.terrain = TerrainType.FerryPort;
-  point2.terrain = TerrainType.FerryPort;
-
-  return {
+  const ferryConnection: FerryConnection = {
     Name: ferry.Name,
     connections: [point1, point2],
     cost: ferry.cost
   };
+  point1.ferryConnection = ferryConnection;
+  point2.ferryConnection = ferryConnection;
+  point1.terrain = TerrainType.FerryPort;
+  point2.terrain = TerrainType.FerryPort;
+
+  return ferryConnection;
 });
 
 // Use fixed width and height for the grid

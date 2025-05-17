@@ -109,10 +109,7 @@ export interface Point {
 export interface GridPoint extends Point {
     id: string;
     terrain: TerrainType;
-    ferryConnection?: { 
-        row: number; 
-        col: number; 
-    };
+    ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
     
     // Runtime properties

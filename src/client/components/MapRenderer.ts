@@ -5,6 +5,7 @@ import {
   GridPoint,
   Point,
   CityData,
+  FerryConnection,
 } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -344,7 +345,7 @@ export class MapRenderer {
       {
         id: string;
         terrain: TerrainType;
-        ferryConnection?: { row: number; col: number };
+        ferryConnection?: FerryConnection;
         //TODO: Add centerPoint to the config for any city, allow saving the row/col of the center point
         //points come from mapConfig which has this data - connected points only filled for major cities
         city?: {
@@ -690,7 +691,7 @@ export class MapRenderer {
         const dx = toX - fromX;
         const dy = toY - fromY;
         const length = Math.sqrt(dx * dx + dy * dy);
-        const offset = length * 0.08; // Smaller offset for a milder curve
+        const offset = length * 0.1; // Smaller offset for a milder curve
         // Perpendicular vector (flip sign on perpY for upward arc)
         const perpX = -dy / length;
         const perpY = -dx / length; // negative for upward
