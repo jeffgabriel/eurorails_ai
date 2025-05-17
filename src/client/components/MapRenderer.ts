@@ -342,6 +342,7 @@ export class MapRenderer {
     const terrainLookup = new Map<
       string,
       {
+        id: string;
         terrain: TerrainType;
         ferryConnection?: { row: number; col: number };
         //TODO: Add centerPoint to the config for any city, allow saving the row/col of the center point
@@ -359,6 +360,7 @@ export class MapRenderer {
     // First pass: Build lookup maps and identify city areas
     mapConfig.points.forEach((point) => {
       terrainLookup.set(`${point.row},${point.col}`, {
+        id: point.id,
         terrain: point.terrain,
         ferryConnection: point.ferryConnection,
         city: point.city,
@@ -611,6 +613,7 @@ export class MapRenderer {
 
         // Store point data with grid coordinates
         this.gridPoints[row][col] = {
+          id: config?.id || "",
           x: x + this.GRID_MARGIN,
           y: y + this.GRID_MARGIN,
           row,

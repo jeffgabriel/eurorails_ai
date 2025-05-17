@@ -47,6 +47,7 @@ describe('TrackDrawingManager', () => {
             for (let col = 0; col < 3; col++) {
                 // Create a basic grid point with Clear terrain
                 gridPoints[row][col] = {
+                    id: `${row}-${col}`,
                     x: col * 35,
                     y: row * 35,
                     row,
@@ -95,6 +96,7 @@ describe('TrackDrawingManager', () => {
         beforeEach(() => {
             // Create a simple grid of points for testing
             majorCityPoint = {
+                id: '0-1',
                 x: 35,
                 y: 0,
                 row: 0,
@@ -109,6 +111,7 @@ describe('TrackDrawingManager', () => {
             };
 
             regularPoint = {
+                id: '0-2',
                 x: 70,
                 y: 0,
                 row: 0,
@@ -157,6 +160,7 @@ describe('TrackDrawingManager', () => {
 
             // Create from point (always Clear terrain for testing)
             const fromPoint: GridPoint = {
+                id: '0-0',
                 x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear
             };
 
@@ -175,6 +179,7 @@ describe('TrackDrawingManager', () => {
             for (const testCase of terrainTypes) {
                 // Create a destination point with the specific terrain type
                 const toPoint: GridPoint = {
+                    id: '0-1',
                     x: 35, y: 35, row: 1, col: 1, terrain: testCase.terrain
                 };
 
@@ -203,13 +208,13 @@ describe('TrackDrawingManager', () => {
             const calculateTrackCost = (trackDrawingManager as any).calculateTrackCost.bind(trackDrawingManager);
 
             // Create points for horizontal and diagonal movement
-            const fromPoint: GridPoint = { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear };
+            const fromPoint: GridPoint = { id: '0-0', x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear };
             
             // Horizontal movement (same row)
-            const horizontalPoint: GridPoint = { x: 35, y: 0, row: 0, col: 1, terrain: TerrainType.Clear };
+            const horizontalPoint: GridPoint = { id: '0-1', x: 35, y: 0, row: 0, col: 1, terrain: TerrainType.Clear };
             
             // Diagonal movement (different row)
-            const diagonalPoint: GridPoint = { x: 35, y: 35, row: 1, col: 1, terrain: TerrainType.Clear };
+            const diagonalPoint: GridPoint = { id: '1-1', x: 35, y: 35, row: 1, col: 1, terrain: TerrainType.Clear };
 
             // Calculate costs
             const horizontalCost = calculateTrackCost(fromPoint, horizontalPoint);
@@ -227,7 +232,7 @@ describe('TrackDrawingManager', () => {
             const calculateTrackCost = (trackDrawingManager as any).calculateTrackCost.bind(trackDrawingManager);
 
             // Create a source point (clear terrain)
-            const fromPoint: GridPoint = { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear };
+            const fromPoint: GridPoint = { id: '0-0', x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear };
             
             // Test all city types
             const cityTypes = [
@@ -251,6 +256,7 @@ describe('TrackDrawingManager', () => {
             for (const cityType of cityTypes) {
                 // Create a destination point with the city
                 const toPoint: GridPoint = { 
+                    id: '0-1',
                     x: 35, 
                     y: 0, 
                     row: 0, 
@@ -283,6 +289,7 @@ describe('TrackDrawingManager', () => {
 
             // Test 3: First connection to major city outpost (should also cost 5 ECU)
             const outpostPoint: GridPoint = {
+                id: '1-1',
                 x: 35,
                 y: 35,
                 row: 1,
