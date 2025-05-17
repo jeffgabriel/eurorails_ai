@@ -411,6 +411,30 @@ export class TrackDrawingManager {
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
                 
+                // If we've reached a ferry port, create the ferry connection
+                if (toPoint.terrain === TerrainType.FerryPort && toPoint.ferryConnection) {
+                    const ferryConnection = toPoint.ferryConnection;
+                    const otherEnd = ferryConnection.connections.find(p => 
+                        p.row !== toPoint.row || p.col !== toPoint.col
+                    );
+                    
+                    if (otherEnd) {
+                        // Find the actual grid point for the other end to get correct coordinates
+                        const otherEndGridPoint = this.gridPoints[otherEnd.row][otherEnd.col];
+                        if (!otherEndGridPoint) {
+                            console.error('Could not find grid point for ferry connection end');
+                            break;
+                        }
+
+                        // Update the last clicked point to be the other end of the ferry
+                        // This will start a new track segment from the other ferry port
+                        this.lastClickedPoint = otherEndGridPoint;
+                        
+                        // Break out of the loop since we've reached a ferry port
+                        break;
+                    }
+                }
+                
                 // Get the current accumulated cost for this turn (reuse the playerTrackState from above)
                 const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
                 
@@ -425,7 +449,9 @@ export class TrackDrawingManager {
 
             // After adding track, update last clicked point and valid connection points
             // Now this includes the most recently added track segments
-            this.lastClickedPoint = gridPoint;
+            if (gridPoint.terrain !== TerrainType.FerryPort) {
+                this.lastClickedPoint = gridPoint;
+            }
             this.updateValidConnectionPoints();
         }
     }
@@ -450,6 +476,17 @@ export class TrackDrawingManager {
             this.previewGraphics.clear();
             this.previewPath = [];
             return;
+        }
+
+        // If the last clicked point is a ferry port, find the other end of the ferry
+        let startPoint = this.lastClickedPoint;
+        if (startPoint.terrain === TerrainType.FerryPort && startPoint.ferryConnection) {
+            const otherEnd = startPoint.ferryConnection.connections.find(p => 
+                p.row !== startPoint.row || p.col !== startPoint.col
+            );
+            if (otherEnd) {
+                startPoint = otherEnd;
+            }
         }
 
         // Find path to hover point
@@ -714,6 +751,16 @@ export class TrackDrawingManager {
                 // Skip if the segment exists in any other player's network
                 if (this.isSegmentInAnyOtherNetwork(currentPoint, neighbor, currentPlayer.id)) {
                     continue;
+                }
+
+                // Prevent direct connections between ferry points
+                if (currentPoint.terrain === TerrainType.FerryPort && neighbor.terrain === TerrainType.FerryPort) {
+                    // Only allow connection if they are part of the same ferry connection
+                    const currentFerry = currentPoint.ferryConnection;
+                    const neighborFerry = neighbor.ferryConnection;
+                    if (!currentFerry || !neighborFerry || currentFerry !== neighborFerry) {
+                        continue;
+                    }
                 }
                 
                 // Calculate the cost for a segment
