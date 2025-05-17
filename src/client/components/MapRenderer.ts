@@ -589,10 +589,36 @@ export class MapRenderer {
             sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
             ferryPortIcons.add(sprite);
 
+            // Find the ferry connection for this port
+            const ferryConnection = mapConfig.ferryConnections?.find(ferry => {
+              const [pointA, pointB] = ferry.connections;
+              return (pointA.row === row && pointA.col === col) || (pointB.row === row && pointB.col === col);
+            });
+
+            // Calculate text position based on ferry connection
+            let textX = x + this.GRID_MARGIN;
+            let textY = y + this.GRID_MARGIN;
+            let textOrigin = { x: 0.5, y: 0.5 }; // Default centered origin
+
+            if (ferryConnection) {
+              const [pointA, pointB] = ferryConnection.connections;
+              const isPointA = pointA.row === row && pointA.col === col;
+              const otherPoint = isPointA ? pointB : pointA;
+              
+              // Determine if text should be above or below based on relative position
+              const isAbove = otherPoint.row < row || (otherPoint.row === row && otherPoint.col < col);
+              
+              if (isAbove) {
+                textOrigin = { x: 0.0, y: -1.75 };
+              } else {
+                textOrigin = { x: 0.5, y: 2.5 };
+              }
+            }
+
             // Add ferry port name
             const portName = this.scene.add.text(
-              x + this.GRID_MARGIN - this.FERRY_ICON_SIZE/2, // Align left of the icon
-              y + this.GRID_MARGIN + this.FERRY_ICON_SIZE/2 + 3, // Position below the icon
+              textX,
+              textY,
               config?.city?.name || "Port", // Use city name if available, otherwise "Port"
               {
                 color: "#000000",
@@ -600,7 +626,7 @@ export class MapRenderer {
                 fontFamily: "sans-serif",
               }
             );
-            portName.setOrigin(0, 0); // Align text to top-left
+            portName.setOrigin(textOrigin.x, textOrigin.y);
             portNames.add(portName);
           } else if (config || isConnectedPointOfMajorCity) {
             // Draw standard point
