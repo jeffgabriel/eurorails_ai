@@ -209,3 +209,16 @@ export enum TerrainType {
 }
 ```
 
+# Type Changes Rule
+
+When modifying types in the codebase:
+
+1. Always check existing type definitions first before creating new ones
+2. Only modify types when there is a clear requirement to do so such as missing property which must now go on the type or for design reasons you have been instructed to make a type change by the prompt.
+3. When adding new functionality that uses existing types:
+   - First try to use the existing type structure
+   - Only extend types if the new functionality cannot be expressed with existing types
+   - Document why the type extension is necessary
+4. Never consolidate or split types without explicit requirements
+5. When in doubt, ask for clarification before making type changes
+

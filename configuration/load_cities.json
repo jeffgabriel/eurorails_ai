@@ -1,0 +1,184 @@
+{
+  "LoadConfiguration": [
+    {
+      "Bauxite": [
+        "Budapest",
+        "Beograd",
+        "Marseille",
+        "Wroclaw",
+        "Aberdeen",
+        "Newcastle"
+      ],
+      "count": 5
+    },
+    {
+      "Beer": [
+        "Cork",
+        "Dublin",
+        "Frankfurt",
+        "München",
+        "Praha",
+        "Lisboa",
+        "Sevilla",
+        "Valencia"
+      ],
+      "count": 3
+    },
+    {
+      "Cars": [
+        "Oslo",
+        "Manchester",
+        "München",
+        "Stuttgart",
+        "Torino",
+        "Szczecin"
+      ],
+      "count": 3
+    },
+    {
+      "Flowers": [
+        "Holland"
+      ],
+      "count": 3
+    },
+    {
+      "Sheep": [
+        "Bilbao",
+        "Bern",
+        "Cork",
+        "Nantes",
+        "Glasgow",
+        "Warszawa"
+      ],
+      "count": 3
+    },
+    {
+      "Cattle": [
+        "Bilbao",
+        "Bern",
+        "Cork",
+        "Nantes",
+        "Glasgow",
+        "Warszawa"
+      ],
+      "count": 4
+    },
+    {
+      "Cheese": [
+        "Bern",
+        "Holland",
+        "København"
+      ],
+      "count": 3
+    },
+    {
+      "Ham": [
+        "Glasgow",
+        "Warszawa"
+      ],
+      "count": 3
+    },
+    {
+      "Steel": [
+        "Birmingham"
+      ],
+      "count": 3
+    },
+    {
+      "Hops": [
+        "Bern",
+        "Holland",
+        "København"
+      ],
+      "count": 3
+    },
+    {
+      "Imports": [
+        "Antwerpen"
+      ],
+      "count": 3
+    },
+    {
+      "China": [
+        "Birmingham",
+        "Hamburg",
+        "Napoli",
+        "Leipzig"
+      ],
+      "count": 3
+    },
+    {
+      "Tobacco": [
+        "Birmingham",
+        "Hamburg",
+        "Napoli",
+        "Leipzig"
+      ],
+      "count": 3
+    },
+    {
+      "Iron": [
+        "Bruxelles",
+        "Kaliningrad",
+        "Ruhr",
+        "Zürich",
+        "Stockholm"
+      ],
+      "count": 3
+    },
+    {
+      "Tourists": [
+        "Birmingham",
+        "London",
+        "Kaliningrad",
+        "Stockholm"
+      ],
+      "count": 3
+    },
+    {
+      "Wheat": [
+        "Lyon",
+        "Beograd",
+        "Toulouse",
+        "Krakow",
+        "Sarajevo"
+      ],
+      "count": 3
+    },
+    {
+      "Coal": [
+        "Cardiff",
+        "Beograd",
+        "Toulouse",
+        "Krakow",
+        "Sarajevo"
+      ],
+      "count": 6
+    },
+    {
+      "Wine": [
+        "Berlin",
+        "Madrid",
+        "Milano",
+        "Rondeaux"
+      ],
+      "count": 3
+    },
+    {
+      "Machinery": [
+        "Frankfurt",
+        "Barcelona",
+        "Porto",
+        "Nantes"
+      ],
+      "count": 5
+    },
+    {
+      "Marble": [
+        "Oslo",
+        "Sarajevo"
+      ],
+      "count": 3
+    }
+  ]
+}

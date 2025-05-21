@@ -5,6 +5,7 @@ import {
   GridPoint,
   Point,
   CityData,
+  FerryConnection,
 } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -18,7 +19,7 @@ export class MapRenderer {
   private readonly VERTICAL_SPACING = 35;
   private readonly POINT_RADIUS = 3;
   private readonly GRID_MARGIN = 100; // Increased margin around the grid
-  private readonly FERRY_ICON_SIZE = 12; // Size for the ferry icon
+  private readonly FERRY_ICON_SIZE = 14; // Size for the ferry icon
 
   private readonly terrainColors = {
     [TerrainType.Clear]: 0x000000,
@@ -342,8 +343,9 @@ export class MapRenderer {
     const terrainLookup = new Map<
       string,
       {
+        id: string;
         terrain: TerrainType;
-        ferryConnection?: { row: number; col: number };
+        ferryConnection?: FerryConnection;
         //TODO: Add centerPoint to the config for any city, allow saving the row/col of the center point
         //points come from mapConfig which has this data - connected points only filled for major cities
         city?: {
@@ -359,6 +361,7 @@ export class MapRenderer {
     // First pass: Build lookup maps and identify city areas
     mapConfig.points.forEach((point) => {
       terrainLookup.set(`${point.row},${point.col}`, {
+        id: point.id,
         terrain: point.terrain,
         ferryConnection: point.ferryConnection,
         city: point.city,
@@ -367,28 +370,30 @@ export class MapRenderer {
     });
 
     // Create graphics objects for different elements
+    const ferryConnections = this.scene.add.graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      }).setName('ferryConnections');
     const cityAreas = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    });
+    }).setName('cityAreas');
     const landPoints = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    });
+    }).setName('landPoints');
     const mountainPoints = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    });
+    }).setName('mountainPoints');
     const hillPoints = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    });
-    const ferryConnections = this.scene.add.graphics({
+    }).setName('hillPoints');
+    const ferryCosts = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    });
-    ferryConnections.setDepth(0); // Set ferry line depth lower than circle
-
+    }).setName('ferryCosts');
     // Set styles
     landPoints.lineStyle(1, 0x000000);
     landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
@@ -397,6 +402,8 @@ export class MapRenderer {
     hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
     ferryConnections.lineStyle(6, 0x808080, 0.8); // Increased thickness to 6, using gray color, 0.8 opacity
 
+    const portNames = this.scene.add.container();
+    const ferryPortIcons = this.scene.add.container();
     // First pass: Draw city areas
     const majorCities = new Set<string>();
     for (let row = 0; row <= mapConfig.height; row++) {
@@ -576,9 +583,52 @@ export class MapRenderer {
               x + this.GRID_MARGIN,
               y + this.GRID_MARGIN,
               "ferry-port"
-            );
+            ).setName(`ferryPort--${config?.city?.name}`);
+            sprite.setScale(1);
+            sprite.setOrigin(0.5, 0.5);
+            this.scene.textures.get('ferry-port').setFilter(Phaser.Textures.FilterMode.LINEAR);
             sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
-            this.mapContainer.add(sprite);
+            ferryPortIcons.add(sprite);
+
+            // Find the ferry connection for this port
+            const ferryConnection = mapConfig.ferryConnections?.find(ferry => {
+              const [pointA, pointB] = ferry.connections;
+              return (pointA.row === row && pointA.col === col) || (pointB.row === row && pointB.col === col);
+            });
+
+            // Calculate text position based on ferry connection
+            let textX = x + this.GRID_MARGIN;
+            let textY = y + this.GRID_MARGIN;
+            let textOrigin = { x: 0.5, y: 0.5 }; // Default centered origin
+
+            if (ferryConnection) {
+              const [pointA, pointB] = ferryConnection.connections;
+              const isPointA = pointA.row === row && pointA.col === col;
+              const otherPoint = isPointA ? pointB : pointA;
+              
+              // Determine if text should be above or below based on relative position
+              const isAbove = otherPoint.row < row || (otherPoint.row === row && otherPoint.col < col);
+              
+              if (isAbove) {
+                textOrigin = { x: 0.0, y: -1.75 };
+              } else {
+                textOrigin = { x: 0.5, y: 2.5 };
+              }
+            }
+
+            // Add ferry port name
+            const portName = this.scene.add.text(
+              textX,
+              textY,
+              config?.city?.name || "Port", // Use city name if available, otherwise "Port"
+              {
+                color: "#000000",
+                fontSize: "7px", // Smaller than small city (8px)
+                fontFamily: "sans-serif",
+              }
+            );
+            portName.setOrigin(textOrigin.x, textOrigin.y);
+            portNames.add(portName);
           } else if (config || isConnectedPointOfMajorCity) {
             // Draw standard point
             landPoints.beginPath();
@@ -594,6 +644,7 @@ export class MapRenderer {
 
         // Store point data with grid coordinates
         this.gridPoints[row][col] = {
+          id: config?.id || "",
           x: x + this.GRID_MARGIN,
           y: y + this.GRID_MARGIN,
           row,
@@ -612,45 +663,81 @@ export class MapRenderer {
         };
       }
     }
-
-    // Draw ferry connections
-    mapConfig.points.forEach((point) => {
-      if (point.ferryConnection) {
-        const isFromOffsetRow = point.row % 2 === 1;
-        const isToOffsetRow = point.ferryConnection.row % 2 === 1;
+    const ferryCostsText: Phaser.GameObjects.Text[] = [];
+    // Draw ferry connections using the ferryConnections array from mapConfig
+    if (mapConfig.ferryConnections) {
+      mapConfig.ferryConnections.forEach(ferry => {
+        const [pointA, pointB] = ferry.connections;
+        const isFromOffsetRow = pointA.row % 2 === 1;
+        const isToOffsetRow = pointB.row % 2 === 1;
 
         const fromX =
-          point.col * this.HORIZONTAL_SPACING +
+          pointA.col * this.HORIZONTAL_SPACING +
           (isFromOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-        const fromY = point.row * this.VERTICAL_SPACING;
+        const fromY = pointA.row * this.VERTICAL_SPACING;
 
         const toX =
-          point.ferryConnection.col * this.HORIZONTAL_SPACING +
+          pointB.col * this.HORIZONTAL_SPACING +
           (isToOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-        const toY = point.ferryConnection.row * this.VERTICAL_SPACING;
+        const toY = pointB.row * this.VERTICAL_SPACING;
 
-        // Draw the ferry connection line
+        // Draw the ferry connection line with a gentle, smooth upward arc
         ferryConnections.beginPath();
         ferryConnections.moveTo(fromX, fromY);
-        ferryConnections.lineTo(toX, toY);
+        
+        // Calculate control point for the curve
+        const curveMidX = (fromX + toX) / 2;
+        const curveMidY = (fromY + toY) / 2;
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        const offset = length * 0.1; // Smaller offset for a milder curve
+        // Perpendicular vector (flip sign on perpY for upward arc)
+        const perpX = -dy / length;
+        const perpY = -dx / length; // negative for upward
+        const controlX = curveMidX + perpX * offset;
+        const controlY = curveMidY + perpY * offset;
+        // Draw the curve using multiple segments for smoothness
+        const segments = 24;
+        let midCurveX = 0;
+        let midCurveY = 0;
+        for (let i = 1; i <= segments; i++) {
+          const t = i / segments;
+          // Quadratic Bézier formula
+          const x = (1 - t) * (1 - t) * fromX + 2 * (1 - t) * t * controlX + t * t * toX;
+          const y = (1 - t) * (1 - t) * fromY + 2 * (1 - t) * t * controlY + t * t * toY;
+          ferryConnections.lineTo(x, y);
+          // Save midpoint at t=0.5 for the cost circle
+          if (Math.abs(t - 0.5) < 1e-2) {
+            midCurveX = x;
+            midCurveY = y;
+          }
+        }
         ferryConnections.stroke();
 
-        // Calculate midpoint for the cost circle
-        const midX = (fromX + toX) / 2;
-        const midY = (fromY + toY) / 2;
-
-        // Draw the circled cost (5 ECU)
-        this.drawCircledNumber(ferryConnections, midX, midY, 5);
-      }
-    });
-
+        // Draw the circled cost at the midpoint of the curve
+        const text = this.drawCircledNumber(ferryCosts, midCurveX, midCurveY, ferry.cost);
+        ferryCostsText.push(text);
+      });
+    }
+    // //convert all graphics to static textures
+    const ferryTexture = ferryConnections.generateTexture("ferry-connections");
+    const cityAreasTexture = cityAreas.generateTexture("city-areas");
+    const landPointsTexture = landPoints.generateTexture("land-points");
+    const mountainPointsTexture = mountainPoints.generateTexture("mountain-points");
+    const hillPointsTexture = hillPoints.generateTexture("hill-points");
+    const ferryCostsTexture = ferryCosts.generateTexture("ferry-costs");
     // Add all graphics objects to the map container in correct order
     this.mapContainer.add([
-      cityAreas,
-      landPoints,
-      mountainPoints,
-      hillPoints,
-      ferryConnections,
+     ferryTexture,
+      cityAreasTexture ,
+      landPointsTexture,
+      mountainPointsTexture,
+      hillPointsTexture,
+      ferryCostsTexture,
+      ...ferryCostsText,
+      portNames,
+      ferryPortIcons,
     ]);
   }
 
@@ -690,24 +777,17 @@ export class MapRenderer {
     x: number,
     y: number,
     number: number
-  ): void {
-    const CIRCLE_RADIUS = 12;
-
-    // Create a new graphics object for the circle and text with higher depth
-    const circleGraphics = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    });
-    circleGraphics.setDepth(1); // Set higher depth to appear above ferry line
+  ): Phaser.GameObjects.Text {
+    const CIRCLE_RADIUS = 7;
 
     // Draw white circle background
-    circleGraphics.lineStyle(2, 0x000000, 1); // Black border
-    circleGraphics.fillStyle(0xffffff, 1); // White fill
-    circleGraphics.beginPath();
-    circleGraphics.arc(x, y, CIRCLE_RADIUS, 0, Math.PI * 2);
-    circleGraphics.closePath();
-    circleGraphics.fill();
-    circleGraphics.stroke();
+    graphics.lineStyle(2, 0x000000, 1); // Black border
+    graphics.fillStyle(0xffffff, 1); // White fill
+    graphics.beginPath();
+    graphics.arc(x, y, CIRCLE_RADIUS, 0, Math.PI * 2);
+    graphics.closePath();
+    graphics.fill();
+    graphics.stroke();
 
     // Add the number with even higher depth
     const text = this.scene.add.text(
@@ -716,15 +796,14 @@ export class MapRenderer {
       number.toString(),
       {
         color: "#000000",
-        fontSize: "14px",
+        fontSize: "10px",
         fontStyle: "bold",
       }
     );
-    text.setDepth(2); // Set even higher depth to ensure text appears above circle
+    //text.setDepth(2); // Set even higher depth to ensure text appears above circle
     text.setOrigin(0.5, 0.5);
 
-    // Add both to the container
-    this.mapContainer.add([circleGraphics, text]);
+    return text;
   }
 
   public getGridPointAtPosition(

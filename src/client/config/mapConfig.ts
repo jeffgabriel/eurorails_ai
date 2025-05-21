@@ -1,5 +1,6 @@
-import { MapConfig, TerrainType, GridPoint } from "../../shared/types/GameTypes";
+import { MapConfig, TerrainType, GridPoint, FerryConnection } from "../../shared/types/GameTypes";
 import mileposts from "../../../configuration/gridPoints.json";
+import ferryPoints from "../../../configuration/ferryPoints.json";
 
 const gridRows = 58;
 const gridCols = 64;
@@ -61,8 +62,15 @@ const points: GridPoint[] = [];
     let row = mp.GridY;
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
-    const base: GridPoint = { x: col, y: row, col, row, terrain };
-    if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City")) {
+    const base: GridPoint = { 
+      x: col, 
+      y: row, 
+      col, 
+      row, 
+      terrain,
+      id: mp.Id
+    };
+    if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port")) {
       base.city = {
         type: terrain,
         name: mp.Name,
@@ -86,6 +94,7 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   const connectedPoints = group.slice(1, 7).map(outpost => ({ col: outpost.GridX, row: outpost.GridY }));
 
   points.push({
+    id: center.id,
     x: center.GridX,
     y: center.GridY,
     col,
@@ -100,6 +109,37 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   });
 });
 
+// Create a lookup map of grid points by their ID
+const gridPointLookup = new Map<string, GridPoint>();
+points.forEach(point => {
+  if (point.id) {
+    gridPointLookup.set(point.id, point);
+  }
+});
+
+// Load and process ferry connections
+const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry => {
+  const point1 = gridPointLookup.get(ferry.connections[0]);
+  const point2 = gridPointLookup.get(ferry.connections[1]);
+  
+  if (!point1 || !point2) {
+    throw new Error(`Invalid ferry connection: Could not find grid points for ${ferry.Name}`);
+  }
+
+  // Set ferry connection on both points and update their terrain type
+  const ferryConnection: FerryConnection = {
+    Name: ferry.Name,
+    connections: [point1, point2],
+    cost: ferry.cost
+  };
+  point1.ferryConnection = ferryConnection;
+  point2.ferryConnection = ferryConnection;
+  point1.terrain = TerrainType.FerryPort;
+  point2.terrain = TerrainType.FerryPort;
+
+  return ferryConnection;
+});
+
 // Use fixed width and height for the grid
 const width = gridCols;
 const height = gridRows;
@@ -108,4 +148,5 @@ export const mapConfig: MapConfig = {
   width,
   height,
   points,
+  ferryConnections, // Add ferry connections to the config
 };

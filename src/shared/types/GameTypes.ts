@@ -107,11 +107,9 @@ export interface Point {
 
 // Unified GridPoint type
 export interface GridPoint extends Point {
+    id: string;
     terrain: TerrainType;
-    ferryConnection?: { 
-        row: number; 
-        col: number; 
-    };
+    ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
     
     // Runtime properties
@@ -119,11 +117,17 @@ export interface GridPoint extends Point {
     tracks?: Array<{ playerId: string }>;
 }
 
+export interface FerryConnection {
+    Name: string;
+    connections: [GridPoint, GridPoint];
+    cost: number;
+  }
 // Updated MapConfig
 export interface MapConfig {
     width: number;
     height: number;
-    points: GridPoint[];  // Now using the unified GridPoint type
+    points: GridPoint[];
+    ferryConnections?: FerryConnection[];  // Optional ferry connections
 }
 
 export interface TrackSegment {

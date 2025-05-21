@@ -12,7 +12,7 @@ const config: Phaser.Types.Core.GameConfig = {
         createContainer: true
     },
     scale: {
-        mode: Phaser.Scale.RESIZE,
+        mode: Phaser.Scale.NONE,
         parent: 'game',
         width: '100%',
         height: '100%',
@@ -22,7 +22,11 @@ const config: Phaser.Types.Core.GameConfig = {
     physics: {
         default: 'none'
     },
-    disableContextMenu: true
+    disableContextMenu: true,
+    render: {
+        pixelArt: false,   // <--- for smooth high-res assets
+        antialias: true    // <--- enables smoother edges
+    }
 };
 
 // Create game instance

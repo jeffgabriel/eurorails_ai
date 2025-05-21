@@ -3329,8 +3329,8 @@
   },
   {
     "Id": "9f982cd2-73bf-4aa5-b8f9-710972b1e449",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Cherbourg",
     "GridX": 24,
     "GridY": 25,
     "Ocean": "English Channel"
@@ -3449,8 +3449,8 @@
   },
   {
     "Id": "5c6e1c2a-a0c8-438c-8863-32c50034921f",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Plymouth",
     "GridX": 24,
     "GridY": 20,
     "Ocean": "English Channel"
@@ -4075,7 +4075,7 @@
     "Id": "42e3067a-af56-447d-9fef-993c7102989a",
     "Type": "Small City",
     "Name": "Belfast",
-    "GridX": 27,
+    "GridX": 26,
     "GridY": 7,
     "Ocean": "Irish Sea"
   },
@@ -4361,8 +4361,8 @@
   },
   {
     "Id": "be053def-548e-465a-963b-5eb0c943a635",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Stranraer",
     "GridX": 28,
     "GridY": 7,
     "Ocean": "Irish Sea"
@@ -4401,8 +4401,8 @@
   },
   {
     "Id": "dd892132-7be7-4c45-873d-09d863cec733",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Portsmouth",
     "GridX": 28,
     "GridY": 21,
     "Ocean": "English Channel"
@@ -4664,14 +4664,6 @@
     "Ocean": "Mediterranean Sea"
   },
   {
-    "Id": "94a8a3a8-d0b3-436a-90f8-527fc8b98e71",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 29,
-    "GridY": 13,
-    "Ocean": "Irish Sea"
-  },
-  {
     "Id": "6493c759-f78e-4dba-8c58-3ae57594afad",
     "Type": "Milepost",
     "Name": null,
@@ -4693,6 +4685,14 @@
     "Name": null,
     "GridX": 29,
     "GridY": 21,
+    "Ocean": "English Channel"
+  },
+  {
+    "Id": "363da834-6e2a-452b-922c-e9844275fad0",
+    "Type": "Ferry Port",
+    "Name": "Le Havre",
+    "GridX": 29,
+    "GridY": 25,
     "Ocean": "English Channel"
   },
   {
@@ -5323,6 +5323,22 @@
     "Id": "d08de692-02c6-47f0-a5d1-b364c4dd78f2",
     "Type": "Medium City",
     "Name": "Manchester",
+    "GridX": 30,
+    "GridY": 13,
+    "Ocean": null
+  },
+  {
+    "Id": "94a8a3a8-d0b3-436a-90f8-527fc8b98e71",
+    "Type": "Ferry Port",
+    "Name": "Liverpool",
+    "GridX": 29,
+    "GridY": 13,
+    "Ocean": "Irish Sea"
+  },
+  {
+    "Id": "94a8a3a8-d0b3-436a-90f8-427fc8b98e71",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 31,
     "GridY": 13,
     "Ocean": null
@@ -6105,8 +6121,8 @@
   },
   {
     "Id": "7ea87d74-44fe-45b0-9388-62cd3ebe7a82",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Newcastle",
     "GridX": 33,
     "GridY": 10,
     "Ocean": "North Sea"
@@ -6201,8 +6217,8 @@
   },
   {
     "Id": "7b1e2373-9504-4404-ab1f-0f26724439f4",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Dover",
     "GridX": 33,
     "GridY": 22,
     "Ocean": "English Channel"
@@ -6336,9 +6352,17 @@
     "Ocean": "English Channel"
   },
   {
+    "Id": "ff2d5e96-ae65-480a-bd37-639fd0ecaa18",
+    "Type": "Ferry Port",
+    "Name": "Harwich",
+    "GridX": 35,
+    "GridY": 19,
+    "Ocean": "English Channel"
+  },
+  {
     "Id": "088aa69d-3be2-4232-8006-d945c8985685",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Calais",
     "GridX": 33,
     "GridY": 23,
     "Ocean": "English Channel"
@@ -6558,14 +6582,6 @@
     "GridX": 34,
     "GridY": 46,
     "Ocean": null
-  },
-  {
-    "Id": "93853d52-3e53-436a-a093-5c1d0370d4a8",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 35,
-    "GridY": 19,
-    "Ocean": "English Channel"
   },
   {
     "Id": "4f2c4979-879a-4d2b-b91b-f1a3fb51c81a",
@@ -7425,9 +7441,9 @@
   },
   {
     "Id": "ff069f4c-7d39-4c2a-bdfc-fccbf7c68297",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 38,
+    "Type": "Ferry Port",
+    "Name": "Ijmuiden",
+    "GridX": 39,
     "GridY": 19,
     "Ocean": "English Channel"
   },
@@ -9305,8 +9321,8 @@
   },
   {
     "Id": "a98856ad-73c7-4c06-8100-831000b2b405",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Esbjerg",
     "GridX": 46,
     "GridY": 12,
     "Ocean": "North Sea"
@@ -10521,10 +10537,18 @@
   },
   {
     "Id": "d4d549d7-6c59-4c8e-9642-8538380cff97",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Hirtshals",
     "GridX": 49,
     "GridY": 8,
+    "Ocean": "North Sea"
+  },
+  {
+    "Id": "d4d549d7-6c59-4c6e-9642-8538380cff97",
+    "Type": "Ferry Port",
+    "Name": "Kristiansand",
+    "GridX": 49,
+    "GridY": 5,
     "Ocean": "North Sea"
   },
   {
@@ -11777,8 +11801,8 @@
   },
   {
     "Id": "2a0d3d67-ea72-492d-a74f-8b1b02989ffa",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Malmo",
     "GridX": 52,
     "GridY": 15,
     "Ocean": "Baltic Sea"
@@ -16054,6 +16078,14 @@
     "GridX": 53,
     "GridY": 19,
     "Ocean": null
+  },
+  {
+    "Id": "106abac8-6586-4398-b98b-5cf28a421687",
+    "Type": "Ferry Port",
+    "Name": "Sassnitz",
+    "GridX": 53,
+    "GridY": 18,
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "aac651eb-1a38-4788-9123-7e75487ec720",
