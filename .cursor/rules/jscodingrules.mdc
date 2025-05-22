@@ -222,3 +222,163 @@ When modifying types in the codebase:
 4. Never consolidate or split types without explicit requirements
 5. When in doubt, ask for clarification before making type changes
 
+# ⚙️ TypeScript Game Architecture Guide for Coding Agent
+
+## 🌟 Purpose
+
+This guide outlines architectural principles and patterns for building a maintainable, scalable, and performant game in TypeScript. The target game uses a hex/grid map, track building, object manipulation, and turn-based player logic.
+
+---
+
+## 📦 Core Architectural Principles
+
+### 1. **Model Domain Objects as Classes or Interfaces**
+
+* Every core game concept (e.g., `Train`, `City`, `LoadChip`, `TrackSegment`) should be a distinct class or interface.
+* Encapsulate data and methods within each object:
+
+  ```ts
+  class Train {
+    type: TrainType;
+    position: GridPoint;
+    draw(): void;
+    move(path: GridPoint[]): void;
+  }
+  ```
+
+---
+
+### 2. **Separate Game Logic from Rendering**
+
+* Keep rendering code in `View` or `Sprite` classes.
+* Logic classes (`Train`, `Track`, `GameState`) **must not access rendering APIs** (e.g., Phaser).
+* Use composition:
+
+  ```ts
+  class TrainView {
+    constructor(public train: Train, public graphics: Graphics) {}
+    draw(): void { ... }
+  }
+  ```
+
+---
+
+### 3. **Centralized Game State**
+
+* Use a single `GameState` structure to manage game data:
+
+  ```ts
+  interface GameState {
+    players: Player[];
+    trains: Record<string, Train>;
+    board: GridMap;
+    currentPlayerId: string;
+    turnPhase: TurnPhase;
+  }
+  ```
+
+---
+
+### 4. **Strong Typing & Enum Modeling**
+
+* Use `type` aliases and `enum`s for clear expression of rules and constraints:
+
+  ```ts
+  type TrainType = 'Freight' | 'FastFreight' | 'HeavyFreight' | 'Superfreight';
+  enum TerrainType { Clear, Mountain, Alpine, River, Ocean }
+  ```
+
+---
+
+### 5. **Use Grid Utilities for Map Logic**
+
+* Movement and neighbor logic should be encapsulated in a `Grid` class:
+
+  ```ts
+  class HexGrid {
+    getNeighbors(point: GridPoint): GridPoint[];
+    distance(a: GridPoint, b: GridPoint): number;
+  }
+  ```
+
+---
+
+## 🧠 Behavioral Modeling
+
+### 6. **Use State Machines for Turn Phases**
+
+* Each player’s turn follows a strict sequence:
+
+  * Move train
+  * Load/unload
+  * Deliver
+  * Build/upgrade
+* Represent this using a state machine or turn-phase enum.
+
+---
+
+### 7. **Encapsulate Drawing Behavior per Object Type**
+
+* Prefer putting drawing logic inside each model or associate it closely with it:
+
+  * `Train.draw(graphics)`
+  * `City.draw()`
+  * Avoid large procedural rendering functions.
+
+---
+
+### 8. **Event-Driven Updates**
+
+* Use an event bus or observer pattern to signal game state changes:
+
+  ```ts
+  eventBus.emit('loadPickedUp', { trainId, loadType });
+  ```
+
+---
+
+### 9. **Avoid Global State Outside Game Context**
+
+* Do not rely on global variables.
+* Use dependency injection for services such as sound, rendering layers, or network.
+
+---
+
+## 🧪 Testability and Maintainability
+
+### 10. **Pure Logic Should Be Easily Unit-Tested**
+
+* Ensure pathfinding, rule enforcement, and game rules are testable without graphics or UI.
+
+### 11. **Use Factory Functions for Complex Creation**
+
+* Example: `createTrain(trainType: TrainType, startPoint: GridPoint): Train`
+
+---
+
+## 🛠️ Suggested Folder Structure
+
+```
+/models        # Domain logic (Train, City, Load, Track)
+/views         # Rendering code and sprite helpers
+/state         # Game state container and reducers
+/utils         # Grid math, helpers
+/engine        # Turn manager, event dispatcher, AI agent
+/config        # Static data (terrain costs, load types)
+```
+
+---
+
+## 📌 Summary Checklist
+
+| ✅ Best Practice               | 💬 Summary                                     |
+| ----------------------------- | ---------------------------------------------- |
+| Domain models encapsulated    | `Train`, `City`, `Load` are self-contained     |
+| Rendering isolated from logic | Views handle Phaser; logic is UI-agnostic      |
+| Global state centralized      | Use `GameState` or reducer pattern             |
+| Typed enums for logic safety  | Use `enum` and `type` aliases                  |
+| Grid logic abstracted         | `HexGrid.getNeighbors`, `GridUtils.snapToGrid` |
+| Events not direct callbacks   | Use event bus for gameplay updates             |
+| Turn sequence enforceable     | Represented explicitly via state machine       |
+| View class per game object    | Avoid centralized `drawAll` logic              |
+| Test coverage on pure logic   | Model rules testable in isolation              |

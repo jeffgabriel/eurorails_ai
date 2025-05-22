@@ -2,24 +2,22 @@ import "phaser";
 import { mapConfig } from "../config/mapConfig";
 import {
   TerrainType,
-  GridPoint,
-  Point,
-  CityData,
-  FerryConnection,
+  GridPoint
 } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
-import { LoadService } from "../services/LoadService";
+import { MapElement } from "./map/MapElement";
+import { MapElementFactory } from "./map/MapElementFactory";
 
 // All coordinates in configuration and rendering are zero-based. Do not add or subtract 1 from row/col anywhere in this file.
 
 export class MapRenderer {
+  public static readonly FERRY_ICONS_CONTAINER_NAME = 'ferryIcons';
+  public static readonly PORT_NAMES_CONTAINER_NAME = 'portNames';
   // Grid configuration
   private readonly HORIZONTAL_SPACING = 35;
   private readonly VERTICAL_SPACING = 35;
-  private readonly POINT_RADIUS = 3;
-  private readonly GRID_MARGIN = 100; // Increased margin around the grid
-  private readonly FERRY_ICON_SIZE = 14; // Size for the ferry icon
+  private readonly GRID_MARGIN = 100; // Increased margin around the grid// Size for the ferry icon
 
   private readonly terrainColors = {
     [TerrainType.Clear]: 0x000000,
@@ -41,15 +39,12 @@ export class MapRenderer {
     [TerrainType.SmallCity]: 8, // Reduced size for small city square
   };
 
-  private readonly LOAD_SPRITE_SIZE = 24; // Increased from 16 to 24 (50% larger)
-  private readonly LOAD_SPRITE_OPACITY = 0.7; // Opacity for load sprites
-
   private scene: Phaser.Scene;
   private mapContainer: Phaser.GameObjects.Container;
   public gridPoints: GridPoint[][] = [];
   private trackDrawingManager: TrackDrawingManager;
   private backgroundGraphics: Phaser.GameObjects.Graphics;
-  private loadService: LoadService;
+  private mapElements: MapElement[][] = [];
 
   constructor(
     scene: Phaser.Scene,
@@ -60,7 +55,6 @@ export class MapRenderer {
     this.scene = scene;
     this.mapContainer = mapContainer;
     this.trackDrawingManager = trackDrawingManager;
-    this.loadService = LoadService.getInstance();
 
     // Initialize background graphics with lowest depth
     this.backgroundGraphics = this.scene.add.graphics();
@@ -76,296 +70,19 @@ export class MapRenderer {
     return { width, height };
   }
 
-  private addLoadSpritesToCity(
-    cityX: number,
-    cityY: number,
-    cityName: string,
-    cityType: TerrainType
-  ): void {
-    const loadDetails = this.loadService.getCityLoadDetails(cityName);
-    if (!loadDetails || loadDetails.length === 0) return;
-
-    // Calculate starting position for load sprites
-    // Position them in a full circle around the city
-    const radius = cityType === TerrainType.MajorCity ? 45 : 30;
-    const angleStep = (2 * Math.PI) / loadDetails.length; // Distribute evenly in a full circle
-    const startAngle = -Math.PI / 2; // Start from top (-90 degrees)
-
-    loadDetails.forEach((load, index) => {
-      try {
-        if (!load || !load.loadType) {
-          console.warn(
-            `Invalid load data for city ${cityName} at index ${index}`
-          );
-          return;
-        }
-
-        const angle = startAngle + angleStep * index;
-        const spriteX = cityX + radius * Math.cos(angle);
-        const spriteY = cityY + radius * Math.sin(angle);
-
-        const spriteKey = `load-${load.loadType.toLowerCase()}`;
-
-        // Check if the sprite texture exists before creating the image
-        if (!this.scene.textures.exists(spriteKey)) {
-          console.warn(`Missing sprite texture for load type: ${spriteKey}`);
-          return;
-        }
-
-        // Create sprite for the load
-        const sprite = this.scene.add.image(spriteX, spriteY, spriteKey);
-
-        // Configure sprite
-        sprite.setAlpha(this.LOAD_SPRITE_OPACITY);
-        sprite.setDepth(1); // Ensure it appears above the city but below UI elements
-
-        // Add to container
-        this.mapContainer.add(sprite);
-
-        // Add count indicator if more than 1 available
-        if (load.count > 1) {
-          try {
-            const countText = this.scene.add.text(
-              spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
-              spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
-              load.count.toString(),
-              {
-                fontSize: "10px",
-                color: "#000000",
-                backgroundColor: "#ffffff",
-                padding: { x: 2, y: 2 },
-              }
-            );
-            countText.setOrigin(0.5, 0.5); // Center the text
-            countText.setDepth(2);
-            this.mapContainer.add(countText);
-          } catch (textError) {
-            console.warn(
-              `Failed to add count text for ${load.loadType} at ${cityName}:`,
-              textError
-            );
-          }
-        }
-      } catch (error) {
-        console.warn(`Failed to add load sprite for ${cityName}:`, error);
-        // Continue with the next load
-      }
-    });
-  }
-
-  private drawCityWithLoads(
-    graphics: Phaser.GameObjects.Graphics,
-    point: Point,
-    config: { city: CityData; terrain: TerrainType }
-  ): void {
-    const { city } = config;
-
-    // Defensive: Check connectedPoints for major cities
-    if (city.type === TerrainType.MajorCity) {
-      if (!city.connectedPoints || city.connectedPoints.length === 0) {
-        // eslint-disable-next-line no-console
-        console.error(
-          "drawCityWithLoads: city.connectedPoints is missing or empty for",
-          city.name,
-          city
-        );
-        return;
-      }
-      const centerPoint = {
-        row: point.row,
-        col: point.col,
-      };
-      if (
-        !centerPoint ||
-        typeof centerPoint.row !== "number" ||
-        typeof centerPoint.col !== "number"
-      ) {
-        // eslint-disable-next-line no-console
-        console.error(
-          "drawCityWithLoads: centerPoint is invalid for",
-          city.name,
-          centerPoint,
-          city
-        );
-        return;
-      }
-
-      // Draw a regular hexagon centered at the city center
-      const centerIsOffsetRow = centerPoint.row % 2 === 1;
-      const centerX =
-        centerPoint.col * this.HORIZONTAL_SPACING +
-        (centerIsOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-      const centerY = centerPoint.row * this.VERTICAL_SPACING;
-      const hexRadius = 36; // Adjust as needed for visual size
-
-      // Display debug info for connected points
-      console.debug(
-        `City ${city.name} at (${centerPoint.row},${centerPoint.col}) has ${city.connectedPoints.length} connected points:`,
-        city.connectedPoints.map((cp) => `(${cp.row},${cp.col})`).join(", ")
-      );
-
-      graphics.fillStyle(this.CITY_COLORS[TerrainType.MajorCity], .8);
-      graphics.blendMode = Phaser.BlendModes.MULTIPLY;
-      graphics.lineStyle(2, 0x000000, 0.7);
-      graphics.beginPath();
-
-      // For a flat-topped hexagon, the top and bottom sides are horizontal
-      // Start at the right-top vertex and go clockwise
-      for (let i = 0; i < 6; i++) {
-        // For flat-topped hex, angles start at 0° and go by 60° increments
-        // 0° = right-top, 60° = right, 120° = right-bottom, 180° = left-bottom, 240° = left, 300° = left-top
-        const angle = (i * Math.PI) / 3;
-        const x_i = centerX + hexRadius * Math.cos(angle);
-        const y_i = centerY + hexRadius * Math.sin(angle);
-        if (i === 0) {
-          graphics.moveTo(x_i, y_i);
-        } else {
-          graphics.lineTo(x_i, y_i);
-        }
-      }
-      graphics.closePath();
-      graphics.fill();
-      graphics.stroke();
-
-      // Draw star at center point
-      this.drawStar(graphics, centerX, centerY, 8);
-
-      // Add city name centered in the hexagon
-      const cityName = this.scene.add.text(
-        centerX + this.GRID_MARGIN,
-        centerY + this.GRID_MARGIN + 15, // Added offset to move below center point
-        city.name,
-        {
-          color: "#000000",
-          font: "Arial",
-          fontSize: "12px",
-          fontStyle: "bold",
-        }
-      );
-      cityName.setOrigin(0.5, 0.5);
-      cityName.setText(cityName.text.toUpperCase());
-      this.mapContainer.add(cityName);
-
-      // Add load sprites using the center coordinates with margin
-      this.addLoadSpritesToCity(
-        centerX + this.GRID_MARGIN,
-        centerY + this.GRID_MARGIN,
-        city.name,
-        city.type
-      );
-      return;
-    }
-
-    // Medium and small cities (unchanged)
-    if (city.type === TerrainType.MediumCity) {
-      graphics.fillStyle(this.CITY_COLORS[TerrainType.MediumCity], 0.7);
-      graphics.lineStyle(2, 0x000000, 0.7);
-      graphics.beginPath();
-      graphics.arc(
-        point.x,
-        point.y,
-        this.CITY_RADIUS[TerrainType.MediumCity],
-        0,
-        Math.PI * 2
-      );
-      graphics.closePath();
-      graphics.fill();
-      graphics.stroke();
-
-      // Add city name
-      const cityName = this.scene.add.text(
-        point.x + this.GRID_MARGIN,
-        point.y + this.GRID_MARGIN - 15,
-        city.name.toUpperCase(),
-        {
-          color: "#000000",
-          fontSize: "10px",
-          font: "Arial",
-        }
-      );
-      cityName.setOrigin(0.5, 0.5);
-      this.mapContainer.add(cityName);
-      this.scene.children.bringToTop(cityName);
-
-      // Add load sprites
-      this.addLoadSpritesToCity(
-        point.x + this.GRID_MARGIN,
-        point.y + this.GRID_MARGIN,
-        city.name,
-        city.type
-      );
-      return;
-    }
-    if (city.type === TerrainType.SmallCity) {
-      graphics.fillStyle(this.CITY_COLORS[TerrainType.SmallCity], 0.7);
-      graphics.lineStyle(2, 0x000000, 0.7);
-      const radius = this.CITY_RADIUS[TerrainType.SmallCity];
-      graphics.fillRect(
-        point.x - radius,
-        point.y - radius,
-        radius * 2,
-        radius * 2
-      );
-      graphics.strokeRect(
-        point.x - radius,
-        point.y - radius,
-        radius * 2,
-        radius * 2
-      );
-
-      // Add city name
-      const cityName = this.scene.add.text(
-        point.x + this.GRID_MARGIN,
-        point.y + this.GRID_MARGIN - 15,
-        city.name.toUpperCase(),
-        {
-          color: "#000000",
-          fontSize: "8px",
-          font: "Arial",
-        }
-      );
-      cityName.setOrigin(0.5, 0.5);
-      this.mapContainer.add(cityName);
-
-      // Add load sprites
-      this.addLoadSpritesToCity(
-        point.x + this.GRID_MARGIN,
-        point.y + this.GRID_MARGIN,
-        city.name,
-        city.type
-      );
-      return;
-    }
-  }
-
   public createHexagonalGrid(): void {
     // Create lookup maps
     const terrainLookup = new Map<
       string,
-      {
-        id: string;
-        terrain: TerrainType;
-        ferryConnection?: FerryConnection;
-        //TODO: Add centerPoint to the config for any city, allow saving the row/col of the center point
-        //points come from mapConfig which has this data - connected points only filled for major cities
-        city?: {
-          type: TerrainType;
-          name: string;
-          connectedPoints?: Array<{ row: number; col: number }>;
-          availableLoads?: string[];
-        };
-        ocean: string;
-      }
+      GridPoint
     >();
 
     // First pass: Build lookup maps and identify city areas
     mapConfig.points.forEach((point) => {
       terrainLookup.set(`${point.row},${point.col}`, {
-        id: point.id,
-        terrain: point.terrain,
-        ferryConnection: point.ferryConnection,
-        city: point.city,
-        ocean: (point as any).ocean,
+        ...point,
+        x: point.x + this.GRID_MARGIN,
+        y: point.y + this.GRID_MARGIN,
       });
     });
 
@@ -394,16 +111,20 @@ export class MapRenderer {
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
     }).setName('ferryCosts');
+    const portNames = this.scene.add.container();
+    portNames.setName(MapRenderer.PORT_NAMES_CONTAINER_NAME);
+    const ferryPortIcons = this.scene.add.container();
+    ferryPortIcons.setName(MapRenderer.FERRY_ICONS_CONTAINER_NAME);
     // Set styles
     landPoints.lineStyle(1, 0x000000);
     landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
     mountainPoints.lineStyle(1, 0x000000);
     hillPoints.lineStyle(1, 0x000000);
     hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
-    ferryConnections.lineStyle(6, 0x808080, 0.8); // Increased thickness to 6, using gray color, 0.8 opacity
+    ferryConnections.lineStyle(6, 0x808080, 0.8);
 
-    const portNames = this.scene.add.container();
-    const ferryPortIcons = this.scene.add.container();
+    
+
     // First pass: Draw city areas
     const majorCities = new Set<string>();
     for (let row = 0; row <= mapConfig.height; row++) {
@@ -456,8 +177,7 @@ export class MapRenderer {
                   config.city.connectedPoints
                 );
               }
-              //console.log("Drawing city with loads:", cityConfig, x, y);
-              this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
+              //this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
             }
           } else {
             if (
@@ -477,7 +197,7 @@ export class MapRenderer {
                 config.city.connectedPoints
               );
             }
-            this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
+            //this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
           }
         }
       }
@@ -486,6 +206,7 @@ export class MapRenderer {
     // Second pass: Draw regular grid points and terrain
     for (let row = 0; row <= mapConfig.height; row++) {
       this.gridPoints[row] = [];
+      this.mapElements[row] = [];
       const isOffsetRow = row % 2 === 1;
 
       for (let col = 0; col <= mapConfig.width; col++) {
@@ -494,8 +215,20 @@ export class MapRenderer {
           (isOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
         const y = row * this.VERTICAL_SPACING;
 
-        const config = terrainLookup.get(`${row},${col}`);
-
+        let config = terrainLookup.get(`${row},${col}`);
+        if(!config) {
+          console.log(`No config found for ${row},${col}`);
+          config = {
+            id: `${row},${col}`,
+            x,
+            y,
+            row,
+            col,
+            terrain: TerrainType.Water,
+            city: undefined,
+            ferryConnection: undefined,
+          };
+        }
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const ferryConnection = config?.ferryConnection;
@@ -513,20 +246,6 @@ export class MapRenderer {
             }
           }
         }
-
-        //Add coordinate label for each point
-        // const coordLabel = this.scene.add.text(
-        //     x + this.GRID_MARGIN,
-        //     y + this.GRID_MARGIN,
-        //     `${col},${row}`,
-        //     {
-        //         color: '#000000',
-        //         fontSize: '8px',
-        //         backgroundColor: '#ffffff80' // Semi-transparent white background
-        //     }
-        // );
-        // coordLabel.setOrigin(0, 1);
-        // this.mapContainer.add(coordLabel);
 
         let sprite:
           | Phaser.GameObjects.Graphics
@@ -551,95 +270,26 @@ export class MapRenderer {
           }
         }
 
-       if (terrain !== TerrainType.Water) {
-          if (
-            terrain === TerrainType.Alpine ||
-            terrain === TerrainType.Mountain
-          ) {
-            // Draw terrain features as before
-            const graphics =
-              terrain === TerrainType.Alpine ? mountainPoints : hillPoints;
-            const triangleHeight = this.POINT_RADIUS * 2;
-            graphics.beginPath();
-            graphics.moveTo(x, y - triangleHeight);
-            graphics.lineTo(x - triangleHeight, y + triangleHeight);
-            graphics.lineTo(x + triangleHeight, y + triangleHeight);
-            graphics.closePath();
-            if (terrain === TerrainType.Mountain) {
-              graphics.fill();
-            }
-            graphics.stroke();
-          }  
-        //   else if (terrain === TerrainType.Water) {
-        //     landPoints.beginPath();
-        //     landPoints.fillStyle(0x1cb2f5, 1); // Bright blue
-        //     landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
-        //     landPoints.closePath();
-        //     landPoints.fill();
-        //     landPoints.stroke();
-        // }
-        else if (terrain === TerrainType.FerryPort) {
-            sprite = this.scene.add.image(
-              x + this.GRID_MARGIN,
-              y + this.GRID_MARGIN,
-              "ferry-port"
-            ).setName(`ferryPort--${config?.city?.name}`);
-            sprite.setScale(1);
-            sprite.setOrigin(0.5, 0.5);
-            this.scene.textures.get('ferry-port').setFilter(Phaser.Textures.FilterMode.LINEAR);
-            sprite.setDisplaySize(this.FERRY_ICON_SIZE, this.FERRY_ICON_SIZE);
-            ferryPortIcons.add(sprite);
+        if (terrain !== TerrainType.Water) {
+          // Create and store the map element
+          const mapElement = MapElementFactory.createMapElement(
+            this.scene,
+            terrain,
+            config as GridPoint,
+            x,
+            y
+          );
+          this.mapElements[row][col] = mapElement;
 
-            // Find the ferry connection for this port
-            const ferryConnection = mapConfig.ferryConnections?.find(ferry => {
-              const [pointA, pointB] = ferry.connections;
-              return (pointA.row === row && pointA.col === col) || (pointB.row === row && pointB.col === col);
-            });
-
-            // Calculate text position based on ferry connection
-            let textX = x + this.GRID_MARGIN;
-            let textY = y + this.GRID_MARGIN;
-            let textOrigin = { x: 0.5, y: 0.5 }; // Default centered origin
-
-            if (ferryConnection) {
-              const [pointA, pointB] = ferryConnection.connections;
-              const isPointA = pointA.row === row && pointA.col === col;
-              const otherPoint = isPointA ? pointB : pointA;
-              
-              // Determine if text should be above or below based on relative position
-              const isAbove = otherPoint.row < row || (otherPoint.row === row && otherPoint.col < col);
-              
-              if (isAbove) {
-                textOrigin = { x: 0.0, y: -1.75 };
-              } else {
-                textOrigin = { x: 0.5, y: 2.5 };
-              }
-            }
-
-            // Add ferry port name
-            const portName = this.scene.add.text(
-              textX,
-              textY,
-              config?.city?.name || "Port", // Use city name if available, otherwise "Port"
-              {
-                color: "#000000",
-                fontSize: "7px", // Smaller than small city (8px)
-                fontFamily: "sans-serif",
-              }
-            );
-            portName.setOrigin(textOrigin.x, textOrigin.y);
-            portNames.add(portName);
+          // Draw the element
+          if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
+            mapElement.draw(mountainPoints, this.mapContainer);
+          } else if (terrain === TerrainType.FerryPort) {
+            mapElement.draw(ferryConnections, this.mapContainer);
           } else if (config || isConnectedPointOfMajorCity) {
-            // Draw standard point
-            landPoints.beginPath();
-            landPoints.fillStyle(this.terrainColors[TerrainType.Clear], 1); // Always set to black for land
-
-            landPoints.arc(x, y, this.POINT_RADIUS, 0, Math.PI * 2);
-            landPoints.closePath();
-            landPoints.fill();
-            landPoints.stroke();
+            mapElement.draw(landPoints, this.mapContainer);
+            //mapElement.addLoadSpritesToCity(x, y, config?.city?.name, terrain, landPoints);
           }
-         
         }
 
         // Store point data with grid coordinates
@@ -663,6 +313,7 @@ export class MapRenderer {
         };
       }
     }
+
     const ferryCostsText: Phaser.GameObjects.Text[] = [];
     // Draw ferry connections using the ferryConnections array from mapConfig
     if (mapConfig.ferryConnections) {
@@ -720,17 +371,19 @@ export class MapRenderer {
         ferryCostsText.push(text);
       });
     }
-    // //convert all graphics to static textures
+
+    // Convert all graphics to static textures
     const ferryTexture = ferryConnections.generateTexture("ferry-connections");
     const cityAreasTexture = cityAreas.generateTexture("city-areas");
     const landPointsTexture = landPoints.generateTexture("land-points");
     const mountainPointsTexture = mountainPoints.generateTexture("mountain-points");
     const hillPointsTexture = hillPoints.generateTexture("hill-points");
     const ferryCostsTexture = ferryCosts.generateTexture("ferry-costs");
+    
     // Add all graphics objects to the map container in correct order
     this.mapContainer.add([
-     ferryTexture,
-      cityAreasTexture ,
+      ferryTexture,
+      cityAreasTexture,
       landPointsTexture,
       mountainPointsTexture,
       hillPointsTexture,
@@ -739,37 +392,6 @@ export class MapRenderer {
       portNames,
       ferryPortIcons,
     ]);
-  }
-
-  private drawStar(
-    graphics: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    radius: number
-  ) {
-    const points = 5;
-    const innerRadius = radius * 0.4; // Inner radius of the star
-
-    graphics.beginPath();
-
-    for (let i = 0; i <= points * 2; i++) {
-      const r = i % 2 === 0 ? radius : innerRadius;
-      const angle = (i * Math.PI) / points;
-      const pointX = x + r * Math.sin(angle);
-      const pointY = y - r * Math.cos(angle);
-
-      if (i === 0) {
-        graphics.moveTo(pointX, pointY);
-      } else {
-        graphics.lineTo(pointX, pointY);
-      }
-    }
-
-    graphics.closePath();
-    graphics.fillStyle(0x000000, 1); // Black fill
-    graphics.fill();
-    graphics.lineStyle(1, 0x000000);
-    graphics.stroke();
   }
 
   private drawCircledNumber(
@@ -800,7 +422,6 @@ export class MapRenderer {
         fontStyle: "bold",
       }
     );
-    //text.setDepth(2); // Set even higher depth to ensure text appears above circle
     text.setOrigin(0.5, 0.5);
 
     return text;
