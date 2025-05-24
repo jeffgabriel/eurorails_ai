@@ -24,11 +24,10 @@ jest.mock('fs', () => ({
 }));
 
 import { LoadService } from '../services/loadService';
-import { LoadState, LoadType } from '../../shared/types/LoadTypes';
+import { LoadType } from '../../shared/types/LoadTypes';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import path from 'path';
+
 
 // Import LoadService after setting up mocks
 
@@ -318,6 +317,39 @@ describe('LoadService', () => {
         const result = await client.query('SELECT * FROM load_chips WHERE is_dropped = true');
         expect(result.rows.length).toBe(0);
       });
+    });
+  });
+
+  describe('Initial Load Availability', () => {
+    let loadService: LoadService;
+
+    beforeEach(async () => {
+      loadService = await LoadService.getInstance();
+      loadService.reset();
+    });
+
+    it('Each city should only have the loads configured in load_cities.json', () => {
+      // Read the config file directly
+      const fs = require('fs');
+      const path = require('path');
+      const configPath = path.resolve(__dirname, '../../../configuration/load_cities.json');
+      const configFile = fs.readFileSync(configPath, 'utf8');
+      const config = JSON.parse(configFile);
+      const cityToLoads: Record<string, string[]> = {};
+      for (const item of config.LoadConfiguration) {
+        for (const key of Object.keys(item)) {
+          if (key !== 'count') {
+            for (const city of item[key]) {
+              if (!cityToLoads[city]) cityToLoads[city] = [];
+              cityToLoads[city].push(key);
+            }
+          }
+        }
+      }
+      for (const [city, expectedLoads] of Object.entries(cityToLoads)) {
+        const actualLoads = loadService.getAvailableLoadsForCity(city);
+        expect(actualLoads.sort()).toEqual(expectedLoads.sort());
+      }
     });
   });
 }); 
