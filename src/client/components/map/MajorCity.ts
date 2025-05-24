@@ -1,6 +1,7 @@
 import { City } from "./City";
 import { GridPoint, CityData } from "../../../shared/types/GameTypes";
 import "phaser";
+import { CITY_COLOR } from "./City";
 
 export class MajorCity extends City {
   private centerX: number;
@@ -30,7 +31,7 @@ export class MajorCity extends City {
     }
 
     const hexRadius = 36;
-    graphics.fillStyle(this.CITY_COLORS[this.cityData.type], 0.8);
+    graphics.fillStyle(CITY_COLOR, 0.8);
     graphics.blendMode = Phaser.BlendModes.MULTIPLY;
     graphics.lineStyle(2, 0x000000, 0.7);
     graphics.beginPath();

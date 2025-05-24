@@ -1,6 +1,7 @@
 import { City } from "./City";
 import { CityData, GridPoint } from "../../../shared/types/GameTypes";
 import "phaser";
+import { CITY_COLOR } from "./City";
 
 export class MediumCity extends City {
   constructor(
@@ -13,7 +14,7 @@ export class MediumCity extends City {
   }
 
   draw(graphics: Phaser.GameObjects.Graphics, container: Phaser.GameObjects.Container): void {
-    graphics.fillStyle(this.CITY_COLORS[this.cityData.type], 0.7);
+    graphics.fillStyle(CITY_COLOR, 0.7);
     graphics.lineStyle(2, 0x000000, 0.7);
     graphics.beginPath();
     graphics.arc(

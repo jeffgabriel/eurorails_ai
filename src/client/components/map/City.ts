@@ -3,13 +3,9 @@ import { TerrainType, CityData, GridPoint } from "../../../shared/types/GameType
 import { LoadService } from "../../services/LoadService";
 import "phaser";
 
-export abstract class City extends MapElement {
-  protected readonly CITY_COLORS = {
-    [TerrainType.MajorCity]: 0xab0000, // Brighter red for major cities
-    [TerrainType.MediumCity]: 0xab0000, // Brighter blue for cities
-    [TerrainType.SmallCity]: 0xab0000, // Brighter green for small cities
-  };
+export const CITY_COLOR = 0xab0000;
 
+export abstract class City extends MapElement {
   protected readonly CITY_RADIUS = {
     [TerrainType.MajorCity]: 30, // Size for major city hexagon
     [TerrainType.MediumCity]: 12, // Reduced size for city circle
