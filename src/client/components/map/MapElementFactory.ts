@@ -18,7 +18,7 @@ export class MapElementFactory {
     y: number
   ): MapElement {
     // Handle cities first
-    if (point.city) {
+    if (point && point.city) {
       switch (point.city.type) {
         case TerrainType.MajorCity:
           return new MajorCity(scene, point, x, y);

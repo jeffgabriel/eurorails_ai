@@ -19,7 +19,7 @@ export class Mountain extends MapElement {
     graphics.lineTo(this.x - triangleHeight, this.y + triangleHeight);
     graphics.lineTo(this.x + triangleHeight, this.y + triangleHeight);
     graphics.closePath();
-    graphics.fillStyle(0x964b00, 1); // Brown fill
+    graphics.fillStyle(0x000000, 1);
     graphics.fill();
     graphics.stroke();
   }

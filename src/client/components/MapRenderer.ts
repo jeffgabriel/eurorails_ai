@@ -103,10 +103,10 @@ export class MapRenderer {
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
     }).setName('mountainPoints');
-    const hillPoints = this.scene.add.graphics({
+    const alpinePoints = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
-    }).setName('hillPoints');
+    }).setName('alpinePoints');
     const ferryCosts = this.scene.add.graphics({
       x: this.GRID_MARGIN,
       y: this.GRID_MARGIN,
@@ -116,12 +116,13 @@ export class MapRenderer {
     const ferryPortIcons = this.scene.add.container();
     ferryPortIcons.setName(MapRenderer.FERRY_ICONS_CONTAINER_NAME);
     // Set styles
-    landPoints.lineStyle(1, 0x000000);
-    landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
-    mountainPoints.lineStyle(1, 0x000000);
-    hillPoints.lineStyle(1, 0x000000);
-    hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
-    ferryConnections.lineStyle(6, 0x808080, 0.8);
+    // landPoints.lineStyle(1, 0x000000);
+    // landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
+    // mountainPoints.lineStyle(1, 0x000000);
+    // alpinePoints.lineStyle(1, 0x000000);
+    // hillPoints.lineStyle(1, 0x000000);
+    // hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
+    // ferryConnections.lineStyle(6, 0x808080, 0.8);
 
     
 
@@ -197,7 +198,6 @@ export class MapRenderer {
                 config.city.connectedPoints
               );
             }
-            //this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
           }
         }
       }
@@ -216,19 +216,7 @@ export class MapRenderer {
         const y = row * this.VERTICAL_SPACING;
 
         let config = terrainLookup.get(`${row},${col}`);
-        if(!config) {
-          console.log(`No config found for ${row},${col}`);
-          config = {
-            id: `${row},${col}`,
-            x,
-            y,
-            row,
-            col,
-            terrain: TerrainType.Water,
-            city: undefined,
-            ferryConnection: undefined,
-          };
-        }
+        
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const ferryConnection = config?.ferryConnection;
@@ -282,13 +270,15 @@ export class MapRenderer {
           this.mapElements[row][col] = mapElement;
 
           // Draw the element
-          if (terrain === TerrainType.Alpine || terrain === TerrainType.Mountain) {
+          if (terrain === TerrainType.Mountain){
             mapElement.draw(mountainPoints, this.mapContainer);
-          } else if (terrain === TerrainType.FerryPort) {
+          } else if (terrain === TerrainType.Alpine){
+            mapElement.draw(alpinePoints, this.mapContainer);
+          }
+          else if (terrain === TerrainType.FerryPort) {
             mapElement.draw(ferryConnections, this.mapContainer);
           } else if (config || isConnectedPointOfMajorCity) {
             mapElement.draw(landPoints, this.mapContainer);
-            //mapElement.addLoadSpritesToCity(x, y, config?.city?.name, terrain, landPoints);
           }
         }
 
@@ -377,7 +367,7 @@ export class MapRenderer {
     const cityAreasTexture = cityAreas.generateTexture("city-areas");
     const landPointsTexture = landPoints.generateTexture("land-points");
     const mountainPointsTexture = mountainPoints.generateTexture("mountain-points");
-    const hillPointsTexture = hillPoints.generateTexture("hill-points");
+    const alpinePointsTexture = alpinePoints.generateTexture("hill-points");
     const ferryCostsTexture = ferryCosts.generateTexture("ferry-costs");
     
     // Add all graphics objects to the map container in correct order
@@ -386,7 +376,7 @@ export class MapRenderer {
       cityAreasTexture,
       landPointsTexture,
       mountainPointsTexture,
-      hillPointsTexture,
+      alpinePointsTexture,
       ferryCostsTexture,
       ...ferryCostsText,
       portNames,
