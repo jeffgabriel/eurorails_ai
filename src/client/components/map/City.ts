@@ -6,8 +6,8 @@ import "phaser";
 export abstract class City extends MapElement {
   protected readonly CITY_COLORS = {
     [TerrainType.MajorCity]: 0xab0000, // Brighter red for major cities
-    [TerrainType.MediumCity]: 0x9999ff, // Brighter blue for cities
-    [TerrainType.SmallCity]: 0x99ff99, // Brighter green for small cities
+    [TerrainType.MediumCity]: 0xab0000, // Brighter blue for cities
+    [TerrainType.SmallCity]: 0xab0000, // Brighter green for small cities
   };
 
   protected readonly CITY_RADIUS = {
@@ -81,7 +81,7 @@ export abstract class City extends MapElement {
     const startAngle = -Math.PI / 2; // Start from top (-90 degrees)
 
     loadDetails.forEach((load, index) => {
-      try {
+     // try {
         if (!load || !load.loadType) {
           console.warn(
             `Invalid load data for city ${cityName} at index ${index}`
@@ -112,33 +112,33 @@ export abstract class City extends MapElement {
         mapContainer.add(sprite);
 
         // Add count indicator if more than 1 available
-        if (load.count > 1) {
-          try {
-            const countText = this.scene.add.text(
-              spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
-              spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
-              load.count.toString(),
-              {
-                fontSize: "10px",
-                color: "#000000",
-                backgroundColor: "#ffffff",
-                padding: { x: 2, y: 2 },
-              }
-            );
-            countText.setOrigin(0.5, 0.5); // Center the text
-            countText.setDepth(2);
-            //this.mapContainer.add(countText);
-          } catch (textError) {
-            console.warn(
-              `Failed to add count text for ${load.loadType} at ${cityName}:`,
-              textError
-            );
-          }
-        }
-      } catch (error) {
-        console.warn(`Failed to add load sprite for ${cityName}:`, error);
-        // Continue with the next load
-      }
+      //   if (load.count > 1) {
+      //     try {
+      //       const countText = this.scene.add.text(
+      //         spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
+      //         spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
+      //         load.count.toString(),
+      //         {
+      //           fontSize: "10px",
+      //           color: "#000000",
+      //           backgroundColor: "#ffffff",
+      //           padding: { x: 2, y: 2 },
+      //         }
+      //       );
+      //       countText.setOrigin(0.5, 0.5); // Center the text
+      //       countText.setDepth(2);
+      //       //this.mapContainer.add(countText);
+      //     } catch (textError) {
+      //       console.warn(
+      //         `Failed to add count text for ${load.loadType} at ${cityName}:`,
+      //         textError
+      //       );
+      //     }
+      //   }
+      // } catch (error) {
+      //   console.warn(`Failed to add load sprite for ${cityName}:`, error);
+      //   // Continue with the next load
+      // }
     });
   }
 } 

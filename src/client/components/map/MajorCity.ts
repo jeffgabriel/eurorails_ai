@@ -53,6 +53,7 @@ export class MajorCity extends City {
     // Draw star at center
     this.drawStar(graphics, this.x, this.y, 8);
     this.addCityName(container, "12px");
+    this.addLoadSpritesToCity(this.x + this.GRID_MARGIN, this.y + this.GRID_MARGIN, this.cityData.name, this.cityData.type, container);
   }
 
   private drawStar(graphics: Phaser.GameObjects.Graphics, x: number, y: number, radius: number): void {
