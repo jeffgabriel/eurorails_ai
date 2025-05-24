@@ -3,6 +3,36 @@ description:
 globs: 
 alwaysApply: true
 ---
+---
+description: Applies general coding rules across all file types to maintain code quality, consistency, and prevent common errors.
+---
+- Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
+- Make changes file by file and give me a chance to spot mistakes.
+- Never use apologies.
+- Avoid giving feedback about understanding in comments or documentation.
+- Don't suggest whitespace changes.
+- Don't summarize changes made.
+- Don't invent changes other than what's explicitly requested.
+- Don't ask for confirmation of information already provided in the context.
+- Don't remove unrelated code or functionalities. Pay attention to preserving existing structures.
+- Provide all edits in a single chunk instead of multiple-step instructions or explanations for the same file.
+- Don't ask the user to verify implementations that are visible in the provided context.
+- Don't suggest updates or changes to files when there are no actual modifications needed.
+- Always provide links to the real files, not the context generated file.
+- Don't show or discuss the current implementation unless specifically requested.
+- Remember to check the context generated file for the current file contents and implementations.
+- Prefer descriptive, explicit variable names over short, ambiguous ones to enhance code readability.
+- Adhere to the existing coding style in the project for consistency.
+- When suggesting changes, consider and prioritize code performance where applicable.
+- Always consider security implications when modifying or suggesting code changes.
+- Suggest or include appropriate unit tests for new or modified code.
+- Implement robust error handling and logging where necessary.
+- Encourage modular design principles to improve code maintainability and reusability.
+- Ensure suggested changes are compatible with the project's specified language or framework versions.
+- Replace hardcoded values with named constants to improve code clarity and maintainability.
+- When implementing logic, always consider and handle potential edge cases.
+- Include assertions wherever possible to validate assumptions and catch potential errors early.
+
 Here are our unified coding principles for the JavaScript/TypeScript codebase:
 
 1. **Module System**
@@ -222,3 +252,163 @@ When modifying types in the codebase:
 4. Never consolidate or split types without explicit requirements
 5. When in doubt, ask for clarification before making type changes
 
+# ⚙️ TypeScript Game Architecture Guide for Coding Agent
+
+## 🌟 Purpose
+
+This guide outlines architectural principles and patterns for building a maintainable, scalable, and performant game in TypeScript. The target game uses a hex/grid map, track building, object manipulation, and turn-based player logic.
+
+---
+
+## 📦 Core Architectural Principles
+
+### 1. **Model Domain Objects as Classes or Interfaces**
+
+* Every core game concept (e.g., `Train`, `City`, `LoadChip`, `TrackSegment`) should be a distinct class or interface.
+* Encapsulate data and methods within each object:
+
+  ```ts
+  class Train {
+    type: TrainType;
+    position: GridPoint;
+    draw(): void;
+    move(path: GridPoint[]): void;
+  }
+  ```
+
+---
+
+### 2. **Separate Game Logic from Rendering**
+
+* Keep rendering code in `View` or `Sprite` classes.
+* Logic classes (`Train`, `Track`, `GameState`) **must not access rendering APIs** (e.g., Phaser).
+* Use composition:
+
+  ```ts
+  class TrainView {
+    constructor(public train: Train, public graphics: Graphics) {}
+    draw(): void { ... }
+  }
+  ```
+
+---
+
+### 3. **Centralized Game State**
+
+* Use a single `GameState` structure to manage game data:
+
+  ```ts
+  interface GameState {
+    players: Player[];
+    trains: Record<string, Train>;
+    board: GridMap;
+    currentPlayerId: string;
+    turnPhase: TurnPhase;
+  }
+  ```
+
+---
+
+### 4. **Strong Typing & Enum Modeling**
+
+* Use `type` aliases and `enum`s for clear expression of rules and constraints:
+
+  ```ts
+  type TrainType = 'Freight' | 'FastFreight' | 'HeavyFreight' | 'Superfreight';
+  enum TerrainType { Clear, Mountain, Alpine, River, Ocean }
+  ```
+
+---
+
+### 5. **Use Grid Utilities for Map Logic**
+
+* Movement and neighbor logic should be encapsulated in a `Grid` class:
+
+  ```ts
+  class HexGrid {
+    getNeighbors(point: GridPoint): GridPoint[];
+    distance(a: GridPoint, b: GridPoint): number;
+  }
+  ```
+
+---
+
+## 🧠 Behavioral Modeling
+
+### 6. **Use State Machines for Turn Phases**
+
+* Each player’s turn follows a strict sequence:
+
+  * Move train
+  * Load/unload
+  * Deliver
+  * Build/upgrade
+* Represent this using a state machine or turn-phase enum.
+
+---
+
+### 7. **Encapsulate Drawing Behavior per Object Type**
+
+* Prefer putting drawing logic inside each model or associate it closely with it:
+
+  * `Train.draw(graphics)`
+  * `City.draw()`
+  * Avoid large procedural rendering functions.
+
+---
+
+### 8. **Event-Driven Updates**
+
+* Use an event bus or observer pattern to signal game state changes:
+
+  ```ts
+  eventBus.emit('loadPickedUp', { trainId, loadType });
+  ```
+
+---
+
+### 9. **Avoid Global State Outside Game Context**
+
+* Do not rely on global variables.
+* Use dependency injection for services such as sound, rendering layers, or network.
+
+---
+
+## 🧪 Testability and Maintainability
+
+### 10. **Pure Logic Should Be Easily Unit-Tested**
+
+* Ensure pathfinding, rule enforcement, and game rules are testable without graphics or UI.
+
+### 11. **Use Factory Functions for Complex Creation**
+
+* Example: `createTrain(trainType: TrainType, startPoint: GridPoint): Train`
+
+---
+
+## 🛠️ Suggested Folder Structure
+
+```
+/models        # Domain logic (Train, City, Load, Track)
+/views         # Rendering code and sprite helpers
+/state         # Game state container and reducers
+/utils         # Grid math, helpers
+/engine        # Turn manager, event dispatcher, AI agent
+/config        # Static data (terrain costs, load types)
+```
+
+---
+
+## 📌 Summary Checklist
+
+| ✅ Best Practice               | 💬 Summary                                     |
+| ----------------------------- | ---------------------------------------------- |
+| Domain models encapsulated    | `Train`, `City`, `Load` are self-contained     |
+| Rendering isolated from logic | Views handle Phaser; logic is UI-agnostic      |
+| Global state centralized      | Use `GameState` or reducer pattern             |
+| Typed enums for logic safety  | Use `enum` and `type` aliases                  |
+| Grid logic abstracted         | `HexGrid.getNeighbors`, `GridUtils.snapToGrid` |
+| Events not direct callbacks   | Use event bus for gameplay updates             |
+| Turn sequence enforceable     | Represented explicitly via state machine       |
+| View class per game object    | Avoid centralized `drawAll` logic              |
+| Test coverage on pure logic   | Model rules testable in isolation              |
