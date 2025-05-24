@@ -1,19 +1,17 @@
 import "phaser";
 import { mapConfig } from "../config/mapConfig";
-import {
-  TerrainType,
-  GridPoint
-} from "../../shared/types/GameTypes";
+import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { MapElement } from "./map/MapElement";
 import { MapElementFactory } from "./map/MapElementFactory";
+import { FerryConnectionElement } from "./map/FerryConnection";
 
 // All coordinates in configuration and rendering are zero-based. Do not add or subtract 1 from row/col anywhere in this file.
 
 export class MapRenderer {
-  public static readonly FERRY_ICONS_CONTAINER_NAME = 'ferryIcons';
-  public static readonly PORT_NAMES_CONTAINER_NAME = 'portNames';
+  public static readonly FERRY_ICONS_CONTAINER_NAME = "ferryIcons";
+  public static readonly PORT_NAMES_CONTAINER_NAME = "portNames";
   // Grid configuration
   private readonly HORIZONTAL_SPACING = 35;
   private readonly VERTICAL_SPACING = 35;
@@ -72,10 +70,7 @@ export class MapRenderer {
 
   public createHexagonalGrid(): void {
     // Create lookup maps
-    const terrainLookup = new Map<
-      string,
-      GridPoint
-    >();
+    const terrainLookup = new Map<string, GridPoint>();
 
     // First pass: Build lookup maps and identify city areas
     mapConfig.points.forEach((point) => {
@@ -87,44 +82,46 @@ export class MapRenderer {
     });
 
     // Create graphics objects for different elements
-    const ferryConnections = this.scene.add.graphics({
+    const ferryConnections = this.scene.add
+      .graphics({
         x: this.GRID_MARGIN,
         y: this.GRID_MARGIN,
-      }).setName('ferryConnections');
-    const cityAreas = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    }).setName('cityAreas');
-    const landPoints = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    }).setName('landPoints');
-    const mountainPoints = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    }).setName('mountainPoints');
-    const alpinePoints = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    }).setName('alpinePoints');
-    const ferryCosts = this.scene.add.graphics({
-      x: this.GRID_MARGIN,
-      y: this.GRID_MARGIN,
-    }).setName('ferryCosts');
+      })
+      .setName("ferryConnections");
+    const cityAreas = this.scene.add
+      .graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      })
+      .setName("cityAreas");
+    const landPoints = this.scene.add
+      .graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      })
+      .setName("landPoints");
+    const mountainPoints = this.scene.add
+      .graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      })
+      .setName("mountainPoints");
+    const alpinePoints = this.scene.add
+      .graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      })
+      .setName("alpinePoints");
+    const ferryCosts = this.scene.add
+      .graphics({
+        x: this.GRID_MARGIN,
+        y: this.GRID_MARGIN,
+      })
+      .setName("ferryCosts");
     const portNames = this.scene.add.container();
     portNames.setName(MapRenderer.PORT_NAMES_CONTAINER_NAME);
     const ferryPortIcons = this.scene.add.container();
     ferryPortIcons.setName(MapRenderer.FERRY_ICONS_CONTAINER_NAME);
-    // Set styles
-    // landPoints.lineStyle(1, 0x000000);
-    // landPoints.fillStyle(this.terrainColors[TerrainType.Clear]);
-    // mountainPoints.lineStyle(1, 0x000000);
-    // alpinePoints.lineStyle(1, 0x000000);
-    // hillPoints.lineStyle(1, 0x000000);
-    // hillPoints.fillStyle(this.terrainColors[TerrainType.Mountain]);
-    // ferryConnections.lineStyle(6, 0x808080, 0.8);
-
-    
 
     // First pass: Draw city areas
     const majorCities = new Set<string>();
@@ -178,7 +175,6 @@ export class MapRenderer {
                   config.city.connectedPoints
                 );
               }
-              //this.drawCityWithLoads(cityAreas, currentPoint, cityConfig);
             }
           } else {
             if (
@@ -216,7 +212,7 @@ export class MapRenderer {
         const y = row * this.VERTICAL_SPACING;
 
         let config = terrainLookup.get(`${row},${col}`);
-        
+
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const ferryConnection = config?.ferryConnection;
@@ -230,7 +226,7 @@ export class MapRenderer {
           if (city.type === TerrainType.MajorCity && city.connectedPoints) {
             // Check if this point is one of the connected points for the major city
             for (const cp of city.connectedPoints) {
-                terrain = TerrainType.MajorCity;              
+              terrain = TerrainType.MajorCity;
             }
           }
         }
@@ -270,12 +266,11 @@ export class MapRenderer {
           this.mapElements[row][col] = mapElement;
 
           // Draw the element
-          if (terrain === TerrainType.Mountain){
+          if (terrain === TerrainType.Mountain) {
             mapElement.draw(mountainPoints, this.mapContainer);
-          } else if (terrain === TerrainType.Alpine){
+          } else if (terrain === TerrainType.Alpine) {
             mapElement.draw(alpinePoints, this.mapContainer);
-          }
-          else if (terrain === TerrainType.FerryPort) {
+          } else if (terrain === TerrainType.FerryPort) {
             mapElement.draw(ferryConnections, this.mapContainer);
           } else if (config || isConnectedPointOfMajorCity) {
             mapElement.draw(landPoints, this.mapContainer);
@@ -304,61 +299,14 @@ export class MapRenderer {
       }
     }
 
-    const ferryCostsText: Phaser.GameObjects.Text[] = [];
     // Draw ferry connections using the ferryConnections array from mapConfig
+    const ferryCostsText: Phaser.GameObjects.Text[] = [];
     if (mapConfig.ferryConnections) {
-      mapConfig.ferryConnections.forEach(ferry => {
-        const [pointA, pointB] = ferry.connections;
-        const isFromOffsetRow = pointA.row % 2 === 1;
-        const isToOffsetRow = pointB.row % 2 === 1;
-
-        const fromX =
-          pointA.col * this.HORIZONTAL_SPACING +
-          (isFromOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-        const fromY = pointA.row * this.VERTICAL_SPACING;
-
-        const toX =
-          pointB.col * this.HORIZONTAL_SPACING +
-          (isToOffsetRow ? this.HORIZONTAL_SPACING / 2 : 0);
-        const toY = pointB.row * this.VERTICAL_SPACING;
-
-        // Draw the ferry connection line with a gentle, smooth upward arc
-        ferryConnections.beginPath();
-        ferryConnections.moveTo(fromX, fromY);
-        
-        // Calculate control point for the curve
-        const curveMidX = (fromX + toX) / 2;
-        const curveMidY = (fromY + toY) / 2;
-        const dx = toX - fromX;
-        const dy = toY - fromY;
-        const length = Math.sqrt(dx * dx + dy * dy);
-        const offset = length * 0.1; // Smaller offset for a milder curve
-        // Perpendicular vector (flip sign on perpY for upward arc)
-        const perpX = -dy / length;
-        const perpY = -dx / length; // negative for upward
-        const controlX = curveMidX + perpX * offset;
-        const controlY = curveMidY + perpY * offset;
-        // Draw the curve using multiple segments for smoothness
-        const segments = 24;
-        let midCurveX = 0;
-        let midCurveY = 0;
-        for (let i = 1; i <= segments; i++) {
-          const t = i / segments;
-          // Quadratic Bézier formula
-          const x = (1 - t) * (1 - t) * fromX + 2 * (1 - t) * t * controlX + t * t * toX;
-          const y = (1 - t) * (1 - t) * fromY + 2 * (1 - t) * t * controlY + t * t * toY;
-          ferryConnections.lineTo(x, y);
-          // Save midpoint at t=0.5 for the cost circle
-          if (Math.abs(t - 0.5) < 1e-2) {
-            midCurveX = x;
-            midCurveY = y;
-          }
-        }
-        ferryConnections.stroke();
-
-        // Draw the circled cost at the midpoint of the curve
-        const text = this.drawCircledNumber(ferryCosts, midCurveX, midCurveY, ferry.cost);
-        ferryCostsText.push(text);
+      mapConfig.ferryConnections.forEach((ferry) => {
+        new FerryConnectionElement(this.scene, ferry).draw(
+          ferryConnections,
+          ferryCostsText
+        );
       });
     }
 
@@ -366,10 +314,11 @@ export class MapRenderer {
     const ferryTexture = ferryConnections.generateTexture("ferry-connections");
     const cityAreasTexture = cityAreas.generateTexture("city-areas");
     const landPointsTexture = landPoints.generateTexture("land-points");
-    const mountainPointsTexture = mountainPoints.generateTexture("mountain-points");
+    const mountainPointsTexture =
+      mountainPoints.generateTexture("mountain-points");
     const alpinePointsTexture = alpinePoints.generateTexture("hill-points");
     const ferryCostsTexture = ferryCosts.generateTexture("ferry-costs");
-    
+
     // Add all graphics objects to the map container in correct order
     this.mapContainer.add([
       ferryTexture,
@@ -384,131 +333,6 @@ export class MapRenderer {
     ]);
   }
 
-  private drawCircledNumber(
-    graphics: Phaser.GameObjects.Graphics,
-    x: number,
-    y: number,
-    number: number
-  ): Phaser.GameObjects.Text {
-    const CIRCLE_RADIUS = 7;
-
-    // Draw white circle background
-    graphics.lineStyle(2, 0x000000, 1); // Black border
-    graphics.fillStyle(0xffffff, 1); // White fill
-    graphics.beginPath();
-    graphics.arc(x, y, CIRCLE_RADIUS, 0, Math.PI * 2);
-    graphics.closePath();
-    graphics.fill();
-    graphics.stroke();
-
-    // Add the number with even higher depth
-    const text = this.scene.add.text(
-      x + this.GRID_MARGIN,
-      y + this.GRID_MARGIN,
-      number.toString(),
-      {
-        color: "#000000",
-        fontSize: "10px",
-        fontStyle: "bold",
-      }
-    );
-    text.setOrigin(0.5, 0.5);
-
-    return text;
-  }
-
-  public getGridPointAtPosition(
-    screenX: number,
-    screenY: number,
-    camera: Phaser.Cameras.Scene2D.Camera
-  ): GridPoint | null {
-    // Convert screen coordinates to world coordinates
-    const worldPoint = camera.getWorldPoint(screenX, screenY);
-
-    // Define maximum distance for point selection
-    const MAX_DISTANCE = 15; // pixels
-
-    let closestPoint: GridPoint | null = null;
-    let minDistance = MAX_DISTANCE;
-
-    // Calculate approximate position, accounting for row offset
-    const approxRow = Math.floor(
-      (worldPoint.y - this.GRID_MARGIN) / this.VERTICAL_SPACING
-    );
-    const isOddRow = approxRow % 2 === 1;
-    const rowOffset = isOddRow ? this.HORIZONTAL_SPACING / 2 : 0;
-    const approxCol = Math.floor(
-      (worldPoint.x - this.GRID_MARGIN - rowOffset) / this.HORIZONTAL_SPACING
-    );
-
-    // Search in a hexagonal pattern around the approximate position
-    // This covers the 6 surrounding hexes plus the center
-    const searchPattern = [
-      { dr: 0, dc: 0 },  // center
-      { dr: -1, dc: 0 }, // top
-      { dr: 1, dc: 0 },  // bottom
-      { dr: 0, dc: -1 }, // left
-      { dr: 0, dc: 1 },  // right
-      { dr: -1, dc: isOddRow ? 1 : -1 }, // top-left or top-right
-      { dr: 1, dc: isOddRow ? 1 : -1 },  // bottom-left or bottom-right
-    ];
-
-    for (const { dr, dc } of searchPattern) {
-      const r = approxRow + dr;
-      const c = approxCol + dc;
-
-      // Skip if out of bounds
-      if (r < 0 || r >= mapConfig.height || c < 0 || c >= mapConfig.width) {
-        continue;
-      }
-
-      if (!this.gridPoints[r] || !this.gridPoints[r][c]) continue;
-
-      const point = this.gridPoints[r][c];
-      if (!point) continue;
-
-      // Calculate distance to this point
-      const dx = point.x - worldPoint.x;
-      const dy = point.y - worldPoint.y;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-
-      // Update closest point if this is closer
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestPoint = point;
-      }
-    }
-
-    return closestPoint;
-  }
-
-  public isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
-    // Prevent null/undefined points
-    if (!point1 || !point2) return false;
-
-    // Same row adjacency - must be consecutive columns
-    if (point1.row === point2.row) {
-      return Math.abs(point1.col - point2.col) === 1;
-    }
-
-    // One row difference only
-    const rowDiff = Math.abs(point1.row - point2.row);
-    if (rowDiff !== 1) return false;
-
-    // For points in adjacent rows, the column relationship depends on which row is odd/even
-    const isPoint1OddRow = point1.row % 2 === 1;
-    const colDiff = point2.col - point1.col; // Use directed difference
-
-    // In a hexagonal grid, each point can connect to two points in adjacent rows
-    if (isPoint1OddRow) {
-      // For odd rows, can connect to same column or one column to the right
-      return colDiff === 0 || colDiff === 1;
-    } else {
-      // For even rows, can connect to same column or one column to the left
-      return colDiff === 0 || colDiff === -1;
-    }
-  }
-
   public playerHasTrack(playerId: string): boolean {
     // Get player's track state from TrackDrawingManager
     const playerTrackState =
@@ -517,23 +341,6 @@ export class MapRenderer {
       return false;
     }
     return playerTrackState.segments.length > 0;
-  }
-
-  // Also let's add a method to help debug track data
-  public debugTrackData(): void {
-    console.log("=== Track Data Debug ===");
-    this.gridPoints.forEach((row, rowIndex) => {
-      row.forEach((point, colIndex) => {
-        if (point?.tracks && point.tracks.length > 0) {
-          console.log(`Track at [${rowIndex},${colIndex}]:`, {
-            point,
-            tracks: point.tracks,
-            numTracks: point.tracks.length,
-          });
-        }
-      });
-    });
-    console.log("=== End Track Data Debug ===");
   }
 
   public findNearestMilepostOnOwnTrack(
