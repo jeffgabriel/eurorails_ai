@@ -68,10 +68,7 @@ export abstract class City extends MapElement {
     mapContainer: Phaser.GameObjects.Container
   ): void {
     const loadDetails = this.loadService.getCityLoadDetails(cityName);
-    // Debug: Log the loads being returned for this city
-    // eslint-disable-next-line no-console
-    console.log(`[City.addLoadSpritesToCity] Loads for city '${cityName}':`, loadDetails);
-    if (!loadDetails || loadDetails.length === 0) return;
+   if (!loadDetails || loadDetails.length === 0) return;
 
     // Calculate starting position for load sprites
     // Position them in a full circle around the city

@@ -5008,22 +5008,6 @@
     "Ocean": null
   },
   {
-    "Id": "2eb6ef13-d566-42cb-bb16-4068fc34206e",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 30,
-    "GridY": 19,
-    "Ocean": null
-  },
-  {
-    "Id": "00f905b5-92a4-4258-a89b-14aa61328919",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 30,
-    "GridY": 21,
-    "Ocean": "English Channel"
-  },
-  {
     "Id": "6ee9eddb-52b1-440e-a137-dc5974cca627",
     "Type": "Milepost",
     "Name": null,
@@ -5189,14 +5173,6 @@
     "Name": null,
     "GridX": 30,
     "GridY": 18,
-    "Ocean": null
-  },
-  {
-    "Id": "b07085ba-7684-4494-8f8a-ca487b100727",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 30,
-    "GridY": 20,
     "Ocean": null
   },
   {
@@ -5368,22 +5344,6 @@
     "Ocean": null
   },
   {
-    "Id": "bfd485cd-78f2-4f88-84a2-33710a314331",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 31,
-    "GridY": 19,
-    "Ocean": null
-  },
-  {
-    "Id": "59e4f97a-db0d-4a1e-b11c-7e4daeff44fb",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 31,
-    "GridY": 21,
-    "Ocean": "English Channel"
-  },
-  {
     "Id": "7d95cd1e-b3ef-4586-abae-25733cd4a763",
     "Type": "Milepost",
     "Name": null,
@@ -5552,14 +5512,6 @@
     "Ocean": "English Channel"
   },
   {
-    "Id": "8e2b7e85-dab5-42da-8050-0a2a96a464f2",
-    "Type": "Major City",
-    "Name": "London",
-    "GridX": 31,
-    "GridY": 20,
-    "Ocean": null
-  },
-  {
     "Id": "d77e6c24-4aff-4720-984b-8eea48be7049",
     "Type": "Milepost",
     "Name": null,
@@ -5718,22 +5670,6 @@
     "GridX": 32,
     "GridY": 25,
     "Ocean": "English Channel"
-  },
-  {
-    "Id": "090ef102-ae8c-4d70-bc39-62f1f3287460",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 32,
-    "GridY": 19,
-    "Ocean": null
-  },
-  {
-    "Id": "e64e7b8c-ee3d-432b-9878-6c54df83f390",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 32,
-    "GridY": 21,
-    "Ocean": null
   },
   {
     "Id": "d4a6c367-58b6-4464-a68e-045777eabdf2",
@@ -5909,14 +5845,6 @@
     "Name": null,
     "GridX": 32,
     "GridY": 26,
-    "Ocean": null
-  },
-  {
-    "Id": "018fcf8e-122b-48af-8a74-15509393df6d",
-    "Type": "Major City Outpost",
-    "Name": "London",
-    "GridX": 32,
-    "GridY": 20,
     "Ocean": null
   },
   {
@@ -16357,6 +16285,78 @@
     "Name": null,
     "GridX": 50,
     "GridY": 53,
+    "Ocean": null
+  },
+  {
+    "Id": "8e2b7e85-dab5-42da-8050-0a2a96a464f2",
+    "Type": "Major City",
+    "Name": "London",
+    "GridX": 31,
+    "GridY": 20,
+    "Ocean": null
+  },
+  {
+    "Id": "2eb6ef13-d566-42cb-bb16-4068fc34206e",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 30,
+    "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "bfd485cd-78f2-4f88-84a2-33710a314331",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 31,
+    "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "018fcf8e-122b-48af-8a74-15509393df6d",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 32,
+    "GridY": 20,
+    "Ocean": null
+  },
+  {
+    "Id": "59e4f97a-db0d-4a1e-b11c-7e4daeff44fb",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 31,
+    "GridY": 21,
+    "Ocean": null
+  },
+  {
+    "Id": "00f905b5-92a4-4258-a89b-14aa61328919",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 30,
+    "GridY": 21,
+    "Ocean":"English Channel"
+  },
+  {
+    "Id": "b07085ba-7684-4494-8f8a-ca487b100727",
+    "Type": "Major City Outpost",
+    "Name": "London",
+    "GridX": 30,
+    "GridY": 20,
+    "Ocean": null
+  },
+  {
+    "Id": "090ef102-ae8c-4d70-bc39-62f1f3287460",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 32,
+    "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "e64e7b8c-ee3d-432b-9878-6c54df83f390",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 32,
+    "GridY": 21,
     "Ocean": null
   }
 ]

@@ -35,27 +35,13 @@ const assignedCells = new Set<string>();
 
 // Group major city outposts by name
 const majorCityGroups: { [name: string]: any[] } = {};
-mileposts.forEach((mp: any) => {
-  if (mp.Type === "Major City Outpost" && mp.Name) {
-    if (!majorCityGroups[mp.Name]) {
-      majorCityGroups[mp.Name] = [];
-    }
-    majorCityGroups[mp.Name].push(mp);
-  } else if (mp.Type === "Major City") {
-    if (!majorCityGroups[mp.Name] || majorCityGroups[mp.Name].length === 0) {
-      majorCityGroups[mp.Name] = [mp];
-    } else {
-      majorCityGroups[mp.Name].splice(0, 0, mp);
-    }
-  }
-});
 
 // Build points array
 const points: GridPoint[] = [];
 
 // First, handle all non-major city outposts
 (mileposts as any[])
-  .filter(mp => mp.Type !== "Major City Outpost" && mp.Type !== "Major City")
+ // .filter(mp => mp.Type !== "Major City Outpost" && mp.Type !== "Major City")
   .forEach(mp => {
     if (typeof mp.GridX !== 'number' || typeof mp.GridY !== 'number') return;
     let col = mp.GridX;
@@ -63,13 +49,25 @@ const points: GridPoint[] = [];
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
     const base: GridPoint = { 
-      x: col, 
+      x: col, //TODO: calculate proper x y position here instead of in renderer.
       y: row, 
       col, 
       row, 
       terrain,
       id: mp.Id
     };
+    if (mp.Type === "Major City Outpost" && mp.Name) {
+      if (!majorCityGroups[mp.Name]) {
+        majorCityGroups[mp.Name] = [];
+      }
+      majorCityGroups[mp.Name].push(mp);
+    } else if (mp.Type === "Major City") {
+      if (!majorCityGroups[mp.Name] || majorCityGroups[mp.Name].length === 0) {
+        majorCityGroups[mp.Name] = [mp];
+      } else {
+        majorCityGroups[mp.Name].splice(0, 0, mp);
+      }
+    }
     if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port")) {
       base.city = {
         type: terrain,

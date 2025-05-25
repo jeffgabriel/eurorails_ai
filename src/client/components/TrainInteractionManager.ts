@@ -1,11 +1,12 @@
 import "phaser";
-import { GameState, Player, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
+import { GameState, GridPoint, Player, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { UIManager } from "./UIManager";
+import { TrackDrawingManager } from "./TrackDrawingManager";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -20,14 +21,15 @@ export class TrainInteractionManager {
   private playerHandDisplay: PlayerHandDisplay | null = null;
   private handContainer: Phaser.GameObjects.Container | null = null;
   private uiManager: UIManager | null = null;
-  
+  private trackDrawingManager: TrackDrawingManager;
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
     trainMovementManager: TrainMovementManager,
     mapRenderer: MapRenderer,
     gameStateService: GameStateService,
-    trainContainer: Phaser.GameObjects.Container
+    trainContainer: Phaser.GameObjects.Container,
+    trackDrawingManager: TrackDrawingManager
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -35,7 +37,7 @@ export class TrainInteractionManager {
     this.mapRenderer = mapRenderer;
     this.gameStateService = gameStateService;
     this.trainContainer = trainContainer;
-    
+    this.trackDrawingManager = trackDrawingManager;
     // Initialize trainSprites map in gameState if not exists
     if (!this.gameState.trainSprites) {
       this.gameState.trainSprites = new Map();
@@ -65,6 +67,109 @@ export class TrainInteractionManager {
       }
     );
   }
+
+  public playerHasTrack(playerId: string): boolean {
+    // Get player's track state from TrackDrawingManager
+    const playerTrackState =
+      this.trackDrawingManager.getPlayerTrackState(playerId);
+    if (!playerTrackState || !playerTrackState.segments) {
+      return false;
+    }
+    return playerTrackState.segments.length > 0;
+  }
+
+  public findNearestMilepostOnOwnTrack(
+    x: number,
+    y: number,
+    playerId: string
+  ): GridPoint | null {
+    // First, get the clicked point using TrackDrawingManager's method
+    const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(x, y);
+
+    if (!clickedPoint) {
+      console.log("No valid grid point found at click position");
+      return null;
+    }
+
+    // Get the player's track state
+    const playerTrackState =
+      this.trackDrawingManager.getPlayerTrackState(playerId);
+    if (!playerTrackState || !playerTrackState.segments) {
+      console.log("No track state found for player");
+      return null;
+    }
+
+    // Check if the clicked point is part of any of the player's track segments
+    const isOnPlayerTrack = playerTrackState.segments.some(
+      (segment) =>
+        // Check both ends of each segment
+        (segment.from.row === clickedPoint.row &&
+          segment.from.col === clickedPoint.col) ||
+        (segment.to.row === clickedPoint.row &&
+          segment.to.col === clickedPoint.col)
+    );
+
+    if (isOnPlayerTrack) {
+      console.log("Found player track at clicked point");
+      return clickedPoint;
+    }
+
+    // If not, find the nearest point that is part of a player's track segment
+    let nearestPoint: GridPoint | null = null;
+    let minDistance = Infinity;
+
+    // Create a set of all points that are part of the player's track network
+    const trackPoints = new Set<string>();
+    playerTrackState.segments.forEach((segment) => {
+      trackPoints.add(`${segment.from.row},${segment.from.col}`);
+      trackPoints.add(`${segment.to.row},${segment.to.col}`);
+    });
+
+    // Search through adjacent points first (within a reasonable radius)
+    const searchRadius = 3; // Adjust this value as needed
+    const rowStart = Math.max(0, clickedPoint.row - searchRadius);
+    const rowEnd = Math.min(
+      this.mapRenderer.gridPoints.length - 1,
+      clickedPoint.row + searchRadius
+    );
+
+    for (let row = rowStart; row <= rowEnd; row++) {
+      if (!this.mapRenderer.gridPoints[row]) continue;
+
+      const colStart = Math.max(0, clickedPoint.col - searchRadius);
+      const colEnd = Math.min(
+        this.mapRenderer.gridPoints[row].length - 1,
+        clickedPoint.col + searchRadius
+      );
+
+      for (let col = colStart; col <= colEnd; col++) {
+        const point = this.mapRenderer.gridPoints[row][col];
+        if (!point || point.terrain === TerrainType.Water) continue;
+
+        // Check if this point is part of the player's track network
+        if (trackPoints.has(`${point.row},${point.col}`)) {
+          // Calculate distance to this point
+          const dx = point.x - clickedPoint.x;
+          const dy = point.y - clickedPoint.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          // Update nearest point if this is closer
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestPoint = point;
+          }
+        }
+      }
+    }
+
+    if (nearestPoint) {
+      console.log("Found nearest point with player track:", nearestPoint);
+      return nearestPoint;
+    }
+
+    console.log("No valid track point found within search radius");
+    return null;
+  }
   
   private async handleTrainPlacement(
     pointer: Phaser.Input.Pointer
@@ -79,7 +184,7 @@ export class TrainInteractionManager {
     );
 
     // Find the nearest milepost to the click that belongs to the current player
-    const nearestMilepost = this.mapRenderer.findNearestMilepostOnOwnTrack(
+    const nearestMilepost = this.findNearestMilepostOnOwnTrack(
       worldPoint.x,
       worldPoint.y,
       currentPlayer.id
@@ -358,7 +463,7 @@ export class TrainInteractionManager {
       console.log("Train clicked:", {
         playerId,
         isCurrentPlayer: playerId === this.gameState.players[this.gameState.currentPlayerIndex].id,
-        hasTrack: this.mapRenderer.playerHasTrack(playerId),
+        hasTrack: this.playerHasTrack(playerId),
         isDrawingMode: this.isDrawingMode,
         isTrainMovementMode: this.isTrainMovementMode,
       });
@@ -371,7 +476,7 @@ export class TrainInteractionManager {
       const isCurrentPlayer =
         playerId ===
         this.gameState.players[this.gameState.currentPlayerIndex].id;
-      const hasTrack = this.mapRenderer.playerHasTrack(playerId);
+      const hasTrack = this.playerHasTrack(playerId);
 
       if (
         isCurrentPlayer &&

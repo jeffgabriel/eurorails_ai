@@ -1,9 +1,10 @@
 import { GridPoint } from "../../../shared/types/GameTypes";
+import { MapRenderer } from "../MapRenderer";
 import "phaser";
 
 export abstract class BaseMapElement {
-  protected readonly HORIZONTAL_SPACING = 40;
-  protected readonly VERTICAL_SPACING = 40;
+  protected readonly HORIZONTAL_SPACING = MapRenderer.HORIZONTAL_SPACING;
+  protected readonly VERTICAL_SPACING = MapRenderer.VERTICAL_SPACING;
   protected readonly POINT_RADIUS = 3;
   protected readonly GRID_MARGIN = 100;
   protected readonly LOAD_SPRITE_SIZE = 16; // Increased from 16 to 24 (50% larger)
