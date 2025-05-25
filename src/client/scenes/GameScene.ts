@@ -161,7 +161,8 @@ export class GameScene extends Phaser.Scene {
       () => this.nextPlayerTurn(),
       () => this.openSettings(),
       this.gameStateService,
-      this.mapRenderer
+      this.mapRenderer,
+      this.trackManager
     );
 
     // Get container references from UI manager

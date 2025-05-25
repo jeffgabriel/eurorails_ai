@@ -7,6 +7,7 @@ import { TrainInteractionManager } from "./TrainInteractionManager";
 import { LeaderboardManager } from "./LeaderboardManager";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { CitySelectionManager } from "./CitySelectionManager";
+import { TrackDrawingManager } from "./TrackDrawingManager";
 
 export class UIManager {
   private scene: Phaser.Scene;
@@ -19,13 +20,13 @@ export class UIManager {
   private openSettingsCallback: () => void;
   private gameStateService: GameStateService;
   private mapRenderer: MapRenderer;
-  private isDrawingMode: boolean = false;
-  
+  private trackDrawingManager: TrackDrawingManager;
   // Component managers
   private trainInteractionManager: TrainInteractionManager;
   private leaderboardManager: LeaderboardManager;
   private playerHandDisplay: PlayerHandDisplay;
   private citySelectionManager: CitySelectionManager;
+  private isDrawingMode: boolean = false;
 
   constructor(
     scene: Phaser.Scene,
@@ -34,7 +35,8 @@ export class UIManager {
     nextPlayerCallback: () => void,
     openSettingsCallback: () => void,
     gameStateService: GameStateService,
-    mapRenderer: MapRenderer
+    mapRenderer: MapRenderer,
+    trackDrawingManager: TrackDrawingManager
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -43,7 +45,7 @@ export class UIManager {
     this.openSettingsCallback = openSettingsCallback;
     this.gameStateService = gameStateService;
     this.mapRenderer = mapRenderer;
-
+    this.trackDrawingManager = trackDrawingManager;
     // Create containers
     this.uiContainer = this.scene.add.container(0, 0);
     this.playerHandContainer = this.scene.add.container(0, 0);
@@ -64,7 +66,8 @@ export class UIManager {
       trainMovementManager,
       this.mapRenderer,
       this.gameStateService,
-      this.trainContainer
+      this.trainContainer,
+      this.trackDrawingManager
     );
 
     // Initialize the leaderboard manager
@@ -93,6 +96,8 @@ export class UIManager {
       this.mapRenderer,
       (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col)
     );
+
+    
   }
 
   public getContainers(): {
