@@ -13,29 +13,10 @@ export class MapRenderer {
   public static readonly FERRY_ICONS_CONTAINER_NAME = "ferryIcons";
   public static readonly PORT_NAMES_CONTAINER_NAME = "portNames";
   // Grid configuration
-  private readonly HORIZONTAL_SPACING = 35;
-  private readonly VERTICAL_SPACING = 35;
+  private readonly HORIZONTAL_SPACING = 40;
+  private readonly VERTICAL_SPACING = 40;
   private readonly GRID_MARGIN = 100; // Increased margin around the grid// Size for the ferry icon
 
-  private readonly terrainColors = {
-    [TerrainType.Clear]: 0x000000,
-    [TerrainType.Water]: 0x0000ff,
-    [TerrainType.Mountain]: 0x964b00,
-    [TerrainType.Alpine]: 0x808080,
-    [TerrainType.FerryPort]: 0xffa500,
-  };
-
-  private readonly CITY_COLORS = {
-    [TerrainType.MajorCity]: 0xab0000, // Brighter red for major cities
-    [TerrainType.MediumCity]: 0x9999ff, // Brighter blue for cities
-    [TerrainType.SmallCity]: 0x99ff99, // Brighter green for small cities
-  };
-
-  private readonly CITY_RADIUS = {
-    [TerrainType.MajorCity]: 30, // Size for major city hexagon
-    [TerrainType.MediumCity]: 12, // Reduced size for city circle
-    [TerrainType.SmallCity]: 8, // Reduced size for small city square
-  };
 
   private scene: Phaser.Scene;
   private mapContainer: Phaser.GameObjects.Container;

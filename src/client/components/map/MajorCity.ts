@@ -30,7 +30,7 @@ export class MajorCity extends City {
       return;
     }
 
-    const hexRadius = 36;
+    const hexRadius = 43;
     graphics.fillStyle(CITY_COLOR, 0.8);
     graphics.blendMode = Phaser.BlendModes.MULTIPLY;
     graphics.lineStyle(2, 0x000000, 0.7);
