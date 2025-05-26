@@ -111,7 +111,7 @@ export interface GridPoint extends Point {
     terrain: TerrainType;
     ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
-    
+    ocean?: string;
     // Runtime properties
     sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
     tracks?: Array<{ playerId: string }>;

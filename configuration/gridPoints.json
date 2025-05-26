@@ -1189,7 +1189,7 @@
     "Name": null,
     "GridX": 11,
     "GridY": 57,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "03ac2bae-7d94-4773-9c96-7a5b04d8000e",
@@ -1293,7 +1293,7 @@
     "Name": null,
     "GridX": 12,
     "GridY": 57,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "819bedf5-6208-48ea-adbd-02cadef67182",
@@ -1381,7 +1381,7 @@
     "Name": null,
     "GridX": 13,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "8961237f-2dea-4bc9-b6d2-28e0f81872e9",
@@ -1469,7 +1469,7 @@
     "Name": null,
     "GridX": 14,
     "GridY": 57,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "efaec283-d946-48d4-95bf-51bb405f2f4c",
@@ -1733,7 +1733,7 @@
     "Name": null,
     "GridX": 16,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "6326b40c-bbee-4a27-9330-61f0f35469af",
@@ -2965,6 +2965,14 @@
     "Name": null,
     "GridX": 22,
     "GridY": 41,
+    "Ocean": null
+  },
+  {
+    "Id": "228388df-11ed-478d-8680-63d1c1ff5b4d",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 21,
+    "GridY": 41,
     "Ocean": "Atlantic Ocean"
   },
   {
@@ -3261,7 +3269,7 @@
     "Name": null,
     "GridX": 22,
     "GridY": 40,
-    "Ocean": null
+    "Ocean": "Atlantic Ocean"
   },
   {
     "Id": "cb430009-be08-44ea-bb39-a1d612321419",
@@ -12365,7 +12373,7 @@
     "Name": null,
     "GridX": 54,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "a953be6d-f082-42f5-a9a6-450a8ef9c19d",
@@ -12757,7 +12765,7 @@
     "Name": null,
     "GridX": 55,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "3d13b69a-52df-4352-88c5-f81f5895798a",
@@ -13117,7 +13125,7 @@
     "Name": null,
     "GridX": 56,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "ab3cb081-f1c7-4fe1-8d6c-c86ec6f9eb03",
@@ -13509,7 +13517,7 @@
     "Name": null,
     "GridX": 57,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "5b7a2492-96f0-44e3-950b-0f0b8a4e4021",
@@ -13709,7 +13717,7 @@
     "Name": null,
     "GridX": 57,
     "GridY": 19,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "8bd757a7-6c92-4967-85d9-5a40070ed3a0",
@@ -14109,7 +14117,7 @@
     "Name": null,
     "GridX": 58,
     "GridY": 19,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "df24a38c-71e7-4a99-bcd9-0f878f11b66c",
@@ -14509,7 +14517,7 @@
     "Name": null,
     "GridX": 59,
     "GridY": 19,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "6e38e86c-22eb-46ac-80e3-8f7ecf6dacad",
@@ -14709,7 +14717,7 @@
     "Name": null,
     "GridX": 60,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "5ae45521-a5b5-4364-86f3-3e132f256724",
@@ -15061,7 +15069,7 @@
     "Name": null,
     "GridX": 61,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "b05c345e-d109-46b2-adb3-fbb5ee77374a",
@@ -15373,7 +15381,7 @@
     "Name": null,
     "GridX": 62,
     "GridY": 20,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "6e3dfde0-452f-48e1-9ea5-7fd7d73f0e82",
@@ -15509,6 +15517,14 @@
     "Name": null,
     "GridX": 61,
     "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "9261a6c2-c034-49f8-9c92-63ccce94a272",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 64,
+    "GridY": 18,
     "Ocean": "Baltic Sea"
   },
   {
@@ -15913,7 +15929,7 @@
   },
   {
     "Id": "e6a4c22a-ffeb-48be-97b3-1ea7fe37f3de",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 50,
@@ -15945,7 +15961,7 @@
   },
   {
     "Id": "3fc925ab-0a7d-4984-8ea2-ea00c617d639",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 53,
@@ -16005,7 +16021,7 @@
     "Name": null,
     "GridX": 53,
     "GridY": 19,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "106abac8-6586-4398-b98b-5cf28a421687",
@@ -16021,7 +16037,7 @@
     "Name": null,
     "GridX": 60,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "29aaad19-3688-402d-9cef-42ae63dc5e64",
@@ -16057,7 +16073,7 @@
   },
   {
     "Id": "a582b9d1-da51-464b-9a15-e53c386b98e8",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 49,
@@ -16065,7 +16081,7 @@
   },
   {
     "Id": "5a450278-129c-4800-8ec8-5b0758504418",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 51,
@@ -16073,7 +16089,7 @@
   },
   {
     "Id": "580d843f-bcd8-4acf-90c8-fb34e30d8936",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 52,
@@ -16081,7 +16097,7 @@
   },
   {
     "Id": "2e30c807-135f-45f8-b0bc-6343953ab65e",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 53,
@@ -16101,7 +16117,7 @@
     "Name": null,
     "GridX": 59,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "264abeab-2486-4098-a1c8-fd78da0f3a54",
@@ -16109,7 +16125,7 @@
     "Name": null,
     "GridX": 58,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "630751be-afba-4aa3-bd19-956df9c929ca",
@@ -16117,7 +16133,7 @@
     "Name": null,
     "GridX": 57,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "f0ca5093-74d3-4f11-8611-d6dbc30b5ea0",
@@ -16141,7 +16157,7 @@
     "Name": null,
     "GridX": 56,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "4b996052-c044-43f9-8bdf-2b6e486516a3",
@@ -16149,7 +16165,7 @@
     "Name": null,
     "GridX": 55,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "436f5319-3a72-4aeb-b30a-189d0e401237",
@@ -16157,7 +16173,7 @@
     "Name": null,
     "GridX": 54,
     "GridY": 18,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "1de01418-49f9-4a5a-a416-a43df46b0c66",
@@ -16193,7 +16209,7 @@
   },
   {
     "Id": "c8809ddb-3326-4ad5-8f1d-c37a0eeb86cb",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 50,
@@ -16201,7 +16217,7 @@
   },
   {
     "Id": "c914f0d7-29c9-4b09-b78f-ae1e547bde38",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 51,
@@ -16209,7 +16225,7 @@
   },
   {
     "Id": "10077b29-aa62-4665-b0a8-6a27d2440a73",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 52,
@@ -16217,7 +16233,7 @@
   },
   {
     "Id": "b5801bb4-9256-433f-a2e1-948cfd419881",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 53,
@@ -16253,7 +16269,7 @@
     "Name": null,
     "GridX": 62,
     "GridY": 17,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "830beb65-679a-44ea-a5f0-cec0bbdba5aa",
@@ -16261,7 +16277,7 @@
     "Name": null,
     "GridX": 61,
     "GridY": 17,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "883f8522-8661-4cc1-bf12-8e72458b5fdf",
@@ -16269,7 +16285,7 @@
     "Name": null,
     "GridX": 60,
     "GridY": 17,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "0858c9c0-30b2-4854-a4c8-8075bfd28fdc",

@@ -126,7 +126,7 @@ export class MapRenderer {
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const city = config?.city;
-
+        //this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
           const mapElement = MapElementFactory.createMapElement(
@@ -152,6 +152,7 @@ export class MapRenderer {
           col,
           terrain,
           ferryConnection: config?.ferryConnection,
+          ocean: config?.ocean,
           city: city
             ? {
                 type: city.type,
@@ -206,12 +207,17 @@ export class MapRenderer {
       : defaultGraphics;
   }
 
-  private writeGridPointCoordinates(point: GridPoint) {
+  private writeGridPointCoordinates(
+    x: number,
+    y: number,
+    col: number,
+    row: number
+  ) {
     // Add coordinate label for each point
     const coordLabel = this.scene.add.text(
-      point.x + this.GRID_MARGIN + 1, // Offset slightly to the right
-      point.y + this.GRID_MARGIN - 2, // Offset slightly above
-      `${point.col},${point.row}`,
+      x + this.GRID_MARGIN,
+      y + this.GRID_MARGIN,
+      `${col},${row}`,
       {
         color: "#000000",
         fontSize: "8px",
