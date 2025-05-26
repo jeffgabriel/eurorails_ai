@@ -1,5 +1,5 @@
 import { City } from "./City";
-import { GridPoint, CityData } from "../../../shared/types/GameTypes";
+import { CityData, GridPoint } from "../../../shared/types/GameTypes";
 import "phaser";
 import { CITY_COLOR } from "./City";
 
@@ -16,22 +16,20 @@ export class SmallCity extends City {
   draw(graphics: Phaser.GameObjects.Graphics, container: Phaser.GameObjects.Container): void {
     graphics.fillStyle(CITY_COLOR, 0.7);
     graphics.lineStyle(2, 0x000000, 0.7);
-    const radius = this.CITY_RADIUS[this.cityData.type];
-    graphics.fillRect(
-      this.x - radius,
-      this.y - radius,
-      radius * 2,
-      radius * 2
+    graphics.beginPath();
+    graphics.arc(
+      this.x,
+      this.y,
+      this.CITY_RADIUS[this.cityData.type],
+      0,
+      Math.PI * 2
     );
-    graphics.strokeRect(
-      this.x - radius,
-      this.y - radius,
-      radius * 2,
-      radius * 2
-    );
+    graphics.closePath();
+    graphics.fill();
+    graphics.stroke();
     this.drawMilepostDot(graphics);
     // Add city name
-    this.addCityName(container, "8px");
+    this.addCityName(container, "10px");
     this.addLoadSpritesToCity(this.x + this.GRID_MARGIN, this.y + this.GRID_MARGIN, this.cityData.name, this.cityData.type, container);
   }
 } 

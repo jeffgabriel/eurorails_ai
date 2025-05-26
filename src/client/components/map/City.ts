@@ -1,5 +1,9 @@
 import { MapElement } from "./MapElement";
-import { TerrainType, CityData, GridPoint } from "../../../shared/types/GameTypes";
+import {
+  TerrainType,
+  CityData,
+  GridPoint,
+} from "../../../shared/types/GameTypes";
 import { LoadService } from "../../services/LoadService";
 import "phaser";
 
@@ -7,35 +11,33 @@ export const CITY_COLOR = 0xab0000;
 
 export abstract class City extends MapElement {
   protected readonly CITY_RADIUS = {
-    [TerrainType.MajorCity]: 30, // Size for major city hexagon
-    [TerrainType.MediumCity]: 12, // Reduced size for city circle
-    [TerrainType.SmallCity]: 8, // Reduced size for small city square
+    [TerrainType.MajorCity]: 30,
+    [TerrainType.MediumCity]: 8,
+    [TerrainType.SmallCity]: 12,
   };
 
   protected readonly POINT_RADIUS = 3; // Radius for the milepost dot
   private loadService: LoadService;
   protected cityData: CityData;
 
-  constructor(
-    scene: Phaser.Scene,
-    point: GridPoint,
-    x: number,
-    y: number
-  ) {
+  constructor(scene: Phaser.Scene, point: GridPoint, x: number, y: number) {
     super(scene, point, x, y);
     this.loadService = LoadService.getInstance();
-      this.cityData = point.city || {
-        type: TerrainType.MajorCity,
-        name: "Unknown",
-        connectedPoints: [],
-        availableLoads: []
-      };
+    this.cityData = point.city || {
+      type: TerrainType.MajorCity,
+      name: "Unknown",
+      connectedPoints: [],
+      availableLoads: [],
+    };
   }
 
-  protected addCityName(container: Phaser.GameObjects.Container, fontSize: string): void {
+  protected addCityName(
+    container: Phaser.GameObjects.Container,
+    fontSize: string
+  ): void {
     const cityName = this.scene.add.text(
       this.x + this.GRID_MARGIN,
-      this.y + this.GRID_MARGIN - 15,
+      this.y + this.GRID_MARGIN - 18,
       this.cityData.name.toUpperCase(),
       {
         color: "#000000",
@@ -68,16 +70,18 @@ export abstract class City extends MapElement {
     mapContainer: Phaser.GameObjects.Container
   ): void {
     const loadDetails = this.loadService.getCityLoadDetails(cityName);
-   if (!loadDetails || loadDetails.length === 0) return;
+    if (!loadDetails || loadDetails.length === 0) return;
 
     // Calculate starting position for load sprites
-    // Position them in a full circle around the city
+    // First load: below the city, then bottom right, then counter-clockwise
     const radius = cityType === TerrainType.MajorCity ? 45 : 30;
-    const angleStep = (2 * Math.PI) / loadDetails.length; // Distribute evenly in a full circle
-    const startAngle = -Math.PI / 2; // Start from top (-90 degrees)
+    const loadCount = loadDetails.length;
+    // Start angle: 90 degrees (below the city)
+    const startAngle = Math.PI / 2;
+    const angleStep = (-2 * Math.PI) / loadCount; // Negative for counter-clockwise
 
     loadDetails.forEach((load, index) => {
-     // try {
+      try {
         if (!load || !load.loadType) {
           console.warn(
             `Invalid load data for city ${cityName} at index ${index}`
@@ -98,43 +102,17 @@ export abstract class City extends MapElement {
         }
 
         // Create sprite for the load
-        const sprite = this.scene.add.image(spriteX, spriteY, spriteKey,);
+        const sprite = this.scene.add.image(spriteX, spriteY, spriteKey);
 
         // Configure sprite
         sprite.setAlpha(this.LOAD_SPRITE_OPACITY);
         sprite.setDepth(1); // Ensure it appears above the city but below UI elements
-        sprite.setScale(.8);
+        sprite.setScale(0.8);
         // Add to container
         mapContainer.add(sprite);
-
-        // Add count indicator if more than 1 available
-      //   if (load.count > 1) {
-      //     try {
-      //       const countText = this.scene.add.text(
-      //         spriteX + this.LOAD_SPRITE_SIZE / 2, // Position count to the right of sprite
-      //         spriteY - this.LOAD_SPRITE_SIZE / 2, // Position count above sprite
-      //         load.count.toString(),
-      //         {
-      //           fontSize: "10px",
-      //           color: "#000000",
-      //           backgroundColor: "#ffffff",
-      //           padding: { x: 2, y: 2 },
-      //         }
-      //       );
-      //       countText.setOrigin(0.5, 0.5); // Center the text
-      //       countText.setDepth(2);
-      //       //this.mapContainer.add(countText);
-      //     } catch (textError) {
-      //       console.warn(
-      //         `Failed to add count text for ${load.loadType} at ${cityName}:`,
-      //         textError
-      //       );
-      //     }
-      //   }
-      // } catch (error) {
-      //   console.warn(`Failed to add load sprite for ${cityName}:`, error);
-      //   // Continue with the next load
-      // }
+      } catch (error) {
+        console.warn(`Failed to add load sprite for ${cityName}:`, error);
+      }
     });
   }
-} 
+}
