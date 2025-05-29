@@ -15,7 +15,7 @@ export class MapRenderer {
   // Grid configuration
   public static readonly HORIZONTAL_SPACING = 45;
   public static readonly VERTICAL_SPACING = 40;
-  private readonly GRID_MARGIN = 100; // Increased margin around the grid// Size for the ferry icon
+  public static readonly GRID_MARGIN = 100; // Increased margin around the grid// Size for the ferry icon
 
   private scene: Phaser.Scene;
   private mapContainer: Phaser.GameObjects.Container;
@@ -42,9 +42,9 @@ export class MapRenderer {
 
   public calculateMapDimensions() {
     const width =
-      mapConfig.width * MapRenderer.HORIZONTAL_SPACING + this.GRID_MARGIN * 2;
+      mapConfig.width * MapRenderer.HORIZONTAL_SPACING + MapRenderer.GRID_MARGIN * 2;
     const height =
-      mapConfig.height * MapRenderer.VERTICAL_SPACING + this.GRID_MARGIN * 2;
+      mapConfig.height * MapRenderer.VERTICAL_SPACING + MapRenderer.GRID_MARGIN * 2;
     return { width, height };
   }
 
@@ -56,43 +56,43 @@ export class MapRenderer {
     mapConfig.points.forEach((point) => {
       terrainLookup.set(`${point.row},${point.col}`, {
         ...point,
-        x: point.x + this.GRID_MARGIN,
-        y: point.y + this.GRID_MARGIN,
+        x: point.x + MapRenderer.GRID_MARGIN,
+        y: point.y + MapRenderer.GRID_MARGIN,
       });
     });
 
     // Create graphics objects for different elements
     const ferryConnections = this.scene.add
       .graphics({
-        x: this.GRID_MARGIN,
-        y: this.GRID_MARGIN,
+        x: MapRenderer.GRID_MARGIN,
+        y: MapRenderer.GRID_MARGIN,
       })
       .setName("ferryConnections");
 
     const cityAreas = this.scene.add
       .graphics({
-        x: this.GRID_MARGIN,
-        y: this.GRID_MARGIN,
+        x: MapRenderer.GRID_MARGIN,
+        y: MapRenderer.GRID_MARGIN,
       })
       .setName("cityAreas");
 
     const landPoints = this.scene.add
       .graphics({
-        x: this.GRID_MARGIN,
-        y: this.GRID_MARGIN,
+        x: MapRenderer.GRID_MARGIN,
+        y: MapRenderer.GRID_MARGIN,
       })
       .setName("landPoints");
 
     const mountainPoints = this.scene.add
       .graphics({
-        x: this.GRID_MARGIN,
-        y: this.GRID_MARGIN,
+        x: MapRenderer.GRID_MARGIN,
+        y: MapRenderer.GRID_MARGIN,
       })
       .setName("mountainPoints");
     const alpinePoints = this.scene.add
       .graphics({
-        x: this.GRID_MARGIN,
-        y: this.GRID_MARGIN,
+        x: MapRenderer.GRID_MARGIN,
+        y: MapRenderer.GRID_MARGIN,
       })
       .setName("alpinePoints");
 
@@ -126,6 +126,7 @@ export class MapRenderer {
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const city = config?.city;
+        
         //this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
@@ -146,8 +147,8 @@ export class MapRenderer {
         // Store point data with grid coordinates
         this.gridPoints[row][col] = {
           id: config?.id || "",
-          x: x + this.GRID_MARGIN,
-          y: y + this.GRID_MARGIN,
+          x: x + MapRenderer.GRID_MARGIN,
+          y: y + MapRenderer.GRID_MARGIN,
           row,
           col,
           terrain,
@@ -215,8 +216,8 @@ export class MapRenderer {
   ) {
     // Add coordinate label for each point
     const coordLabel = this.scene.add.text(
-      x + this.GRID_MARGIN,
-      y + this.GRID_MARGIN,
+      x + MapRenderer.GRID_MARGIN,
+      y + MapRenderer.GRID_MARGIN,
       `${col},${row}`,
       {
         color: "#000000",

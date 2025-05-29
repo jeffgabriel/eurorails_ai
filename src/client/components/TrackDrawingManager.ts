@@ -1,6 +1,7 @@
 import 'phaser';
 import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
 import { TrackSegment, PlayerTrackState, TrackBuildError } from '../../shared/types/TrackTypes';
+import { MapRenderer } from './MapRenderer';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -316,8 +317,14 @@ export class TrackDrawingManager {
         }
 
         const clickedPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
+        console.log('[TrackDrawingManager] handleDrawingClick:', {
+            clickedPoint
+        });
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
+        console.log('[TrackDrawingManager] handleDrawingClick:', {
+            gridPoint
+        });
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             return;
         }
@@ -325,14 +332,21 @@ export class TrackDrawingManager {
         // Get current player information
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
-
+        console.log('[TrackDrawingManager] handleDrawingClick:', {
+           gridPoint
+        });
         // Handle first click (starting point) - still needed to initialize the pathfinding
         if (!this.lastClickedPoint) {
             // Check if this point is either a major city or a connected point of a major city
             const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
             const isConnectedPointOfMajorCity = this.isConnectedPointOfMajorCity(gridPoint);
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
-            
+            console.log('[TrackDrawingManager] handleDrawingClick:', {
+                gridPoint,
+                isMajorCity,
+                isConnectedPointOfMajorCity,
+                isConnectedToNetwork
+            });
             if (!isMajorCity && !isConnectedPointOfMajorCity && !isConnectedToNetwork) {
                 return;
             }
@@ -520,11 +534,10 @@ export class TrackDrawingManager {
         
         let closestPoint: GridPoint | null = null;
         let minDistance = MAX_DISTANCE;
-
         // Check points in a 3x3 grid area around the cursor
-        const GRID_MARGIN = 100; // Same as in MapRenderer
-        const VERTICAL_SPACING = 35; // Same as in MapRenderer
-        const HORIZONTAL_SPACING = 35; // Same as in MapRenderer
+        const GRID_MARGIN = MapRenderer.GRID_MARGIN; 
+        const VERTICAL_SPACING = MapRenderer.VERTICAL_SPACING;
+        const HORIZONTAL_SPACING = MapRenderer.HORIZONTAL_SPACING;
         
         const approxRow = Math.floor((worldY - GRID_MARGIN) / VERTICAL_SPACING);
         const approxCol = Math.floor((worldX - GRID_MARGIN) / HORIZONTAL_SPACING);
@@ -552,7 +565,6 @@ export class TrackDrawingManager {
                 }
             }
         }
-
         return closestPoint;
     }
 

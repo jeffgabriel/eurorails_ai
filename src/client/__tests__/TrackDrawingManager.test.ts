@@ -333,4 +333,60 @@ describe('TrackDrawingManager', () => {
             expect(Math.floor(secondConnectionCost)).toBe(5); // Major city terrain cost
         });
     });
+
+    describe('getGridPointAtPosition', () => {
+        it('should find the correct grid point based on world coordinates', () => {
+            // Arrange: create a grid with known spacing and a target point at (row=39, col=21)
+            const GRID_MARGIN = 100;
+            const VERTICAL_SPACING = 35;
+            const HORIZONTAL_SPACING = 35;
+            const targetRow = 39;
+            const targetCol = 21;
+            const gridRows = 50;
+            const gridCols = 30;
+            const gridPoints: GridPoint[][] = [];
+            for (let row = 0; row < gridRows; row++) {
+                gridPoints[row] = [];
+                for (let col = 0; col < gridCols; col++) {
+                    gridPoints[row][col] = {
+                        id: `${row}-${col}`,
+                        x: GRID_MARGIN + col * HORIZONTAL_SPACING,
+                        y: GRID_MARGIN + row * VERTICAL_SPACING,
+                        row,
+                        col,
+                        terrain: TerrainType.Clear
+                    };
+                }
+            }
+            // Create the manager
+            const mockGraphics = {
+                setDepth: jest.fn(),
+                lineStyle: jest.fn(),
+                beginPath: jest.fn(),
+                moveTo: jest.fn(),
+                lineTo: jest.fn(),
+                strokePath: jest.fn(),
+                clear: jest.fn()
+            };
+            const mockScene = {
+                add: {
+                    graphics: () => mockGraphics
+                }
+            } as unknown as Phaser.Scene;
+            const mockContainer = { add: jest.fn() } as unknown as Phaser.GameObjects.Container;
+            const mockGameState = {
+                players: [{ id: 'player1', color: '#FF0000' }],
+                currentPlayerIndex: 0
+            } as GameState;
+            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            // Act: use the world coordinates that should map to (39,21)
+            const worldX = GRID_MARGIN + targetCol * HORIZONTAL_SPACING + 0.1; // small offset
+            const worldY = GRID_MARGIN + targetRow * VERTICAL_SPACING + 0.1;
+            const foundPoint = manager.getGridPointAtPosition(worldX, worldY);
+            // Assert
+            expect(foundPoint).not.toBeNull();
+            expect(foundPoint?.row).toBe(targetRow);
+            expect(foundPoint?.col).toBe(targetCol);
+        });
+    });
 });
