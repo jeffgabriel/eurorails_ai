@@ -540,7 +540,7 @@ export class TrackDrawingManager {
         const HORIZONTAL_SPACING = MapRenderer.HORIZONTAL_SPACING;
         
         const approxRow = Math.floor((worldY - GRID_MARGIN) / VERTICAL_SPACING);
-        const approxCol = Math.floor((worldX - GRID_MARGIN) / HORIZONTAL_SPACING);
+        const approxCol = Math.floor((worldX - GRID_MARGIN) / HORIZONTAL_SPACING);  
 
         // Search in a 3x3 area around the approximate position
         for (let r = Math.max(0, approxRow - 1); r <= Math.min(this.gridPoints.length - 1, approxRow + 1); r++) {
@@ -559,7 +559,7 @@ export class TrackDrawingManager {
                 const distance = Math.sqrt(dx * dx + dy * dy);
 
                 // Update closest point if this is closer
-                if (distance < minDistance) {
+                if (distance <= minDistance) {
                     minDistance = distance;
                     closestPoint = point;
                 }

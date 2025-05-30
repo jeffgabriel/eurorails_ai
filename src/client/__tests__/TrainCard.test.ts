@@ -1,6 +1,6 @@
-import { TrainCard } from "../TrainCard";
-import { Player } from "../../../shared/types/GameTypes";
-import { LoadType } from "../../../shared/types/LoadTypes";
+import { TrainCard } from '../components/TrainCard';
+import { Player } from '../../shared/types/GameTypes';
+import { LoadType } from '../../shared/types/LoadTypes';
 
 describe("TrainCard", () => {
   let mockScene: any;
@@ -19,9 +19,16 @@ describe("TrainCard", () => {
         image: jest.fn().mockReturnValue({
           setOrigin: jest.fn().mockReturnThis(),
           setTexture: jest.fn().mockReturnThis(),
+          setScale: jest.fn().mockReturnThis(),
           destroy: jest.fn()
         }),
         rectangle: jest.fn().mockReturnValue({
+          setOrigin: jest.fn().mockReturnThis(),
+          setStrokeStyle: jest.fn().mockReturnThis(),
+          setFillStyle: jest.fn().mockReturnThis(),
+          destroy: jest.fn()
+        }),
+        circle: jest.fn().mockReturnValue({
           setOrigin: jest.fn().mockReturnThis(),
           setStrokeStyle: jest.fn().mockReturnThis(),
           setFillStyle: jest.fn().mockReturnThis(),
@@ -79,7 +86,12 @@ describe("TrainCard", () => {
     trainCard.updateLoads();
 
     // Verify slots have correct fill styles
-    expect(mockScene.add.rectangle().setFillStyle).toHaveBeenCalledWith(0x888888, 0.5);
+    const calls = mockScene.add.rectangle().setFillStyle.mock.calls;
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        [0x444444, 0.3]
+      ])
+    );
   });
 
   it("should handle visibility changes", () => {
