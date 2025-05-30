@@ -87,7 +87,6 @@ export class TrainInteractionManager {
     const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(x, y);
 
     if (!clickedPoint) {
-      console.log("No valid grid point found at click position");
       return null;
     }
 
@@ -95,7 +94,6 @@ export class TrainInteractionManager {
     const playerTrackState =
       this.trackDrawingManager.getPlayerTrackState(playerId);
     if (!playerTrackState || !playerTrackState.segments) {
-      console.log("No track state found for player");
       return null;
     }
 
@@ -110,7 +108,6 @@ export class TrainInteractionManager {
     );
 
     if (isOnPlayerTrack) {
-      console.log("Found player track at clicked point");
       return clickedPoint;
     }
 
@@ -163,11 +160,9 @@ export class TrainInteractionManager {
     }
 
     if (nearestPoint) {
-      console.log("Found nearest point with player track:", nearestPoint);
       return nearestPoint;
     }
 
-    console.log("No valid track point found within search radius");
     return null;
   }
   
@@ -195,8 +190,8 @@ export class TrainInteractionManager {
         //where the train is coming from
         const previousPosition = currentPlayer.trainState.position;
         //check if the selected point is a valid move 
-        const canMove = this.trainMovementManager.canMoveTo(nearestMilepost);
-        if (!canMove) {
+        const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
+        if (!moveResult.canMove) {
           this.showInvalidMoveMessage(pointer);
           return;
         }
@@ -244,8 +239,10 @@ export class TrainInteractionManager {
           this.handleCityArrival(currentPlayer, nearestMilepost);
         }
 
-        // Exit train movement mode
-        this.exitTrainMovementMode();
+        // If arrived at a ferry port, or if movement should end, exit movement mode
+        if (moveResult.endMovement) {
+          this.exitTrainMovementMode();
+        }
       } catch (error) {
         throw error;
       }
@@ -299,7 +296,6 @@ export class TrainInteractionManager {
   
   private showLoadDialog(player: Player, city: any): void {
     if (!this.uiManager) {
-      console.error('UIManager not set');
       return;
     }
 
@@ -326,8 +322,28 @@ export class TrainInteractionManager {
     });
   }
   
-  public enterTrainMovementMode(): void {
-    console.log("Entering train movement mode");
+  public async enterTrainMovementMode(): Promise<void> {
+    const currentPlayer =
+      this.gameState.players[this.gameState.currentPlayerIndex];
+    const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+    // If atFerryPort is set and status is 'pending', move the train to the 'to' GridPoint
+    if (
+      currentPlayer.trainState.atFerryPort &&
+      currentPlayer.trainState.atFerryPort.status === 'pending'
+    ) {
+      const ferryTo = currentPlayer.trainState.atFerryPort.to;
+      currentPlayer.trainState.position = ferryTo;
+      currentPlayer.trainState.atFerryPort = undefined;
+      // Update train sprite position using updateTrainPosition
+      await this.updateTrainPosition(
+        currentPlayer.id,
+        ferryTo.x,
+        ferryTo.y,
+        ferryTo.row,
+        ferryTo.col
+      );
+      // Optionally, update the database or UI as needed
+    }
     this.isTrainMovementMode = true;
     this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
 
@@ -335,14 +351,8 @@ export class TrainInteractionManager {
     this.scene.input.setDefaultCursor("pointer");
 
     // Add visual indicator that train is selected
-    const currentPlayer =
-      this.gameState.players[this.gameState.currentPlayerIndex];
-    const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
     if (trainSprite) {
       trainSprite.setAlpha(0.7); // Make train slightly transparent to indicate it's being moved
-      console.log("Train sprite opacity set to 0.7");
-    } else {
-      console.warn("No train sprite found for current player", currentPlayer.id);
     }
   }
   
@@ -460,14 +470,6 @@ export class TrainInteractionManager {
     
     // Add the pointer down listener
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      console.log("Train clicked:", {
-        playerId,
-        isCurrentPlayer: playerId === this.gameState.players[this.gameState.currentPlayerIndex].id,
-        hasTrack: this.playerHasTrack(playerId),
-        isDrawingMode: this.isDrawingMode,
-        isTrainMovementMode: this.isTrainMovementMode,
-      });
-      
       // Only allow interaction if:
       // 1. This is the current player's train
       // 2. Not in drawing mode
@@ -549,7 +551,6 @@ export class TrainInteractionManager {
   }
   
   public setDrawingMode(isDrawing: boolean): void {
-    console.log("TrainInteractionManager.setDrawingMode:", isDrawing);
     this.isDrawingMode = isDrawing;
     
     // When entering drawing mode, exit train movement mode if active

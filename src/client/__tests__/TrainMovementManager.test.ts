@@ -39,22 +39,22 @@ describe('TrainMovementManager Ferry Movement', () => {
 
   it('allows movement at half speed after stopping at a ferry port', () => {
     // remainingMovement is 4 (halved from 9)
-    expect(manager.canMoveTo(nextPoint)).toBe(true);
+    expect(manager.canMoveTo(nextPoint)).toMatchObject({ canMove: true });
     // Should deduct 1
     expect(player.trainState.remainingMovement).toBe(3);
   });
 
   it('does not double halve movement when checking multiple times', () => {
     // Simulate two checks
-    expect(manager.canMoveTo(nextPoint)).toBe(true);
-    expect(manager.canMoveTo(nextPoint)).toBe(true);
+    expect(manager.canMoveTo(nextPoint)).toMatchObject({ canMove: true });
+    expect(manager.canMoveTo(nextPoint)).toMatchObject({ canMove: true });
     // Should deduct 1 each time, not halve again
     expect(player.trainState.remainingMovement).toBe(2);
   });
 
   it('allows reversal at a ferry port', () => {
     // Try to move back to prevPoint (reverse direction)
-    expect(manager.canMoveTo(prevPoint)).toBe(true);
+    expect(manager.canMoveTo(prevPoint)).toMatchObject({ canMove: true });
     expect(player.trainState.remainingMovement).toBe(3);
   });
 
@@ -64,7 +64,7 @@ describe('TrainMovementManager Ferry Movement', () => {
     player.trainState.movementHistory.push({ from: { ...ferryPort }, to: { ...nextPoint }, cost: 0 });
     player.trainState.remainingMovement = 9;
     const anotherPoint = { row: 5, col: 7, x: 0, y: 0, terrain: TerrainType.Clear } as GridPoint;
-    expect(manager.canMoveTo(anotherPoint)).toBe(true);
+    expect(manager.canMoveTo(anotherPoint)).toMatchObject({ canMove: true });
     expect(player.trainState.remainingMovement).toBe(8);
   });
 }); 

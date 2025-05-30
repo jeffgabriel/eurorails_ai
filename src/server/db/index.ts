@@ -24,62 +24,26 @@ const pool = new Pool({
 // Clean all game data
 export async function cleanDatabase() {
     if (!DEV_MODE && !TEST_MODE) {
-        console.warn('Cleanup attempted in production mode. Skipping.');
         return;
     }
-    console.log('Database cleaned for testing');
     try {
-        // Get a list of all tables in the database to ensure we don't miss any
+        // Get a list of all tables in the database except schema_migrations
         const tableListQuery = `
             SELECT tablename FROM pg_tables 
             WHERE schemaname = 'public' 
             AND tablename != 'schema_migrations'
         `;
         const tableResult = await pool.query(tableListQuery);
-        
-        // Tables that need to be handled separately due to foreign key constraints
-        // Set winner_id to null before deleting players
-        await pool.query('UPDATE games SET winner_id = NULL WHERE winner_id IS NOT NULL');
-        
-        // Delete from tables in an order that respects foreign key constraints
-        const tablesToDeleteFirst = [
-            'player_track_networks',
-            'player_tracks',
-            'movement_history',
-            'load_chips',
-            'demand_cards',
-            'event_cards',
-            'game_logs',
-            'players'
-        ];
-        
-        // First delete from the known tables that have foreign key dependencies
-        for (const tableName of tablesToDeleteFirst) {
-            try {
-                // Check if table exists before attempting deletion
-                const tableExistsQuery = `
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
-                        AND table_name = $1
-                    )
-                `;
-                const exists = await pool.query(tableExistsQuery, [tableName]);
-                
-                if (exists.rows[0].exists) {
-                    await pool.query(`DELETE FROM ${tableName}`);
-                    console.log(`Cleaned table: ${tableName}`);
-                }
-            } catch (e) {
-                console.warn(`Warning: Failed to clean table ${tableName}:`, e);
-            }
+        const tables = tableResult.rows.map(row => row.tablename);
+        if (tables.length > 0) {
+            // Disable triggers to avoid foreign key issues
+            await pool.query('SET session_replication_role = replica;');
+            await pool.query(`TRUNCATE TABLE ${tables.map(t => '"' + t + '"').join(', ')} RESTART IDENTITY CASCADE`);
+            await pool.query('SET session_replication_role = DEFAULT;');
         }
-        
-        // Finally delete from games table (the root of most foreign keys)
-        await pool.query('DELETE FROM games');
-        console.log('Cleaned table: games');
     } catch (err) {
-        console.error('Error cleaning database:', err);
+        // Optionally rethrow or handle error
+        throw err;
     }
 }
 

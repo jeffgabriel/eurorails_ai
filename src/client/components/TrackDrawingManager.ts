@@ -317,14 +317,8 @@ export class TrackDrawingManager {
         }
 
         const clickedPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
-        console.log('[TrackDrawingManager] handleDrawingClick:', {
-            clickedPoint
-        });
         // Find the grid point at this position
         const gridPoint = this.getGridPointAtPosition(clickedPoint.x, clickedPoint.y);
-        console.log('[TrackDrawingManager] handleDrawingClick:', {
-            gridPoint
-        });
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             return;
         }
@@ -332,21 +326,12 @@ export class TrackDrawingManager {
         // Get current player information
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
-        console.log('[TrackDrawingManager] handleDrawingClick:', {
-           gridPoint
-        });
         // Handle first click (starting point) - still needed to initialize the pathfinding
         if (!this.lastClickedPoint) {
             // Check if this point is either a major city or a connected point of a major city
             const isMajorCity = gridPoint.city?.type === TerrainType.MajorCity;
             const isConnectedPointOfMajorCity = this.isConnectedPointOfMajorCity(gridPoint);
             const isConnectedToNetwork = this.isPointConnectedToNetwork(gridPoint, playerTrackState);
-            console.log('[TrackDrawingManager] handleDrawingClick:', {
-                gridPoint,
-                isMajorCity,
-                isConnectedPointOfMajorCity,
-                isConnectedToNetwork
-            });
             if (!isMajorCity && !isConnectedPointOfMajorCity && !isConnectedToNetwork) {
                 return;
             }
@@ -436,7 +421,6 @@ export class TrackDrawingManager {
                         // Find the actual grid point for the other end to get correct coordinates
                         const otherEndGridPoint = this.gridPoints[otherEnd.row][otherEnd.col];
                         if (!otherEndGridPoint) {
-                            console.error('Could not find grid point for ferry connection end');
                             break;
                         }
 

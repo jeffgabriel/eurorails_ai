@@ -25,6 +25,17 @@ export interface TrainState {
     remainingMovement: number;
     movementHistory: TrackSegment[];
     loads: LoadType[];
+    /**
+     * If set, the train is at a ferry port and eligible to cross or reverse.
+     * - from: the current ferry port GridPoint
+     * - to: the other end of the ferry
+     * - status: 'pending' (awaiting player choice) or 'reversed' (player chose to reverse)
+     */
+    atFerryPort?: {
+        from: GridPoint;
+        to: GridPoint;
+        status: 'pending' | 'reversed';
+    };
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';
