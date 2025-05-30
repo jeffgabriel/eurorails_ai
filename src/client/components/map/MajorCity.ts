@@ -69,7 +69,6 @@ export class MajorCity extends City {
       const angle = (i * Math.PI) / points;
       const pointX = x + r * Math.sin(angle);
       const pointY = y - r * Math.cos(angle);
-      console.log(pointX, pointY);
       if (i === 0) {
         graphics.moveTo(pointX, pointY);
       } else {
@@ -79,7 +78,6 @@ export class MajorCity extends City {
     graphics.closePath();
     graphics.fillStyle(0x000000, 1);
     graphics.fill();
-    //graphics.lineStyle(1, 0x000000);
     graphics.stroke();
   }
 

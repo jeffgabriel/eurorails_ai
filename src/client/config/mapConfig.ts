@@ -60,6 +60,12 @@ const points: GridPoint[] = [];
       if (!majorCityGroups[mp.Name]) {
         majorCityGroups[mp.Name] = [];
       }
+      mp.terrain = TerrainType.MajorCity;
+      mp.city = {
+        type: TerrainType.MajorCity,
+        name: mp.Name,
+        availableLoads: [], 
+      }
       majorCityGroups[mp.Name].push(mp);
     } else if (mp.Type === "Major City") {
       if (!majorCityGroups[mp.Name] || majorCityGroups[mp.Name].length === 0) {

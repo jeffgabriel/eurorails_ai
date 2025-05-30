@@ -112,15 +112,7 @@ export class TrainMovementManager {
     let maxMovement = currentPlayer.trainState.remainingMovement;
     console.log("Checking movement - Distance:", distance, "Max Movement:", maxMovement);
 
-    // If at a ferry port, movement is halved
-    const lastTrackPoint = currentPlayer.trainState.movementHistory.length > 0
-      ? currentPlayer.trainState.movementHistory[
-          currentPlayer.trainState.movementHistory.length - 1
-        ].to
-      : null;
-    if (lastTrackPoint && lastTrackPoint.terrain === TerrainType.FerryPort) {
-      maxMovement = Math.floor(maxMovement / 2);
-    }
+    // Remove ferry port halving here; already handled at turn start
     
     return distance <= maxMovement;
   }
