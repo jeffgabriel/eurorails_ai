@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, TerrainType } from "../../shared/types/GameTypes";
+import { GameState, TerrainType, Player } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -325,6 +325,9 @@ export class GameScene extends Phaser.Scene {
       this.gameState.players[this.gameState.currentPlayerIndex];
     newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
 
+    // Handle ferry state transitions and teleportation at turn start
+    await this.handleFerryTurnTransition(newCurrentPlayer);
+
     // Reset movement points for the new player
     const maxMovement =
       newCurrentPlayer.trainType === "Fast Freight" ||
@@ -332,15 +335,14 @@ export class GameScene extends Phaser.Scene {
         ? 12 // Fast trains
         : 9; // Regular trains
 
-    // If at a ferry port, movement is halved
-    const isAtFerry =
-      newCurrentPlayer.trainState?.movementHistory?.length > 0 &&
-      newCurrentPlayer.trainState.movementHistory[
-        newCurrentPlayer.trainState.movementHistory.length - 1
-      ].to.terrain === TerrainType.FerryPort;
-    newCurrentPlayer.trainState.remainingMovement = isAtFerry
-      ? Math.floor(maxMovement / 2)
-      : maxMovement;
+    // Set movement based on ferry state
+    if (newCurrentPlayer.trainState.ferryState?.status === 'ready_to_cross') {
+      // Train starts turn ready to cross - movement is halved
+      newCurrentPlayer.trainState.remainingMovement = Math.ceil(maxMovement / 2);
+    } else {
+      // Normal movement
+      newCurrentPlayer.trainState.remainingMovement = maxMovement;
+    }
 
     // Reset train movement mode
     this.uiManager.resetTrainMovementMode();
@@ -355,6 +357,51 @@ export class GameScene extends Phaser.Scene {
     // Check if new current player needs to select a starting city
     if (!newCurrentPlayer.trainState.position) {
       this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
+    }
+  }
+
+  /**
+   * Handle ferry state transitions at the start of a player's turn
+   */
+  private async handleFerryTurnTransition(player: Player): Promise<void> {
+    if (!player.trainState.ferryState) {
+      return; // Not at a ferry
+    }
+
+    if (player.trainState.ferryState.status === 'just_arrived') {
+      // Transition from 'just_arrived' to 'ready_to_cross'
+      player.trainState.ferryState.status = 'ready_to_cross';
+      
+      // Get the other side coordinates from ferry state
+      const otherSideFromFerry = player.trainState.ferryState.otherSide;
+      
+      // Get the actual GridPoint with correct world coordinates from MapRenderer
+      const actualOtherSide = this.mapRenderer.gridPoints[otherSideFromFerry.row][otherSideFromFerry.col];
+      
+      if (!actualOtherSide) {
+        console.error(`Could not find grid point at ${otherSideFromFerry.row},${otherSideFromFerry.col}`);
+        return;
+      }
+      
+      // Update train position to other side using correct world coordinates
+      await this.uiManager.updateTrainPosition(
+        player.id,
+        actualOtherSide.x,
+        actualOtherSide.y,
+        actualOtherSide.row,
+        actualOtherSide.col
+      );
+      
+      // Clear ferry state after successful crossing
+      player.trainState.ferryState = undefined;
+      
+      console.log(`Player ${player.name} crossed ferry to ${actualOtherSide.city?.name || 'other side'}`);
+    }
+    
+    // If status was already 'ready_to_cross', it means the player didn't move last turn
+    // so we just clear the ferry state and continue with normal movement
+    if (player.trainState.ferryState?.status === 'ready_to_cross') {
+      player.trainState.ferryState = undefined;
     }
   }
 

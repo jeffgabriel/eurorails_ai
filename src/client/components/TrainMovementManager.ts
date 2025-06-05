@@ -136,6 +136,12 @@ export class TrainMovementManager {
       currentPlayer.trainState.movementHistory = [];
     }
 
+    // Check ferry state - if just arrived at ferry, no movement allowed
+    if (currentPlayer.trainState.ferryState?.status === 'just_arrived') {
+      // console.log("Cannot move - just arrived at ferry this turn");
+      return { canMove: false, endMovement: false };
+    }
+
     // If this is the first move, only check if it's a valid starting point
     if (!currentPlayer.trainState.position) {
       const isStartingCity = point.terrain == TerrainType.MajorCity;
@@ -198,18 +204,20 @@ export class TrainMovementManager {
     // If we got here, the move is valid - deduct the movement points
     this.deductMovement(currentPlayer, distance);
 
-    // If arriving at a ferry port, set remainingMovement to 0 and signal to end movement
+    // If arriving at a ferry port, set up ferry state and end movement
     if (point.terrain === TerrainType.FerryPort) {
       currentPlayer.trainState.remainingMovement = 0;
-      // Set atFerryPort state if ferry connection exists
+      
+      // Set ferry state if ferry connection exists
       if (point.ferryConnection) {
         const [from, to] = point.ferryConnection.connections;
-        // Determine which end is the current point
+        // Determine which end is the current point and which is the other side
         const isCurrentFrom = from.row === point.row && from.col === point.col;
-        currentPlayer.trainState.atFerryPort = {
-          from: isCurrentFrom ? from : to,
-          to: isCurrentFrom ? to : from,
-          status: 'pending',
+        currentPlayer.trainState.ferryState = {
+          status: 'just_arrived',
+          ferryConnection: point.ferryConnection,
+          currentSide: isCurrentFrom ? from : to,
+          otherSide: isCurrentFrom ? to : from,
         };
       }
       return { canMove: true, endMovement: true };

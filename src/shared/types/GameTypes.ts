@@ -26,15 +26,16 @@ export interface TrainState {
     movementHistory: TrackSegment[];
     loads: LoadType[];
     /**
-     * If set, the train is at a ferry port and eligible to cross or reverse.
-     * - from: the current ferry port GridPoint
-     * - to: the other end of the ferry
-     * - status: 'pending' (awaiting player choice) or 'reversed' (player chose to reverse)
+     * Ferry state management:
+     * - 'just_arrived': Just arrived at ferry this turn, no further movement allowed
+     * - 'ready_to_cross': At ferry from last turn, ready to cross (with halved movement)
+     * - undefined: Not at a ferry port
      */
-    atFerryPort?: {
-        from: GridPoint;
-        to: GridPoint;
-        status: 'pending' | 'reversed';
+    ferryState?: {
+        status: 'just_arrived' | 'ready_to_cross';
+        ferryConnection: FerryConnection;
+        currentSide: GridPoint;  // Which ferry port we're currently at
+        otherSide: GridPoint;    // Where we would go if we cross
     };
 }
 

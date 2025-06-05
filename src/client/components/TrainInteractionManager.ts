@@ -326,24 +326,13 @@ export class TrainInteractionManager {
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
     const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
-    // If atFerryPort is set and status is 'pending', move the train to the 'to' GridPoint
-    if (
-      currentPlayer.trainState.atFerryPort &&
-      currentPlayer.trainState.atFerryPort.status === 'pending'
-    ) {
-      const ferryTo = currentPlayer.trainState.atFerryPort.to;
-      currentPlayer.trainState.position = ferryTo;
-      currentPlayer.trainState.atFerryPort = undefined;
-      // Update train sprite position using updateTrainPosition
-      await this.updateTrainPosition(
-        currentPlayer.id,
-        ferryTo.x,
-        ferryTo.y,
-        ferryTo.row,
-        ferryTo.col
-      );
-      // Optionally, update the database or UI as needed
+    
+    // Check if train just arrived at ferry - if so, prevent movement
+    if (currentPlayer.trainState.ferryState?.status === 'just_arrived') {
+      // console.log("Cannot enter movement mode - just arrived at ferry this turn");
+      return;
     }
+    
     this.isTrainMovementMode = true;
     this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
 
