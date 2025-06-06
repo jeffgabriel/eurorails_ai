@@ -3,13 +3,16 @@ import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
 import { LoadType } from '../../shared/types/LoadTypes';
+import { cleanDatabase } from '../db/index';
+
+// Force Jest to run this test file serially
+export const test = { concurrent: false };
 
 describe('PlayerService Integration Tests', () => {
     let gameId: string;
     let client: any;
 
     beforeAll(async () => {
-        // Create a dedicated client for transactions
         client = await db.connect();
     });
 
@@ -18,60 +21,18 @@ describe('PlayerService Integration Tests', () => {
     });
 
     beforeEach(async () => {
-        // Start a transaction
-        await client.query('BEGIN');
         gameId = uuidv4();
-        await PlayerService.createGame(gameId);
+        await client.query(
+            'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
+            [gameId, 'setup', 0, 6]
+        );
     });
 
     afterEach(async () => {
-        // Rollback the transaction to clean up
-        await client.query('ROLLBACK');
-        
-        // Additional cleanup for any data that might have been committed
-        // Use the centralized cleanDatabase function to handle foreign key constraints
-        try {
-            // Clean the database using the shared function that handles constraints
-            const { cleanDatabase } = require('../db/index');
-            await cleanDatabase();
-        } catch (error) {
-            console.error('Cleanup error:', error);
-            
-            // Fallback manual cleanup if the centralized method fails
-            try {
-                // Set winner_id to null to avoid foreign key issues
-                await db.query('UPDATE games SET winner_id = NULL WHERE winner_id IS NOT NULL');
-                
-                // Delete from tables in the correct order
-                const tablesToDelete = [
-                    'player_track_networks',
-                    'player_tracks', 
-                    'movement_history',
-                    'players',
-                    'games'
-                ];
-                
-                for (const table of tablesToDelete) {
-                    try {
-                        const tableExists = await db.query(`
-                            SELECT EXISTS (
-                                SELECT FROM information_schema.tables 
-                                WHERE table_schema = 'public' 
-                                AND table_name = $1
-                            );
-                        `, [table]);
-                        
-                        if (tableExists.rows[0].exists) {
-                            await db.query(`DELETE FROM ${table}`);
-                        }
-                    } catch (err) {
-                        console.warn(`Failed to clean table ${table}:`, err);
-                    }
-                }
-            } catch (fallbackError) {
-                console.error('Fallback cleanup also failed:', fallbackError);
-            }
-        }
+        // Delete in dependency order to avoid constraint errors
+        await client.query('DELETE FROM player_tracks');
+        await client.query('DELETE FROM players');
+        await client.query('DELETE FROM games');
     });
 
     describe('Game Operations', () => {
@@ -141,6 +102,7 @@ describe('PlayerService Integration Tests', () => {
             await PlayerService.updatePlayer(gameId, updatedPlayer);
 
             const result = await db.query('SELECT * FROM players WHERE id = $1', [playerId]);
+            expect(result.rows.length).toBeGreaterThan(0);
             expect(result.rows[0].name).toBe('Updated Name');
             expect(result.rows[0].money).toBe(100);
             expect(result.rows[0].loads).toEqual([LoadType.Wheat]);
@@ -228,6 +190,7 @@ describe('PlayerService Integration Tests', () => {
         });
 
         it('should cascade delete player tracks when player is deleted', async () => {
+            // Ensure the game exists before inserting player and tracks
             const playerId = uuidv4();
             const player = {
                 id: playerId,
