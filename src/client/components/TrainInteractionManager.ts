@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, GridPoint, Player, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
+import { GameState, GridPoint, Player, TerrainType, TrackSegment, CityData } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -7,6 +7,7 @@ import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { UIManager } from "./UIManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { majorCityGroups } from '../config/mapConfig';
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -272,25 +273,53 @@ export class TrainInteractionManager {
     });
   }
   
+  private lookupMajorCityCenterForOutpost(point: GridPoint): CityData | undefined {
+    // majorCityGroups: { [name: string]: any[] }
+    for (const [name, group] of Object.entries(majorCityGroups)) {
+      // The center is always group[0]
+      const center = group[0];
+      // Outposts are group[1..n]
+      for (let i = 1; i < group.length; i++) {
+        const outpost = group[i];
+        if (outpost.GridX === point.col && outpost.GridY === point.row) {
+          // Return the center's city data
+          return {
+            type: center.Type === 'Major City' ? 2 : center.Type, // 2 = TerrainType.MajorCity
+            name: name,
+            connectedPoints: group.slice(1, 7).map(op => ({ col: op.GridX, row: op.GridY })),
+            availableLoads: [],
+          };
+        }
+      }
+    }
+    return undefined;
+  }
+
   private async handleCityArrival(
     currentPlayer: Player, 
     nearestMilepost: any
   ): Promise<void> {
+    // If this is a major city outpost, look up the center's city data
+    let cityData = nearestMilepost.city;
+    if (
+      nearestMilepost.terrain === 2 && // TerrainType.MajorCity
+      !nearestMilepost.city
+    ) {
+      cityData = this.lookupMajorCityCenterForOutpost(nearestMilepost);
+    }
+    if (!cityData) return;
     // Get the LoadService instance to check available loads
     const loadService = LoadService.getInstance();
-    
     // Check if train has any loads that could potentially be delivered
     const hasLoads = currentPlayer.trainState.loads && currentPlayer.trainState.loads.length > 0;
-    
     // Check if city has any loads available for pickup
-    const cityLoads = await loadService.getCityLoadDetails(nearestMilepost.city!.name);
+    const cityLoads = await loadService.getCityLoadDetails(cityData.name);
     const cityHasLoads = cityLoads && cityLoads.length > 0;
-    
     // Show dialog if either:
     // 1. Train has loads (could be delivered or dropped)
     // 2. City has loads (can be picked up, possibly after dropping current loads)
     if (hasLoads || cityHasLoads) {
-      this.showLoadDialog(currentPlayer, nearestMilepost.city!);
+      this.showLoadDialog(currentPlayer, cityData);
     }
   }
   
