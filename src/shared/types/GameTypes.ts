@@ -37,6 +37,10 @@ export interface TrainState {
         currentSide: GridPoint;  // Which ferry port we're currently at
         otherSide: GridPoint;    // Where we would go if we cross
     };
+    /**
+     * Set to true for the turn immediately after crossing a ferry, to halve movement.
+     */
+    justCrossedFerry?: boolean;
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';

@@ -335,10 +335,10 @@ export class GameScene extends Phaser.Scene {
         ? 12 // Fast trains
         : 9; // Regular trains
 
-    // Set movement based on ferry state
-    if (newCurrentPlayer.trainState.ferryState?.status === 'ready_to_cross') {
-      // Train starts turn ready to cross - movement is halved
+    // Set movement based on ferry crossing
+    if (newCurrentPlayer.trainState.justCrossedFerry) {
       newCurrentPlayer.trainState.remainingMovement = Math.ceil(maxMovement / 2);
+      newCurrentPlayer.trainState.justCrossedFerry = false;
     } else {
       // Normal movement
       newCurrentPlayer.trainState.remainingMovement = maxMovement;
@@ -392,6 +392,9 @@ export class GameScene extends Phaser.Scene {
         actualOtherSide.col
       );
       
+      // Set flag to halve movement for this turn
+      player.trainState.justCrossedFerry = true;
+
       // Clear ferry state after successful crossing
       player.trainState.ferryState = undefined;
       
