@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, GridPoint, Player, TerrainType, TrackSegment } from "../../shared/types/GameTypes";
+import { GameState, GridPoint, Player, TerrainType, TrackSegment, CityData } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -7,6 +7,7 @@ import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { UIManager } from "./UIManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { majorCityGroups } from '../config/mapConfig';
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -87,7 +88,6 @@ export class TrainInteractionManager {
     const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(x, y);
 
     if (!clickedPoint) {
-      console.log("No valid grid point found at click position");
       return null;
     }
 
@@ -95,7 +95,6 @@ export class TrainInteractionManager {
     const playerTrackState =
       this.trackDrawingManager.getPlayerTrackState(playerId);
     if (!playerTrackState || !playerTrackState.segments) {
-      console.log("No track state found for player");
       return null;
     }
 
@@ -110,7 +109,6 @@ export class TrainInteractionManager {
     );
 
     if (isOnPlayerTrack) {
-      console.log("Found player track at clicked point");
       return clickedPoint;
     }
 
@@ -163,11 +161,9 @@ export class TrainInteractionManager {
     }
 
     if (nearestPoint) {
-      console.log("Found nearest point with player track:", nearestPoint);
       return nearestPoint;
     }
 
-    console.log("No valid track point found within search radius");
     return null;
   }
   
@@ -195,8 +191,8 @@ export class TrainInteractionManager {
         //where the train is coming from
         const previousPosition = currentPlayer.trainState.position;
         //check if the selected point is a valid move 
-        const canMove = this.trainMovementManager.canMoveTo(nearestMilepost);
-        if (!canMove) {
+        const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
+        if (!moveResult.canMove) {
           this.showInvalidMoveMessage(pointer);
           return;
         }
@@ -244,8 +240,10 @@ export class TrainInteractionManager {
           this.handleCityArrival(currentPlayer, nearestMilepost);
         }
 
-        // Exit train movement mode
-        this.exitTrainMovementMode();
+        // If arrived at a ferry port, or if movement should end, exit movement mode
+        if (moveResult.endMovement) {
+          this.exitTrainMovementMode();
+        }
       } catch (error) {
         throw error;
       }
@@ -275,31 +273,58 @@ export class TrainInteractionManager {
     });
   }
   
+  private lookupMajorCityCenterForOutpost(point: GridPoint): CityData | undefined {
+    // majorCityGroups: { [name: string]: any[] }
+    for (const [name, group] of Object.entries(majorCityGroups)) {
+      // The center is always group[0]
+      const center = group[0];
+      // Outposts are group[1..n]
+      for (let i = 1; i < group.length; i++) {
+        const outpost = group[i];
+        if (outpost.GridX === point.col && outpost.GridY === point.row) {
+          // Return the center's city data
+          return {
+            type: center.Type === 'Major City' ? 2 : center.Type, // 2 = TerrainType.MajorCity
+            name: name,
+            connectedPoints: group.slice(1, 7).map(op => ({ col: op.GridX, row: op.GridY })),
+            availableLoads: [],
+          };
+        }
+      }
+    }
+    return undefined;
+  }
+
   private async handleCityArrival(
     currentPlayer: Player, 
     nearestMilepost: any
   ): Promise<void> {
+    // If this is a major city outpost, look up the center's city data
+    let cityData = nearestMilepost.city;
+    if (
+      nearestMilepost.terrain === 2 && // TerrainType.MajorCity
+      !nearestMilepost.city
+    ) {
+      cityData = this.lookupMajorCityCenterForOutpost(nearestMilepost);
+    }
+    if (!cityData) return;
     // Get the LoadService instance to check available loads
     const loadService = LoadService.getInstance();
-    
     // Check if train has any loads that could potentially be delivered
     const hasLoads = currentPlayer.trainState.loads && currentPlayer.trainState.loads.length > 0;
-    
     // Check if city has any loads available for pickup
-    const cityLoads = await loadService.getCityLoadDetails(nearestMilepost.city!.name);
+    const cityLoads = await loadService.getCityLoadDetails(cityData.name);
     const cityHasLoads = cityLoads && cityLoads.length > 0;
-    
     // Show dialog if either:
     // 1. Train has loads (could be delivered or dropped)
     // 2. City has loads (can be picked up, possibly after dropping current loads)
     if (hasLoads || cityHasLoads) {
-      this.showLoadDialog(currentPlayer, nearestMilepost.city!);
+      this.showLoadDialog(currentPlayer, cityData);
     }
   }
   
   private showLoadDialog(player: Player, city: any): void {
     if (!this.uiManager) {
-      console.error('UIManager not set');
       return;
     }
 
@@ -326,8 +351,17 @@ export class TrainInteractionManager {
     });
   }
   
-  public enterTrainMovementMode(): void {
-    console.log("Entering train movement mode");
+  public async enterTrainMovementMode(): Promise<void> {
+    const currentPlayer =
+      this.gameState.players[this.gameState.currentPlayerIndex];
+    const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
+    
+    // Check if train just arrived at ferry - if so, prevent movement
+    if (currentPlayer.trainState.ferryState?.status === 'just_arrived') {
+      // console.log("Cannot enter movement mode - just arrived at ferry this turn");
+      return;
+    }
+    
     this.isTrainMovementMode = true;
     this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
 
@@ -335,14 +369,8 @@ export class TrainInteractionManager {
     this.scene.input.setDefaultCursor("pointer");
 
     // Add visual indicator that train is selected
-    const currentPlayer =
-      this.gameState.players[this.gameState.currentPlayerIndex];
-    const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
     if (trainSprite) {
       trainSprite.setAlpha(0.7); // Make train slightly transparent to indicate it's being moved
-      console.log("Train sprite opacity set to 0.7");
-    } else {
-      console.warn("No train sprite found for current player", currentPlayer.id);
     }
   }
   
@@ -460,14 +488,6 @@ export class TrainInteractionManager {
     
     // Add the pointer down listener
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-      console.log("Train clicked:", {
-        playerId,
-        isCurrentPlayer: playerId === this.gameState.players[this.gameState.currentPlayerIndex].id,
-        hasTrack: this.playerHasTrack(playerId),
-        isDrawingMode: this.isDrawingMode,
-        isTrainMovementMode: this.isTrainMovementMode,
-      });
-      
       // Only allow interaction if:
       // 1. This is the current player's train
       // 2. Not in drawing mode
@@ -549,7 +569,6 @@ export class TrainInteractionManager {
   }
   
   public setDrawingMode(isDrawing: boolean): void {
-    console.log("TrainInteractionManager.setDrawingMode:", isDrawing);
     this.isDrawingMode = isDrawing;
     
     // When entering drawing mode, exit train movement mode if active

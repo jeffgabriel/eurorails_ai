@@ -25,6 +25,22 @@ export interface TrainState {
     remainingMovement: number;
     movementHistory: TrackSegment[];
     loads: LoadType[];
+    /**
+     * Ferry state management:
+     * - 'just_arrived': Just arrived at ferry this turn, no further movement allowed
+     * - 'ready_to_cross': At ferry from last turn, ready to cross (with halved movement)
+     * - undefined: Not at a ferry port
+     */
+    ferryState?: {
+        status: 'just_arrived' | 'ready_to_cross';
+        ferryConnection: FerryConnection;
+        currentSide: GridPoint;  // Which ferry port we're currently at
+        otherSide: GridPoint;    // Where we would go if we cross
+    };
+    /**
+     * Set to true for the turn immediately after crossing a ferry, to halve movement.
+     */
+    justCrossedFerry?: boolean;
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed';

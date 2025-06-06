@@ -41,30 +41,35 @@ const points: GridPoint[] = [];
 
 // First, handle all non-major city outposts
 (mileposts as any[])
- // .filter(mp => mp.Type !== "Major City Outpost" && mp.Type !== "Major City")
   .forEach(mp => {
     if (typeof mp.GridX !== 'number' || typeof mp.GridY !== 'number') return;
     let col = mp.GridX;
     let row = mp.GridY;
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
-    const base: GridPoint = { 
-      x: col, //TODO: calculate proper x y position here instead of in renderer.
-      y: row, 
-      col, 
-      row, 
+    // Build the GridPoint directly
+    const gridPoint: GridPoint = {
+      x: col, // TODO: calculate proper x y position here instead of in renderer.
+      y: row,
+      col,
+      row,
       terrain,
-      id: mp.Id
+      id: mp.Id,
+      // Only assign city for small, medium, and ferry port cities
+      city: (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port") && mp.Name
+        ? {
+            type: terrain,
+            name: mp.Name,
+            availableLoads: [],
+          }
+        : undefined,
+      // Set ocean if present
+      ...(mp.Ocean ? { ocean: mp.Ocean } : {})
     };
+    // Group major city outposts and centers for second pass
     if (mp.Type === "Major City Outpost" && mp.Name) {
       if (!majorCityGroups[mp.Name]) {
         majorCityGroups[mp.Name] = [];
-      }
-      mp.terrain = TerrainType.MajorCity;
-      mp.city = {
-        type: TerrainType.MajorCity,
-        name: mp.Name,
-        availableLoads: [], 
       }
       majorCityGroups[mp.Name].push(mp);
     } else if (mp.Type === "Major City") {
@@ -74,17 +79,7 @@ const points: GridPoint[] = [];
         majorCityGroups[mp.Name].splice(0, 0, mp);
       }
     }
-    if (mp.Name && (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port")) {
-      base.city = {
-        type: terrain,
-        name: mp.Name,
-        availableLoads: [],
-      };
-    }
-    if (mp.Ocean) {
-      (base as any).ocean = mp.Ocean;
-    }
-    points.push(base);
+    points.push(gridPoint);
   });
 
 // Now, handle major cities as a group (center + outposts)
@@ -154,3 +149,5 @@ export const mapConfig: MapConfig = {
   points,
   ferryConnections, // Add ferry connections to the config
 };
+
+export { majorCityGroups };
