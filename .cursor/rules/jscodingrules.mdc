@@ -412,3 +412,30 @@ This guide outlines architectural principles and patterns for building a maintai
 | Turn sequence enforceable     | Represented explicitly via state machine       |
 | View class per game object    | Avoid centralized `drawAll` logic              |
 | Test coverage on pure logic   | Model rules testable in isolation              |
+
+
+1. Per-Test Cleanup, Not Global Truncation
+Always use per-fixture (per-test or per-suite) cleanup with explicit DELETE FROM statements in dependency order (child tables first, then parent tables).
+Never use global TRUNCATE or disable triggers for test cleanup unless absolutely necessary and safe (e.g., no open transactions, single-threaded).
+2. No Cleanup During Transactions
+Never perform database cleanup (truncate, delete, or schema changes) while any transaction is open.
+Always ensure all transactions are committed or rolled back before cleanup.
+3. Minimal State Setup
+Each test must set up only the state it needs.
+Never rely on state from previous tests or global fixtures.
+4. Test Independence
+Tests must not depend on the order of execution or on side effects from other tests.
+Each test should be able to run in isolation and still pass.
+5. Dependency Order for Deletes
+When deleting rows for cleanup, always delete from child tables before parent tables to avoid foreign key constraint errors and deadlocks.
+6. Avoid Shared Clients in Tests
+Prefer using a fresh database client per test or per suite, unless there is a strong reason to share.
+Always release clients after use.
+7. Serial Execution for DB-Heavy Tests
+If tests interact heavily with the database and are not designed for parallelism, run them serially (one after another) to avoid race conditions and deadlocks.
+8. No Disabling of Triggers Unless Absolutely Necessary
+Disabling triggers can break referential integrity and should be avoided in test cleanup.
+9. Explicit Error Handling
+Always check for and handle errors during setup and cleanup, and fail tests clearly if cleanup/setup fails.
+10. Document Test Cleanup Strategy
+Always document the cleanup and isolation strategy at the top of each test file for future maintainers.

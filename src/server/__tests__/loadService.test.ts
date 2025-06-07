@@ -1,3 +1,8 @@
+// Test Cleanup Strategy: Serial Execution Required
+// This test file interacts heavily with the database and must run serially to avoid deadlocks.
+// Run with: npm test -- --runInBand src/server/__tests__/loadService.test.ts
+// Or set maxWorkers=1 in jest config for all database tests.
+
 // Mock fs module before any imports
 jest.mock('fs', () => ({
   readFileSync: jest.fn((path) => {
@@ -49,20 +54,15 @@ describe('LoadService', () => {
   });
 
   beforeEach(async () => {
-    // Create a test game with the pre-generated UUID
-    await client.query(
-      'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
-      [gameId, 'setup', 0, 6]
-    );
-
+    await ensureTestGameExists(client, gameId);
     // Get a fresh instance of LoadService and reset it
     loadService = await LoadService.getInstance();
     loadService.reset();
   });
 
   afterEach(async () => {
-    // Clean up test data for this game only
-    await client.query('DELETE FROM games WHERE id = $1', [gameId]);
+    // Clean up all test data in dependency order (child tables first)
+    await client.query('DELETE FROM load_chips WHERE game_id = $1', [gameId]);
   });
 
   describe('Load Configuration', () => {
@@ -137,7 +137,6 @@ describe('LoadService', () => {
         // Setup: Insert some test dropped loads using the service
         await ensureTestGameExists(client, gameId);
         await loadService.setLoadInCity('München', LoadType.Beer, gameId);
-        await ensureTestGameExists(client, gameId);
         await loadService.setLoadInCity('Stuttgart', LoadType.Cars, gameId);
 
         const droppedLoads = await loadService.getDroppedLoads();

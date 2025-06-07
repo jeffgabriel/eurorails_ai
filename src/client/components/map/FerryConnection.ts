@@ -1,5 +1,6 @@
 import { FerryConnection } from "@/shared/types/GameTypes";
 import { BaseMapElement } from "./MapElement";
+import { MapRenderer } from "../MapRenderer";
 
 export class FerryConnectionElement extends BaseMapElement {
   protected ferryConnection: FerryConnection;
@@ -93,8 +94,8 @@ export class FerryConnectionElement extends BaseMapElement {
 
     // Add the number with even higher depth
     const text = this.scene.add.text(
-      x + this.GRID_MARGIN,
-      y + this.GRID_MARGIN,
+      x + MapRenderer.GRID_MARGIN,
+      y + MapRenderer.GRID_MARGIN,
       number.toString(),
       {
         color: "#000000",

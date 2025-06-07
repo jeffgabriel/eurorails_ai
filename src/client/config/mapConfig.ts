@@ -2,8 +2,21 @@ import { MapConfig, TerrainType, GridPoint, FerryConnection } from "../../shared
 import mileposts from "../../../configuration/gridPoints.json";
 import ferryPoints from "../../../configuration/ferryPoints.json";
 
+// Define spacing constants directly here to avoid circular dependency with MapRenderer
+export const HORIZONTAL_SPACING = 45;
+export const VERTICAL_SPACING = 40;
+export const GRID_MARGIN = 100;
+
 const gridRows = 58;
 const gridCols = 64;
+
+// Helper function to calculate world coordinates from grid coordinates
+function calculateWorldCoordinates(col: number, row: number): { x: number, y: number } {
+  const isOffsetRow = row % 2 === 1;
+  const x = col * HORIZONTAL_SPACING + GRID_MARGIN + (isOffsetRow ? HORIZONTAL_SPACING / 2 : 0);
+  const y = row * VERTICAL_SPACING + GRID_MARGIN;
+  return { x, y };
+}
 
 function mapTypeToTerrain(type: string): TerrainType {
   switch (type) {
@@ -47,10 +60,11 @@ const points: GridPoint[] = [];
     let row = mp.GridY;
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
+    const { x, y } = calculateWorldCoordinates(col, row);
     // Build the GridPoint directly
     const gridPoint: GridPoint = {
-      x: col, // TODO: calculate proper x y position here instead of in renderer.
-      y: row,
+      x: x,
+      y: y,
       col,
       row,
       terrain,

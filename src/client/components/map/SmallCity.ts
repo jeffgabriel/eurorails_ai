@@ -30,6 +30,6 @@ export class SmallCity extends City {
     this.drawMilepostDot(graphics);
     // Add city name
     this.addCityName(container, "10px");
-    this.addLoadSpritesToCity(this.x + this.GRID_MARGIN, this.y + this.GRID_MARGIN, this.cityData.name, this.cityData.type, container);
+    this.addLoadSpritesToCity(this.x, this.y, this.cityData.name, this.cityData.type, container);
   }
 } 

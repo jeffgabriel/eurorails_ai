@@ -6,6 +6,7 @@ import {
 } from "../../../shared/types/GameTypes";
 import { LoadService } from "../../services/LoadService";
 import "phaser";
+import { MapRenderer } from "../MapRenderer";
 
 export const CITY_COLOR = 0xab0000;
 
@@ -36,8 +37,8 @@ export abstract class City extends MapElement {
     fontSize: string
   ): void {
     const cityName = this.scene.add.text(
-      this.x + this.GRID_MARGIN,
-      this.y + this.GRID_MARGIN - 18,
+      this.x + MapRenderer.GRID_MARGIN,
+      this.y + MapRenderer.GRID_MARGIN - 18,
       this.cityData.name.toUpperCase(),
       {
         color: "#000000",
@@ -90,8 +91,8 @@ export abstract class City extends MapElement {
         }
 
         const angle = startAngle + angleStep * index;
-        const spriteX = cityX + radius * Math.cos(angle);
-        const spriteY = cityY + radius * Math.sin(angle);
+        const spriteX = cityX + MapRenderer.GRID_MARGIN + radius * Math.cos(angle);
+        const spriteY = cityY + MapRenderer.GRID_MARGIN + radius * Math.sin(angle);
 
         const spriteKey = `load-${load.loadType.toLowerCase()}`;
 
