@@ -1497,8 +1497,8 @@
   },
   {
     "Id": "7067d508-308a-447f-a3f6-d944b7180d2a",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
     "GridX": 14,
     "GridY": 49,
     "Ocean": null
@@ -1513,8 +1513,8 @@
   },
   {
     "Id": "46c0b3de-b20c-440f-97cd-145a84f4d2d1",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
     "GridX": 14,
     "GridY": 47,
     "Ocean": null
@@ -1857,16 +1857,16 @@
   },
   {
     "Id": "64186a7d-39e1-40ff-91fc-46494620c51f",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 16,
     "GridY": 47,
     "Ocean": null
   },
   {
     "Id": "f2b24ca9-88d5-4186-9c77-2c80b34bc30f",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 16,
     "GridY": 49,
     "Ocean": null
@@ -5696,14 +5696,6 @@
     "Ocean": null
   },
   {
-    "Id": "3e3a431d-7831-4039-b73e-5205309c103d",
-    "Type": "Major City Outpost",
-    "Name": "Paris",
-    "GridX": 32,
-    "GridY": 29,
-    "Ocean": null
-  },
-  {
     "Id": "5af12b97-d64c-4c30-ad72-2f8f309c00fe",
     "Type": "Milepost",
     "Name": null,
@@ -5859,14 +5851,22 @@
     "Id": "110d2533-0438-4a1d-80cd-1f84311ed659",
     "Type": "Major City Outpost",
     "Name": "Paris",
-    "GridX": 32,
+    "GridX": 34,
     "GridY": 28,
     "Ocean": null
   },
   {
-    "Id": "a801c70a-bece-481b-87cb-df44ce555e58",
+    "Id": "3e3a431d-7831-4039-b73e-5205309c103d",
     "Type": "Major City Outpost",
     "Name": "Paris",
+    "GridX": 32,
+    "GridY": 29,
+    "Ocean": null
+  },
+  {
+    "Id": "a801c70a-bece-481b-87cb-df44ce555e58",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 32,
     "GridY": 30,
     "Ocean": null
@@ -6435,14 +6435,14 @@
     "Id": "1491ee80-f819-4e8f-9b73-4460adc46ac3",
     "Type": "Milepost",
     "Name": null,
-    "GridX": 34,
+    "GridX": 32,
     "GridY": 28,
     "Ocean": null
   },
   {
     "Id": "83617006-2d59-43b0-8a6b-926d61bc7ec5",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Paris",
     "GridX": 34,
     "GridY": 30,
     "Ocean": null
@@ -7784,14 +7784,6 @@
     "Ocean": null
   },
   {
-    "Id": "1d61847c-a71f-4978-9e31-80027a0b3a1e",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
-    "GridX": 41,
-    "GridY": 25,
-    "Ocean": null
-  },
-  {
     "Id": "d5e25843-1394-4160-a953-b50aa1bf0686",
     "Type": "Milepost",
     "Name": null,
@@ -7904,17 +7896,9 @@
     "Ocean": null
   },
   {
-    "Id": "77ee51db-a456-43c9-b304-a1ba7804abad",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
-    "GridX": 41,
-    "GridY": 24,
-    "Ocean": null
-  },
-  {
     "Id": "a7275ef4-ae4d-4e57-ac65-9f75627b24fa",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 41,
     "GridY": 26,
     "Ocean": null
@@ -8013,14 +7997,6 @@
     "Name": null,
     "GridX": 41,
     "GridY": 21,
-    "Ocean": null
-  },
-  {
-    "Id": "f92c2514-e676-4ee8-b3d5-e8578f11ca0a",
-    "Type": "Major City",
-    "Name": "Ruhr",
-    "GridX": 42,
-    "GridY": 25,
     "Ocean": null
   },
   {
@@ -8136,6 +8112,30 @@
     "Ocean": null
   },
   {
+    "Id": "77ee51db-a456-43c9-b304-a1ba7804abad",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 41,
+    "GridY": 24,
+    "Ocean": null
+  },
+  {
+    "Id": "f92c2514-e676-4ee8-b3d5-e8578f11ca0a",
+    "Type": "Major City",
+    "Name": "Ruhr",
+    "GridX": 42,
+    "GridY": 25,
+    "Ocean": null
+  },
+  {
+    "Id": "1d61847c-a71f-4978-9e31-80027a0b3a1e",
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
+    "GridX": 41,
+    "GridY": 25,
+    "Ocean": null
+  },
+  {
     "Id": "4da0a345-a970-4c09-9b5b-98dbf75dec6b",
     "Type": "Major City Outpost",
     "Name": "Ruhr",
@@ -8148,6 +8148,22 @@
     "Type": "Major City Outpost",
     "Name": "Ruhr",
     "GridX": 42,
+    "GridY": 26,
+    "Ocean": null
+  },
+  {
+    "Id": "5864bdb1-39aa-44e2-8331-d57b9d32d251",
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
+    "GridX": 43,
+    "GridY": 25,
+    "Ocean": null
+  },
+  {
+    "Id": "8665a9b6-e668-4dc2-b229-693f9f053e50",
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
+    "GridX": 43,
     "GridY": 26,
     "Ocean": null
   },
@@ -8280,14 +8296,6 @@
     "Ocean": null
   },
   {
-    "Id": "5864bdb1-39aa-44e2-8331-d57b9d32d251",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
-    "GridX": 43,
-    "GridY": 25,
-    "Ocean": null
-  },
-  {
     "Id": "e9d9cbe3-900a-4dff-b211-dddcdeaa1a39",
     "Type": "Milepost",
     "Name": null,
@@ -8385,8 +8393,8 @@
   },
   {
     "Id": "696f202e-3139-4e4a-97de-468975ca679f",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
     "GridX": 43,
     "GridY": 24,
     "Ocean": null
@@ -8405,14 +8413,6 @@
     "Name": null,
     "GridX": 43,
     "GridY": 30,
-    "Ocean": null
-  },
-  {
-    "Id": "8665a9b6-e668-4dc2-b229-693f9f053e50",
-    "Type": "Mountain",
-    "Name": null,
-    "GridX": 43,
-    "GridY": 26,
     "Ocean": null
   },
   {

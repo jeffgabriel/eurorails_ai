@@ -1,5 +1,5 @@
 import "phaser";
-import { mapConfig } from "../config/mapConfig";
+import { mapConfig, HORIZONTAL_SPACING, VERTICAL_SPACING, GRID_MARGIN } from "../config/mapConfig";
 import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -12,10 +12,10 @@ import { FerryConnectionElement } from "./map/FerryConnection";
 export class MapRenderer {
   public static readonly FERRY_ICONS_CONTAINER_NAME = "ferryIcons";
   public static readonly PORT_NAMES_CONTAINER_NAME = "portNames";
-  // Grid configuration
-  public static readonly HORIZONTAL_SPACING = 45;
-  public static readonly VERTICAL_SPACING = 40;
-  public static readonly GRID_MARGIN = 100; // Increased margin around the grid// Size for the ferry icon
+  // Grid configuration - using constants from mapConfig to avoid circular dependency
+  public static readonly HORIZONTAL_SPACING = HORIZONTAL_SPACING;
+  public static readonly VERTICAL_SPACING = VERTICAL_SPACING;
+  public static readonly GRID_MARGIN = GRID_MARGIN;
 
   private scene: Phaser.Scene;
   private mapContainer: Phaser.GameObjects.Container;
@@ -42,9 +42,11 @@ export class MapRenderer {
 
   public calculateMapDimensions() {
     const width =
-      mapConfig.width * MapRenderer.HORIZONTAL_SPACING + MapRenderer.GRID_MARGIN * 2;
+      mapConfig.width * MapRenderer.HORIZONTAL_SPACING +
+      MapRenderer.GRID_MARGIN * 2;
     const height =
-      mapConfig.height * MapRenderer.VERTICAL_SPACING + MapRenderer.GRID_MARGIN * 2;
+      mapConfig.height * MapRenderer.VERTICAL_SPACING +
+      MapRenderer.GRID_MARGIN * 2;
     return { width, height };
   }
 
@@ -56,8 +58,8 @@ export class MapRenderer {
     mapConfig.points.forEach((point) => {
       terrainLookup.set(`${point.row},${point.col}`, {
         ...point,
-        x: point.x + MapRenderer.GRID_MARGIN,
-        y: point.y + MapRenderer.GRID_MARGIN,
+        x: point.x,
+        y: point.y,
       });
     });
 
@@ -126,7 +128,7 @@ export class MapRenderer {
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const city = config?.city;
-        
+        //this.writeGridPointLabel(config, isOffsetRow);
         //this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
@@ -147,8 +149,8 @@ export class MapRenderer {
         // Store point data with grid coordinates
         this.gridPoints[row][col] = {
           id: config?.id || "",
-          x: x + MapRenderer.GRID_MARGIN,
-          y: y + MapRenderer.GRID_MARGIN,
+          x: config ? config.x : (x + MapRenderer.GRID_MARGIN),
+          y: config ? config.y : (y + MapRenderer.GRID_MARGIN),
           row,
           col,
           terrain,
@@ -216,16 +218,31 @@ export class MapRenderer {
   ) {
     // Add coordinate label for each point
     const coordLabel = this.scene.add.text(
-      x + MapRenderer.GRID_MARGIN,
-      y + MapRenderer.GRID_MARGIN,
+      x + 93,
+      y + 118,
       `${col},${row}`,
       {
         color: "#000000",
-        fontSize: "8px",
+        fontSize: "6px",
         backgroundColor: "#ffffff80", // Semi-transparent white background
       }
     );
     coordLabel.setOrigin(0, 1);
     this.mapContainer.add(coordLabel);
+  }
+
+  private writeGridPointLabel(p: GridPoint | undefined, isOffsetRow: boolean) {
+    if (!p) return;
+      const label = this.scene.add.text(
+        p.x - 15,
+        p.y + 18,
+        TerrainType[p.terrain],
+        {
+          color: "#000000",
+          fontSize: "8px",
+          backgroundColor: "#ffffff80", // Semi-transparent white background
+        }
+      );
+      this.mapContainer.add(label);
   }
 }

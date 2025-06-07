@@ -350,9 +350,10 @@ describe('TrackDrawingManager', () => {
             for (let row = 0; row < gridRows; row++) {
                 gridPoints[row] = [];
                 for (let col = 0; col < gridCols; col++) {
+                    const isOffsetRow = row % 2 === 1;
                     gridPoints[row][col] = {
                         id: `${row}-${col}`,
-                        x: MapRenderer.GRID_MARGIN + col * MapRenderer.HORIZONTAL_SPACING,
+                        x: MapRenderer.GRID_MARGIN + col * MapRenderer.HORIZONTAL_SPACING + (isOffsetRow ? MapRenderer.HORIZONTAL_SPACING / 2 : 0),
                         y: MapRenderer.GRID_MARGIN + row * MapRenderer.VERTICAL_SPACING,
                         row,
                         col,
@@ -382,7 +383,8 @@ describe('TrackDrawingManager', () => {
             } as GameState;
             const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
             // Act: use the world coordinates that should map to (39,21)
-            const worldX = MapRenderer.GRID_MARGIN + targetCol * MapRenderer.HORIZONTAL_SPACING;
+            const isTargetOffsetRow = targetRow % 2 === 1;
+            const worldX = MapRenderer.GRID_MARGIN + targetCol * MapRenderer.HORIZONTAL_SPACING + (isTargetOffsetRow ? MapRenderer.HORIZONTAL_SPACING / 2 : 0);
             const worldY = MapRenderer.GRID_MARGIN + targetRow * MapRenderer.VERTICAL_SPACING;
             // Log the grid point and world coordinates for debugging
             console.log('Grid point at (39,21):', gridPoints[targetRow][targetCol]);

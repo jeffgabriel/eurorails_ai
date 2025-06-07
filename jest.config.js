@@ -43,7 +43,8 @@ module.exports = {
       displayName: 'server',
       testEnvironment: 'node',
       testMatch: ['<rootDir>/src/server/__tests__/**/*.test.ts'],
-      setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts']
+      setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
+      maxWorkers: 1  // Force serial execution for database tests to prevent deadlocks
     },
     {
       displayName: 'shared',

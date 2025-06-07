@@ -2,6 +2,7 @@ import { City } from "./City";
 import { GridPoint, CityData } from "../../../shared/types/GameTypes";
 import "phaser";
 import { CITY_COLOR } from "./City";
+import { MapRenderer } from "../MapRenderer";
 
 export class MajorCity extends City {
   private centerX: number;
@@ -46,8 +47,8 @@ export class MajorCity extends City {
     this.drawStar(graphics, this.x, this.y, 8);
     this.addCityName(container);
     this.addLoadSpritesToCity(
-      this.x + this.GRID_MARGIN,
-      this.y + this.GRID_MARGIN,
+      this.x,
+      this.y,
       this.cityData.name,
       this.cityData.type,
       container
@@ -86,8 +87,8 @@ export class MajorCity extends City {
   ): void {
     // Add city name centered in the hexagon
     const cityName = this.scene.add.text(
-      this.centerX + this.GRID_MARGIN,
-      this.centerY + this.GRID_MARGIN + 15, // Added offset to move below center point
+      this.centerX + MapRenderer.GRID_MARGIN,
+      this.centerY + MapRenderer.GRID_MARGIN + 15, // Added offset to move below center point
       this.cityData.name,
       {
         color: "#000000",

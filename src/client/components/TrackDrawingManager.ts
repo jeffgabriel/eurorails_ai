@@ -463,7 +463,7 @@ export class TrackDrawingManager {
 
         const hoverPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         const gridPoint = this.getGridPointAtPosition(hoverPoint.x, hoverPoint.y);
-        if (!gridPoint) {
+        if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             this.previewGraphics.clear();
             this.previewPath = [];
             return;
@@ -533,6 +533,9 @@ export class TrackDrawingManager {
             for (let c = Math.max(0, approxCol - 1); c <= Math.min(this.gridPoints[r].length - 1, approxCol + 1); c++) {
                 const point = this.gridPoints[r][c];
                 if (!point) continue;
+
+                // Defensive: Skip points with missing terrain or empty id
+                if (typeof point.terrain === 'undefined' || point.id === '') continue;
 
                 // Skip water points
                 if (point.terrain === TerrainType.Water) continue;
@@ -679,6 +682,11 @@ export class TrackDrawingManager {
                         path.unshift(current); // Include the network node in the path
                         break;
                     }
+                }
+
+                // Defensive check: if any node in the path is water, return null
+                if (path.some(p => p.terrain === TerrainType.Water)) {
+                    return null;
                 }
 
                 // Validate that no segment in the path overlaps with other players' tracks

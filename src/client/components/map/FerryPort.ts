@@ -23,8 +23,8 @@ export class FerryPort extends MapElement {
     let ferryPortIcons = this.scene.children.getByName(MapRenderer.FERRY_ICONS_CONTAINER_NAME) as Phaser.GameObjects.Container || this.scene.add.container().setName(MapRenderer.FERRY_ICONS_CONTAINER_NAME);
     let portNames = this.scene.children.getByName(MapRenderer.PORT_NAMES_CONTAINER_NAME) as Phaser.GameObjects.Container || this.scene.add.container().setName(MapRenderer.PORT_NAMES_CONTAINER_NAME);
     const sprite = this.scene.add.image(
-      this.x + this.GRID_MARGIN,
-      this.y + this.GRID_MARGIN,
+      this.x + MapRenderer.GRID_MARGIN,
+      this.y + MapRenderer.GRID_MARGIN,
       "ferry-port"
     ).setName(`ferryPort--${this.point.city?.name}`);
     sprite.setScale(1);
@@ -40,8 +40,10 @@ export class FerryPort extends MapElement {
     });
 
     // Calculate text position based on ferry connection
-    let textX = this.x + this.GRID_MARGIN;
-    let textY = this.y + this.GRID_MARGIN;
+    const centerX = this.x + MapRenderer.GRID_MARGIN;
+    const centerY = this.y + MapRenderer.GRID_MARGIN;
+    let textX = this.x;
+    let textY = this.y;
     let textOrigin = { x: 0.5, y: 0.5 }; // Default centered origin
 
     if (ferryConnection) {
@@ -61,8 +63,8 @@ export class FerryPort extends MapElement {
 
     // Add ferry port name
     const portName = this.scene.add.text(
-      textX,
-      textY,
+      textX + MapRenderer.GRID_MARGIN,
+      textY + MapRenderer.GRID_MARGIN,
       this.point.city?.name || "Port", // Use city name if available, otherwise "Port"
       {
         color: "#000000",
