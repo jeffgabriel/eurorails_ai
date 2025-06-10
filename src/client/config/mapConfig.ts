@@ -2,8 +2,21 @@ import { MapConfig, TerrainType, GridPoint, FerryConnection } from "../../shared
 import mileposts from "../../../configuration/gridPoints.json";
 import ferryPoints from "../../../configuration/ferryPoints.json";
 
+// Define spacing constants directly here to avoid circular dependency with MapRenderer
+export const HORIZONTAL_SPACING = 45;
+export const VERTICAL_SPACING = 40;
+export const GRID_MARGIN = 100;
+
 const gridRows = 58;
 const gridCols = 64;
+
+// Helper function to calculate world coordinates from grid coordinates
+function calculateWorldCoordinates(col: number, row: number): { x: number, y: number } {
+  const isOffsetRow = row % 2 === 1;
+  const x = col * HORIZONTAL_SPACING + GRID_MARGIN + (isOffsetRow ? HORIZONTAL_SPACING / 2 : 0);
+  const y = row * VERTICAL_SPACING + GRID_MARGIN;
+  return { x, y };
+}
 
 function mapTypeToTerrain(type: string): TerrainType {
   switch (type) {
@@ -47,10 +60,11 @@ const points: GridPoint[] = [];
     let row = mp.GridY;
     assignedCells.add(`${col},${row}`);
     const terrain = mapTypeToTerrain(mp.Type);
+    const { x, y } = calculateWorldCoordinates(col, row);
     // Build the GridPoint directly
     const gridPoint: GridPoint = {
-      x: col, // TODO: calculate proper x y position here instead of in renderer.
-      y: row,
+      x: x,
+      y: y,
       col,
       row,
       terrain,
@@ -91,11 +105,11 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   const row = center.GridY;
   
   const connectedPoints = group.slice(1, 7).map(outpost => ({ col: outpost.GridX, row: outpost.GridY }));
-
+  const { x, y } = calculateWorldCoordinates(col, row);
   points.push({
     id: center.id,
-    x: center.GridX,
-    y: center.GridY,
+    x: x,
+    y: y,
     col,
     row,
     terrain: TerrainType.MajorCity,
@@ -138,6 +152,25 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
 
   return ferryConnection;
 });
+
+// Create water points for all unassigned cells
+// This ensures every grid position has a corresponding GridPoint
+for (let row = 0; row < gridRows; row++) {
+  for (let col = 0; col < gridCols; col++) {
+    const key = `${col},${row}`;
+    if (!assignedCells.has(key)) {
+      const { x, y } = calculateWorldCoordinates(col, row);
+      points.push({
+        id: `water_${row}_${col}`,
+        x,
+        y,
+        col,
+        row,
+        terrain: TerrainType.Water,
+      });
+    }
+  }
+}
 
 // Use fixed width and height for the grid
 const width = gridCols;

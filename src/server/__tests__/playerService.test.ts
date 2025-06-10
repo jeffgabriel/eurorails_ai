@@ -8,31 +8,36 @@ import { cleanDatabase } from '../db/index';
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
 
+// Helper to run a query with automatic connection management
+async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
+    const client = await db.connect();
+    try {
+        return await queryFn(client);
+    } finally {
+        client.release();
+    }
+}
+
 describe('PlayerService Integration Tests', () => {
     let gameId: string;
-    let client: any;
-
-    beforeAll(async () => {
-        client = await db.connect();
-    });
-
-    afterAll(async () => {
-        await client.release();
-    });
 
     beforeEach(async () => {
         gameId = uuidv4();
-        await client.query(
-            'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
-            [gameId, 'setup', 0, 6]
-        );
+        await runQuery(async (client) => {
+            await client.query(
+                'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
+                [gameId, 'setup', 0, 6]
+            );
+        });
     });
 
     afterEach(async () => {
-        // Delete in dependency order to avoid constraint errors
-        await client.query('DELETE FROM player_tracks');
-        await client.query('DELETE FROM players');
-        await client.query('DELETE FROM games');
+        await runQuery(async (client) => {
+            // Delete in dependency order to avoid constraint errors
+            await client.query('DELETE FROM player_tracks');
+            await client.query('DELETE FROM players');
+            await client.query('DELETE FROM games');
+        });
     });
 
     describe('Game Operations', () => {

@@ -463,7 +463,7 @@ export class TrackDrawingManager {
 
         const hoverPoint = this.scene.cameras.main.getWorldPoint(pointer.x, pointer.y);
         const gridPoint = this.getGridPointAtPosition(hoverPoint.x, hoverPoint.y);
-        if (!gridPoint) {
+        if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             this.previewGraphics.clear();
             this.previewPath = [];
             return;
@@ -524,7 +524,18 @@ export class TrackDrawingManager {
         const HORIZONTAL_SPACING = MapRenderer.HORIZONTAL_SPACING;
         
         const approxRow = Math.floor((worldY - GRID_MARGIN) / VERTICAL_SPACING);
-        const approxCol = Math.floor((worldX - GRID_MARGIN) / HORIZONTAL_SPACING);  
+        
+        // For hexagonal grid, we need to account for the offset on odd rows
+        // First, calculate the column without offset
+        let approxCol = Math.floor((worldX - GRID_MARGIN) / HORIZONTAL_SPACING);
+        
+        // If we're on an odd row, we need to adjust for the horizontal offset
+        const isOffsetRow = approxRow % 2 === 1;
+        if (isOffsetRow) {
+            // On odd rows, points are shifted right by HORIZONTAL_SPACING / 2
+            // So we need to adjust the column calculation
+            approxCol = Math.floor((worldX - GRID_MARGIN - HORIZONTAL_SPACING / 2) / HORIZONTAL_SPACING);
+        }
 
         // Search in a 3x3 area around the approximate position
         for (let r = Math.max(0, approxRow - 1); r <= Math.min(this.gridPoints.length - 1, approxRow + 1); r++) {
@@ -533,6 +544,9 @@ export class TrackDrawingManager {
             for (let c = Math.max(0, approxCol - 1); c <= Math.min(this.gridPoints[r].length - 1, approxCol + 1); c++) {
                 const point = this.gridPoints[r][c];
                 if (!point) continue;
+
+                // Defensive: Skip points with missing terrain or empty id
+                if (typeof point.terrain === 'undefined' || point.id === '') continue;
 
                 // Skip water points
                 if (point.terrain === TerrainType.Water) continue;
@@ -679,6 +693,11 @@ export class TrackDrawingManager {
                         path.unshift(current); // Include the network node in the path
                         break;
                     }
+                }
+
+                // Defensive check: if any node in the path is water, return null
+                if (path.some(p => p.terrain === TerrainType.Water)) {
+                    return null;
                 }
 
                 // Validate that no segment in the path overlaps with other players' tracks
