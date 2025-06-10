@@ -128,8 +128,8 @@ export class MapRenderer {
         // Use city area config if available, otherwise use regular config
         let terrain = config?.terrain || TerrainType.Clear;
         const city = config?.city;
-        //this.writeGridPointLabel(config, isOffsetRow);
-        //this.writeGridPointCoordinates(x, y, col, row);
+       // this.writeGridPointLabel(config, isOffsetRow);
+       // this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
           const mapElement = MapElementFactory.createMapElement(

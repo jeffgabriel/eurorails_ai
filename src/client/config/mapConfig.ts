@@ -105,11 +105,11 @@ Object.entries(majorCityGroups).forEach(([name, group]) => {
   const row = center.GridY;
   
   const connectedPoints = group.slice(1, 7).map(outpost => ({ col: outpost.GridX, row: outpost.GridY }));
-
+  const { x, y } = calculateWorldCoordinates(col, row);
   points.push({
     id: center.id,
-    x: center.GridX,
-    y: center.GridY,
+    x: x,
+    y: y,
     col,
     row,
     terrain: TerrainType.MajorCity,
@@ -152,6 +152,25 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
 
   return ferryConnection;
 });
+
+// Create water points for all unassigned cells
+// This ensures every grid position has a corresponding GridPoint
+for (let row = 0; row <= gridRows; row++) {
+  for (let col = 0; col <= gridCols; col++) {
+    const key = `${col},${row}`;
+    if (!assignedCells.has(key)) {
+      const { x, y } = calculateWorldCoordinates(col, row);
+      points.push({
+        id: `water_${row}_${col}`,
+        x,
+        y,
+        col,
+        row,
+        terrain: TerrainType.Water,
+      });
+    }
+  }
+}
 
 // Use fixed width and height for the grid
 const width = gridCols;

@@ -395,5 +395,101 @@ describe('TrackDrawingManager', () => {
             expect(foundPoint?.row).toBe(targetRow);
             expect(foundPoint?.col).toBe(targetCol);
         });
+
+        it('should correctly find grid points on both even and odd rows', () => {
+            // Arrange: create mock scene and container
+            const mockScene = new MockScene();
+            const mockContainer = { add: jest.fn() };
+            
+            // Create a mock grid
+            const gridPoints: GridPoint[][] = [];
+            for (let row = 0; row < 10; row++) {
+                gridPoints[row] = [];
+                for (let col = 0; col < 10; col++) {
+                    const isOffsetRow = row % 2 === 1;
+                    const x = MapRenderer.GRID_MARGIN + col * MapRenderer.HORIZONTAL_SPACING + (isOffsetRow ? MapRenderer.HORIZONTAL_SPACING / 2 : 0);
+                    const y = MapRenderer.GRID_MARGIN + row * MapRenderer.VERTICAL_SPACING;
+                    gridPoints[row][col] = {
+                        row,
+                        col,
+                        x,
+                        y,
+                        terrain: TerrainType.Clear,
+                        id: `${col}-${row}`
+                    };
+                }
+            }
+            
+            const mockGameState = {
+                players: [{ id: 'player1', color: '#FF0000' }],
+                currentPlayerIndex: 0
+            } as GameState;
+            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            
+            // Test several points on even rows (0, 2, 4)
+            const evenRowTests = [
+                { row: 0, col: 0 },
+                { row: 0, col: 5 },
+                { row: 2, col: 3 },
+                { row: 4, col: 9 }
+            ];
+            
+            for (const test of evenRowTests) {
+                const worldX = MapRenderer.GRID_MARGIN + test.col * MapRenderer.HORIZONTAL_SPACING;
+                const worldY = MapRenderer.GRID_MARGIN + test.row * MapRenderer.VERTICAL_SPACING;
+                const foundPoint = manager.getGridPointAtPosition(worldX, worldY);
+                expect(foundPoint).not.toBeNull();
+                expect(foundPoint?.row).toBe(test.row);
+                expect(foundPoint?.col).toBe(test.col);
+            }
+            
+            // Test several points on odd rows (1, 3, 5)
+            const oddRowTests = [
+                { row: 1, col: 0 },
+                { row: 1, col: 5 },
+                { row: 3, col: 3 },
+                { row: 5, col: 9 }
+            ];
+            
+            for (const test of oddRowTests) {
+                const worldX = MapRenderer.GRID_MARGIN + test.col * MapRenderer.HORIZONTAL_SPACING + MapRenderer.HORIZONTAL_SPACING / 2;
+                const worldY = MapRenderer.GRID_MARGIN + test.row * MapRenderer.VERTICAL_SPACING;
+                const foundPoint = manager.getGridPointAtPosition(worldX, worldY);
+                expect(foundPoint).not.toBeNull();
+                expect(foundPoint?.row).toBe(test.row);
+                expect(foundPoint?.col).toBe(test.col);
+            }
+        });
+
+        it('should return null for water terrain points', () => {
+            // Arrange: create mock scene and container
+            const mockScene = new MockScene();
+            const mockContainer = { add: jest.fn() };
+            
+            // Create a mock grid with a water point
+            const gridPoints: GridPoint[][] = [];
+            gridPoints[0] = [
+                {
+                    row: 0,
+                    col: 0,
+                    x: MapRenderer.GRID_MARGIN,
+                    y: MapRenderer.GRID_MARGIN,
+                    terrain: TerrainType.Water,
+                    id: '0-0'
+                }
+            ];
+            
+            const mockGameState = {
+                players: [{ id: 'player1', color: '#FF0000' }],
+                currentPlayerIndex: 0
+            } as GameState;
+            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            
+            // Act: try to find the water point
+            const foundPoint = manager.getGridPointAtPosition(MapRenderer.GRID_MARGIN, MapRenderer.GRID_MARGIN);
+            
+            // Assert: should return null for water points
+            expect(foundPoint).toBeNull();
+        });
     });
 });
