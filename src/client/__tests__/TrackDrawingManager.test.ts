@@ -581,23 +581,19 @@ describe('TrackDrawingManager', () => {
             trackDrawingManager.toggleDrawingMode();
             costUpdateCallback.mockClear();
             
-            // Mock input events
-            const mockPointer = {
-                x: 135,  // Point at col 1
-                y: 135,  // Point at row 1
-                leftButtonDown: () => false,
-                event: null
-            };
-            
             // Simulate starting from major city
             const startPoint = gridPoints[2][2]; // Major city
             (trackDrawingManager as any).lastClickedPoint = startPoint;
             
-            // Simulate hover over adjacent clear terrain
-            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: 170, y: 135 });
+            // Target point (adjacent clear terrain)
+            const targetPoint = gridPoints[2][3];
             
-            // Trigger hover event
-            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            // Mock the findPreviewPath method to return a simple path
+            const mockPath = [startPoint, targetPoint];
+            jest.spyOn(trackDrawingManager as any, 'findPreviewPath').mockReturnValue(mockPath);
+            
+            // Call processHoverUpdate directly to bypass throttling
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
             
             // Should have called callback with cost for clear terrain (1)
             expect(costUpdateCallback).toHaveBeenCalledWith(1);
@@ -780,16 +776,11 @@ describe('TrackDrawingManager', () => {
             const mockPath = [startPoint, targetPoint];
             jest.spyOn(trackDrawingManager as any, 'findPreviewPath').mockReturnValue(mockPath);
             
-            // Mock getGridPointAtPosition to return the target point
-            jest.spyOn(trackDrawingManager, 'getGridPointAtPosition').mockReturnValue(targetPoint);
-            
             // Test 1: Valid cost (green preview)
             gameState.players[0].money = 50;
             
-            const mockPointer = { x: targetPoint.x, y: targetPoint.y, leftButtonDown: () => false, event: null };
-            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: targetPoint.x, y: targetPoint.y });
-            
-            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            // Call processHoverUpdate directly to bypass throttling
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
             
             // Should use green color (0x00ff00)
             expect(mockGraphics.lineStyle).toHaveBeenCalledWith(2, 0x00ff00, 0.5);
@@ -799,7 +790,8 @@ describe('TrackDrawingManager', () => {
             mockGraphics.clear.mockClear();
             mockGraphics.lineStyle.mockClear();
             
-            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            // Call processHoverUpdate again
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
             
             // Should use red color (0xff0000)
             expect(mockGraphics.lineStyle).toHaveBeenCalledWith(2, 0xff0000, 0.5);

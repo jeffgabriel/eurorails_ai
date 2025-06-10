@@ -12,6 +12,12 @@ export class TrackDrawingManager {
     private playerTracks: Map<string, PlayerTrackState>;
     private gridPoints: GridPoint[][];
     
+    // Performance optimization caches
+    private networkNodesCache: Map<string, Set<string>> = new Map();
+    private lastHoverPoint: { row: number; col: number } | null = null;
+    private pathCache: Map<string, GridPoint[] | null> = new Map();
+    private hoverThrottleTimer: number | null = null;
+    
     // Drawing mode state
     private isDrawingMode: boolean = false;
     private currentSegments: TrackSegment[] = [];
@@ -270,6 +276,11 @@ export class TrackDrawingManager {
         // Reset current session's drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
+        
+        // Clear performance caches
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
         
         // Reset the current session's build cost, but keep track of the accumulated cost for the turn
         // We'll get the current player's total build cost for the notification
@@ -295,6 +306,12 @@ export class TrackDrawingManager {
         this.scene.input.off('pointerdown', this.handleDrawingClick, this);
         this.scene.input.off('pointermove', this.handleDrawingHover, this);
 
+        // Clear any pending hover timer
+        if (this.hoverThrottleTimer !== null) {
+            window.clearTimeout(this.hoverThrottleTimer);
+            this.hoverThrottleTimer = null;
+        }
+
         // Clear the graphics objects and redraw all permanent tracks
         this.drawingGraphics.clear();
         this.previewGraphics.clear();
@@ -303,7 +320,12 @@ export class TrackDrawingManager {
         // Reset drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
         this.turnBuildCost = 0;
+        
+        // Clear performance caches
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
@@ -410,6 +432,9 @@ export class TrackDrawingManager {
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
                 
+                // Clear network cache since we added a segment
+                this.networkNodesCache.clear();
+                
                 // If we've reached a ferry port, create the ferry connection
                 if (toPoint.terrain === TerrainType.FerryPort && toPoint.ferryConnection) {
                     const ferryConnection = toPoint.ferryConnection;
@@ -479,14 +504,43 @@ export class TrackDrawingManager {
             return;
         }
 
+        // Skip if we're already hovering over the same point
+        if (this.lastHoverPoint && 
+            this.lastHoverPoint.row === gridPoint.row && 
+            this.lastHoverPoint.col === gridPoint.col) {
+            return; // No need to recalculate
+        }
+
+        // Throttle hover updates to reduce calculation frequency
+        if (this.hoverThrottleTimer !== null) {
+            return;
+        }
+
+        this.hoverThrottleTimer = window.setTimeout(() => {
+            this.hoverThrottleTimer = null;
+            this.processHoverUpdate(gridPoint);
+        }, 50); // 50ms throttle - 20 updates per second max
+    }
+
+    private processHoverUpdate(gridPoint: GridPoint): void {
+        this.lastHoverPoint = { row: gridPoint.row, col: gridPoint.col };
+
         // If the last clicked point is a ferry port, find the other end of the ferry
-        let startPoint = this.lastClickedPoint;
+        const initialStartPoint = this.lastClickedPoint;
+        if (!initialStartPoint) return; // Early return if no start point
+        
+        let startPoint: GridPoint = initialStartPoint;
         if (startPoint.terrain === TerrainType.FerryPort && startPoint.ferryConnection) {
+            const currentRow = startPoint.row;
+            const currentCol = startPoint.col;
             const otherEnd = startPoint.ferryConnection.connections.find(p => 
-                p.row !== startPoint.row || p.col !== startPoint.col
+                p.row !== currentRow || p.col !== currentCol
             );
             if (otherEnd) {
-                startPoint = otherEnd;
+                const otherEndPoint = this.gridPoints[otherEnd.row][otherEnd.col];
+                if (otherEndPoint) {
+                    startPoint = otherEndPoint;
+                }
             }
         }
 
@@ -632,13 +686,20 @@ export class TrackDrawingManager {
             return null;
         }
 
-        // Calculate search area with larger margins to cover potential network connections
-        const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 10;  // Add larger margin
-        const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 10;  // Add larger margin
-        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - maxRowDiff);
-        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + maxRowDiff);
-        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - maxColDiff);
-        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + maxColDiff);
+        // Limit preview distance to prevent expensive calculations
+        const distance = Math.abs(targetPoint.row - startPoint.row) + Math.abs(targetPoint.col - startPoint.col);
+        if (distance > 15) {  // Maximum Manhattan distance
+            return null;
+        }
+
+        // Calculate search area with smaller, more reasonable margins
+        const rowDiff = Math.abs(targetPoint.row - startPoint.row);
+        const colDiff = Math.abs(targetPoint.col - startPoint.col);
+        const margin = Math.min(5, Math.max(rowDiff, colDiff) / 2); // Adaptive margin, max 5
+        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - margin);
+        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + margin);
+        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - margin);
+        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + margin);
 
         // Initialize all points with infinity distance within the search area
         let pointCount = 0;
@@ -654,19 +715,25 @@ export class TrackDrawingManager {
             }
         }
 
-        // Build a set of all nodes in the player's network (for quick lookup)
-        const networkNodes = new Set<string>();
-        if (playerTrackState) {
-            for (const segment of playerTrackState.segments) {
-                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
-                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+        // Get cached network nodes or build them
+        const cacheKey = `${currentPlayer.id}_${this.currentSegments.length}`;
+        let networkNodes = this.networkNodesCache.get(cacheKey);
+        
+        if (!networkNodes) {
+            networkNodes = new Set<string>();
+            if (playerTrackState) {
+                for (const segment of playerTrackState.segments) {
+                    networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                    networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+                }
+                
+                // Also add current segments being built in this session
+                for (const segment of this.currentSegments) {
+                    networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                    networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+                }
             }
-            
-            // Also add current segments being built in this session
-            for (const segment of this.currentSegments) {
-                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
-                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
-            }
+            this.networkNodesCache.set(cacheKey, networkNodes);
         }
 
         // Set distance to 0 for the clicked point and all nodes in the player's network
