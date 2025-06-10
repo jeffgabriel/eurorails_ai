@@ -1,4 +1,4 @@
-import { FerryConnection } from "@/shared/types/GameTypes";
+import { FerryConnection } from "../../../shared/types/GameTypes";
 import { BaseMapElement } from "./MapElement";
 import { MapRenderer } from "../MapRenderer";
 

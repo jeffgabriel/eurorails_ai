@@ -399,7 +399,7 @@ describe('TrackDrawingManager', () => {
         it('should correctly find grid points on both even and odd rows', () => {
             // Arrange: create mock scene and container
             const mockScene = new MockScene();
-            const mockContainer = { add: jest.fn() };
+            const mockContainer = { add: jest.fn() } as unknown as Phaser.GameObjects.Container;
             
             // Create a mock grid
             const gridPoints: GridPoint[][] = [];
@@ -424,7 +424,7 @@ describe('TrackDrawingManager', () => {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
             } as GameState;
-            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            const manager = new TrackDrawingManager(mockScene as any, mockContainer, mockGameState, gridPoints);
             
             // Test several points on even rows (0, 2, 4)
             const evenRowTests = [
@@ -464,7 +464,7 @@ describe('TrackDrawingManager', () => {
         it('should return null for water terrain points', () => {
             // Arrange: create mock scene and container
             const mockScene = new MockScene();
-            const mockContainer = { add: jest.fn() };
+            const mockContainer = { add: jest.fn() } as unknown as Phaser.GameObjects.Container;
             
             // Create a mock grid with a water point
             const gridPoints: GridPoint[][] = [];
@@ -483,7 +483,7 @@ describe('TrackDrawingManager', () => {
                 players: [{ id: 'player1', color: '#FF0000' }],
                 currentPlayerIndex: 0
             } as GameState;
-            const manager = new TrackDrawingManager(mockScene, mockContainer, mockGameState, gridPoints);
+            const manager = new TrackDrawingManager(mockScene as any, mockContainer, mockGameState, gridPoints);
             
             // Act: try to find the water point
             const foundPoint = manager.getGridPointAtPosition(MapRenderer.GRID_MARGIN, MapRenderer.GRID_MARGIN);

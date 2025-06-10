@@ -44,6 +44,15 @@ export class TrackDrawingManager {
     // Callback for cost updates
     private onCostUpdateCallback: ((cost: number) => void) | null = null;
     
+    // Add this property to track the last displayed cost
+    private lastDisplayedCost: number = 0;
+    
+    // Add this property to track the last path key
+    private lastPathKey: string = '';
+    
+    // Add this property to track pending hover points
+    private pendingHoverPoint: GridPoint | null = null;
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -483,7 +492,7 @@ export class TrackDrawingManager {
         if (!this.isDrawingMode || !this.lastClickedPoint) {
             this.previewGraphics.clear();
             this.previewPath = [];
-            this.updateCostDisplayToCommitted();
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -492,7 +501,7 @@ export class TrackDrawingManager {
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             this.previewGraphics.clear();
             this.previewPath = [];
-            this.updateCostDisplayToCommitted();
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -500,7 +509,7 @@ export class TrackDrawingManager {
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
             this.previewGraphics.clear();
             this.previewPath = [];
-            this.updateCostDisplayToCommitted();
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -511,6 +520,12 @@ export class TrackDrawingManager {
             return; // No need to recalculate
         }
 
+        // Update last hover point immediately to ensure smooth tracking
+        this.lastHoverPoint = { row: gridPoint.row, col: gridPoint.col };
+
+        // Store the most recent hover point for processing
+        this.pendingHoverPoint = gridPoint;
+
         // Throttle hover updates to reduce calculation frequency
         if (this.hoverThrottleTimer !== null) {
             return;
@@ -518,16 +533,17 @@ export class TrackDrawingManager {
 
         this.hoverThrottleTimer = window.setTimeout(() => {
             this.hoverThrottleTimer = null;
-            this.processHoverUpdate(gridPoint);
-        }, 50); // 50ms throttle - 20 updates per second max
+            if (this.pendingHoverPoint) {
+                this.processHoverUpdate(this.pendingHoverPoint);
+                this.pendingHoverPoint = null;
+            }
+        }, 16); // Reduced to ~60fps for smoother updates
     }
 
     private processHoverUpdate(gridPoint: GridPoint): void {
-        this.lastHoverPoint = { row: gridPoint.row, col: gridPoint.col };
-
         // If the last clicked point is a ferry port, find the other end of the ferry
         const initialStartPoint = this.lastClickedPoint;
-        if (!initialStartPoint) return; // Early return if no start point
+        if (!initialStartPoint) return;
         
         let startPoint: GridPoint = initialStartPoint;
         if (startPoint.terrain === TerrainType.FerryPort && startPoint.ferryConnection) {
@@ -550,7 +566,7 @@ export class TrackDrawingManager {
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
             this.previewPath = [];
-            this.updateCostDisplayToCommitted();
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -581,9 +597,9 @@ export class TrackDrawingManager {
         const totalCost = previousSessionsCost + totalPreviewCost;
         
         // Notify about the preview cost
-        if (this.onCostUpdateCallback) {
-            this.onCostUpdateCallback(totalCost);
-        }
+        // if (this.onCostUpdateCallback) {
+        //     this.onCostUpdateCallback(totalCost);
+        // }
 
         // Draw the preview path with color based on validity
         this.previewGraphics.clear();
@@ -696,10 +712,10 @@ export class TrackDrawingManager {
         const rowDiff = Math.abs(targetPoint.row - startPoint.row);
         const colDiff = Math.abs(targetPoint.col - startPoint.col);
         const margin = Math.min(5, Math.max(rowDiff, colDiff) / 2); // Adaptive margin, max 5
-        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - margin);
-        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + margin);
-        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - margin);
-        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + margin);
+        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - Math.floor(margin));
+        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + Math.ceil(margin));
+        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - Math.floor(margin));
+        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + Math.ceil(margin));
 
         // Initialize all points with infinity distance within the search area
         let pointCount = 0;
@@ -1165,12 +1181,21 @@ export class TrackDrawingManager {
             return;
         }
         
+        // Only update if we have a valid preview path
+        if (this.previewPath.length === 0) {
+            return;
+        }
+        
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
         const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
         const totalCommittedCost = previousSessionsCost + this.turnBuildCost;
         
-        this.onCostUpdateCallback(totalCommittedCost);
+        // Only call the callback if the cost has actually changed
+        if (this.lastDisplayedCost !== totalCommittedCost) {
+            this.lastDisplayedCost = totalCommittedCost;
+            this.onCostUpdateCallback(totalCommittedCost);
+        }
     }
 
     // Add this new helper method

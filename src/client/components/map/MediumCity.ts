@@ -19,7 +19,7 @@ export class MediumCity extends City {
     const scalerRadius = 2.7;
     const scalerX = 1.35;
     const scalerY = 1.35;
-    const radius = this.CITY_RADIUS[this.cityData.type];
+    const radius = this.CITY_RADIUS[this.cityData.type as keyof typeof this.CITY_RADIUS] || 8;
     graphics.fillRect(
       this.x - radius * scalerX,
       this.y - radius * scalerY,
