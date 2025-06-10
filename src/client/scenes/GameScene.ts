@@ -175,9 +175,14 @@ export class GameScene extends Phaser.Scene {
 
     // Register for track cost updates
     this.trackManager.onCostUpdate((cost) => {
-      // Update the UI to show the current track cost
+      // Always update the UI to show the current track cost during drawing mode
       if (this.trackManager.isInDrawingMode) {
-        this.uiManager.setupPlayerHand(true, cost);
+        // Get the current player to check budget constraints
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        const totalCost = previousSessionsCost + cost;
+        
+        this.uiManager.setupPlayerHand(true, totalCost);
       }
     });
 

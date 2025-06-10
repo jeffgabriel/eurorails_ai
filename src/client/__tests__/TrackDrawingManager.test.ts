@@ -492,4 +492,317 @@ describe('TrackDrawingManager', () => {
             expect(foundPoint).toBeNull();
         });
     });
+
+    describe('Real-time Cost Display', () => {
+        let scene: MockScene;
+        let mapContainer: any;
+        let gameState: GameState;
+        let gridPoints: GridPoint[][];
+        let trackDrawingManager: TrackDrawingManager;
+        let costUpdateCallback: jest.Mock;
+
+        beforeEach(() => {
+            // Set up our mocks
+            scene = new MockScene();
+            mapContainer = {
+                add: jest.fn()
+            };
+            gameState = {
+                id: 'test-game-id',
+                players: [
+                    { 
+                        id: 'player1', 
+                        name: 'Player 1', 
+                        color: '#FF0000', 
+                        money: 50, 
+                        trainType: 'Freight',
+                        turnNumber: 1,
+                        trainState: {
+                            position: {x: 100, y: 100, row: 1, col: 1},
+                            movementHistory: [],
+                            remainingMovement: 9,
+                            loads: []
+                        },
+                        hand: []
+                    }   
+                ],
+                currentPlayerIndex: 0,
+                status: 'active',
+                maxPlayers: 6
+            };
+            
+            // Create a simple 5x5 grid of points for testing
+            gridPoints = [];
+            for (let row = 0; row < 5; row++) {
+                gridPoints[row] = [];
+                for (let col = 0; col < 5; col++) {
+                    const terrain = row === 2 && col === 2 ? TerrainType.MajorCity : TerrainType.Clear;
+                    gridPoints[row][col] = {
+                        id: `${row}-${col}`,
+                        x: col * 35 + 100,
+                        y: row * 35 + 100,
+                        row,
+                        col,
+                        terrain: terrain
+                    };
+                    
+                    // Add city property for major city
+                    if (terrain === TerrainType.MajorCity) {
+                        gridPoints[row][col].city = {
+                            type: TerrainType.MajorCity,
+                            name: 'Test City',
+                            availableLoads: []
+                        };
+                    }
+                }
+            }
+
+            // Create the TrackDrawingManager instance
+            trackDrawingManager = new TrackDrawingManager(scene as any, mapContainer, gameState, gridPoints);
+            
+            // Create mock callback
+            costUpdateCallback = jest.fn();
+        });
+
+        it('should register and call cost update callback', () => {
+            // Register callback
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            
+            // Toggle drawing mode on
+            trackDrawingManager.toggleDrawingMode();
+            
+            // Verify callback was called with initial cost (0 for new session)
+            expect(costUpdateCallback).toHaveBeenCalledWith(0);
+        });
+
+        it('should update cost during preview hover', () => {
+            // Setup: Register callback and enter drawing mode
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            trackDrawingManager.toggleDrawingMode();
+            costUpdateCallback.mockClear();
+            
+            // Mock input events
+            const mockPointer = {
+                x: 135,  // Point at col 1
+                y: 135,  // Point at row 1
+                leftButtonDown: () => false,
+                event: null
+            };
+            
+            // Simulate starting from major city
+            const startPoint = gridPoints[2][2]; // Major city
+            (trackDrawingManager as any).lastClickedPoint = startPoint;
+            
+            // Simulate hover over adjacent clear terrain
+            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: 170, y: 135 });
+            
+            // Trigger hover event
+            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            
+            // Should have called callback with cost for clear terrain (1)
+            expect(costUpdateCallback).toHaveBeenCalledWith(1);
+        });
+
+        it('should accumulate costs across multiple drawing sessions', () => {
+            // Setup: Register callback
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            
+            // Simulate previous session cost in player track state
+            const playerTrackState = {
+                playerId: 'player1',
+                gameId: 'test-game-id',
+                segments: [],
+                totalCost: 0,
+                turnBuildCost: 10, // Previous session cost
+                lastBuildTimestamp: new Date()
+            };
+            (trackDrawingManager as any).playerTracks.set('player1', playerTrackState);
+            
+            // Enter drawing mode
+            trackDrawingManager.toggleDrawingMode();
+            
+            // Should call callback with accumulated cost (10 from previous session)
+            expect(costUpdateCallback).toHaveBeenCalledWith(10);
+        });
+
+        it('should show correct total cost when adding segments', () => {
+            // Setup: Register callback and enter drawing mode
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            
+            // Mock fetch for saving tracks
+            global.fetch = jest.fn().mockResolvedValue({
+                ok: true,
+                json: async () => ({})
+            });
+            
+            // Set up player track state with previous build cost
+            const playerTrackState = {
+                playerId: 'player1',
+                gameId: 'test-game-id',
+                segments: [],
+                totalCost: 0,
+                turnBuildCost: 15, // Previous session cost
+                lastBuildTimestamp: new Date()
+            };
+            (trackDrawingManager as any).playerTracks.set('player1', playerTrackState);
+            
+            trackDrawingManager.toggleDrawingMode();
+            costUpdateCallback.mockClear();
+            
+            // Simulate click on major city to start
+            const majorCityPoint = gridPoints[2][2];
+            
+            // Mock getGridPointAtPosition to return the major city point
+            jest.spyOn(trackDrawingManager, 'getGridPointAtPosition')
+                .mockReturnValueOnce(majorCityPoint);
+            
+            const mockPointer = {
+                x: majorCityPoint.x,
+                y: majorCityPoint.y,
+                leftButtonDown: () => true,
+                event: null
+            };
+            
+            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
+                x: majorCityPoint.x, 
+                y: majorCityPoint.y 
+            });
+            
+            // First click to set starting point
+            (trackDrawingManager as any).handleDrawingClick(mockPointer);
+            
+            // Now set up for second click on adjacent point
+            const targetPoint = gridPoints[2][3]; // Adjacent clear terrain
+            
+            // Mock getGridPointAtPosition to return the target point
+            jest.spyOn(trackDrawingManager, 'getGridPointAtPosition')
+                .mockReturnValueOnce(targetPoint);
+            
+            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
+                x: targetPoint.x, 
+                y: targetPoint.y 
+            });
+            
+            // Set up preview path
+            (trackDrawingManager as any).previewPath = [majorCityPoint, targetPoint];
+            
+            // Second click to create segment
+            (trackDrawingManager as any).handleDrawingClick(mockPointer);
+            
+            // Should update with previous (15) + new segment cost (1 for clear terrain) = 16
+            expect(costUpdateCallback).toHaveBeenCalledWith(16);
+        });
+
+        it('should reset cost display when hovering over invalid paths', () => {
+            // Setup: Register callback and enter drawing mode
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            
+            // Set accumulated cost
+            const playerTrackState = {
+                playerId: 'player1',
+                gameId: 'test-game-id',
+                segments: [],
+                totalCost: 0,
+                turnBuildCost: 20,
+                lastBuildTimestamp: new Date()
+            };
+            (trackDrawingManager as any).playerTracks.set('player1', playerTrackState);
+            
+            trackDrawingManager.toggleDrawingMode();
+            (trackDrawingManager as any).lastClickedPoint = gridPoints[2][2];
+            (trackDrawingManager as any).turnBuildCost = 5; // Current session cost
+            costUpdateCallback.mockClear();
+            
+            // Hover over water point (invalid)
+            const waterPoint = {
+                id: 'water',
+                x: 300,
+                y: 300,
+                row: 8,
+                col: 8,
+                terrain: TerrainType.Water
+            };
+            
+            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: 300, y: 300 });
+            
+            // Mock getGridPointAtPosition to return water point
+            jest.spyOn(trackDrawingManager, 'getGridPointAtPosition').mockReturnValue(waterPoint);
+            
+            const mockPointer = { x: 300, y: 300, leftButtonDown: () => false, event: null };
+            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            
+            // Should reset to committed cost only (20 + 5 = 25)
+            expect(costUpdateCallback).toHaveBeenCalledWith(25);
+        });
+
+        it('should validate cost against player money and turn limit', () => {
+            // Setup: Player with limited money
+            gameState.players[0].money = 15;
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            
+            // Mock isValidCost to test the logic
+            const isValidCost = (trackDrawingManager as any).isValidCost.bind(trackDrawingManager);
+            
+            // Test 1: Within both budget and money
+            expect(isValidCost(10)).toBe(true);
+            
+            // Test 2: Over player money
+            expect(isValidCost(16)).toBe(false);
+            
+            // Test 3: Over turn limit (20M)
+            gameState.players[0].money = 100;
+            expect(isValidCost(21)).toBe(false);
+        });
+
+        it('should show different preview colors based on cost validity', () => {
+            // Setup graphics mock to track color changes
+            const mockGraphics = {
+                clear: jest.fn(),
+                lineStyle: jest.fn(),
+                beginPath: jest.fn(),
+                moveTo: jest.fn(),
+                lineTo: jest.fn(),
+                strokePath: jest.fn()
+            };
+            (trackDrawingManager as any).previewGraphics = mockGraphics;
+            
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            trackDrawingManager.toggleDrawingMode();
+            
+            // Set starting point (major city)
+            const startPoint = gridPoints[2][2];
+            (trackDrawingManager as any).lastClickedPoint = startPoint;
+            
+            // Target point (adjacent clear terrain)
+            const targetPoint = gridPoints[2][3];
+            
+            // Mock the findPreviewPath method to return a valid path
+            const mockPath = [startPoint, targetPoint];
+            jest.spyOn(trackDrawingManager as any, 'findPreviewPath').mockReturnValue(mockPath);
+            
+            // Mock getGridPointAtPosition to return the target point
+            jest.spyOn(trackDrawingManager, 'getGridPointAtPosition').mockReturnValue(targetPoint);
+            
+            // Test 1: Valid cost (green preview)
+            gameState.players[0].money = 50;
+            
+            const mockPointer = { x: targetPoint.x, y: targetPoint.y, leftButtonDown: () => false, event: null };
+            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: targetPoint.x, y: targetPoint.y });
+            
+            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            
+            // Should use green color (0x00ff00)
+            expect(mockGraphics.lineStyle).toHaveBeenCalledWith(2, 0x00ff00, 0.5);
+            
+            // Test 2: Invalid cost (red preview) - player has insufficient money
+            gameState.players[0].money = 0.5; // Not enough money for even 1 ECU cost
+            mockGraphics.clear.mockClear();
+            mockGraphics.lineStyle.mockClear();
+            
+            (trackDrawingManager as any).handleDrawingHover(mockPointer);
+            
+            // Should use red color (0xff0000)
+            expect(mockGraphics.lineStyle).toHaveBeenCalledWith(2, 0xff0000, 0.5);
+        });
+    });
 });

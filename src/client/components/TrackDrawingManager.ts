@@ -458,6 +458,7 @@ export class TrackDrawingManager {
         if (!this.isDrawingMode || !this.lastClickedPoint) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -466,6 +467,7 @@ export class TrackDrawingManager {
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -473,6 +475,7 @@ export class TrackDrawingManager {
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -493,15 +496,49 @@ export class TrackDrawingManager {
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            this.updateCostDisplayToCommitted();
             return;
         }
 
         // Store the valid path
         this.previewPath = path;
 
-        // Draw the preview path
+        // Calculate the cost of the preview path
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        let previewCost = 0;
+        
+        for (let i = 0; i < path.length - 1; i++) {
+            const fromPoint = path[i];
+            const toPoint = path[i + 1];
+            
+            // Skip cost for existing segments
+            if (!this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
+                const segmentCost = Math.floor(this.calculateTrackCost(fromPoint, toPoint));
+                previewCost += segmentCost;
+            }
+        }
+        
+        // Update the cost display with current session cost + preview cost
+        const totalPreviewCost = this.turnBuildCost + previewCost;
+        
+        // Get accumulated cost from previous sessions
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalCost = previousSessionsCost + totalPreviewCost;
+        
+        // Notify about the preview cost
+        if (this.onCostUpdateCallback) {
+            this.onCostUpdateCallback(totalCost);
+        }
+
+        // Draw the preview path with color based on validity
         this.previewGraphics.clear();
-        this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
+        
+        // Check if cost is valid
+        const isValidCost = this.isValidCost(previewCost);
+        const lineColor = isValidCost ? 0x00ff00 : 0xff0000; // Green if valid, red if not
+        
+        this.previewGraphics.lineStyle(2, lineColor, 0.5);
         
         // Draw lines connecting all points in the path
         this.previewGraphics.beginPath();
@@ -1053,6 +1090,20 @@ export class TrackDrawingManager {
     // Method to update grid points after initialization
     public updateGridPoints(gridPoints: GridPoint[][]): void {
         this.gridPoints = gridPoints;
+    }
+    
+    // Helper method to update cost display to show only committed costs
+    private updateCostDisplayToCommitted(): void {
+        if (!this.isDrawingMode || !this.onCostUpdateCallback) {
+            return;
+        }
+        
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalCommittedCost = previousSessionsCost + this.turnBuildCost;
+        
+        this.onCostUpdateCallback(totalCommittedCost);
     }
 
     // Add this new helper method
