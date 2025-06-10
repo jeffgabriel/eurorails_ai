@@ -179,7 +179,7 @@ export class GameScene extends Phaser.Scene {
       if (this.trackManager.isInDrawingMode) {
         // Get the current player to check budget constraints
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        const previousSessionsCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+        const previousSessionsCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
         const totalCost = previousSessionsCost + cost;
         
         this.uiManager.setupPlayerHand(true, totalCost);
@@ -275,9 +275,7 @@ export class GameScene extends Phaser.Scene {
     // Get the current cost to display regardless of drawing mode
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
-    const previousSessionsCost = this.trackManager.getLastBuildCost(
-      currentPlayer.id
-    );
+    const previousSessionsCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
     const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
     const totalCost = previousSessionsCost + currentSessionCost;
 
@@ -291,7 +289,7 @@ export class GameScene extends Phaser.Scene {
       this.gameState.players[this.gameState.currentPlayerIndex];
 
     // Check if there was a build cost from the player's previous activity
-    let buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+    let buildCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
 
     // If in drawing mode, finalize track drawing first by toggling it off
     // This will handle saving tracks and cleanup through TrackDrawingManager
@@ -301,7 +299,7 @@ export class GameScene extends Phaser.Scene {
       this.uiManager.setDrawingMode(isDrawingMode);
 
       // Get the updated build cost after saving track state
-      buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+      buildCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
     }
 
     // Deduct track building cost from player's money if there was any building
