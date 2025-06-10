@@ -155,8 +155,8 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
 
 // Create water points for all unassigned cells
 // This ensures every grid position has a corresponding GridPoint
-for (let row = 0; row <= gridRows; row++) {
-  for (let col = 0; col <= gridCols; col++) {
+for (let row = 0; row < gridRows; row++) {
+  for (let col = 0; col < gridCols; col++) {
     const key = `${col},${row}`;
     if (!assignedCells.has(key)) {
       const { x, y } = calculateWorldCoordinates(col, row);

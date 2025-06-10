@@ -125,9 +125,14 @@ export class MapRenderer {
 
         let config = terrainLookup.get(`${row},${col}`);
 
-        // Use city area config if available, otherwise use regular config
-        let terrain = config?.terrain || TerrainType.Clear;
-        const city = config?.city;
+        // All grid positions should have a config now (including water)
+        if (!config) {
+          console.warn(`No config found for grid position ${row},${col}`);
+          continue;
+        }
+        
+        const terrain = config.terrain;
+        const city = config.city;
        // this.writeGridPointLabel(config, isOffsetRow);
        // this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
