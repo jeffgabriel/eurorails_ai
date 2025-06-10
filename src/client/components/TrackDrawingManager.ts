@@ -53,6 +53,13 @@ export class TrackDrawingManager {
     // Add this property to track pending hover points
     private pendingHoverPoint: GridPoint | null = null;
     
+    // Add cost update queue
+    private costUpdateQueue: {
+        path: GridPoint[],
+        cost: number,
+        timestamp: number
+    } | null = null;
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -75,8 +82,56 @@ export class TrackDrawingManager {
         this.previewGraphics = this.scene.add.graphics();
         this.previewGraphics.setDepth(2);  // Set higher depth to appear above tracks
         this.mapContainer.add(this.previewGraphics);
+
+        // Setup cost update handler
+        this.setupCostUpdateHandler();
     }
     
+    private setupCostUpdateHandler(): void {
+        this.scene.events.on('update', () => {
+            if (this.costUpdateQueue) {
+                const now = Date.now();
+                // Only update if we've been hovering for at least 100ms
+                if (now - this.costUpdateQueue.timestamp > 100) {
+                    this.processCostUpdate();
+                }
+            }
+        });
+    }
+
+    private processCostUpdate(): void {
+        if (!this.costUpdateQueue || !this.onCostUpdateCallback) return;
+
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalCost = previousSessionsCost + this.costUpdateQueue.cost;
+
+        // Only update if the cost has changed
+        if (this.lastDisplayedCost !== totalCost) {
+            this.lastDisplayedCost = totalCost;
+            this.onCostUpdateCallback(totalCost);
+        }
+
+        // Clear the queue
+        this.costUpdateQueue = null;
+    }
+
+    private queueCostUpdate(path: GridPoint[], cost: number): void {
+        // Generate a unique key for this path
+        const pathKey = path.map(p => `${p.row},${p.col}`).join('|');
+        
+        // Only queue if the path is different from the last one
+        if (pathKey !== this.lastPathKey) {
+            this.lastPathKey = pathKey;
+            this.costUpdateQueue = {
+                path,
+                cost,
+                timestamp: Date.now()
+            };
+        }
+    }
+
     // Method to register a callback when the track cost changes
     public onCostUpdate(callback: (cost: number) => void): void {
         this.onCostUpdateCallback = callback;
@@ -335,6 +390,10 @@ export class TrackDrawingManager {
         // Clear performance caches
         this.networkNodesCache.clear();
         this.pathCache.clear();
+
+        // Clear cost update queue
+        this.costUpdateQueue = null;
+        this.lastPathKey = '';
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
@@ -566,7 +625,6 @@ export class TrackDrawingManager {
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
             this.previewPath = [];
-            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -589,17 +647,8 @@ export class TrackDrawingManager {
             }
         }
         
-        // Update the cost display with current session cost + preview cost
-        const totalPreviewCost = this.turnBuildCost + previewCost;
-        
-        // Get accumulated cost from previous sessions
-        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
-        const totalCost = previousSessionsCost + totalPreviewCost;
-        
-        // Notify about the preview cost
-        // if (this.onCostUpdateCallback) {
-        //     this.onCostUpdateCallback(totalCost);
-        // }
+        // Queue the cost update instead of updating immediately
+        this.queueCostUpdate(path, previewCost);
 
         // Draw the preview path with color based on validity
         this.previewGraphics.clear();
