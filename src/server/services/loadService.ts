@@ -84,13 +84,14 @@ export class LoadService {
 
       // Check if this is a dropped load being picked up
       await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND is_dropped = true',
-        [city, loadType]
+        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
+        [city, loadType, gameId]
       );
 
-      // Get updated dropped loads
+      // Get updated dropped loads for this game
       const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true'
+        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
+        [gameId]
       );
 
       await client.query('COMMIT');
@@ -115,7 +116,7 @@ export class LoadService {
     }
   }
 
-  public async returnLoad(city: string, loadType: LoadType): Promise<{
+  public async returnLoad(city: string, loadType: LoadType, gameId: string): Promise<{
     loadState: LoadState;
     droppedLoads: Array<{ city_name: string; type: LoadType }>;
   }> {
@@ -125,13 +126,14 @@ export class LoadService {
 
       // If this was a dropped load, mark it as no longer dropped
       await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND is_dropped = true',
-        [city, loadType]
+        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
+        [city, loadType, gameId]
       );
 
-      // Get updated dropped loads
+      // Get updated dropped loads for this game
       const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true'
+        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
+        [gameId]
       );
 
       await client.query('COMMIT');
@@ -164,10 +166,10 @@ export class LoadService {
     try {
       await client.query('BEGIN');
 
-      // First, mark any existing dropped load in this city as returned
+      // First, mark any existing dropped load in this city as returned (for this game)
       await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND is_dropped = true',
-        [city]
+        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND game_id = $2 AND is_dropped = true',
+        [city, gameId]
       );
 
       // Then create the new dropped load record
@@ -176,9 +178,10 @@ export class LoadService {
         [gameId, loadType, city]
       );
 
-      // Get updated dropped loads
+      // Get updated dropped loads for this game
       const droppedLoadsResult = await client.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true'
+        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
+        [gameId]
       );
 
       await client.query('COMMIT');
@@ -203,10 +206,11 @@ export class LoadService {
     }
   }
 
-  public async getDroppedLoads(): Promise<Array<{ city_name: string; type: LoadType }>> {
+  public async getDroppedLoads(gameId: string): Promise<Array<{ city_name: string; type: LoadType }>> {
     try {
       const result = await db.query(
-        'SELECT city_name, type FROM load_chips WHERE is_dropped = true'
+        'SELECT city_name, type FROM load_chips WHERE is_dropped = true AND game_id = $1',
+        [gameId]
       );
       return result.rows;
     } catch (error) {

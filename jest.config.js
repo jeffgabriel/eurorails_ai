@@ -2,6 +2,7 @@
 module.exports = {
   verbose: true,
   testTimeout: 10000,
+  maxWorkers: 1,  // Force serial execution globally to prevent database deadlocks
   transform: {
     '^.+\\.(ts|tsx)$': [
       'ts-jest',

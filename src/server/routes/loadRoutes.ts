@@ -25,9 +25,15 @@ const getLoadState: RequestHandler = async (_req: Request, res: Response) => {
 };
 
 // Get all dropped loads
-const getDroppedLoads: RequestHandler = async (_req: Request, res: Response) => {
+const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
+  const gameId = req.session.gameId;
+  
   try {
-    const droppedLoads = await loadService.getDroppedLoads();
+    if (!gameId) {
+      return res.status(400).json({ error: 'No game ID in session' });
+    }
+    
+    const droppedLoads = await loadService.getDroppedLoads(gameId);
     res.json(droppedLoads);
   } catch (error) {
     console.error('Error getting dropped loads:', error);
@@ -56,9 +62,14 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
 // Handle load return to tray
 const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => {
   const { loadType, city } = req.body;
+  const gameId = req.session.gameId;
   
   try {
-    const result = await loadService.returnLoad(city, loadType);
+    if (!gameId) {
+      return res.status(400).json({ error: 'No game ID in session' });
+    }
+    
+    const result = await loadService.returnLoad(city, loadType, gameId);
     res.json(result);
   } catch (error) {
     console.error('Error returning load:', error);

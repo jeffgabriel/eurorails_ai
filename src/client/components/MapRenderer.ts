@@ -112,12 +112,12 @@ export class MapRenderer {
     const ferryPortIcons = this.scene.add.container();
     ferryPortIcons.setName(MapRenderer.FERRY_ICONS_CONTAINER_NAME);
 
-    for (let row = 0; row <= mapConfig.height; row++) {
+    for (let row = 0; row < mapConfig.height; row++) {
       this.gridPoints[row] = [];
       this.mapElements[row] = [];
       const isOffsetRow = row % 2 === 1;
 
-      for (let col = 0; col <= mapConfig.width; col++) {
+      for (let col = 0; col < mapConfig.width; col++) {
         const x =
           col * MapRenderer.HORIZONTAL_SPACING +
           (isOffsetRow ? MapRenderer.HORIZONTAL_SPACING / 2 : 0);
