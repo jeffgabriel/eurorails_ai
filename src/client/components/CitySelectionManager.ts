@@ -7,6 +7,7 @@ export class CitySelectionManager {
   private gameState: GameState;
   private mapRenderer: MapRenderer;
   private onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>;
+  private dropdownDomElement: Phaser.GameObjects.DOMElement | null = null;
   
   constructor(
     scene: Phaser.Scene,
@@ -40,7 +41,7 @@ export class CitySelectionManager {
       return;
     }
 
-    // Remove any existing city selection dropdowns
+    // Remove any existing dropdown DOM element
     this.cleanupCityDropdowns();
 
     // Find all major cities from the grid
@@ -62,18 +63,17 @@ export class CitySelectionManager {
       ).values(),
     ];
 
-    // Create dropdown (using HTML overlay)
+    // Create dropdown (as a DOM element)
     const dropdown = document.createElement("select");
-    dropdown.className = "city-selection-dropdown"; // Add class for easy cleanup
-    dropdown.style.position = "absolute";
-    dropdown.style.left = "820px"; // Align with player info
-    dropdown.style.top = `${this.scene.scale.height - 140}px`; // Fixed position aligned with player info
+    dropdown.className = "city-selection-dropdown";
     dropdown.style.width = "180px";
     dropdown.style.padding = "5px";
     dropdown.style.backgroundColor = "#444444";
     dropdown.style.color = "#ffffff";
     dropdown.style.border = "1px solid #666666";
-    dropdown.style.zIndex = "1000"; // Ensure it appears above other elements
+    dropdown.style.fontSize = "16px";
+    dropdown.style.fontFamily = "Arial, sans-serif";
+    dropdown.style.pointerEvents = "auto";
 
     // Add prompt option
     const promptOption = document.createElement("option");
@@ -119,15 +119,18 @@ export class CitySelectionManager {
       // Note: No longer removing dropdown here - it will be removed when track is built
     };
 
-    document.body.appendChild(dropdown);
+    // Add the dropdown as a Phaser DOM element at the player info area (x=820, y=hand area)
+    const handY = this.scene.scale.height - 280 + 20; // 20px from top of hand area
+    this.dropdownDomElement = this.scene.add.dom(820, handY, dropdown);
+    this.dropdownDomElement.setOrigin(0, 0);
+    this.dropdownDomElement.setDepth(1000); // Ensure it appears above other elements
   }
   
   public cleanupCityDropdowns(): void {
-    const existingDropdowns = document.querySelectorAll(
-      ".city-selection-dropdown"
-    );
-    existingDropdowns.forEach((dropdown) => {
-      document.body.removeChild(dropdown);
-    });
+    // Remove dropdown DOM element from scene if present
+    if (this.dropdownDomElement) {
+      this.dropdownDomElement.destroy();
+      this.dropdownDomElement = null;
+    }
   }
 }

@@ -60,6 +60,9 @@ export class TrackDrawingManager {
         timestamp: number
     } | null = null;
     
+    // Add property to store the update event handler
+    private updateEventHandler: (() => void) | null = null;
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -88,7 +91,8 @@ export class TrackDrawingManager {
     }
     
     private setupCostUpdateHandler(): void {
-        this.scene.events.on('update', () => {
+        // Store the handler function so we can remove it later
+        this.updateEventHandler = () => {
             if (this.costUpdateQueue) {
                 const now = Date.now();
                 // Only update if we've been hovering for at least 100ms
@@ -96,7 +100,9 @@ export class TrackDrawingManager {
                     this.processCostUpdate();
                 }
             }
-        });
+        };
+        
+        this.scene.events.on('update', this.updateEventHandler);
     }
 
     private processCostUpdate(): void {
@@ -1266,5 +1272,47 @@ export class TrackDrawingManager {
             }
         }
         return false;
+    }
+
+    // Add cleanup method
+    public cleanup(): void {
+        if (this.updateEventHandler) {
+            this.scene.events.off('update', this.updateEventHandler);
+            this.updateEventHandler = null;
+        }
+        
+        // Clear any pending hover timer
+        if (this.hoverThrottleTimer !== null) {
+            window.clearTimeout(this.hoverThrottleTimer);
+            this.hoverThrottleTimer = null;
+        }
+        
+        // Clear any pending cost updates
+        this.costUpdateQueue = null;
+    }
+
+    // Add destroy method to clean up Phaser resources
+    public destroy(): void {
+        // Call cleanup first to handle event listeners and timers
+        this.cleanup();
+        
+        // Clean up Phaser graphics objects
+        if (this.drawingGraphics) {
+            this.drawingGraphics.destroy();
+        }
+        if (this.previewGraphics) {
+            this.previewGraphics.destroy();
+        }
+        
+        // Clear all caches and state
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
+        this.validConnectionPoints.clear();
+        this.playerTracks.clear();
+        this.currentSegments = [];
+        this.previewPath = [];
+        this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
+        this.pendingHoverPoint = null;
     }
 }

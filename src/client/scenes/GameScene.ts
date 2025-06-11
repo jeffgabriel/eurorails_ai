@@ -8,6 +8,15 @@ import { GameStateService } from "../services/GameStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 
+// Add type declaration for Phaser.Scene
+declare module "phaser" {
+  namespace Scene {
+    interface Scene {
+      shutdown(fromScene?: Scene): void;
+    }
+  }
+}
+
 export class GameScene extends Phaser.Scene {
   // Main containers
   private mapContainer!: Phaser.GameObjects.Container;
@@ -415,5 +424,13 @@ export class GameScene extends Phaser.Scene {
     // Pause this scene and start settings scene
     this.scene.pause();
     this.scene.launch("SettingsScene", { gameState: this.gameState });
+  }
+
+  // Clean up resources when scene is destroyed
+  destroy(fromScene?: boolean): void {
+    // Clean up TrackDrawingManager
+    if (this.trackManager) {
+      this.trackManager.destroy();
+    }
   }
 }

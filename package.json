@@ -24,7 +24,7 @@
     "express-session": "^1.18.1",
     "neverthrow": "^8.2.0",
     "pg": "^8.7.0",
-    "phaser": "^3.55.2",
+    "phaser": "^3.88.2",
     "socket.io": "^4.5.0",
     "uuid": "^11.1.0"
   },
