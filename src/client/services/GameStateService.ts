@@ -1,4 +1,4 @@
-import { LoadType } from '@/shared/types/LoadTypes';
+import { LoadType } from '../../shared/types/LoadTypes';
 import { GameState } from '../../shared/types/GameTypes';
 
 export class GameStateService {

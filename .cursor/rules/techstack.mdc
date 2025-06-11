@@ -12,6 +12,6 @@ Phaser.js – A great game engine for 2D browser games with physics, animations,
 
 Backend (Multiplayer, Game State, and Logic)
 Node.js – High-performance server-side runtime.
-Fastify – Lightweight web frameworks for API and game state management.
+Express.js – Web framework for API and game state management.
 Socket.IO – Real-time communication for multiplayer features.
 PostgreSQL – Database for storing user progress and game data.

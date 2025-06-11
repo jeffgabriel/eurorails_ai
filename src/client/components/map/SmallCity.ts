@@ -20,7 +20,7 @@ export class SmallCity extends City {
     graphics.arc(
       this.x,
       this.y,
-      this.CITY_RADIUS[this.cityData.type],
+      this.CITY_RADIUS[this.cityData.type as keyof typeof this.CITY_RADIUS] || 12,
       0,
       Math.PI * 2
     );

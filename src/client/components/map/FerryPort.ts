@@ -1,4 +1,4 @@
-import { GridPoint } from "@/shared/types/GameTypes";
+import { GridPoint } from "../../../shared/types/GameTypes";
 import { MapElement } from "./MapElement";
 import { mapConfig } from "../../config/mapConfig";
 import "phaser";

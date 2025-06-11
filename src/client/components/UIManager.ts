@@ -22,10 +22,10 @@ export class UIManager {
   private mapRenderer: MapRenderer;
   private trackDrawingManager: TrackDrawingManager;
   // Component managers
-  private trainInteractionManager: TrainInteractionManager;
-  private leaderboardManager: LeaderboardManager;
-  private playerHandDisplay: PlayerHandDisplay;
-  private citySelectionManager: CitySelectionManager;
+  private trainInteractionManager!: TrainInteractionManager;
+  private leaderboardManager!: LeaderboardManager;
+  private playerHandDisplay!: PlayerHandDisplay;
+  private citySelectionManager!: CitySelectionManager;
   private isDrawingMode: boolean = false;
 
   constructor(

@@ -3,7 +3,7 @@ import { Scene } from 'phaser';
 import { CityData, Player, GameState } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
-import { LoadType } from '@/shared/types/LoadTypes';
+import { LoadType } from '../../shared/types/LoadTypes';
 import { UIManager } from '../components/UIManager';
 
 interface LoadDialogConfig {

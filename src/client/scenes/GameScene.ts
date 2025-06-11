@@ -8,6 +8,15 @@ import { GameStateService } from "../services/GameStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 
+// Add type declaration for Phaser.Scene
+declare module "phaser" {
+  namespace Scene {
+    interface Scene {
+      shutdown(fromScene?: Scene): void;
+    }
+  }
+}
+
 export class GameScene extends Phaser.Scene {
   // Main containers
   private mapContainer!: Phaser.GameObjects.Container;
@@ -175,9 +184,14 @@ export class GameScene extends Phaser.Scene {
 
     // Register for track cost updates
     this.trackManager.onCostUpdate((cost) => {
-      // Update the UI to show the current track cost
+      // Always update the UI to show the current track cost during drawing mode
       if (this.trackManager.isInDrawingMode) {
-        this.uiManager.setupPlayerHand(true, cost);
+        // Get the current player to check budget constraints
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
+        const totalCost = previousSessionsCost + cost;
+        
+        this.uiManager.setupPlayerHand(true, totalCost);
       }
     });
 
@@ -270,9 +284,7 @@ export class GameScene extends Phaser.Scene {
     // Get the current cost to display regardless of drawing mode
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
-    const previousSessionsCost = this.trackManager.getLastBuildCost(
-      currentPlayer.id
-    );
+    const previousSessionsCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
     const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
     const totalCost = previousSessionsCost + currentSessionCost;
 
@@ -286,7 +298,7 @@ export class GameScene extends Phaser.Scene {
       this.gameState.players[this.gameState.currentPlayerIndex];
 
     // Check if there was a build cost from the player's previous activity
-    let buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+    let buildCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
 
     // If in drawing mode, finalize track drawing first by toggling it off
     // This will handle saving tracks and cleanup through TrackDrawingManager
@@ -296,7 +308,7 @@ export class GameScene extends Phaser.Scene {
       this.uiManager.setDrawingMode(isDrawingMode);
 
       // Get the updated build cost after saving track state
-      buildCost = this.trackManager.getLastBuildCost(currentPlayer.id);
+      buildCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
     }
 
     // Deduct track building cost from player's money if there was any building
@@ -412,5 +424,13 @@ export class GameScene extends Phaser.Scene {
     // Pause this scene and start settings scene
     this.scene.pause();
     this.scene.launch("SettingsScene", { gameState: this.gameState });
+  }
+
+  // Clean up resources when scene is destroyed
+  destroy(fromScene?: boolean): void {
+    // Clean up TrackDrawingManager
+    if (this.trackManager) {
+      this.trackManager.destroy();
+    }
   }
 }

@@ -12,6 +12,12 @@ export class TrackDrawingManager {
     private playerTracks: Map<string, PlayerTrackState>;
     private gridPoints: GridPoint[][];
     
+    // Performance optimization caches
+    private networkNodesCache: Map<string, Set<string>> = new Map();
+    private lastHoverPoint: { row: number; col: number } | null = null;
+    private pathCache: Map<string, GridPoint[] | null> = new Map();
+    private hoverThrottleTimer: number | null = null;
+    
     // Drawing mode state
     private isDrawingMode: boolean = false;
     private currentSegments: TrackSegment[] = [];
@@ -38,6 +44,25 @@ export class TrackDrawingManager {
     // Callback for cost updates
     private onCostUpdateCallback: ((cost: number) => void) | null = null;
     
+    // Add this property to track the last displayed cost
+    private lastDisplayedCost: number = 0;
+    
+    // Add this property to track the last path key
+    private lastPathKey: string = '';
+    
+    // Add this property to track pending hover points
+    private pendingHoverPoint: GridPoint | null = null;
+    
+    // Add cost update queue
+    private costUpdateQueue: {
+        path: GridPoint[],
+        cost: number,
+        timestamp: number
+    } | null = null;
+    
+    // Add property to store the update event handler
+    private updateEventHandler: (() => void) | null = null;
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -60,8 +85,59 @@ export class TrackDrawingManager {
         this.previewGraphics = this.scene.add.graphics();
         this.previewGraphics.setDepth(2);  // Set higher depth to appear above tracks
         this.mapContainer.add(this.previewGraphics);
+
+        // Setup cost update handler
+        this.setupCostUpdateHandler();
     }
     
+    private setupCostUpdateHandler(): void {
+        // Store the handler function so we can remove it later
+        this.updateEventHandler = () => {
+            if (this.costUpdateQueue) {
+                const now = Date.now();
+                // Only update if we've been hovering for at least 100ms
+                if (now - this.costUpdateQueue.timestamp > 100) {
+                    this.processCostUpdate();
+                }
+            }
+        };
+        
+        this.scene.events.on('update', this.updateEventHandler);
+    }
+
+    private processCostUpdate(): void {
+        if (!this.costUpdateQueue || !this.onCostUpdateCallback) return;
+
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalCost = previousSessionsCost + this.costUpdateQueue.cost;
+
+        // Only update if the cost has changed
+        if (this.lastDisplayedCost !== totalCost) {
+            this.lastDisplayedCost = totalCost;
+            this.onCostUpdateCallback(totalCost);
+        }
+
+        // Clear the queue
+        this.costUpdateQueue = null;
+    }
+
+    private queueCostUpdate(path: GridPoint[], cost: number): void {
+        // Generate a unique key for this path
+        const pathKey = path.map(p => `${p.row},${p.col}`).join('|');
+        
+        // Only queue if the path is different from the last one
+        if (pathKey !== this.lastPathKey) {
+            this.lastPathKey = pathKey;
+            this.costUpdateQueue = {
+                path,
+                cost,
+                timestamp: Date.now()
+            };
+        }
+    }
+
     // Method to register a callback when the track cost changes
     public onCostUpdate(callback: (cost: number) => void): void {
         this.onCostUpdateCallback = callback;
@@ -270,6 +346,11 @@ export class TrackDrawingManager {
         // Reset current session's drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
+        
+        // Clear performance caches
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
         
         // Reset the current session's build cost, but keep track of the accumulated cost for the turn
         // We'll get the current player's total build cost for the notification
@@ -295,6 +376,12 @@ export class TrackDrawingManager {
         this.scene.input.off('pointerdown', this.handleDrawingClick, this);
         this.scene.input.off('pointermove', this.handleDrawingHover, this);
 
+        // Clear any pending hover timer
+        if (this.hoverThrottleTimer !== null) {
+            window.clearTimeout(this.hoverThrottleTimer);
+            this.hoverThrottleTimer = null;
+        }
+
         // Clear the graphics objects and redraw all permanent tracks
         this.drawingGraphics.clear();
         this.previewGraphics.clear();
@@ -303,7 +390,16 @@ export class TrackDrawingManager {
         // Reset drawing state
         this.currentSegments = [];
         this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
         this.turnBuildCost = 0;
+        
+        // Clear performance caches
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
+
+        // Clear cost update queue
+        this.costUpdateQueue = null;
+        this.lastPathKey = '';
     }
 
     private handleDrawingClick(pointer: Phaser.Input.Pointer): void {
@@ -410,6 +506,9 @@ export class TrackDrawingManager {
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
                 
+                // Clear network cache since we added a segment
+                this.networkNodesCache.clear();
+                
                 // If we've reached a ferry port, create the ferry connection
                 if (toPoint.terrain === TerrainType.FerryPort && toPoint.ferryConnection) {
                     const ferryConnection = toPoint.ferryConnection;
@@ -458,6 +557,7 @@ export class TrackDrawingManager {
         if (!this.isDrawingMode || !this.lastClickedPoint) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -466,6 +566,7 @@ export class TrackDrawingManager {
         if (!gridPoint || gridPoint.terrain === TerrainType.Water) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
@@ -473,17 +574,54 @@ export class TrackDrawingManager {
         if (gridPoint.row === this.lastClickedPoint.row && gridPoint.col === this.lastClickedPoint.col) {
             this.previewGraphics.clear();
             this.previewPath = [];
+            // this.updateCostDisplayToCommitted();
             return;
         }
 
+        // Skip if we're already hovering over the same point
+        if (this.lastHoverPoint && 
+            this.lastHoverPoint.row === gridPoint.row && 
+            this.lastHoverPoint.col === gridPoint.col) {
+            return; // No need to recalculate
+        }
+
+        // Update last hover point immediately to ensure smooth tracking
+        this.lastHoverPoint = { row: gridPoint.row, col: gridPoint.col };
+
+        // Store the most recent hover point for processing
+        this.pendingHoverPoint = gridPoint;
+
+        // Throttle hover updates to reduce calculation frequency
+        if (this.hoverThrottleTimer !== null) {
+            return;
+        }
+
+        this.hoverThrottleTimer = window.setTimeout(() => {
+            this.hoverThrottleTimer = null;
+            if (this.pendingHoverPoint) {
+                this.processHoverUpdate(this.pendingHoverPoint);
+                this.pendingHoverPoint = null;
+            }
+        }, 16); // Reduced to ~60fps for smoother updates
+    }
+
+    private processHoverUpdate(gridPoint: GridPoint): void {
         // If the last clicked point is a ferry port, find the other end of the ferry
-        let startPoint = this.lastClickedPoint;
+        const initialStartPoint = this.lastClickedPoint;
+        if (!initialStartPoint) return;
+        
+        let startPoint: GridPoint = initialStartPoint;
         if (startPoint.terrain === TerrainType.FerryPort && startPoint.ferryConnection) {
+            const currentRow = startPoint.row;
+            const currentCol = startPoint.col;
             const otherEnd = startPoint.ferryConnection.connections.find(p => 
-                p.row !== startPoint.row || p.col !== startPoint.col
+                p.row !== currentRow || p.col !== currentCol
             );
             if (otherEnd) {
-                startPoint = otherEnd;
+                const otherEndPoint = this.gridPoints[otherEnd.row][otherEnd.col];
+                if (otherEndPoint) {
+                    startPoint = otherEndPoint;
+                }
             }
         }
 
@@ -499,9 +637,33 @@ export class TrackDrawingManager {
         // Store the valid path
         this.previewPath = path;
 
-        // Draw the preview path
+        // Calculate the cost of the preview path
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        let previewCost = 0;
+        
+        for (let i = 0; i < path.length - 1; i++) {
+            const fromPoint = path[i];
+            const toPoint = path[i + 1];
+            
+            // Skip cost for existing segments
+            if (!this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
+                const segmentCost = Math.floor(this.calculateTrackCost(fromPoint, toPoint));
+                previewCost += segmentCost;
+            }
+        }
+        
+        // Queue the cost update instead of updating immediately
+        this.queueCostUpdate(path, previewCost);
+
+        // Draw the preview path with color based on validity
         this.previewGraphics.clear();
-        this.previewGraphics.lineStyle(2, 0x00ff00, 0.5);
+        
+        // Check if cost is valid
+        const isValidCost = this.isValidCost(previewCost);
+        const lineColor = isValidCost ? 0x00ff00 : 0xff0000; // Green if valid, red if not
+        
+        this.previewGraphics.lineStyle(2, lineColor, 0.5);
         
         // Draw lines connecting all points in the path
         this.previewGraphics.beginPath();
@@ -595,13 +757,20 @@ export class TrackDrawingManager {
             return null;
         }
 
-        // Calculate search area with larger margins to cover potential network connections
-        const maxRowDiff = Math.abs(targetPoint.row - startPoint.row) + 10;  // Add larger margin
-        const maxColDiff = Math.abs(targetPoint.col - startPoint.col) + 10;  // Add larger margin
-        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - maxRowDiff);
-        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + maxRowDiff);
-        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - maxColDiff);
-        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + maxColDiff);
+        // Limit preview distance to prevent expensive calculations
+        const distance = Math.abs(targetPoint.row - startPoint.row) + Math.abs(targetPoint.col - startPoint.col);
+        if (distance > 15) {  // Maximum Manhattan distance
+            return null;
+        }
+
+        // Calculate search area with smaller, more reasonable margins
+        const rowDiff = Math.abs(targetPoint.row - startPoint.row);
+        const colDiff = Math.abs(targetPoint.col - startPoint.col);
+        const margin = Math.min(5, Math.max(rowDiff, colDiff) / 2); // Adaptive margin, max 5
+        const minRow = Math.max(0, Math.min(startPoint.row, targetPoint.row) - Math.floor(margin));
+        const maxRow = Math.min(this.gridPoints.length - 1, Math.max(startPoint.row, targetPoint.row) + Math.ceil(margin));
+        const minCol = Math.max(0, Math.min(startPoint.col, targetPoint.col) - Math.floor(margin));
+        const maxCol = Math.min(this.gridPoints[0]?.length - 1 || 0, Math.max(startPoint.col, targetPoint.col) + Math.ceil(margin));
 
         // Initialize all points with infinity distance within the search area
         let pointCount = 0;
@@ -617,19 +786,25 @@ export class TrackDrawingManager {
             }
         }
 
-        // Build a set of all nodes in the player's network (for quick lookup)
-        const networkNodes = new Set<string>();
-        if (playerTrackState) {
-            for (const segment of playerTrackState.segments) {
-                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
-                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+        // Get cached network nodes or build them
+        const cacheKey = `${currentPlayer.id}_${this.currentSegments.length}`;
+        let networkNodes = this.networkNodesCache.get(cacheKey);
+        
+        if (!networkNodes) {
+            networkNodes = new Set<string>();
+            if (playerTrackState) {
+                for (const segment of playerTrackState.segments) {
+                    networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                    networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+                }
+                
+                // Also add current segments being built in this session
+                for (const segment of this.currentSegments) {
+                    networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
+                    networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
+                }
             }
-            
-            // Also add current segments being built in this session
-            for (const segment of this.currentSegments) {
-                networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
-                networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
-            }
+            this.networkNodesCache.set(cacheKey, networkNodes);
         }
 
         // Set distance to 0 for the clicked point and all nodes in the player's network
@@ -1054,6 +1229,29 @@ export class TrackDrawingManager {
     public updateGridPoints(gridPoints: GridPoint[][]): void {
         this.gridPoints = gridPoints;
     }
+    
+    // Helper method to update cost display to show only committed costs
+    private updateCostDisplayToCommitted(): void {
+        if (!this.isDrawingMode || !this.onCostUpdateCallback) {
+            return;
+        }
+        
+        // Only update if we have a valid preview path
+        if (this.previewPath.length === 0) {
+            return;
+        }
+        
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalCommittedCost = previousSessionsCost + this.turnBuildCost;
+        
+        // Only call the callback if the cost has actually changed
+        if (this.lastDisplayedCost !== totalCommittedCost) {
+            this.lastDisplayedCost = totalCommittedCost;
+            this.onCostUpdateCallback(totalCommittedCost);
+        }
+    }
 
     // Add this new helper method
     private isConnectedPointOfMajorCity(point: GridPoint): boolean {
@@ -1074,5 +1272,47 @@ export class TrackDrawingManager {
             }
         }
         return false;
+    }
+
+    // Add cleanup method
+    public cleanup(): void {
+        if (this.updateEventHandler) {
+            this.scene.events.off('update', this.updateEventHandler);
+            this.updateEventHandler = null;
+        }
+        
+        // Clear any pending hover timer
+        if (this.hoverThrottleTimer !== null) {
+            window.clearTimeout(this.hoverThrottleTimer);
+            this.hoverThrottleTimer = null;
+        }
+        
+        // Clear any pending cost updates
+        this.costUpdateQueue = null;
+    }
+
+    // Add destroy method to clean up Phaser resources
+    public destroy(): void {
+        // Call cleanup first to handle event listeners and timers
+        this.cleanup();
+        
+        // Clean up Phaser graphics objects
+        if (this.drawingGraphics) {
+            this.drawingGraphics.destroy();
+        }
+        if (this.previewGraphics) {
+            this.previewGraphics.destroy();
+        }
+        
+        // Clear all caches and state
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
+        this.validConnectionPoints.clear();
+        this.playerTracks.clear();
+        this.currentSegments = [];
+        this.previewPath = [];
+        this.lastClickedPoint = null;
+        this.lastHoverPoint = null;
+        this.pendingHoverPoint = null;
     }
 }

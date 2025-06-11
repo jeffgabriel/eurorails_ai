@@ -11,8 +11,11 @@ module.exports = {
     rules: [
       {
         test: /\.tsx?$/,
-        use: 'ts-loader',
+        loader: 'ts-loader',
         exclude: /node_modules/,
+        options: {
+          configFile: 'tsconfig.webpack.json'
+        }
       },
       {
         test: /\.(png|svg|jpg|jpeg|gif)$/i,
@@ -36,19 +39,21 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
-    proxy: {
-      '/api': {
+    proxy: [
+      {
+        context: ['/api'],
         target: 'http://localhost:3001',
         secure: false,
         changeOrigin: true,
         pathRewrite: { '^/api': '/api' }
       },
-      '/socket.io': {
+      {
+        context: ['/socket.io'],
         target: 'http://localhost:3001',
         secure: false,
         changeOrigin: true,
         ws: true
       }
-    }
+    ]
   },
 }; 
