@@ -21,7 +21,8 @@
     "noImplicitAny": false,
     "strictPropertyInitialization": false,
     "preserveConstEnums": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "sourceMap": true
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

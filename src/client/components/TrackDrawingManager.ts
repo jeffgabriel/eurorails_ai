@@ -111,7 +111,8 @@ export class TrackDrawingManager {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         const playerTrackState = this.playerTracks.get(currentPlayer.id);
         const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
-        const totalCost = previousSessionsCost + this.costUpdateQueue.cost;
+        // Total cost = previous sessions + current session committed + preview
+        const totalCost = previousSessionsCost + this.turnBuildCost + this.costUpdateQueue.cost;
 
         // Only update if the cost has changed
         if (this.lastDisplayedCost !== totalCost) {
@@ -646,8 +647,16 @@ export class TrackDrawingManager {
             const fromPoint = path[i];
             const toPoint = path[i + 1];
             
-            // Skip cost for existing segments
-            if (!this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
+            // Skip cost for existing segments (from previous turns or current session)
+            const isExistingSegment = this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState);
+            const isCurrentSessionSegment = this.currentSegments.some(segment =>
+                (segment.from.row === fromPoint.row && segment.from.col === fromPoint.col &&
+                 segment.to.row === toPoint.row && segment.to.col === toPoint.col) ||
+                (segment.from.row === toPoint.row && segment.from.col === toPoint.col &&
+                 segment.to.row === fromPoint.row && segment.to.col === fromPoint.col)
+            );
+            
+            if (!isExistingSegment && !isCurrentSessionSegment) {
                 const segmentCost = Math.floor(this.calculateTrackCost(fromPoint, toPoint));
                 previewCost += segmentCost;
             }
