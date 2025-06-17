@@ -62,6 +62,20 @@ const points: GridPoint[] = [];
     const terrain = mapTypeToTerrain(mp.Type);
     const { x, y } = calculateWorldCoordinates(col, row);
     // Build the GridPoint directly
+    let cityData: any = undefined;
+    if ((mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port") && mp.Name) {
+      cityData = {
+        type: terrain,
+        name: mp.Name,
+        availableLoads: [],
+      };
+    } else if (mp.Type === "Major City Outpost" && mp.Name) {
+      cityData = {
+        type: TerrainType.MajorCity,
+        name: mp.Name,
+        availableLoads: [],
+      };
+    }
     const gridPoint: GridPoint = {
       x: x,
       y: y,
@@ -69,14 +83,7 @@ const points: GridPoint[] = [];
       row,
       terrain,
       id: mp.Id,
-      // Only assign city for small, medium, and ferry port cities
-      city: (mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port") && mp.Name
-        ? {
-            type: terrain,
-            name: mp.Name,
-            availableLoads: [],
-          }
-        : undefined,
+      city: cityData,
       // Set ocean if present
       ...(mp.Ocean ? { ocean: mp.Ocean } : {})
     };

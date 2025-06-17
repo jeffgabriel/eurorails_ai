@@ -273,40 +273,12 @@ export class TrainInteractionManager {
     });
   }
   
-  private lookupMajorCityCenterForOutpost(point: GridPoint): CityData | undefined {
-    // majorCityGroups: { [name: string]: any[] }
-    for (const [name, group] of Object.entries(majorCityGroups)) {
-      // The center is always group[0]
-      const center = group[0];
-      // Outposts are group[1..n]
-      for (let i = 1; i < group.length; i++) {
-        const outpost = group[i];
-        if (outpost.GridX === point.col && outpost.GridY === point.row) {
-          // Return the center's city data
-          return {
-            type: center.Type === 'Major City' ? 2 : center.Type, // 2 = TerrainType.MajorCity
-            name: name,
-            connectedPoints: group.slice(1, 7).map(op => ({ col: op.GridX, row: op.GridY })),
-            availableLoads: [],
-          };
-        }
-      }
-    }
-    return undefined;
-  }
-
   private async handleCityArrival(
     currentPlayer: Player, 
     nearestMilepost: any
   ): Promise<void> {
-    // If this is a major city outpost, look up the center's city data
-    let cityData = nearestMilepost.city;
-    if (
-      nearestMilepost.terrain === 2 && // TerrainType.MajorCity
-      !nearestMilepost.city
-    ) {
-      cityData = this.lookupMajorCityCenterForOutpost(nearestMilepost);
-    }
+    // Always use the city property on the grid point
+    const cityData = nearestMilepost.city;
     if (!cityData) return;
     // Get the LoadService instance to check available loads
     const loadService = LoadService.getInstance();
