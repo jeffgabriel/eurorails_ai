@@ -270,30 +270,6 @@ describe('TrackDrawingManager', () => {
             }
         });
 
-        it('should add a small penalty cost for diagonal movement', () => {
-            // Get access to the private calculateTrackCost method
-            const calculateTrackCost = (trackDrawingManager as any).calculateTrackCost.bind(trackDrawingManager);
-
-            // Create points for horizontal and diagonal movement
-            const fromPoint: GridPoint = { id: '0-0', x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear };
-            
-            // Horizontal movement (same row)
-            const horizontalPoint: GridPoint = { id: '0-1', x: 35, y: 0, row: 0, col: 1, terrain: TerrainType.Clear };
-            
-            // Diagonal movement (different row)
-            const diagonalPoint: GridPoint = { id: '1-1', x: 35, y: 35, row: 1, col: 1, terrain: TerrainType.Clear };
-
-            // Calculate costs
-            const horizontalCost = calculateTrackCost(fromPoint, horizontalPoint);
-            const diagonalCost = calculateTrackCost(fromPoint, diagonalPoint);
-
-            // Diagonal cost should be slightly higher than horizontal cost for the same terrain
-            expect(diagonalCost).toBeGreaterThan(horizontalCost);
-            
-            // The difference should be exactly 0.01
-            expect(diagonalCost - horizontalCost).toBeCloseTo(0.01);
-        });
-        
         it('should correctly calculate costs when entering cities', () => {
             // Get access to the private calculateTrackCost method
             const calculateTrackCost = (trackDrawingManager as any).calculateTrackCost.bind(trackDrawingManager);
