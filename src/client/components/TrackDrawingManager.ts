@@ -882,7 +882,9 @@ export class TrackDrawingManager {
                 // Compute the true build cost for the path (no penalty)
                 let trueBuildCost = 0;
                 for (let i = 0; i < path.length - 1; i++) {
-                    trueBuildCost += this.calculateTrackCost(path[i], path[i + 1]);
+                    if (!this.isSegmentInNetwork(path[i], path[i + 1], playerTrackState)) {
+                        trueBuildCost += this.calculateTrackCost(path[i], path[i + 1]);
+                    }
                 }
 
                 // Use the true build cost for the validity check
