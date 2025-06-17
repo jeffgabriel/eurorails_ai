@@ -21,7 +21,13 @@ export class MapElementFactory {
     if (point && point.city) {
       switch (point.city.type) {
         case TerrainType.MajorCity:
-          return new MajorCity(scene, point, x, y);
+          // Only render as MajorCity if this is the center (has connectedPoints and non-empty)
+          if (point.city.connectedPoints && point.city.connectedPoints.length > 0) {
+            return new MajorCity(scene, point, x, y);
+          } else {
+            // Outposts: fall through to default rendering below
+            break;
+          }
         case TerrainType.MediumCity:
           return new MediumCity(scene, point, x, y);
         case TerrainType.SmallCity:
