@@ -266,8 +266,9 @@ export class TrackDrawingManager {
         // Check against both the turn budget and the player's available money
         const isWithinBudget = totalExistingCost + additionalCost <= this.MAX_TURN_BUILD_COST;
         const isWithinMoney = totalExistingCost + additionalCost <= playerMoney;
+        const result = isWithinBudget && isWithinMoney;
         
-        return isWithinBudget && isWithinMoney;
+        return result;
     }
 
     private async saveCurrentTracks(): Promise<void> {
@@ -453,12 +454,11 @@ export class TrackDrawingManager {
             for (let i = 0; i < this.previewPath.length - 1; i++) {
                 const fromPoint = this.previewPath[i];
                 const toPoint = this.previewPath[i + 1];
-                
                 // Skip cost for existing segments
                 if (this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState)) {
                     continue;
                 }
-                
+                // Only use the actual segment cost, no penalty
                 let segmentCost = this.calculateTrackCost(fromPoint, toPoint);
                 segmentCost = Math.floor(segmentCost);
                 totalPathCost += segmentCost;
@@ -646,7 +646,6 @@ export class TrackDrawingManager {
         for (let i = 0; i < path.length - 1; i++) {
             const fromPoint = path[i];
             const toPoint = path[i + 1];
-            
             // Skip cost for existing segments (from previous turns or current session)
             const isExistingSegment = this.isSegmentInNetwork(fromPoint, toPoint, playerTrackState);
             const isCurrentSessionSegment = this.currentSegments.some(segment =>
@@ -655,8 +654,8 @@ export class TrackDrawingManager {
                 (segment.from.row === toPoint.row && segment.from.col === toPoint.col &&
                  segment.to.row === fromPoint.row && segment.to.col === fromPoint.col)
             );
-            
             if (!isExistingSegment && !isCurrentSessionSegment) {
+                // Only use the actual segment cost, no penalty
                 const segmentCost = Math.floor(this.calculateTrackCost(fromPoint, toPoint));
                 previewCost += segmentCost;
             }
@@ -806,7 +805,6 @@ export class TrackDrawingManager {
                     networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
                     networkNodes.add(getPointKey({ row: segment.to.row, col: segment.to.col } as GridPoint));
                 }
-                
                 // Also add current segments being built in this session
                 for (const segment of this.currentSegments) {
                     networkNodes.add(getPointKey({ row: segment.from.row, col: segment.from.col } as GridPoint));
@@ -858,20 +856,10 @@ export class TrackDrawingManager {
             if (row === targetPoint.row && col === targetPoint.col) {
                 const path: GridPoint[] = [];
                 let current: GridPoint | null = targetPoint;
-                
-                // Check if total cost would exceed budget or player's money
-                const totalCost = distances.get(getPointKey(targetPoint)) || 0;
-                
-                // Use our helper method to check against both budget and money
-                if (!this.isValidCost(totalCost)) {
-                    return null;
-                }
-
                 // Reconstruct the path backwards from the target
                 while (current !== null) {
                     path.unshift(current);
                     current = previous.get(getPointKey(current)) || null;
-                    
                     // If we've reached a network node, we're done - no need to go back to original click
                     if (current && networkNodes.has(getPointKey(current))) {
                         path.unshift(current); // Include the network node in the path
@@ -889,6 +877,19 @@ export class TrackDrawingManager {
                     if (this.isSegmentInAnyOtherNetwork(path[i], path[i + 1], currentPlayer.id)) {
                         return null; // Path is invalid if any segment overlaps with other players' tracks
                     }
+                }
+
+                // Compute the true build cost for the path (no penalty)
+                let trueBuildCost = 0;
+                for (let i = 0; i < path.length - 1; i++) {
+                    if (!this.isSegmentInNetwork(path[i], path[i + 1], playerTrackState)) {
+                        trueBuildCost += this.calculateTrackCost(path[i], path[i + 1]);
+                    }
+                }
+
+                // Use the true build cost for the validity check
+                if (!this.isValidCost(trueBuildCost)) {
+                    return null;
                 }
 
                 return path;
@@ -962,15 +963,15 @@ export class TrackDrawingManager {
                     }
                 }
                 
-                // Calculate the cost for a segment
-                // If both points are in the network, or there's an existing segment between them, cost is 0
+                // Calculate the base cost for a segment
                 let segmentCost = 0;
                 if (!(isCurrentInNetwork && isNeighborInNetwork) && 
                     !this.isSegmentInNetwork(currentPoint, neighbor, playerTrackState)) {
                     segmentCost = this.calculateTrackCost(currentPoint, neighbor);
                 }
-                
-                const newDistance = minDistance + segmentCost;
+                // Add a very small penalty for changing rows, but only for pathfinding (not for actual cost)
+                const rowChangePenalty = (currentPoint.row !== neighbor.row) ? 0.0001 : 0;
+                const newDistance = minDistance + segmentCost + rowChangePenalty;
 
                 // Update distance if new path is shorter
                 const currentNeighborDistance = distances.get(neighborKey) || Infinity;
@@ -1125,12 +1126,6 @@ export class TrackDrawingManager {
                 // Subsequent players or building to the other end costs nothing
                 cost = 0;
             }
-        }
-        
-        // Add a very small additional cost for diagonal movement to prefer straight paths when costs are equal
-        // This ensures the algorithm prefers horizontal/vertical paths when multiple paths have the same terrain cost
-        if (from.row !== to.row) {
-            cost += 0.01;  // Very small penalty for changing rows
         }
 
         return cost;
