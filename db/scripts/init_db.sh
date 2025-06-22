@@ -3,7 +3,7 @@
 # Set defaults and load environment variables if .env file exists
 if [ -f .env ]; then
     echo "Loading environment variables from .env file..."
-    source .env
+    . .env
 fi
 
 # Database configuration with environment variable fallbacks
