@@ -486,7 +486,7 @@ export class TrainInteractionManager {
     });
   }
   
-  private updateTrainZOrders(): void {
+  public updateTrainZOrders(): void {
     // Group trains by location
     const trainsByLocation = new Map<string, string[]>();
 

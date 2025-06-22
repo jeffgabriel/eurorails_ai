@@ -52,10 +52,10 @@ export class UIManager {
     this.trainContainer = this.scene.add.container(0, 0);
 
     // Initialize component managers
-    this.initializeComponentManagers();
+    this.initializeComponentManagers(nextPlayerCallback);
   }
 
-  private initializeComponentManagers(): void {
+  private initializeComponentManagers(nextPlayerCallback: () => void): void {
     // Create the train movement manager
     const trainMovementManager = new TrainMovementManager(this.gameState);
     
@@ -70,11 +70,29 @@ export class UIManager {
       this.trackDrawingManager
     );
 
+    const UIManagedNextPlayerCallback = async () => {
+      this.resetTrainMovementMode();
+      this.cleanupCityDropdowns();
+      await nextPlayerCallback();
+      this.setupUIOverlay();
+      this.trainInteractionManager.updateTrainZOrders();
+      this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
+
+      const newPlayer =
+        this.gameState.players[this.gameState.currentPlayerIndex];
+      if (!newPlayer.trainState?.position) {
+        this.showCitySelectionForPlayer(newPlayer.id);
+      } else {
+        const { x, y } = newPlayer.trainState.position;
+        this.scene.cameras.main.pan(x, y, 1000, "Linear", true);
+      }
+    };
+
     // Initialize the leaderboard manager
     this.leaderboardManager = new LeaderboardManager(
       this.scene,
       this.gameState,
-      this.nextPlayerCallback
+      UIManagedNextPlayerCallback
     );
 
     // Initialize the player hand display
@@ -96,8 +114,6 @@ export class UIManager {
       this.mapRenderer,
       (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col)
     );
-
-    
   }
 
   public getContainers(): {
