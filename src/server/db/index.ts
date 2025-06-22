@@ -49,11 +49,30 @@ export async function cleanDatabase() {
     }
 }
 
+async function connectWithRetry(retries = 5, delay = 2000): Promise<PoolClient> {
+    for (let i = 0; i < retries; i++) {
+        try {
+            const client = await pool.connect();
+            console.log('Successfully connected to the database.');
+            return client;
+        } catch (err) {
+            if (i < retries - 1) {
+                console.log(`Database connection failed. Retrying in ${delay / 1000} seconds... (${i + 1}/${retries})`);
+                await new Promise(res => setTimeout(res, delay));
+            } else {
+                console.error('Database connection failed after multiple retries.');
+                throw err;
+            }
+        }
+    }
+    throw new Error('Should not reach here');
+}
+
 // Check database connection and schema
 export async function checkDatabase() {
     let client: PoolClient | undefined;
     try {
-        client = await pool.connect();
+        client = await connectWithRetry();
         console.log('Initializing and verifying database schema...');
 
         // 1. Ensure schema_migrations table exists.

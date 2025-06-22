@@ -28,9 +28,19 @@ CREATE TABLE IF NOT EXISTS players (
 );
 
 -- Add foreign key from games to players for winner_id
-ALTER TABLE games 
-ADD CONSTRAINT fk_games_winner 
-FOREIGN KEY (winner_id) REFERENCES players(id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints 
+        WHERE constraint_name = 'fk_games_winner' AND table_name = 'games'
+    ) THEN
+        ALTER TABLE games 
+        ADD CONSTRAINT fk_games_winner 
+        FOREIGN KEY (winner_id) REFERENCES players(id)
+        ON DELETE SET NULL;
+    END IF;
+END;
+$$;
 
 -- Create tracks table
 CREATE TABLE IF NOT EXISTS tracks (
@@ -101,35 +111,38 @@ END;
 $$ language 'plpgsql';
 
 -- Add updated_at triggers to all tables with updated_at
+DROP TRIGGER IF EXISTS update_games_updated_at ON games;
 CREATE TRIGGER update_games_updated_at
     BEFORE UPDATE ON games
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_players_updated_at ON players;
 CREATE TRIGGER update_players_updated_at
     BEFORE UPDATE ON players
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_tracks_updated_at ON tracks;
 CREATE TRIGGER update_tracks_updated_at
     BEFORE UPDATE ON tracks
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_demand_cards_updated_at ON demand_cards;
 CREATE TRIGGER update_demand_cards_updated_at
     BEFORE UPDATE ON demand_cards
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_load_chips_updated_at ON load_chips;
 CREATE TRIGGER update_load_chips_updated_at
     BEFORE UPDATE ON load_chips
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+DROP TRIGGER IF EXISTS update_event_cards_updated_at ON event_cards;
 CREATE TRIGGER update_event_cards_updated_at
     BEFORE UPDATE ON event_cards
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
-
--- Insert schema version
-INSERT INTO schema_migrations (version) VALUES (1); 
+    EXECUTE FUNCTION update_updated_at_column(); 

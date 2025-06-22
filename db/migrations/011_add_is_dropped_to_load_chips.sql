@@ -1,2 +1,0 @@
-ALTER TABLE load_chips
-ADD COLUMN is_dropped BOOLEAN NOT NULL DEFAULT false; 

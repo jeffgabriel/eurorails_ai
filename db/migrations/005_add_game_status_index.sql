@@ -10,6 +10,3 @@ BEGIN
     END IF;
 END
 $$;
-
--- Insert schema version
-INSERT INTO schema_migrations (version) VALUES (5);

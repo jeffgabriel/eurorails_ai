@@ -5,6 +5,3 @@ ADD COLUMN IF NOT EXISTS position_x INTEGER,
 ADD COLUMN IF NOT EXISTS position_y INTEGER,
 ADD COLUMN IF NOT EXISTS position_row INTEGER,
 ADD COLUMN IF NOT EXISTS position_col INTEGER;
-
--- Insert schema version
-INSERT INTO schema_migrations (version) VALUES (7);
