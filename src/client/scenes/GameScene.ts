@@ -101,13 +101,13 @@ export class GameScene extends Phaser.Scene {
       //loading with scale to preserve the quality of the svg.
       this.load.svg(
         `load-${loadType.toLowerCase()}`,
-        `assets/loads/${loadType.toLowerCase()}.svg`,
+        `/assets/loads/${loadType}.svg`,
         { scale: 0.03 }
       );
       //load again but scaled larger for tokens as we cannot use the dynamic scaling of the svg.
       this.load.svg(
         `loadtoken-${loadType.toLowerCase()}`,
-        `assets/loads/${loadType.toLowerCase()}.svg`,
+        `/assets/loads/${loadType}.svg`,
         { scale: 0.1 }
       );
     });

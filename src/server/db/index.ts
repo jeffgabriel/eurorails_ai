@@ -1,5 +1,7 @@
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Load environment variables
 dotenv.config();
@@ -47,86 +49,71 @@ export async function cleanDatabase() {
     }
 }
 
-// Check database connection and schema version
+// Check database connection and schema
 export async function checkDatabase() {
+    const client = await pool.connect();
     try {
-        const client = await pool.connect();
-        
-        try {
-            // Check if schema_migrations table exists
-            const tableCheck = await client.query(`
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
-                    WHERE table_schema = 'public' 
-                    AND table_name = 'schema_migrations'
-                );
-            `);
+        console.log('Initializing and verifying database schema...');
 
-            if (!tableCheck.rows[0].exists) {
-                console.error('Database schema not initialized. Please run db/scripts/init_db.sh first.');
-                return false;
-            }
+        // 1. Ensure schema_migrations table exists.
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
 
-            // Get current schema version
-            const versionResult = await client.query('SELECT MAX(version) as version FROM schema_migrations;');
-            const currentVersion = versionResult.rows[0].version;
-            
-            if (currentVersion === null) {
-                console.error('No schema migrations found. Please run db/scripts/init_db.sh to initialize the database.');
-                return false;
-            }
-            
-            console.log(`Database schema version: ${currentVersion}`);
-            
-            // Analyze required migrations
-            // List all sql files in migrations directory
-            const fs = require('fs');
-            const path = require('path');
-            
+        // 2. Get the current schema version.
+        const versionResult = await client.query('SELECT MAX(version) as version FROM schema_migrations;');
+        const currentVersion = versionResult.rows[0].version || 0;
+        console.log(`Current database schema version: ${currentVersion}`);
+
+        // 3. Read migration files from the filesystem.
+        const migrationsDir = path.join(process.cwd(), 'db', 'migrations');
+        const migrationFiles = fs.readdirSync(migrationsDir)
+            .filter(file => file.endsWith('.sql'))
+            .map(file => ({
+                version: parseInt(file.split('_')[0]),
+                file: file,
+                path: path.join(migrationsDir, file)
+            }))
+            .sort((a, b) => a.version - b.version);
+
+        // 4. Find and apply pending migrations.
+        const pendingMigrations = migrationFiles.filter(m => m.version > currentVersion);
+
+        if (pendingMigrations.length > 0) {
+            console.log('Pending migrations found. Applying now...');
+            await client.query('BEGIN');
             try {
-                // Get a list of migration files from the db/migrations directory (consolidated location)
-                const migrationsDir = path.join(process.cwd(), 'db', 'migrations');
-                const migrationFiles = fs.readdirSync(migrationsDir)
-                    .filter(file => file.endsWith('.sql'))
-                    .map(file => parseInt(file.split('_')[0]));
-                
-                // Find the highest migration version
-                const highestMigration = Math.max(...migrationFiles);
-                
-                if (currentVersion < highestMigration) {
-                    console.warn(`Database schema is out of date. Current: ${currentVersion}, Latest: ${highestMigration}`);
-                    console.warn('Please run db/scripts/init_db.sh to update your database schema.');
-                    
-                    // Log all migrations that need to be applied
-                    const pendingMigrations = migrationFiles
-                        .filter(version => version > currentVersion)
-                        .sort((a, b) => a - b);
-                    
-                    if (pendingMigrations.length > 0) {
-                        console.warn('Pending migrations:');
-                        pendingMigrations.forEach(version => {
-                            const filename = fs.readdirSync(migrationsDir)
-                                .find(file => file.startsWith(`${version.toString().padStart(3, '0')}_`));
-                            console.warn(`- ${filename}`);
-                        });
-                    }
+                for (const migration of pendingMigrations) {
+                    console.log(`- Applying migration ${migration.file}...`);
+                    const sql = fs.readFileSync(migration.path, 'utf-8');
+                    await client.query(sql);
+                    await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [migration.version]);
                 }
+                await client.query('COMMIT');
+                console.log('All pending migrations applied successfully.');
             } catch (err) {
-                console.warn('Error checking migration files:', err);
+                await client.query('ROLLBACK');
+                console.error('Error applying migrations, rolled back transaction.', err);
+                throw err;
             }
-
-            // Clean database if in development mode and flag is set
-            if (DEV_MODE && CLEAN_DB_ON_START) {
-                await cleanDatabase();
-            }
-            
-            return true;
-        } finally {
-            client.release();
+        } else {
+            console.log('Database schema is up to date.');
         }
+
+        // Clean database if in development mode and flag is set
+        if (DEV_MODE && CLEAN_DB_ON_START) {
+            await cleanDatabase();
+        }
+        
+        return true;
     } catch (err) {
-        console.error('Database connection error:', err);
+        console.error('Database connection and schema setup failed:', err);
         return false;
+    } finally {
+        client.release();
     }
 }
 
