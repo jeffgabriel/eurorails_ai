@@ -351,21 +351,6 @@ export class GameScene extends Phaser.Scene {
       // Normal movement
       newCurrentPlayer.trainState.remainingMovement = maxMovement;
     }
-
-    // Reset train movement mode
-    this.uiManager.resetTrainMovementMode();
-
-    // Update the UI
-    this.uiManager.cleanupCityDropdowns();
-    this.uiManager.setupUIOverlay();
-    // Ensure drawing mode is off for the new player and sync the state
-    this.uiManager.setDrawingMode(false);
-    this.uiManager.setupPlayerHand(false);
-
-    // Check if new current player needs to select a starting city
-    if (!newCurrentPlayer.trainState.position) {
-      this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
-    }
   }
 
   /**
