@@ -1,4 +1,4 @@
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -51,8 +51,9 @@ export async function cleanDatabase() {
 
 // Check database connection and schema
 export async function checkDatabase() {
-    const client = await pool.connect();
+    let client: PoolClient | undefined;
     try {
+        client = await pool.connect();
         console.log('Initializing and verifying database schema...');
 
         // 1. Ensure schema_migrations table exists.
@@ -113,7 +114,9 @@ export async function checkDatabase() {
         console.error('Database connection and schema setup failed:', err);
         return false;
     } finally {
-        client.release();
+        if (client) {
+            client.release();
+        }
     }
 }
 
