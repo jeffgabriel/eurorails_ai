@@ -33,5 +33,3 @@ CREATE OR REPLACE TRIGGER update_player_tracks_updated_at
     ON public.player_tracks
     FOR EACH ROW
     EXECUTE FUNCTION public.update_updated_at_column();
--- Insert schema version
-INSERT INTO schema_migrations (version) VALUES (3);

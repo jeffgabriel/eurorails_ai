@@ -12,20 +12,16 @@ import { PlayerService } from './services/playerService';
 
 const app = express();
 const port = process.env.PORT || 3001;
-
+const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
 // Debug logging middleware - add more detail
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    console.log('Headers:', req.headers);
-    if (req.body && Object.keys(req.body).length > 0) {
-        console.log('Body:', req.body);
-    }
     next();
 });
 
 // Middleware for parsing JSON and serving static files
 app.use(cors({
-    origin: 'http://localhost:3000',
+    origin: `http://localhost:${serverPort}`,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']

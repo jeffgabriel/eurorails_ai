@@ -13,10 +13,8 @@ CREATE TABLE IF NOT EXISTS movement_history (
 );
 
 -- Create updated_at trigger for movement_history
+DROP TRIGGER IF EXISTS update_movement_history_updated_at ON movement_history;
 CREATE TRIGGER update_movement_history_updated_at
     BEFORE UPDATE ON movement_history
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
-
--- Insert schema version
-INSERT INTO schema_migrations (version) VALUES (6);
