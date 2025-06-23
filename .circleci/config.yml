@@ -3,7 +3,7 @@ version: 2.1
 jobs:
   build:
     docker:
-      - image: docker:stable  # Image for running the job steps
+      - image: docker:stable  # Based on Alpine, lightweight
 
     steps:
       - checkout
@@ -11,8 +11,9 @@ jobs:
       - setup_remote_docker
 
       - run:
-          name: Install Docker Compose V2 Plugin
+          name: Install curl and Docker Compose V2 plugin
           command: |
+            apk add --no-cache curl
             mkdir -p ~/.docker/cli-plugins/
             curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
             chmod +x ~/.docker/cli-plugins/docker-compose
