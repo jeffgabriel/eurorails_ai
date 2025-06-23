@@ -3,23 +3,52 @@ version: 2.1
 jobs:
   build:
     docker:
-      - image: circleci/python:3.8
+      - image: docker:24.0.7-cli  # Official Docker CLI with Compose V2
+
     steps:
       - checkout
+
       - setup_remote_docker:
-          version: 20.10.7
+          version: 20.10.18  # Enables full Docker Engine access
+
       - run:
-          name: Start Docker Compose
-          command: |
-            docker-compose -f docker-compose.yml up -d
+          name: Start services
+          command: docker compose up -d
+
       - run:
-          name: Run Tests
+          name: Wait for postgresdb to be healthy
           command: |
-            # Wait for the database to be ready
-            docker-compose exec postgresdb bash -c 'until pg_isready -U $DB_USER -d $DB_NAME; do sleep 1; done'
-            # Run your integration tests here
-            docker-compose exec app bash -c 'pytest tests/integration'
+            echo "Waiting for 'postgresdb' to be healthy..."
+            timeout=60
+            while [ "$timeout" -gt 0 ]; do
+              cid=$(docker compose ps -q postgresdb)
+              status=$(docker inspect --format='{{.State.Health.Status}}' "$cid")
+              echo "Health status: $status"
+              if [ "$status" = "healthy" ]; then
+                echo "Postgres is healthy!"
+                break
+              fi
+              sleep 2
+              timeout=$((timeout - 2))
+            done
+
+            if [ "$timeout" -le 0 ]; then
+              echo "Postgres healthcheck timed out"
+              docker compose logs
+              exit 1
+            fi
+
       - run:
-          name: Stop Docker Compose
-          command: |
-            docker-compose down
+          name: Run tests in /app
+          command: docker compose exec app sh -c "cd /app && npm test"
+
+      - run:
+          name: Teardown
+          when: always
+          command: docker compose down
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build
