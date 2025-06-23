@@ -12,7 +12,7 @@ jobs:
 
       - run:
           name: Start services with docker compose
-          command: docker compose up -d
+          command: docker-compose up -d
 
       - run:
           name: Wait for postgresdb to be healthy
@@ -20,7 +20,7 @@ jobs:
             echo "Waiting for 'postgresdb' to be healthy..."
             timeout=60
             while [ "$timeout" -gt 0 ]; do
-              cid=$(docker compose ps -q postgresdb)
+              cid=$(docker-compose ps -q postgresdb)
               status=$(docker inspect --format='{{.State.Health.Status}}' "$cid")
               echo "Health status: $status"
               if [ "$status" = "healthy" ]; then
@@ -33,18 +33,18 @@ jobs:
 
             if [ "$timeout" -le 0 ]; then
               echo "Postgres healthcheck timed out"
-              docker compose logs
+              docker-compose logs
               exit 1
             fi
 
       - run:
           name: Run tests in /app
-          command: docker compose exec app sh -c "cd /app && npm test"
+          command: docker-compose exec app sh -c "cd /app && npm test"
 
       - run:
           name: Teardown
           when: always
-          command: docker compose down
+          command: docker-compose down
 
 workflows:
   version: 2
