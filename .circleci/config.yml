@@ -1,0 +1,62 @@
+version: 2.1
+
+jobs:
+  build:
+    docker:
+      - image: docker:stable  # Based on Alpine, lightweight
+
+    steps:
+      - checkout
+
+      - setup_remote_docker
+
+      - run:
+          name: Install curl and Docker Compose V2 plugin
+          command: |
+            apk add --no-cache curl
+            mkdir -p ~/.docker/cli-plugins/
+            curl -SL https://github.com/docker/compose/releases/download/v2.24.6/docker-compose-linux-x86_64 -o ~/.docker/cli-plugins/docker-compose
+            chmod +x ~/.docker/cli-plugins/docker-compose
+            docker compose version
+
+      - run:
+          name: Start services
+          command: docker compose up -d
+
+      - run:
+          name: Wait for postgresdb to be healthy
+          command: |
+            echo "Waiting for 'postgresdb' to be healthy..."
+            timeout=60
+            while [ "$timeout" -gt 0 ]; do
+              cid=$(docker compose ps -q postgresdb)
+              status=$(docker inspect --format='{{.State.Health.Status}}' "$cid")
+              echo "Health status: $status"
+              if [ "$status" = "healthy" ]; then
+                echo "Postgres is healthy!"
+                break
+              fi
+              sleep 2
+              timeout=$((timeout - 2))
+            done
+
+            if [ "$timeout" -le 0 ]; then
+              echo "Postgres healthcheck timed out"
+              docker compose logs
+              exit 1
+            fi
+
+      - run:
+          name: Run tests in /app
+          command: docker compose exec app sh -c "cd /app && npm test"
+
+      - run:
+          name: Teardown
+          when: always
+          command: docker compose down
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - build
