@@ -6952,6 +6952,14 @@
     "Ocean": null
   },
   {
+    "Id": "fa96ebf2-c337-4b4e-8a61-dabf6b118d0e",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 37,
+    "GridY": 25,
+    "Ocean": null
+  },
+  {
     "Id": "cb746b89-ffd1-4f9e-887c-908ad4546b14",
     "Type": "Milepost",
     "Name": null,

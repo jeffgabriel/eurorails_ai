@@ -1,0 +1,11 @@
+---
+description: github
+globs: 
+alwaysApply: false
+---
+- the github repo is jeffgabriel/eurorails_ai
+- all of our local branches take the form of jeff/[NAME OF BRANCH]
+- we always create a local branch if we're on main, do no branching if already on a branch
+- we first commit to the local branch when asked to commit.
+- we setup branches to track local by using the -u flag when pushing a local branch to remote.
+- write a summary message, and identify the issue to resolve when creating a PR
