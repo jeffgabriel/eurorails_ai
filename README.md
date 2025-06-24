@@ -4,6 +4,14 @@ This is a test project for building with AI tools. Pretty much everything in thi
 # Eurorails Digital
 
 A digital implementation of the Eurorails board game using modern web technologies.
+## Setup
+![](https://drive.google.com/uc?export=view&id=1NQLn-Jin-SRFiVshaIOgHC2k2iw4il0g)
+
+## Track Drawing
+![](https://drive.google.com/uc?export=view&id=1iEnhns4--leRVJTqi6qtmn7pvHG-QXSY)
+
+## Manage Load @ City
+![](https://drive.google.com/uc?export=view&id=1LLX9KNwIYmOwaUtHTZ_ytHRqi8s_9c46)
 
 ## Tech Stack
 
