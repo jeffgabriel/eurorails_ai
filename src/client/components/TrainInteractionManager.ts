@@ -193,7 +193,7 @@ export class TrainInteractionManager {
         //check if the selected point is a valid move 
         const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
         if (!moveResult.canMove) {
-          this.showInvalidMoveMessage(pointer);
+          this.showInvalidMoveMessage(pointer, moveResult.message || "Invalid move. You cannot move to this point.");
           return;
         }
 
@@ -250,11 +250,11 @@ export class TrainInteractionManager {
     }
   }
   
-  private showInvalidMoveMessage(pointer: Phaser.Input.Pointer): void {
+  private showInvalidMoveMessage(pointer: Phaser.Input.Pointer, message: string): void {
     const movementProblemText = this.scene.add.text(
       pointer.x,
       pointer.y,
-      "Invalid move. You cannot move to this point.",
+      message,
       {
         fontSize: "16px",
         color: "#ff0000",
@@ -334,6 +334,11 @@ export class TrainInteractionManager {
       return;
     }
     
+    // Load latest track data before enabling movement mode
+    if (this.trainMovementManager && this.trainMovementManager.loadTrackData) {
+      await this.trainMovementManager.loadTrackData();
+    }
+
     this.isTrainMovementMode = true;
     this.justEnteredMovementMode = true; // Set flag to prevent immediate placement
 

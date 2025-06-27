@@ -1,5 +1,10 @@
 import "phaser";
-import { mapConfig, HORIZONTAL_SPACING, VERTICAL_SPACING, GRID_MARGIN } from "../config/mapConfig";
+import {
+  mapConfig,
+  HORIZONTAL_SPACING,
+  VERTICAL_SPACING,
+  GRID_MARGIN,
+} from "../config/mapConfig";
 import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -130,11 +135,11 @@ export class MapRenderer {
           console.warn(`No config found for grid position ${row},${col}`);
           continue;
         }
-        
+
         const terrain = config.terrain;
         const city = config.city;
-       // this.writeGridPointLabel(config, isOffsetRow);
-       // this.writeGridPointCoordinates(x, y, col, row);
+        // this.writeGridPointLabel(config, isOffsetRow);
+        //this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
           const mapElement = MapElementFactory.createMapElement(
@@ -154,8 +159,8 @@ export class MapRenderer {
         // Store point data with grid coordinates
         this.gridPoints[row][col] = {
           id: config?.id || "",
-          x: config ? config.x : (x + MapRenderer.GRID_MARGIN),
-          y: config ? config.y : (y + MapRenderer.GRID_MARGIN),
+          x: config ? config.x : x + MapRenderer.GRID_MARGIN,
+          y: config ? config.y : y + MapRenderer.GRID_MARGIN,
           row,
           col,
           terrain,
@@ -222,32 +227,27 @@ export class MapRenderer {
     row: number
   ) {
     // Add coordinate label for each point
-    const coordLabel = this.scene.add.text(
-      x + 93,
-      y + 118,
-      `${col},${row}`,
-      {
-        color: "#000000",
-        fontSize: "6px",
-        backgroundColor: "#ffffff80", // Semi-transparent white background
-      }
-    );
+    const coordLabel = this.scene.add.text(x + 93, y + 118, `${col},${row}`, {
+      color: "#000000",
+      fontSize: "6px",
+      backgroundColor: "#ffffff80", // Semi-transparent white background
+    });
     coordLabel.setOrigin(0, 1);
     this.mapContainer.add(coordLabel);
   }
 
   private writeGridPointLabel(p: GridPoint | undefined, isOffsetRow: boolean) {
     if (!p) return;
-      const label = this.scene.add.text(
-        p.x - 15,
-        p.y + 18,
-        TerrainType[p.terrain],
-        {
-          color: "#000000",
-          fontSize: "8px",
-          backgroundColor: "#ffffff80", // Semi-transparent white background
-        }
-      );
-      this.mapContainer.add(label);
+    const label = this.scene.add.text(
+      p.x - 15,
+      p.y + 18,
+      TerrainType[p.terrain],
+      {
+        color: "#000000",
+        fontSize: "8px",
+        backgroundColor: "#ffffff80", // Semi-transparent white background
+      }
+    );
+    this.mapContainer.add(label);
   }
 }
