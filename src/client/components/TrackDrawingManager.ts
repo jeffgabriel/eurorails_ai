@@ -1,6 +1,6 @@
 import 'phaser';
 import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
-import { TrackSegment, PlayerTrackState, TrackBuildError } from '../../shared/types/TrackTypes';
+import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 
 export class TrackDrawingManager {
