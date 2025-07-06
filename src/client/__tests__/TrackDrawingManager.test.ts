@@ -904,3 +904,189 @@ describe('TrackDrawingManager', () => {
         });
     });
 });
+
+describe('State consistency on backend failure', () => {
+    let mockTrackService: any;
+    let mockGameStateService: any;
+    let trackDrawingManager: TrackDrawingManager;
+    let playerTrackState: any;
+    let currentPlayer: any;
+    let scene: any;
+    let mapContainer: any;
+
+    beforeEach(() => {
+        // Setup mocks
+        mockTrackService = {
+            saveTrackState: jest.fn(),
+            loadAllTracks: jest.fn().mockResolvedValue([])
+        };
+        mockGameStateService = {
+            updatePlayerMoney: jest.fn()
+        };
+
+        // Setup game state and grid
+        const gameState = {
+            id: 'test-game-id',
+            players: [
+                { 
+                    id: 'player1', 
+                    name: 'Player 1', 
+                    color: '#FF0000', 
+                    money: 50, 
+                    trainType: 'basic',
+                    turnNumber: 1,
+                    trainState: {
+                        position: {x: 0, y: 0, row: 0, col: 0},
+                        movementHistory: [],
+                        remainingMovement: 9,
+                        loads: []
+                    },
+                    hand: []
+                }
+            ],
+            currentPlayerIndex: 0,
+            status: 'active',
+            maxPlayers: 6
+        };
+        const gridPoints = [
+            [
+                { id: '0-0', x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+                { id: '0-1', x: 35, y: 0, row: 0, col: 1, terrain: TerrainType.Clear }
+            ]
+        ];
+
+        // Minimal scene and container mocks
+        scene = {
+            add: { graphics: () => ({ setDepth: jest.fn(), destroy: jest.fn() }) },
+            events: { on: jest.fn(), off: jest.fn() },
+            input: { on: jest.fn(), off: jest.fn() },
+            cameras: { main: { getWorldPoint: jest.fn((x, y) => ({ x, y })) } },
+            scale: { width: 1024, height: 768 }
+        };
+        mapContainer = { add: jest.fn() };
+
+        // Create manager
+        trackDrawingManager = new TrackDrawingManager(
+            scene as any,
+            mapContainer as any,
+            gameState as any,
+            gridPoints as any,
+            mockGameStateService,
+            mockTrackService
+        );
+
+        // Setup player track state
+        playerTrackState = {
+            playerId: 'player1',
+            gameId: 'test-game-id',
+            segments: [],
+            totalCost: 0,
+            turnBuildCost: 0,
+            lastBuildTimestamp: new Date()
+        };
+        (trackDrawingManager as any).playerTracks.set('player1', playerTrackState);
+
+        // Add a segment to currentSegments
+        (trackDrawingManager as any).currentSegments = [
+            {
+                from: gridPoints[0][0],
+                to: gridPoints[0][1],
+                cost: 1
+            }
+        ];
+        (trackDrawingManager as any).turnBuildCost = 1;
+        (trackDrawingManager as any).segmentsDrawnThisTurn = [];
+        currentPlayer = gameState.players[0];
+    });
+
+    it('should not update local state if trackService.saveTrackState fails', async () => {
+        mockTrackService.saveTrackState.mockResolvedValue(false);
+
+        await (trackDrawingManager as any).saveCurrentTracks();
+
+        // State should be unchanged
+        expect(playerTrackState.segments).toHaveLength(0);
+        expect(playerTrackState.totalCost).toBe(0);
+        expect(playerTrackState.turnBuildCost).toBe(0);
+        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
+        expect(currentPlayer.money).toBe(50);
+    });
+
+    it('should not update local state if gameStateService.updatePlayerMoney fails', async () => {
+        mockTrackService.saveTrackState.mockResolvedValue(true);
+        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
+
+        await (trackDrawingManager as any).saveCurrentTracks();
+
+        // State should be unchanged
+        expect(playerTrackState.segments).toHaveLength(0);
+        expect(playerTrackState.totalCost).toBe(0);
+        expect(playerTrackState.turnBuildCost).toBe(0);
+        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
+        expect(currentPlayer.money).toBe(50);
+    });
+
+    it('should attempt rollback if updatePlayerMoney fails after saveTrackState succeeds', async () => {
+        mockTrackService.saveTrackState
+            .mockResolvedValueOnce(true) // initial save succeeds
+            .mockResolvedValueOnce(true); // rollback succeeds
+        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
+
+        const prevSegments = [...playerTrackState.segments];
+        const prevTotalCost = playerTrackState.totalCost;
+        const prevTurnBuildCost = playerTrackState.turnBuildCost;
+        const prevTimestamp = playerTrackState.lastBuildTimestamp;
+
+        const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        await (trackDrawingManager as any).saveCurrentTracks();
+
+        // Should call saveTrackState twice: once for save, once for rollback
+        expect(mockTrackService.saveTrackState).toHaveBeenCalledTimes(2);
+        // The second call should be the rollback with previous state
+        expect(mockTrackService.saveTrackState).toHaveBeenLastCalledWith(
+            'test-game-id',
+            'player1',
+            expect.objectContaining({
+                segments: prevSegments,
+                totalCost: prevTotalCost,
+                turnBuildCost: prevTurnBuildCost,
+                lastBuildTimestamp: prevTimestamp
+            })
+        );
+        // Should log a warning for rollback
+        expect(consoleWarnSpy).toHaveBeenCalledWith('Rolled back track state after player money update failure');
+        // Should not update local state
+        expect(playerTrackState.segments).toHaveLength(0);
+        expect(playerTrackState.totalCost).toBe(0);
+        expect(playerTrackState.turnBuildCost).toBe(0);
+        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
+        expect(currentPlayer.money).toBe(50);
+
+        consoleWarnSpy.mockRestore();
+        consoleErrorSpy.mockRestore();
+    });
+
+    it('should log an error if rollback fails after updatePlayerMoney failure', async () => {
+        mockTrackService.saveTrackState
+            .mockResolvedValueOnce(true) // initial save succeeds
+            .mockResolvedValueOnce(false); // rollback fails
+        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
+
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        await (trackDrawingManager as any).saveCurrentTracks();
+
+        // Should log an error for rollback failure
+        expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to roll back track state after player money update failure');
+        // Should not update local state
+        expect(playerTrackState.segments).toHaveLength(0);
+        expect(playerTrackState.totalCost).toBe(0);
+        expect(playerTrackState.turnBuildCost).toBe(0);
+        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
+        expect(currentPlayer.money).toBe(50);
+
+        consoleErrorSpy.mockRestore();
+    });
+});

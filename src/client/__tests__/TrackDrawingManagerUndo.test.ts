@@ -249,4 +249,92 @@ describe('TrackDrawingManager Undo Feature', () => {
     // Cache should be cleared
     expect((manager as any)["networkNodesCache"].size).toBe(0);
   });
+
+  it('should not allow undoing segments from previous turns after turn change', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Simulate drawing and committing a segment in turn 1
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    expect(manager.segmentsDrawnThisTurn).toEqual([segment1]);
+    // End turn (simulate turn change)
+    const playerId = mockGameState.players[0].id;
+    await manager.endTurnCleanup(playerId);
+    expect(manager.segmentsDrawnThisTurn).toEqual([]);
+    // Try to undo (should do nothing)
+    await manager.undoLastSegment();
+    expect(manager.segmentsDrawnThisTurn).toEqual([]);
+    const playerTrackState = (manager as any).playerTracks.get(playerId);
+    expect(playerTrackState.segments).toEqual([segment1]);
+  });
+
+  it('should handle backend failure gracefully when undoing', async () => {
+    // Mock fetch to fail for this test
+    const originalFetch = (global as any).fetch;
+    (global as any).fetch = jest.fn(() => Promise.resolve({ ok: false, json: async () => ({ error: 'fail' }) }));
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Simulate drawing and committing a segment
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    // Undo last segment (should log error but not throw)
+    await expect(manager.undoLastSegment()).resolves.toBeUndefined();
+    // Restore fetch
+    (global as any).fetch = originalFetch;
+  });
+
+  it('should persist undo state and restore correctly after reload', async () => {
+    // Simulate drawing and committing two segments
+    const manager1 = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    const segment2 = { from: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, to: { x: 2, y: 2, row: 0, col: 2, terrain: TerrainType.Clear }, cost: 2 };
+    (manager1 as any)["currentSegments"] = [segment1];
+    (manager1 as any)["turnBuildCost"] = 1;
+    await (manager1 as any)["saveCurrentTracks"]();
+    (manager1 as any)["currentSegments"] = [segment2];
+    (manager1 as any)["turnBuildCost"] = 2;
+    await (manager1 as any)["saveCurrentTracks"]();
+    // Simulate reload: create a new manager and load tracks
+    const manager2 = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Mock TrackService to return the same segments
+    (manager2 as any).playerTracks.set(
+      mockGameState.players[0].id,
+      {
+        playerId: mockGameState.players[0].id,
+        gameId: mockGameState.id,
+        segments: [segment1, segment2],
+        totalCost: 3,
+        turnBuildCost: 3,
+        lastBuildTimestamp: new Date()
+      }
+    );
+    manager2.segmentsDrawnThisTurn = [segment1, segment2];
+    // Undo last segment
+    await manager2.undoLastSegment();
+    expect(manager2.segmentsDrawnThisTurn).toEqual([segment1]);
+    const playerTrackState = (manager2 as any).playerTracks.get(mockGameState.players[0].id);
+    expect(playerTrackState.segments).toEqual([segment1]);
+  });
 }); 

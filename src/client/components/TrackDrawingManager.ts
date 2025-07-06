@@ -268,7 +268,6 @@ export class TrackDrawingManager {
 
     private async saveCurrentTracks(): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        
         // Get or create track state for current player
         let playerTrackState = this.playerTracks.get(currentPlayer.id);
         if (!playerTrackState) {
@@ -282,50 +281,76 @@ export class TrackDrawingManager {
             };
             this.playerTracks.set(currentPlayer.id, playerTrackState);
         }
-
-        // Add new segments to player's track state
+        // Only proceed if there are new segments to add
         if (this.currentSegments.length > 0 && playerTrackState) {
-            playerTrackState.segments.push(...this.currentSegments);
-            playerTrackState.totalCost += this.turnBuildCost;
-            
-            // Accumulate the turn build cost rather than overwriting it
-            playerTrackState.turnBuildCost += this.turnBuildCost;
-            
-            playerTrackState.lastBuildTimestamp = new Date();
-            
-            // Accumulate all segments built this turn for undo functionality.
-            // This array is only cleared at end of turn, so it persists across multiple drawing sessions.
-            this.segmentsDrawnThisTurn.push(...this.currentSegments);
-            
+            // Prepare new state but do not mutate yet
+            const newSegments = [...playerTrackState.segments, ...this.currentSegments];
+            const newTotalCost = playerTrackState.totalCost + this.turnBuildCost;
+            const newTurnBuildCost = playerTrackState.turnBuildCost + this.turnBuildCost;
+            const newLastBuildTimestamp = new Date();
+            const newSegmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...this.currentSegments];
+            const newMoney = currentPlayer.money - this.turnBuildCost;
             try {
-                // Save track state to database
+                // Attempt to save track state to database (simulate the new state)
                 const ok = await this.trackService.saveTrackState(
                     this.gameState.id,
                     currentPlayer.id,
-                    playerTrackState
+                    {
+                        ...playerTrackState,
+                        segments: newSegments,
+                        totalCost: newTotalCost,
+                        turnBuildCost: newTurnBuildCost,
+                        lastBuildTimestamp: newLastBuildTimestamp
+                    }
                 );
-
                 if (!ok) {
-                    throw new Error('Failed to save track state in database');
+                    console.error('Failed to save track state in database');
+                    return;
                 }
-                
-                // Update player's money if we have track building cost and gameStateService
+                // Only after track state is saved, update player money
                 if (this.turnBuildCost > 0 && this.gameStateService) {
-                    // Calculate new money amount
-                    const newMoney = currentPlayer.money - this.turnBuildCost;
-                    
-                    // Update money both locally and in the database
                     const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
                         currentPlayer.id, 
                         newMoney
                     );
-                    
                     if (!moneyUpdateSuccess) {
-                        throw new Error('Failed to update player money');
+                        // Roll back the track state save to maintain consistency
+                        try {
+                            // Roll back by restoring the previous state
+                            const rollbackOk = await this.trackService.saveTrackState(
+                                this.gameState.id,
+                                currentPlayer.id,
+                                {
+                                    ...playerTrackState,
+                                    segments: [...playerTrackState.segments],
+                                    totalCost: playerTrackState.totalCost,
+                                    turnBuildCost: playerTrackState.turnBuildCost,
+                                    lastBuildTimestamp: playerTrackState.lastBuildTimestamp
+                                }
+                            );
+                            if (!rollbackOk) {
+                                console.error('Failed to roll back track state after player money update failure');
+                            } else {
+                                console.warn('Rolled back track state after player money update failure');
+                            }
+                        } catch (rollbackError) {
+                            console.error('Error during rollback of track state:', rollbackError);
+                        }
+                        return;
                     }
                 }
+                // Only after all backend operations succeed, update local state
+                playerTrackState.segments = newSegments;
+                playerTrackState.totalCost = newTotalCost;
+                playerTrackState.turnBuildCost = newTurnBuildCost;
+                playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
+                this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
+                if (this.turnBuildCost > 0 && this.gameStateService) {
+                    currentPlayer.money = newMoney;
+                }
             } catch (error) {
-                throw error;
+                console.error('Error saving track state:', error);
+                return;
             }
         }
     }
@@ -1354,9 +1379,11 @@ export class TrackDrawingManager {
                 );
                 if (!ok) {
                     console.error('Failed to persist undo to backend');
+                    // Do not throw, just log and continue
                 }
             } catch (error) {
                 console.error('Error persisting undo to backend:', error);
+                // Do not throw, just log and continue
             }
         }
         // Redraw
