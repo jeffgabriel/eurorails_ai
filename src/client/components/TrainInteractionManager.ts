@@ -469,7 +469,6 @@ export class TrainInteractionManager {
       // 1. This is the current player's train
       // 2. Not in drawing mode
       // 3. Player has track
-      // 4. Not already in train movement mode
       const isCurrentPlayer =
         playerId ===
         this.gameState.players[this.gameState.currentPlayerIndex].id;
@@ -478,15 +477,21 @@ export class TrainInteractionManager {
       if (
         isCurrentPlayer &&
         hasTrack &&
-        !this.isDrawingMode &&
-        !this.isTrainMovementMode
+        !this.isDrawingMode
       ) {
         // First stop event propagation to prevent it from being handled by the scene
         if (pointer.event) {
           pointer.event.stopPropagation();
         }
-        // Then enter train movement mode
-        this.enterTrainMovementMode();
+        // Toggle movement mode: if already in movement mode, exit; otherwise, enter
+        if (this.isTrainMovementMode) {
+          // Prevent immediate exit if just entered movement mode
+          if (!this.justEnteredMovementMode) {
+            this.exitTrainMovementMode();
+          }
+        } else {
+          this.enterTrainMovementMode();
+        }
       }
     });
   }
