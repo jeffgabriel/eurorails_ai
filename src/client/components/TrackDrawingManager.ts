@@ -1333,4 +1333,44 @@ export class TrackDrawingManager {
         await this.clearLastBuildCost(playerId);
         this.segmentsDrawnThisTurn = [];
     }
+
+    // Undo the last segment built this turn
+    public undoLastSegment(): void {
+        if (this.segmentsDrawnThisTurn.length === 0) {
+            return;
+        }
+        // Remove the last segment from the turn array
+        const lastSegment = this.segmentsDrawnThisTurn.pop();
+        if (!lastSegment) return;
+        // Remove from permanent track state
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        if (playerTrackState) {
+            // Remove the last matching segment (LIFO)
+            for (let i = playerTrackState.segments.length - 1; i >= 0; i--) {
+                const seg = playerTrackState.segments[i];
+                if (
+                    seg.from.row === lastSegment.from.row &&
+                    seg.from.col === lastSegment.from.col &&
+                    seg.to.row === lastSegment.to.row &&
+                    seg.to.col === lastSegment.to.col
+                ) {
+                    playerTrackState.segments.splice(i, 1);
+                    break;
+                }
+            }
+            // Subtract cost only from turnBuildCost
+            playerTrackState.turnBuildCost = Math.max(0, playerTrackState.turnBuildCost - lastSegment.cost);
+        }
+        // Clear network cache to avoid stale pathfinding
+        this.networkNodesCache.clear();
+        // Redraw
+        this.drawAllTracks();
+        // Update cost display
+        if (this.onCostUpdateCallback) {
+            const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+            const totalCost = previousSessionsCost + this.turnBuildCost;
+            this.onCostUpdateCallback(totalCost);
+        }
+    }
 }

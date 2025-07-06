@@ -99,7 +99,17 @@ export class UIManager {
     this.playerHandDisplay = new PlayerHandDisplay(
       this.scene,
       this.gameState,
-      this.toggleDrawingCallback
+      this.toggleDrawingCallback,
+      () => {
+        this.trackDrawingManager.undoLastSegment();
+        // Refresh the hand display after undo
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackDrawingManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
+        const currentSessionCost = this.trackDrawingManager.getCurrentTurnBuildCost();
+        const totalCost = previousSessionsCost + currentSessionCost;
+        this.setupPlayerHand(this.isDrawingMode, totalCost);
+      },
+      () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0
     );
 
     // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
