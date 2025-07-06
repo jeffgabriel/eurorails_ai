@@ -281,22 +281,27 @@ export class TrackDrawingManager {
             };
             this.playerTracks.set(currentPlayer.id, playerTrackState);
         }
-        // Add new segments to player's track state
+        // Only proceed if there are new segments to add
         if (this.currentSegments.length > 0 && playerTrackState) {
-            playerTrackState.segments.push(...this.currentSegments);
-            playerTrackState.totalCost += this.turnBuildCost;
-            // Accumulate the turn build cost rather than overwriting it
-            playerTrackState.turnBuildCost += this.turnBuildCost;
-            playerTrackState.lastBuildTimestamp = new Date();
-            // Accumulate all segments built this turn for undo functionality.
-            // This array is only cleared at end of turn, so it persists across multiple drawing sessions.
-            this.segmentsDrawnThisTurn.push(...this.currentSegments);
+            // Prepare new state but do not mutate yet
+            const newSegments = [...playerTrackState.segments, ...this.currentSegments];
+            const newTotalCost = playerTrackState.totalCost + this.turnBuildCost;
+            const newTurnBuildCost = playerTrackState.turnBuildCost + this.turnBuildCost;
+            const newLastBuildTimestamp = new Date();
+            const newSegmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...this.currentSegments];
+            const newMoney = currentPlayer.money - this.turnBuildCost;
             try {
-                // Save track state to database
+                // Attempt to save track state to database (simulate the new state)
                 const ok = await this.trackService.saveTrackState(
                     this.gameState.id,
                     currentPlayer.id,
-                    playerTrackState
+                    {
+                        ...playerTrackState,
+                        segments: newSegments,
+                        totalCost: newTotalCost,
+                        turnBuildCost: newTurnBuildCost,
+                        lastBuildTimestamp: newLastBuildTimestamp
+                    }
                 );
                 if (!ok) {
                     console.error('Failed to save track state in database');
@@ -304,8 +309,6 @@ export class TrackDrawingManager {
                 }
                 // Update player's money if we have track building cost and gameStateService
                 if (this.turnBuildCost > 0 && this.gameStateService) {
-                    // Calculate new money amount
-                    const newMoney = currentPlayer.money - this.turnBuildCost;
                     // Update money both locally and in the database
                     const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
                         currentPlayer.id, 
@@ -315,6 +318,15 @@ export class TrackDrawingManager {
                         console.error('Failed to update player money');
                         return;
                     }
+                }
+                // Only after all backend operations succeed, update local state
+                playerTrackState.segments = newSegments;
+                playerTrackState.totalCost = newTotalCost;
+                playerTrackState.turnBuildCost = newTurnBuildCost;
+                playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
+                this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
+                if (this.turnBuildCost > 0 && this.gameStateService) {
+                    currentPlayer.money = newMoney;
                 }
             } catch (error) {
                 console.error('Error saving track state:', error);
