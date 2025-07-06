@@ -48,6 +48,44 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect(manager.segmentsDrawnThisTurn).toEqual([segment1, segment2]);
   });
 
+  it('should not accumulate segments if drawing mode is toggled without drawing', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Simulate toggling drawing mode on/off without drawing
+    (manager as any)["currentSegments"] = [];
+    (manager as any)["turnBuildCost"] = 0;
+    await (manager as any)["saveCurrentTracks"]();
+    expect(manager.segmentsDrawnThisTurn).toEqual([]);
+  });
+
+  it('should accumulate only actual segments across mixed drawing sessions', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // First session: draw one segment
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    // Second session: no drawing
+    (manager as any)["currentSegments"] = [];
+    (manager as any)["turnBuildCost"] = 0;
+    await (manager as any)["saveCurrentTracks"]();
+    // Third session: draw another segment
+    const segment2 = { from: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, to: { x: 2, y: 2, row: 0, col: 2, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment2];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    expect(manager.segmentsDrawnThisTurn).toEqual([segment1, segment2]);
+  });
+
   it('should reset segmentsDrawnThisTurn and build cost on endTurnCleanup', async () => {
     const manager = new TrackDrawingManager(
       mockScene,
