@@ -245,7 +245,7 @@ describe('TrackDrawingManager Undo Feature', () => {
     // Add a fake cache entry
     (manager as any)["networkNodesCache"].set("test", new Set(["a"]));
     // Undo last segment
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     // Cache should be cleared
     expect((manager as any)["networkNodesCache"].size).toBe(0);
   });
