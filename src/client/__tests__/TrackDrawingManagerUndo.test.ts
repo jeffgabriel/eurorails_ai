@@ -206,4 +206,47 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect((manager as any).playerTracks.get(playerId).segments).toEqual([]);
     expect(manager.getLastBuildCost(playerId)).toBe(0);
   });
+
+  it('should not affect this.turnBuildCost when undoing a saved segment', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Simulate drawing and committing a segment
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    // Start a new drawing session (simulate unsaved cost)
+    (manager as any)["turnBuildCost"] = 5;
+    // Undo last segment
+    manager.undoLastSegment();
+    // The unsaved session cost should remain unchanged
+    expect((manager as any)["turnBuildCost"]).toBe(5);
+    // The player's build cost should be 0
+    const playerId = mockGameState.players[0].id;
+    expect(manager.getLastBuildCost(playerId)).toBe(0);
+  });
+
+  it('should clear networkNodesCache after undo', async () => {
+    const manager = new TrackDrawingManager(
+      mockScene,
+      mockMapContainer,
+      mockGameState,
+      mockGridPoints
+    );
+    // Simulate drawing and committing a segment
+    const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
+    (manager as any)["currentSegments"] = [segment1];
+    (manager as any)["turnBuildCost"] = 1;
+    await (manager as any)["saveCurrentTracks"]();
+    // Add a fake cache entry
+    (manager as any)["networkNodesCache"].set("test", new Set(["a"]));
+    // Undo last segment
+    manager.undoLastSegment();
+    // Cache should be cleared
+    expect((manager as any)["networkNodesCache"].size).toBe(0);
+  });
 }); 

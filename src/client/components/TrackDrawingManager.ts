@@ -1359,10 +1359,11 @@ export class TrackDrawingManager {
                     break;
                 }
             }
-            // Subtract cost from both turnBuildCost and this.turnBuildCost
+            // Subtract cost only from turnBuildCost
             playerTrackState.turnBuildCost = Math.max(0, playerTrackState.turnBuildCost - lastSegment.cost);
         }
-        this.turnBuildCost = Math.max(0, this.turnBuildCost - lastSegment.cost);
+        // Clear network cache to avoid stale pathfinding
+        this.networkNodesCache.clear();
         // Redraw
         this.drawAllTracks();
         // Update cost display
