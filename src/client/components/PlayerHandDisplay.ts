@@ -9,6 +9,8 @@ export class PlayerHandDisplay {
   private container: Phaser.GameObjects.Container;
   private gameState: GameState;
   private toggleDrawingCallback: () => void;
+  private onUndo: () => void;
+  private canUndo: () => boolean;
   public trainCard: TrainCard | null = null;
   private readonly CARD_SPACING = 180;
   private readonly START_X = 110;
@@ -20,11 +22,15 @@ export class PlayerHandDisplay {
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
-    toggleDrawingCallback: () => void
+    toggleDrawingCallback: () => void,
+    onUndo: () => void,
+    canUndo: () => boolean
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.toggleDrawingCallback = toggleDrawingCallback;
+    this.onUndo = onUndo;
+    this.canUndo = canUndo;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -223,6 +229,30 @@ export class PlayerHandDisplay {
     }
       
     targetContainer.add([nameAndMoney, buildCostText, crayonButton]);
+
+    // --- Undo button below crayon ---
+    if (this.canUndo()) {
+      const undoButton = this.scene.add
+        .text(
+          crayonButton.x,
+          crayonButton.y + 50, // 50px below crayon
+          '⟲ Undo',
+          {
+            color: '#ffffff',
+            fontSize: '18px',
+            fontStyle: 'bold',
+            backgroundColor: '#444',
+            padding: { left: 8, right: 8, top: 4, bottom: 4 },
+          }
+        )
+        .setOrigin(0.5, 0)
+        .setInteractive({ useHandCursor: true });
+      undoButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        this.onUndo();
+      });
+      targetContainer.add(undoButton);
+    }
   }
 
   public destroy(): void {
