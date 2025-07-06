@@ -301,9 +301,9 @@ export class TrackDrawingManager {
             
             playerTrackState.lastBuildTimestamp = new Date();
             
-            // --- NEW: Track segments built this turn ---
+            // Accumulate all segments built this turn for undo functionality.
+            // This array is only cleared at end of turn, so it persists across multiple drawing sessions.
             this.segmentsDrawnThisTurn.push(...this.currentSegments);
-            // --- END NEW ---
             
             try {
                 // Save track state to database
