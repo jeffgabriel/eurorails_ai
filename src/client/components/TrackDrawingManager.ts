@@ -307,15 +307,35 @@ export class TrackDrawingManager {
                     console.error('Failed to save track state in database');
                     return;
                 }
-                // Update player's money if we have track building cost and gameStateService
+                // Only after track state is saved, update player money
                 if (this.turnBuildCost > 0 && this.gameStateService) {
-                    // Update money both locally and in the database
                     const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
                         currentPlayer.id, 
                         newMoney
                     );
                     if (!moneyUpdateSuccess) {
-                        console.error('Failed to update player money');
+                        // Roll back the track state save to maintain consistency
+                        try {
+                            // Roll back by restoring the previous state
+                            const rollbackOk = await this.trackService.saveTrackState(
+                                this.gameState.id,
+                                currentPlayer.id,
+                                {
+                                    ...playerTrackState,
+                                    segments: [...playerTrackState.segments],
+                                    totalCost: playerTrackState.totalCost,
+                                    turnBuildCost: playerTrackState.turnBuildCost,
+                                    lastBuildTimestamp: playerTrackState.lastBuildTimestamp
+                                }
+                            );
+                            if (!rollbackOk) {
+                                console.error('Failed to roll back track state after player money update failure');
+                            } else {
+                                console.warn('Rolled back track state after player money update failure');
+                            }
+                        } catch (rollbackError) {
+                            console.error('Error during rollback of track state:', rollbackError);
+                        }
                         return;
                     }
                 }
