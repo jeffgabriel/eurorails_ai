@@ -2,6 +2,7 @@ import 'phaser';
 import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes';
 import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
+import { TrackService } from '../services/TrackService';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -40,6 +41,7 @@ export class TrackDrawingManager {
     };
 
     private gameStateService: any; // Using 'any' to avoid circular dependency
+    private trackService: TrackService;
     
     // Callback for cost updates
     private onCostUpdateCallback: ((cost: number) => void) | null = null;
@@ -70,7 +72,8 @@ export class TrackDrawingManager {
         mapContainer: Phaser.GameObjects.Container, 
         gameState: GameState,
         gridPoints: GridPoint[][],
-        gameStateService?: any // Using 'any' to avoid circular dependency
+        gameStateService?: any, // Using 'any' to avoid circular dependency
+        trackService?: TrackService // Optional for testability
     ) {
         this.scene = scene;
         this.mapContainer = mapContainer;
@@ -78,6 +81,7 @@ export class TrackDrawingManager {
         this.gridPoints = gridPoints;
         this.playerTracks = new Map();
         this.gameStateService = gameStateService;
+        this.trackService = trackService || new TrackService();
         this.segmentsDrawnThisTurn = [];
         
         // Initialize drawing graphics
@@ -154,13 +158,7 @@ export class TrackDrawingManager {
     public async loadExistingTracks(): Promise<void> {
         try {
             // Fetch all tracks for the current game
-            const response = await fetch(`/api/tracks/${this.gameState.id}`);
-            if (!response.ok) {
-                throw new Error(await response.text());
-                return;
-            }
-
-            const tracks: PlayerTrackState[] = await response.json();
+            const tracks: PlayerTrackState[] = await this.trackService.loadAllTracks(this.gameState.id);
             
             // Initialize playerTracks Map with loaded data
             tracks.forEach(trackState => {
@@ -233,19 +231,13 @@ export class TrackDrawingManager {
             
             // Save the updated track state to the database
             try {
-                const response = await fetch('/api/tracks/save', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        gameId: this.gameState.id,
-                        playerId: playerId,
-                        trackState: playerTrackState
-                    })
-                });
+                const ok = await this.trackService.saveTrackState(
+                    this.gameState.id,
+                    playerId,
+                    playerTrackState
+                );
                 
-                if (!response.ok) {
+                if (!ok) {
                     throw new Error('Failed to clear turn build cost in database');
                 }
             } catch (error) {
@@ -307,22 +299,14 @@ export class TrackDrawingManager {
             
             try {
                 // Save track state to database
-                const response = await fetch('/api/tracks/save', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        gameId: this.gameState.id,
-                        playerId: currentPlayer.id,
-                        trackState: playerTrackState
-                    })
-                });
+                const ok = await this.trackService.saveTrackState(
+                    this.gameState.id,
+                    currentPlayer.id,
+                    playerTrackState
+                );
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(JSON.stringify(errorData));
-                    return;
+                if (!ok) {
+                    throw new Error('Failed to save track state in database');
                 }
                 
                 // Update player's money if we have track building cost and gameStateService
@@ -1335,7 +1319,7 @@ export class TrackDrawingManager {
     }
 
     // Undo the last segment built this turn
-    public undoLastSegment(): void {
+    public async undoLastSegment(): Promise<void> {
         if (this.segmentsDrawnThisTurn.length === 0) {
             return;
         }
@@ -1361,9 +1345,20 @@ export class TrackDrawingManager {
             }
             // Subtract cost only from turnBuildCost
             playerTrackState.turnBuildCost = Math.max(0, playerTrackState.turnBuildCost - lastSegment.cost);
+            // Persist updated track state to backend
+            try {
+                const ok = await this.trackService.saveTrackState(
+                    this.gameState.id,
+                    currentPlayer.id,
+                    playerTrackState
+                );
+                if (!ok) {
+                    console.error('Failed to persist undo to backend');
+                }
+            } catch (error) {
+                console.error('Error persisting undo to backend:', error);
+            }
         }
-        // Clear network cache to avoid stale pathfinding
-        this.networkNodesCache.clear();
         // Redraw
         this.drawAllTracks();
         // Update cost display
@@ -1372,5 +1367,7 @@ export class TrackDrawingManager {
             const totalCost = previousSessionsCost + this.turnBuildCost;
             this.onCostUpdateCallback(totalCost);
         }
+        // Clear network cache to avoid stale pathfinding (move to end for test correctness)
+        this.networkNodesCache.clear();
     }
 }
