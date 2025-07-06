@@ -1,0 +1,9 @@
+---
+description: This rule should be selected whenever git or github mcp is going to be used
+globs: 
+alwaysApply: false
+---
+owner: jeffgabriel
+repository: eurorails_ai
+
+every branch should be created with a prefix of the current user's first name;
