@@ -268,7 +268,6 @@ export class TrackDrawingManager {
 
     private async saveCurrentTracks(): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        
         // Get or create track state for current player
         let playerTrackState = this.playerTracks.get(currentPlayer.id);
         if (!playerTrackState) {
@@ -282,21 +281,16 @@ export class TrackDrawingManager {
             };
             this.playerTracks.set(currentPlayer.id, playerTrackState);
         }
-
         // Add new segments to player's track state
         if (this.currentSegments.length > 0 && playerTrackState) {
             playerTrackState.segments.push(...this.currentSegments);
             playerTrackState.totalCost += this.turnBuildCost;
-            
             // Accumulate the turn build cost rather than overwriting it
             playerTrackState.turnBuildCost += this.turnBuildCost;
-            
             playerTrackState.lastBuildTimestamp = new Date();
-            
             // Accumulate all segments built this turn for undo functionality.
             // This array is only cleared at end of turn, so it persists across multiple drawing sessions.
             this.segmentsDrawnThisTurn.push(...this.currentSegments);
-            
             try {
                 // Save track state to database
                 const ok = await this.trackService.saveTrackState(
@@ -304,28 +298,27 @@ export class TrackDrawingManager {
                     currentPlayer.id,
                     playerTrackState
                 );
-
                 if (!ok) {
-                    throw new Error('Failed to save track state in database');
+                    console.error('Failed to save track state in database');
+                    return;
                 }
-                
                 // Update player's money if we have track building cost and gameStateService
                 if (this.turnBuildCost > 0 && this.gameStateService) {
                     // Calculate new money amount
                     const newMoney = currentPlayer.money - this.turnBuildCost;
-                    
                     // Update money both locally and in the database
                     const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
                         currentPlayer.id, 
                         newMoney
                     );
-                    
                     if (!moneyUpdateSuccess) {
-                        throw new Error('Failed to update player money');
+                        console.error('Failed to update player money');
+                        return;
                     }
                 }
             } catch (error) {
-                throw error;
+                console.error('Error saving track state:', error);
+                return;
             }
         }
     }
@@ -1354,9 +1347,11 @@ export class TrackDrawingManager {
                 );
                 if (!ok) {
                     console.error('Failed to persist undo to backend');
+                    // Do not throw, just log and continue
                 }
             } catch (error) {
                 console.error('Error persisting undo to backend:', error);
+                // Do not throw, just log and continue
             }
         }
         // Redraw
