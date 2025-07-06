@@ -322,7 +322,7 @@ export class GameScene extends Phaser.Scene {
       }
 
       // Clear the build cost after processing it to avoid double-counting
-      await this.trackManager.clearLastBuildCost(currentPlayer.id);
+      await this.trackManager.endTurnCleanup(currentPlayer.id);
     }
 
     // Use the game state service to handle player turn changes
