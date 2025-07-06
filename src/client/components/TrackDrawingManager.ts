@@ -63,6 +63,8 @@ export class TrackDrawingManager {
     // Add property to store the update event handler
     private updateEventHandler: (() => void) | null = null;
     
+    public segmentsDrawnThisTurn: TrackSegment[] = [];
+    
     constructor(
         scene: Phaser.Scene, 
         mapContainer: Phaser.GameObjects.Container, 
@@ -76,6 +78,7 @@ export class TrackDrawingManager {
         this.gridPoints = gridPoints;
         this.playerTracks = new Map();
         this.gameStateService = gameStateService;
+        this.segmentsDrawnThisTurn = [];
         
         // Initialize drawing graphics
         this.drawingGraphics = this.scene.add.graphics();
@@ -297,6 +300,10 @@ export class TrackDrawingManager {
             playerTrackState.turnBuildCost += this.turnBuildCost;
             
             playerTrackState.lastBuildTimestamp = new Date();
+            
+            // --- NEW: Track segments built this turn ---
+            this.segmentsDrawnThisTurn.push(...this.currentSegments);
+            // --- END NEW ---
             
             try {
                 // Save track state to database
@@ -1318,5 +1325,12 @@ export class TrackDrawingManager {
         this.lastClickedPoint = null;
         this.lastHoverPoint = null;
         this.pendingHoverPoint = null;
+        this.segmentsDrawnThisTurn = [];
+    }
+
+    // End-of-turn cleanup: resets build cost and segments drawn this turn
+    public async endTurnCleanup(playerId: string): Promise<void> {
+        await this.clearLastBuildCost(playerId);
+        this.segmentsDrawnThisTurn = [];
     }
 }
