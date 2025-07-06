@@ -29,11 +29,13 @@ export class TrackService {
   async loadAllTracks(gameId: string): Promise<PlayerTrackState[]> {
     try {
       const response = await fetch(`/api/tracks/${gameId}`);
-      if (!response.ok) return [];
+      if (!response.ok) {
+        throw new Error(`Failed to load tracks: HTTP ${response.status}`);
+      }
       return await response.json();
     } catch (error) {
       console.error('TrackService.loadAllTracks error:', error);
-      return [];
+      throw error;
     }
   }
 } 
