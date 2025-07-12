@@ -193,7 +193,7 @@ export class TrackDrawingManager {
         });
     }
 
-    public toggleDrawingMode(): boolean {
+    public async toggleDrawingMode(): Promise<boolean> {
         // Toggle drawing mode state
         const oldMode = this.isDrawingMode;
         this.isDrawingMode = !this.isDrawingMode;
@@ -201,7 +201,7 @@ export class TrackDrawingManager {
         if (this.isDrawingMode) {
             this.initializeDrawingMode();
         } else {
-            this.saveCurrentTracks();
+            await this.saveCurrentTracks();
             this.cleanupDrawingMode();
         }
         
