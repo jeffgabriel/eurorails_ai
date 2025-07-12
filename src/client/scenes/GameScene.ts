@@ -166,7 +166,7 @@ export class GameScene extends Phaser.Scene {
     this.uiManager = new UIManager(
       this,
       this.gameState,
-      () => this.toggleDrawingMode(), // Call GameScene's method instead of directly accessing TrackManager
+      async () => await this.toggleDrawingMode(), // Await the async toggleDrawingMode
       () => this.nextPlayerTurn(),
       () => this.openSettings(),
       this.gameStateService,
@@ -266,8 +266,8 @@ export class GameScene extends Phaser.Scene {
     return buttonContainer;
   }
 
-  private toggleDrawingMode(): void {
-    const isDrawingMode = this.trackManager.toggleDrawingMode();
+  private async toggleDrawingMode(): Promise<void> {
+    const isDrawingMode = await this.trackManager.toggleDrawingMode();
 
     // Update UIManager's drawing mode state
     this.uiManager.setDrawingMode(isDrawingMode);
@@ -299,7 +299,7 @@ export class GameScene extends Phaser.Scene {
     // If in drawing mode, finalize track drawing first by toggling it off
     // This will handle saving tracks and cleanup through TrackDrawingManager
     if (this.trackManager.isInDrawingMode) {
-      const isDrawingMode = this.trackManager.toggleDrawingMode();
+      const isDrawingMode = await this.trackManager.toggleDrawingMode();
       // Make sure UIManager's drawing mode state stays in sync
       this.uiManager.setDrawingMode(isDrawingMode);
 

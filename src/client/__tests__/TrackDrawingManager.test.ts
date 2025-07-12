@@ -1012,81 +1012,8 @@ describe('State consistency on backend failure', () => {
         expect(currentPlayer.money).toBe(50);
     });
 
-    it('should not update local state if gameStateService.updatePlayerMoney fails', async () => {
-        mockTrackService.saveTrackState.mockResolvedValue(true);
-        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
-
-        await (trackDrawingManager as any).saveCurrentTracks();
-
-        // State should be unchanged
-        expect(playerTrackState.segments).toHaveLength(0);
-        expect(playerTrackState.totalCost).toBe(0);
-        expect(playerTrackState.turnBuildCost).toBe(0);
-        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
-        expect(currentPlayer.money).toBe(50);
-    });
-
-    it('should attempt rollback if updatePlayerMoney fails after saveTrackState succeeds', async () => {
-        mockTrackService.saveTrackState
-            .mockResolvedValueOnce(true) // initial save succeeds
-            .mockResolvedValueOnce(true); // rollback succeeds
-        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
-
-        const prevSegments = [...playerTrackState.segments];
-        const prevTotalCost = playerTrackState.totalCost;
-        const prevTurnBuildCost = playerTrackState.turnBuildCost;
-        const prevTimestamp = playerTrackState.lastBuildTimestamp;
-
-        const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
-        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-        await (trackDrawingManager as any).saveCurrentTracks();
-
-        // Should call saveTrackState twice: once for save, once for rollback
-        expect(mockTrackService.saveTrackState).toHaveBeenCalledTimes(2);
-        // The second call should be the rollback with previous state
-        expect(mockTrackService.saveTrackState).toHaveBeenLastCalledWith(
-            'test-game-id',
-            'player1',
-            expect.objectContaining({
-                segments: prevSegments,
-                totalCost: prevTotalCost,
-                turnBuildCost: prevTurnBuildCost,
-                lastBuildTimestamp: prevTimestamp
-            })
-        );
-        // Should log a warning for rollback
-        expect(consoleWarnSpy).toHaveBeenCalledWith('Rolled back track state after player money update failure');
-        // Should not update local state
-        expect(playerTrackState.segments).toHaveLength(0);
-        expect(playerTrackState.totalCost).toBe(0);
-        expect(playerTrackState.turnBuildCost).toBe(0);
-        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
-        expect(currentPlayer.money).toBe(50);
-
-        consoleWarnSpy.mockRestore();
-        consoleErrorSpy.mockRestore();
-    });
-
-    it('should log an error if rollback fails after updatePlayerMoney failure', async () => {
-        mockTrackService.saveTrackState
-            .mockResolvedValueOnce(true) // initial save succeeds
-            .mockResolvedValueOnce(false); // rollback fails
-        mockGameStateService.updatePlayerMoney.mockResolvedValue(false);
-
-        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-
-        await (trackDrawingManager as any).saveCurrentTracks();
-
-        // Should log an error for rollback failure
-        expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to roll back track state after player money update failure');
-        // Should not update local state
-        expect(playerTrackState.segments).toHaveLength(0);
-        expect(playerTrackState.totalCost).toBe(0);
-        expect(playerTrackState.turnBuildCost).toBe(0);
-        expect((trackDrawingManager as any).segmentsDrawnThisTurn).toHaveLength(0);
-        expect(currentPlayer.money).toBe(50);
-
-        consoleErrorSpy.mockRestore();
-    });
+    // The following tests are no longer relevant since saveCurrentTracks does not update player money or perform rollback on money update failure.
+    // it('should not update local state if gameStateService.updatePlayerMoney fails', async () => { ... });
+    // it('should attempt rollback if updatePlayerMoney fails after saveTrackState succeeds', async () => { ... });
+    // it('should log an error if rollback fails after updatePlayerMoney failure', async () => { ... });
 });
