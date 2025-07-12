@@ -166,7 +166,7 @@ export class GameScene extends Phaser.Scene {
     this.uiManager = new UIManager(
       this,
       this.gameState,
-      () => this.toggleDrawingMode(), // Call GameScene's method instead of directly accessing TrackManager
+      async () => await this.toggleDrawingMode(), // Await the async toggleDrawingMode
       () => this.nextPlayerTurn(),
       () => this.openSettings(),
       this.gameStateService,

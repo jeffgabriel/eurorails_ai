@@ -289,7 +289,6 @@ export class TrackDrawingManager {
             const newTurnBuildCost = playerTrackState.turnBuildCost + this.turnBuildCost;
             const newLastBuildTimestamp = new Date();
             const newSegmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...this.currentSegments];
-            const newMoney = currentPlayer.money - this.turnBuildCost;
             try {
                 // Attempt to save track state to database (simulate the new state)
                 const ok = await this.trackService.saveTrackState(
@@ -307,47 +306,13 @@ export class TrackDrawingManager {
                     console.error('Failed to save track state in database');
                     return;
                 }
-                // Only after track state is saved, update player money
-                if (this.turnBuildCost > 0 && this.gameStateService) {
-                    const moneyUpdateSuccess = await this.gameStateService.updatePlayerMoney(
-                        currentPlayer.id, 
-                        newMoney
-                    );
-                    if (!moneyUpdateSuccess) {
-                        // Roll back the track state save to maintain consistency
-                        try {
-                            // Roll back by restoring the previous state
-                            const rollbackOk = await this.trackService.saveTrackState(
-                                this.gameState.id,
-                                currentPlayer.id,
-                                {
-                                    ...playerTrackState,
-                                    segments: [...playerTrackState.segments],
-                                    totalCost: playerTrackState.totalCost,
-                                    turnBuildCost: playerTrackState.turnBuildCost,
-                                    lastBuildTimestamp: playerTrackState.lastBuildTimestamp
-                                }
-                            );
-                            if (!rollbackOk) {
-                                console.error('Failed to roll back track state after player money update failure');
-                            } else {
-                                console.warn('Rolled back track state after player money update failure');
-                            }
-                        } catch (rollbackError) {
-                            console.error('Error during rollback of track state:', rollbackError);
-                        }
-                        return;
-                    }
-                }
                 // Only after all backend operations succeed, update local state
                 playerTrackState.segments = newSegments;
                 playerTrackState.totalCost = newTotalCost;
                 playerTrackState.turnBuildCost = newTurnBuildCost;
                 playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
                 this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
-                if (this.turnBuildCost > 0 && this.gameStateService) {
-                    currentPlayer.money = newMoney;
-                }
+                // (No player money update here)
             } catch (error) {
                 console.error('Error saving track state:', error);
                 return;
