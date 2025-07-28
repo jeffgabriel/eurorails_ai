@@ -7,13 +7,17 @@ import {
   TrackSegment,
   PlayerTrackState,
 } from "../../shared/types/GameTypes";
+import { MovementCostCalculator } from "./MovementCostCalculator";
+import { mapConfig } from "../config/mapConfig";
 
 export class TrainMovementManager {
   private gameState: GameState;
   private playerTracks: Map<string, PlayerTrackState> = new Map();
+  private movementCalculator: MovementCostCalculator;
 
   constructor(gameState: GameState) {
     this.gameState = gameState;
+    this.movementCalculator = new MovementCostCalculator();
   }
 
   public async loadTrackData(): Promise<void> {
@@ -118,115 +122,46 @@ export class TrainMovementManager {
   }
 
   private calculateDistance(from: Point, to: Point): number {
-    // Calculate direct "crow flies" distance once
-    const dx = Math.abs(to.col - from.col);
-    const dy = Math.abs(to.row - from.row);
-    const directDistance = Math.max(dx, dy);
-
-    // Graceful fallback if no game state or players available
+    // Defensive fallback for basic distance when no game state available
     if (!this.gameState.players || this.gameState.players.length === 0 || 
         this.gameState.currentPlayerIndex >= this.gameState.players.length) {
-      console.warn("[TrainMovementManager] No players or invalid player index, using direct distance:", directDistance);
-      return directDistance;
+      console.warn("[TrainMovementManager] No players available, using direct distance");
+      const dx = Math.abs(to.col - from.col);
+      const dy = Math.abs(to.row - from.row);
+      return Math.max(dx, dy);
     }
 
     // Get current player's track data
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.id) {
-      console.warn("[TrainMovementManager] No current player or player id, using direct distance:", directDistance);
-      return directDistance;
+      console.warn("[TrainMovementManager] Invalid current player, using direct distance");
+      const dx = Math.abs(to.col - from.col);
+      const dy = Math.abs(to.row - from.row);
+      return Math.max(dx, dy);
     }
 
     const playerTrackState = this.playerTracks.get(currentPlayer.id);
     
-    // If no track data available, fall back to direct distance
-    if (!playerTrackState || playerTrackState.segments.length === 0) {
-      console.warn("[TrainMovementManager] No track data for player", currentPlayer.id, "using direct distance:", directDistance);
-      return directDistance;
+    // Use the movement calculator to get the proper cost
+    const result = this.movementCalculator.calculateMovementCost(
+      from,
+      to,
+      playerTrackState || null,
+      mapConfig.points
+    );
+    
+    console.debug("[TrainMovementManager] Movement cost result:", result);
+    
+    if (!result.isValid) {
+      console.warn(`[TrainMovementManager] Invalid movement: ${result.errorMessage}, using direct distance`);
+      const dx = Math.abs(to.col - from.col);
+      const dy = Math.abs(to.row - from.row);
+      return Math.max(dx, dy);
     }
     
-    // Use path-finding to calculate actual track distance
-    const pathDistance = this.findShortestPathDistance(from, to, playerTrackState);
-    console.debug("[TrainMovementManager] Path distance:", pathDistance);
-    // If no path found, fall back to direct distance
-    if (pathDistance === -1) {
-      console.warn("[TrainMovementManager] No path found between", from, to, "using direct distance:", directDistance);
-      return directDistance;
-    }
-    
-    console.debug("[TrainMovementManager] Path distance found:", pathDistance, "from", from, "to", to);
-    return pathDistance;
+    return result.totalCost;
   }
 
-  private findShortestPathDistance(from: Point, to: Point, playerTrackState: PlayerTrackState): number {
-    // If starting and ending points are the same, distance is 0
-    if (from.row === to.row && from.col === to.col) {
-      console.debug("[TrainMovementManager] Start and end points are the same, distance 0");
-      return 0;
-    }
-
-    // Build a graph from the player's track segments
-    const graph = new Map<string, Set<string>>();
-    const getPointKey = (p: Point) => `${p.row},${p.col}`;
-
-    // Add all track segments to the graph
-    for (const segment of playerTrackState.segments) {
-      const fromKey = getPointKey(segment.from);
-      const toKey = getPointKey(segment.to);
-      
-      // Add bidirectional connections
-      if (!graph.has(fromKey)) graph.set(fromKey, new Set());
-      if (!graph.has(toKey)) graph.set(toKey, new Set());
-      
-      graph.get(fromKey)!.add(toKey);
-      graph.get(toKey)!.add(fromKey);
-    }
-
-    console.debug("[TrainMovementManager] Track graph:", Array.from(graph.entries()));
-
-    const fromKey = getPointKey(from);
-    const toKey = getPointKey(to);
-
-    // If either point is not in the track network, no path exists
-    if (!graph.has(fromKey) || !graph.has(toKey)) {
-      console.warn("[TrainMovementManager] Either start or end point not in track graph:", fromKey, toKey);
-      return -1;
-    }
-
-    // Use BFS to find shortest path
-    const queue: Array<{key: string, distance: number, path: string[]}> = [{key: fromKey, distance: 0, path: [fromKey]}];
-    const visited = new Set<string>();
-    visited.add(fromKey);
-
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      // Log each BFS step
-      console.debug("[TrainMovementManager] BFS visiting:", current.key, "distance:", current.distance, "path:", current.path);
-      
-      // If we reached the destination, return the distance
-      if (current.key === toKey) {
-        console.debug("[TrainMovementManager] BFS found path:", current.path, "distance:", current.distance);
-        return current.distance;
-      }
-
-      // Explore neighbors
-      const neighbors = graph.get(current.key) || new Set();
-      for (const neighborKey of neighbors) {
-        if (!visited.has(neighborKey)) {
-          visited.add(neighborKey);
-          queue.push({
-            key: neighborKey,
-            distance: current.distance + 1,
-            path: [...current.path, neighborKey]
-          });
-        }
-      }
-    }
-
-    // No path found
-    console.warn("[TrainMovementManager] BFS could not find a path from", fromKey, "to", toKey);
-    return -1;
-  }
 
   private hasEnoughMovement(currentPlayer: any, proposedPoint: Point): boolean {
     if (!currentPlayer.trainState.position) return true; // First move is always allowed

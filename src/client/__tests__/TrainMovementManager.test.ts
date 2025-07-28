@@ -1,5 +1,5 @@
 import { TrainMovementManager } from '../components/TrainMovementManager';
-import { TerrainType, TrackSegment, GridPoint, GameState, Player, FerryConnection, Point, PlayerTrackState } from '../../shared/types/GameTypes';
+import { TerrainType, TrackSegment, GridPoint, GameState, Player, FerryConnection, FerryPoint, Point, PlayerTrackState } from '../../shared/types/GameTypes';
 
 describe('TrainMovementManager calculateDistance', () => {
   let manager: TrainMovementManager;
@@ -423,10 +423,28 @@ describe('TrainMovementManager Ferry Movement', () => {
     nextPoint = { row: 5, col: 6, x: 0, y: 0, terrain: TerrainType.Clear, id: 'next1' } as GridPoint;
     prevPoint = { row: 5, col: 4, x: 0, y: 0, terrain: TerrainType.Clear, id: 'prev1' } as GridPoint;
     
-    // Create ferry connection
+    // Create ferry connection with FerryPoint objects
+    const ferryPoint1: FerryPoint = {
+      row: ferryPort.row,
+      col: ferryPort.col,
+      x: ferryPort.x,
+      y: ferryPort.y,
+      id: ferryPort.id,
+      terrain: TerrainType.FerryPort
+    };
+    
+    const ferryPoint2: FerryPoint = {
+      row: 10,
+      col: 5,
+      x: 100,
+      y: 0,
+      id: 'ferry2',
+      terrain: TerrainType.FerryPort
+    };
+    
     ferryConnection = {
       Name: 'Test Ferry',
-      connections: [ferryPort, { row: 10, col: 5, x: 100, y: 0, terrain: TerrainType.FerryPort, id: 'ferry2' } as GridPoint],
+      connections: [ferryPoint1, ferryPoint2],
       cost: 4
     };
     ferryPort.ferryConnection = ferryConnection;
@@ -447,7 +465,7 @@ describe('TrainMovementManager Ferry Movement', () => {
         ferryState: {
           status: 'ready_to_cross',
           ferryConnection: ferryConnection,
-          currentSide: ferryPort,
+          currentSide: ferryConnection.connections[0],
           otherSide: ferryConnection.connections[1]
         }
       },
@@ -473,7 +491,7 @@ describe('TrainMovementManager Ferry Movement', () => {
     player.trainState.ferryState = {
       status: 'just_arrived',
       ferryConnection: ferryConnection,
-      currentSide: ferryPort,
+      currentSide: ferryConnection.connections[0],
       otherSide: ferryConnection.connections[1]
     };
     

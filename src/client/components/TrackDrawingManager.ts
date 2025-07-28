@@ -312,6 +312,9 @@ export class TrackDrawingManager {
                 playerTrackState.turnBuildCost = newTurnBuildCost;
                 playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
                 this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
+                
+                // Check if we need to move the train to the track when first track is drawn from major city
+                this.checkAndUpdateTrainPosition(currentPlayer, playerTrackState);
                 // (No player money update here)
             } catch (error) {
                 console.error('Error saving track state:', error);
@@ -1306,6 +1309,113 @@ export class TrackDrawingManager {
     public async endTurnCleanup(playerId: string): Promise<void> {
         await this.clearLastBuildCost(playerId);
         this.segmentsDrawnThisTurn = [];
+    }
+
+    /**
+     * Check if train needs to be moved to track when first track is drawn from starting city
+     * This only applies to initial game setup, not during regular movement
+     */
+    private checkAndUpdateTrainPosition(currentPlayer: any, playerTrackState: PlayerTrackState): void {
+        // Only proceed if train has a position
+        if (!currentPlayer.trainState?.position) {
+            return;
+        }
+
+        // Only apply this logic if the player has no previous track segments at all
+        // This ensures it only happens during initial setup, not during regular gameplay
+        const hadAnyPreviousTrack = playerTrackState.segments.length > this.currentSegments.length;
+        if (hadAnyPreviousTrack) {
+            return; // Train is already in movement during regular gameplay
+        }
+
+        const trainPosition = currentPlayer.trainState.position;
+        
+        // Check if train is currently in a major city
+        const trainCity = this.findMajorCityForPosition(trainPosition);
+        if (!trainCity) {
+            return;
+        }
+
+        // Check if any of the current segments start from this major city
+        const trackStartNode = this.findTrackStartingFromMajorCity(trainCity, this.currentSegments);
+        if (!trackStartNode) {
+            return;
+        }
+
+        // Move train to the track's starting node
+        console.log(`Moving train from starting city (${trainPosition.row},${trainPosition.col}) to track start (${trackStartNode.row},${trackStartNode.col})`);
+        currentPlayer.trainState.position = {
+            x: trackStartNode.x,
+            y: trackStartNode.y,
+            row: trackStartNode.row,
+            col: trackStartNode.col
+        };
+
+        // Update game state if we have the service available
+        if (this.gameStateService?.updatePlayerState) {
+            this.gameStateService.updatePlayerState(currentPlayer);
+        }
+    }
+
+    /**
+     * Find which major city contains the given position
+     */
+    private findMajorCityForPosition(position: any): GridPoint | null {
+        // Check all major cities to see if position is within any of them
+        for (let r = 0; r < this.gridPoints.length; r++) {
+            if (!this.gridPoints[r]) continue;
+            
+            for (let c = 0; c < this.gridPoints[r].length; c++) {
+                const gridPoint = this.gridPoints[r][c];
+                if (!gridPoint?.city || gridPoint.city.type !== TerrainType.MajorCity) continue;
+                
+                // Check if position is the city center
+                if (gridPoint.row === position.row && gridPoint.col === position.col) {
+                    return gridPoint;
+                }
+                
+                // Check if position is one of the connected perimeter points
+                if (gridPoint.city.connectedPoints?.some(cp => 
+                    cp.row === position.row && cp.col === position.col
+                )) {
+                    return gridPoint;
+                }
+            }
+        }
+        return null;
+    }
+
+
+    /**
+     * Find the starting node of track segments that originate from the given major city
+     */
+    private findTrackStartingFromMajorCity(majorCity: GridPoint, segments: TrackSegment[]): any | null {
+        if (!majorCity.city?.connectedPoints) {
+            return null;
+        }
+
+        // Get all points of this major city (center + perimeter)
+        const cityPoints = new Set<string>();
+        cityPoints.add(`${majorCity.row},${majorCity.col}`); // city center
+        majorCity.city.connectedPoints.forEach(cp => {
+            cityPoints.add(`${cp.row},${cp.col}`);
+        });
+
+        // Find the first segment that starts from this city and goes outside
+        for (const segment of segments) {
+            const fromInCity = cityPoints.has(`${segment.from.row},${segment.from.col}`);
+            const toInCity = cityPoints.has(`${segment.to.row},${segment.to.col}`);
+            
+            if (fromInCity && !toInCity) {
+                // Segment starts from city and goes outside - use the city node as starting point
+                return segment.from;
+            } else if (!fromInCity && toInCity) {
+                // Segment comes into city from outside - use the city node as starting point
+                return segment.to;
+            }
+        }
+
+        return null;
     }
 
     // Undo the last segment built this turn

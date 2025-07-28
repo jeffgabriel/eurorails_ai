@@ -1496,27 +1496,11 @@
     "Ocean": null
   },
   {
-    "Id": "7067d508-308a-447f-a3f6-d944b7180d2a",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 14,
-    "GridY": 49,
-    "Ocean": null
-  },
-  {
     "Id": "b9af4cef-8798-40e6-a7fe-2434861ebc95",
     "Type": "Milepost",
     "Name": null,
     "GridX": 13,
     "GridY": 43,
-    "Ocean": null
-  },
-  {
-    "Id": "46c0b3de-b20c-440f-97cd-145a84f4d2d1",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 14,
-    "GridY": 47,
     "Ocean": null
   },
   {
@@ -1573,14 +1557,6 @@
     "Name": null,
     "GridX": 14,
     "GridY": 46,
-    "Ocean": null
-  },
-  {
-    "Id": "b6d727ea-131e-40ec-a8dc-42bc28b413ac",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 14,
-    "GridY": 48,
     "Ocean": null
   },
   {
@@ -1688,22 +1664,6 @@
     "Ocean": null
   },
   {
-    "Id": "5ae507dd-e361-42da-b2cb-f5202c71a9aa",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 15,
-    "GridY": 47,
-    "Ocean": null
-  },
-  {
-    "Id": "532448fc-d7eb-4967-8f16-f7101cc11f82",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 15,
-    "GridY": 49,
-    "Ocean": null
-  },
-  {
     "Id": "eeac1b8b-982c-48ae-a99b-eb1ed92a69be",
     "Type": "Milepost",
     "Name": null,
@@ -1774,14 +1734,6 @@
     "GridX": 15,
     "GridY": 38,
     "Ocean": "Atlantic Ocean"
-  },
-  {
-    "Id": "09e03a87-6629-4e3e-bd2d-74360b883a26",
-    "Type": "Major City",
-    "Name": "Madrid",
-    "GridX": 15,
-    "GridY": 48,
-    "Ocean": null
   },
   {
     "Id": "0db1c702-c3f9-4fae-8344-a43958f5eedb",
@@ -1933,14 +1885,6 @@
     "Name": null,
     "GridX": 16,
     "GridY": 42,
-    "Ocean": null
-  },
-  {
-    "Id": "f8ae184f-730b-4d55-b86e-a5cced8863e0",
-    "Type": "Major City Outpost",
-    "Name": "Madrid",
-    "GridX": 16,
-    "GridY": 48,
     "Ocean": null
   },
   {
@@ -10616,14 +10560,6 @@
     "Ocean": null
   },
   {
-    "Id": "2fa564e5-15b2-439b-9c86-f800685b4637",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 49,
-    "GridY": 15,
-    "Ocean": null
-  },
-  {
     "Id": "1e1a24c4-2746-4df3-9245-0d90c4c5aa9d",
     "Type": "Milepost",
     "Name": null,
@@ -12256,14 +12192,6 @@
     "Ocean": null
   },
   {
-    "Id": "c28815c4-1c07-4411-a34b-ec9c16e3d57b",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 54,
-    "GridY": 37,
-    "Ocean": null
-  },
-  {
     "Id": "89958404-e363-489a-9fa8-3866bbefb177",
     "Type": "Mountain",
     "Name": null,
@@ -12472,22 +12400,6 @@
     "Ocean": "Adriatic Sea"
   },
   {
-    "Id": "b038ab16-339b-482b-b401-36a99a30d2e2",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 54,
-    "GridY": 36,
-    "Ocean": null
-  },
-  {
-    "Id": "9f772649-4656-4cfe-832b-0d74046e32d2",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 54,
-    "GridY": 38,
-    "Ocean": null
-  },
-  {
     "Id": "a055d281-d7fd-47e7-ad9d-70bba0df107f",
     "Type": "Mountain",
     "Name": null,
@@ -12653,14 +12565,6 @@
     "Name": null,
     "GridX": 55,
     "GridY": 35,
-    "Ocean": null
-  },
-  {
-    "Id": "079d8fac-76f3-41d2-bc4d-5f878d1b1ba5",
-    "Type": "Major City",
-    "Name": "Wien",
-    "GridX": 55,
-    "GridY": 37,
     "Ocean": null
   },
   {
@@ -12837,22 +12741,6 @@
     "Name": null,
     "GridX": 54,
     "GridY": 51,
-    "Ocean": null
-  },
-  {
-    "Id": "44ee9eca-5568-41af-a13c-a67cc6eff6fa",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 55,
-    "GridY": 36,
-    "Ocean": null
-  },
-  {
-    "Id": "17c3228d-7cc8-4a7d-8582-a82907638984",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 55,
-    "GridY": 38,
     "Ocean": null
   },
   {
@@ -13040,14 +12928,6 @@
     "Ocean": null
   },
   {
-    "Id": "60db03c5-36d5-4f22-b7ce-d1fd50b1d04e",
-    "Type": "Major City Outpost",
-    "Name": "Wien",
-    "GridX": 56,
-    "GridY": 37,
-    "Ocean": null
-  },
-  {
     "Id": "c201cc02-745f-436c-9c8a-3b5c8dd9dc31",
     "Type": "Milepost",
     "Name": null,
@@ -13208,28 +13088,12 @@
     "Ocean": null
   },
   {
-    "Id": "c82962b2-7a50-4534-af11-507d5b54a9f5",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 56,
-    "GridY": 36,
-    "Ocean": null
-  },
-  {
     "Id": "47427476-26b8-4d98-9d36-d081ab48ae47",
     "Type": "Milepost",
     "Name": null,
     "GridX": 55,
     "GridY": 53,
     "Ocean": "Adriatic Sea"
-  },
-  {
-    "Id": "5df8220a-389f-4c1e-9118-23de6baae527",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 56,
-    "GridY": 38,
-    "Ocean": null
   },
   {
     "Id": "7ff4d10c-fef8-4e76-bc75-038a6bfb6022",
@@ -16373,6 +16237,142 @@
     "Name": null,
     "GridX": 32,
     "GridY": 21,
+    "Ocean": null
+  },
+  {
+    "Id": "e64e7b8c-ee3d-432b-9869-6c54df83f390",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 54,
+    "GridY": 38,
+    "Ocean": null
+  },
+  {
+    "Id": "2fa564e5-15b2-439b-9c86-f800685b4637",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 49,
+    "GridY": 15,
+    "Ocean": null
+  },
+  {
+    "Id": "b038ab93-339b-482b-b401-36a99a30d2e2",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 54,
+    "GridY": 36,
+    "Ocean": null
+  },
+  {
+    "Id": "b038ab16-339b-482b-b401-36a99a30d2e2",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 55,
+    "GridY": 36,
+    "Ocean": null
+  },
+  {
+    "Id": "9f772649-4656-4cfe-832b-0d74046e32d2",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 56,
+    "GridY": 36,
+    "Ocean": null
+  },
+  {
+    "Id": "c28815c4-1c07-4411-a34b-ec9c16e3d57b",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 56,
+    "GridY": 37,
+    "Ocean": null
+  },
+  {
+    "Id": "60db03c5-36d5-4f22-b7ce-d1fd50b1d04e",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 56,
+    "GridY": 38,
+    "Ocean": null
+  },
+  {
+    "Id": "17c3228d-7cc8-4a7d-8582-a82907638984",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 55,
+    "GridY": 38,
+    "Ocean": null
+  },
+  {
+    "Id": "44ee9eca-5568-41af-a13c-a67cc6eff6fa",
+    "Type": "Major City Outpost",
+    "Name": "Wien",
+    "GridX": 54,
+    "GridY": 37,
+    "Ocean": null
+  },
+  {
+    "Id": "079d8fac-76f3-41d2-bc4d-5f878d1b1ba5",
+    "Type": "Major City",
+    "Name": "Wien",
+    "GridX": 55,
+    "GridY": 37,
+    "Ocean": null
+  },
+  {
+    "Id": "09e03a87-6629-4e3e-bd2d-74360b883a26",
+    "Type": "Major City",
+    "Name": "Madrid",
+    "GridX": 15,
+    "GridY": 48,
+    "Ocean": null
+  },
+  {
+    "Id": "46c0b3de-b20c-440f-97cd-145a84f4d2d1",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 14,
+    "GridY": 47,
+    "Ocean": null
+  },
+  {
+    "Id": "5ae507dd-e361-42da-b2cb-f5202c71a9aa",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 15,
+    "GridY": 47,
+    "Ocean": null
+  },
+  {
+    "Id": "f8ae184f-730b-4d55-b86e-a5cced8863e0",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 16,
+    "GridY": 48,
+    "Ocean": null
+  },
+  {
+    "Id": "532448fc-d7eb-4967-8f16-f7101cc11f82",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 15,
+    "GridY": 49,
+    "Ocean": null
+  },
+  {
+    "Id": "7067d508-308a-447f-a3f6-d944b7180d2a",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 14,
+    "GridY": 49,
+    "Ocean": null
+  },
+  {
+    "Id": "b6d727ea-131e-40ec-a8dc-42bc28b413ac",
+    "Type": "Major City Outpost",
+    "Name": "Madrid",
+    "GridX": 14,
+    "GridY": 48,
     "Ocean": null
   }
 ]

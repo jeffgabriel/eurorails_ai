@@ -34,8 +34,8 @@ export interface TrainState {
     ferryState?: {
         status: 'just_arrived' | 'ready_to_cross';
         ferryConnection: FerryConnection;
-        currentSide: GridPoint;  // Which ferry port we're currently at
-        otherSide: GridPoint;    // Where we would go if we cross
+        currentSide: FerryPoint;  // Which ferry port we're currently at
+        otherSide: FerryPoint;    // Where we would go if we cross
     };
     /**
      * Set to true for the turn immediately after crossing a ferry, to halve movement.
@@ -133,11 +133,20 @@ export interface GridPoint extends Point {
     tracks?: Array<{ playerId: string }>;
 }
 
+export interface FerryPoint {
+    row: number;
+    col: number;
+    x: number;
+    y: number;
+    id: string;
+    terrain: TerrainType.FerryPort;
+}
+
 export interface FerryConnection {
     Name: string;
-    connections: [GridPoint, GridPoint];
+    connections: [FerryPoint, FerryPoint];
     cost: number;
-  }
+}
 // Updated MapConfig
 export interface MapConfig {
     width: number;

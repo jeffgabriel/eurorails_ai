@@ -1,4 +1,4 @@
-import { MapConfig, TerrainType, GridPoint, FerryConnection } from "../../shared/types/GameTypes";
+import { MapConfig, TerrainType, GridPoint, FerryConnection, FerryPoint } from "../../shared/types/GameTypes";
 import mileposts from "../../../configuration/gridPoints.json";
 import ferryPoints from "../../../configuration/ferryPoints.json";
 
@@ -146,10 +146,29 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
     throw new Error(`Invalid ferry connection: Could not find grid points for ${ferry.Name}`);
   }
 
+  // Create simplified FerryPoint objects to avoid circular references
+  const ferryPoint1: FerryPoint = {
+    row: point1.row,
+    col: point1.col,
+    x: point1.x,
+    y: point1.y,
+    id: point1.id,
+    terrain: TerrainType.FerryPort
+  };
+  
+  const ferryPoint2: FerryPoint = {
+    row: point2.row,
+    col: point2.col,
+    x: point2.x,
+    y: point2.y,
+    id: point2.id,
+    terrain: TerrainType.FerryPort
+  };
+
   // Set ferry connection on both points and update their terrain type
   const ferryConnection: FerryConnection = {
     Name: ferry.Name,
-    connections: [point1, point2],
+    connections: [ferryPoint1, ferryPoint2],
     cost: ferry.cost
   };
   point1.ferryConnection = ferryConnection;
