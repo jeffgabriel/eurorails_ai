@@ -123,30 +123,6 @@ export class MovementCostCalculator {
 
     // If no track data, only allow movement if it's from/to a major city
     if (!playerTrackState || playerTrackState.segments.length === 0) {
-      // Check if this is a valid major city movement case
-      const fromPoint = allPoints.find(p => p.row === from.row && p.col === from.col);
-      const toPoint = allPoints.find(p => p.row === to.row && p.col === to.col);
-      
-      // Allow direct movement only if starting from major city center or between connected city nodes
-      if (fromPoint?.terrain === TerrainType.MajorCity && fromPoint.city?.connectedPoints) {
-        const isToConnectedPerimeter = fromPoint.city.connectedPoints.some(
-          cp => cp.row === to.row && cp.col === to.col
-        );
-        if (isToConnectedPerimeter) {
-          const directDistance = this.calculateDirectDistance(from, to);
-          return {
-            totalCost: directDistance,
-            isValid: true,
-            segments: [{
-              from,
-              to,
-              type: 'city_internal',
-              cost: directDistance
-            }]
-          };
-        }
-      }
-      
       return {
         totalCost: -1,
         isValid: false,
