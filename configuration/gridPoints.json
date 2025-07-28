@@ -12400,14 +12400,6 @@
     "Ocean": "Adriatic Sea"
   },
   {
-    "Id": "b038ab04-339b-482b-b401-36a99a30d2e2",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 54,
-    "GridY": 36,
-    "Ocean": null
-  },
-  {
     "Id": "a055d281-d7fd-47e7-ad9d-70bba0df107f",
     "Type": "Mountain",
     "Name": null,
@@ -16261,6 +16253,14 @@
     "Name": null,
     "GridX": 49,
     "GridY": 15,
+    "Ocean": null
+  },
+  {
+    "Id": "b038ab93-339b-482b-b401-36a99a30d2e2",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 54,
+    "GridY": 36,
     "Ocean": null
   },
   {
