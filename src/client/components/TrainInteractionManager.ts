@@ -1,5 +1,13 @@
 import "phaser";
-import { GameState, GridPoint, Player, TerrainType, TrackSegment, CityData } from "../../shared/types/GameTypes";
+import {
+  GameState,
+  GridPoint,
+  Player,
+  TerrainType,
+  TrackSegment,
+  CityData,
+  Point,
+} from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -7,7 +15,7 @@ import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { UIManager } from "./UIManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
-import { majorCityGroups } from '../config/mapConfig';
+import { majorCityGroups } from "../config/mapConfig";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -43,10 +51,10 @@ export class TrainInteractionManager {
     if (!this.gameState.trainSprites) {
       this.gameState.trainSprites = new Map();
     }
-    
+
     this.setupTrainInteraction();
   }
-  
+
   private setupTrainInteraction(): void {
     // Listen for pointer down events on the scene
     this.scene.input.on(
@@ -59,10 +67,9 @@ export class TrainInteractionManager {
           if (pointer.event) {
             pointer.event.stopPropagation();
           }
-          // Use await to ensure we handle the entire train placement process
-          await this.handleTrainPlacement(pointer);
         }
-
+        // Use await to ensure we handle the entire train placement process
+        await this.handleTrainPlacement(pointer);
         // Reset the flag after the click is processed
         this.justEnteredMovementMode = false;
       }
@@ -166,7 +173,7 @@ export class TrainInteractionManager {
 
     return null;
   }
-  
+
   private async handleTrainPlacement(
     pointer: Phaser.Input.Pointer
   ): Promise<void> {
@@ -187,70 +194,101 @@ export class TrainInteractionManager {
     );
 
     if (nearestMilepost) {
-      try {
-        //where the train is coming from
-        const previousPosition = currentPlayer.trainState.position;
-        //check if the selected point is a valid move 
-        const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
-        if (!moveResult.canMove) {
-          this.showInvalidMoveMessage(pointer, moveResult.message || "Invalid move. You cannot move to this point.");
-          return;
-        }
-
-        // Create a track segment for the movement history
-        if (previousPosition) {
-          const movementSegment: TrackSegment = {
-            from: {
-              x: previousPosition.x,
-              y: previousPosition.y,
-              row: previousPosition.row,
-              col: previousPosition.col,
-              terrain: TerrainType.Clear // We'll use Clear as default since we don't track terrain for movement
-            },
-            to: {
-              x: nearestMilepost.x,
-              y: nearestMilepost.y,
-              row: nearestMilepost.row,
-              col: nearestMilepost.col,
-              terrain: nearestMilepost.terrain
-            },
-            cost: 0 // Movement cost is handled separately from track building cost
-          };
-
-          // Add to movement history
-          if (!currentPlayer.trainState.movementHistory) {
-            currentPlayer.trainState.movementHistory = [];
-          }
-          currentPlayer.trainState.movementHistory.push(movementSegment);
-        }
-
-        // Update train position - await the async operation to complete
-        await this.updateTrainPosition(
-          currentPlayer.id,
-          nearestMilepost.x,
-          nearestMilepost.y,
-          nearestMilepost.row,
-          nearestMilepost.col
-        );
-
-        // Check if arrived at any city
-        if (nearestMilepost.terrain === TerrainType.MajorCity || 
-            nearestMilepost.terrain === TerrainType.MediumCity ||
-            nearestMilepost.terrain === TerrainType.SmallCity) {
-          this.handleCityArrival(currentPlayer, nearestMilepost);
-        }
-
-        // If arrived at a ferry port, or if movement should end, exit movement mode
-        if (moveResult.endMovement) {
-          this.exitTrainMovementMode();
-        }
-      } catch (error) {
-        throw error;
+      if (this.isTrainMovementMode) {
+        this.handleMovement(currentPlayer, nearestMilepost, pointer);
+      }
+      // Check if arrived at any city
+      if (
+        this.isCity(nearestMilepost) &&
+        this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)
+      ) {
+        this.handleCityArrival(currentPlayer, nearestMilepost);
       }
     }
   }
-  
-  private showInvalidMoveMessage(pointer: Phaser.Input.Pointer, message: string): void {
+
+  private isCity(gridPoint: GridPoint): boolean {
+    return (
+      gridPoint.terrain === TerrainType.MajorCity ||
+      gridPoint.terrain === TerrainType.MediumCity ||
+      gridPoint.terrain === TerrainType.SmallCity
+    );
+  }
+
+  private isSamePoint(point1: Point | null, point2: Point | null): boolean {
+    if (point1 && point2) {
+      return point1.row === point2.row && point1.col === point2.col;
+    } else {
+      return false;
+    }
+  }
+
+  private async handleMovement(
+    currentPlayer: Player,
+    nearestMilepost: GridPoint,
+    pointer: Phaser.Input.Pointer
+  ) {
+    try {
+      //where the train is coming from
+      const previousPosition = currentPlayer.trainState.position;
+      //check if the selected point is a valid move
+      const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
+      if (!moveResult.canMove) {
+        this.showInvalidMoveMessage(
+          pointer,
+          moveResult.message || "Invalid move. You cannot move to this point."
+        );
+        return;
+      }
+
+      // Create a track segment for the movement history
+      if (previousPosition) {
+        const movementSegment: TrackSegment = {
+          from: {
+            x: previousPosition.x,
+            y: previousPosition.y,
+            row: previousPosition.row,
+            col: previousPosition.col,
+            terrain: TerrainType.Clear, // We'll use Clear as default since we don't track terrain for movement
+          },
+          to: {
+            x: nearestMilepost.x,
+            y: nearestMilepost.y,
+            row: nearestMilepost.row,
+            col: nearestMilepost.col,
+            terrain: nearestMilepost.terrain,
+          },
+          cost: 0, // Movement cost is handled separately from track building cost
+        };
+
+        // Add to movement history
+        if (!currentPlayer.trainState.movementHistory) {
+          currentPlayer.trainState.movementHistory = [];
+        }
+        currentPlayer.trainState.movementHistory.push(movementSegment);
+      }
+
+      // Update train position - await the async operation to complete
+      await this.updateTrainPosition(
+        currentPlayer.id,
+        nearestMilepost.x,
+        nearestMilepost.y,
+        nearestMilepost.row,
+        nearestMilepost.col
+      );
+      // If arrived at a ferry port, or if movement should end, exit movement mode
+      if (moveResult.endMovement) {
+        this.exitTrainMovementMode();
+      }
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  private showInvalidMoveMessage(
+    pointer: Phaser.Input.Pointer,
+    message: string
+  ): void {
     const movementProblemText = this.scene.add.text(
       pointer.x,
       pointer.y,
@@ -272,9 +310,9 @@ export class TrainInteractionManager {
       },
     });
   }
-  
+
   private async handleCityArrival(
-    currentPlayer: Player, 
+    currentPlayer: Player,
     nearestMilepost: any
   ): Promise<void> {
     // Always use the city property on the grid point
@@ -283,7 +321,9 @@ export class TrainInteractionManager {
     // Get the LoadService instance to check available loads
     const loadService = LoadService.getInstance();
     // Check if train has any loads that could potentially be delivered
-    const hasLoads = currentPlayer.trainState.loads && currentPlayer.trainState.loads.length > 0;
+    const hasLoads =
+      currentPlayer.trainState.loads &&
+      currentPlayer.trainState.loads.length > 0;
     // Check if city has any loads available for pickup
     const cityLoads = await loadService.getCityLoadDetails(cityData.name);
     const cityHasLoads = cityLoads && cityLoads.length > 0;
@@ -294,18 +334,18 @@ export class TrainInteractionManager {
       this.showLoadDialog(currentPlayer, cityData);
     }
   }
-  
+
   private showLoadDialog(player: Player, city: any): void {
     if (!this.uiManager) {
       return;
     }
 
-    this.scene.scene.launch('LoadDialogScene', {
+    this.scene.scene.launch("LoadDialogScene", {
       city: city,
       player: player,
       gameState: this.gameState,
       onClose: () => {
-        this.scene.scene.stop('LoadDialogScene');
+        this.scene.scene.stop("LoadDialogScene");
       },
       onUpdateTrainCard: () => {
         // Update the train card display through PlayerHandDisplay
@@ -319,21 +359,21 @@ export class TrainInteractionManager {
           this.playerHandDisplay.update(false, 0, this.handContainer);
         }
       },
-      uiManager: this.uiManager
+      uiManager: this.uiManager,
     });
   }
-  
+
   public async enterTrainMovementMode(): Promise<void> {
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
     const trainSprite = this.gameState.trainSprites?.get(currentPlayer.id);
-    
+
     // Check if train just arrived at ferry - if so, prevent movement
-    if (currentPlayer.trainState.ferryState?.status === 'just_arrived') {
+    if (currentPlayer.trainState.ferryState?.status === "just_arrived") {
       // console.log("Cannot enter movement mode - just arrived at ferry this turn");
       return;
     }
-    
+
     // Load latest track data before enabling movement mode
     if (this.trainMovementManager && this.trainMovementManager.loadTrackData) {
       await this.trainMovementManager.loadTrackData();
@@ -350,7 +390,7 @@ export class TrainInteractionManager {
       trainSprite.setAlpha(0.7); // Make train slightly transparent to indicate it's being moved
     }
   }
-  
+
   private exitTrainMovementMode(): void {
     this.isTrainMovementMode = false;
     // Reset cursor style
@@ -361,13 +401,13 @@ export class TrainInteractionManager {
       sprite.setAlpha(1);
     });
   }
-  
+
   public resetTrainMovementMode(): void {
     if (this.isTrainMovementMode) {
       this.exitTrainMovementMode();
     }
   }
-  
+
   public async updateTrainPosition(
     playerId: string,
     x: number,
@@ -384,7 +424,7 @@ export class TrainInteractionManager {
         position: null,
         remainingMovement: 0,
         movementHistory: [],
-        loads: [] // Initialize empty loads array
+        loads: [], // Initialize empty loads array
       };
     }
 
@@ -393,7 +433,11 @@ export class TrainInteractionManager {
 
     // Find all trains at this location
     const trainsAtLocation = this.gameState.players
-      .filter((p) => p.trainState?.position?.row === row && p.trainState?.position?.col === col)
+      .filter(
+        (p) =>
+          p.trainState?.position?.row === row &&
+          p.trainState?.position?.col === col
+      )
       .map((p) => p.id);
 
     // Calculate offset based on position in stack
@@ -408,13 +452,13 @@ export class TrainInteractionManager {
     if (!trainSprite) {
       trainSprite = this.createTrainSprite(player, x + offsetX, y + offsetY);
       this.gameState.trainSprites?.set(playerId, trainSprite);
-      
+
       // Set up interaction for new sprites
       this.setupTrainSpriteInteraction(trainSprite, playerId);
     } else {
       // Just update position for existing sprites
       trainSprite.setPosition(x + offsetX, y + offsetY);
-      
+
       // Make sure it's still interactive
       if (!trainSprite.input) {
         trainSprite.setInteractive({ useHandCursor: true });
@@ -425,10 +469,10 @@ export class TrainInteractionManager {
     // Update z-ordering for all trains
     this.updateTrainZOrders();
   }
-  
+
   private createTrainSprite(
-    player: Player, 
-    x: number, 
+    player: Player,
+    x: number,
     y: number
   ): Phaser.GameObjects.Image {
     const colorMap: { [key: string]: string } = {
@@ -449,20 +493,20 @@ export class TrainInteractionManager {
     const trainSprite = this.scene.add.image(x, y, trainTexture);
     trainSprite.setScale(0.1); // Adjust scale as needed
     this.trainContainer.add(trainSprite);
-    
+
     return trainSprite;
   }
-  
+
   private setupTrainSpriteInteraction(
-    sprite: Phaser.GameObjects.Image, 
+    sprite: Phaser.GameObjects.Image,
     playerId: string
   ): void {
     // Make sprite interactive with hand cursor
     sprite.setInteractive({ useHandCursor: true });
-    
+
     // Remove any existing listeners to prevent duplicates
-    sprite.removeAllListeners('pointerdown');
-    
+    sprite.removeAllListeners("pointerdown");
+
     // Add the pointer down listener
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       // Only allow interaction if:
@@ -474,11 +518,7 @@ export class TrainInteractionManager {
         this.gameState.players[this.gameState.currentPlayerIndex].id;
       const hasTrack = this.playerHasTrack(playerId);
 
-      if (
-        isCurrentPlayer &&
-        hasTrack &&
-        !this.isDrawingMode
-      ) {
+      if (isCurrentPlayer && hasTrack && !this.isDrawingMode) {
         // First stop event propagation to prevent it from being handled by the scene
         if (pointer.event) {
           pointer.event.stopPropagation();
@@ -495,7 +535,7 @@ export class TrainInteractionManager {
       }
     });
   }
-  
+
   public updateTrainZOrders(): void {
     // Group trains by location
     const trainsByLocation = new Map<string, string[]>();
@@ -533,7 +573,7 @@ export class TrainInteractionManager {
       }
     });
   }
-  
+
   public async initializePlayerTrain(
     playerId: string,
     startX: number,
@@ -549,10 +589,10 @@ export class TrainInteractionManager {
       startCol
     );
   }
-  
+
   public setDrawingMode(isDrawing: boolean): void {
     this.isDrawingMode = isDrawing;
-    
+
     // When entering drawing mode, exit train movement mode if active
     if (isDrawing && this.isTrainMovementMode) {
       this.exitTrainMovementMode();

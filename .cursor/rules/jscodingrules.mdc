@@ -1,9 +1,4 @@
 ---
-description: 
-globs: 
-alwaysApply: true
----
----
 description: Applies general coding rules across all file types to maintain code quality, consistency, and prevent common errors.
 ---
 - Always verify information before presenting it. Do not make assumptions or speculate without clear evidence.
@@ -252,6 +247,144 @@ When modifying types in the codebase:
 4. Never consolidate or split types without explicit requirements
 5. When in doubt, ask for clarification before making type changes
 
+# 🔄 Extending Existing Logic Rule
+
+When adding new functionality to existing systems:
+
+## Core Principles
+
+### 1. **Extend, Don't Replace**
+- Always look for opportunities to extend existing methods rather than creating new ones
+- Reuse existing infrastructure and patterns
+- Maintain consistency with existing architectural approaches
+
+```typescript
+// ✅ Do: Extend existing method
+private async handleTrainPlacement(pointer: Phaser.Input.Pointer): Promise<void> {
+  const nearestMilepost = this.findNearestMilepostOnOwnTrack(/* ... */);
+  
+  if (nearestMilepost) {
+    if (this.isTrainMovementMode) {
+      await this.handleMovement(currentPlayer, nearestMilepost, pointer);
+    }
+    // Extend with new functionality
+    if (this.isCity(nearestMilepost) && this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)) {
+      await this.handleCityArrival(currentPlayer, nearestMilepost);
+    }
+  }
+}
+
+// ❌ Don't: Create separate handler
+private async handleCityClick(pointer: Phaser.Input.Pointer): Promise<void> {
+  // Duplicates grid point finding logic
+  const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(/* ... */);
+  // ... duplicate logic
+}
+```
+
+### 2. **Unify Processing Pipelines**
+- Process all related interactions through the same pipeline
+- Use conditional branching within existing methods rather than separate handlers
+- Keep the main entry point as the single source of truth
+
+```typescript
+// ✅ Do: Unified processing
+this.scene.input.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+  const nearestMilepost = this.findNearestMilepostOnOwnTrack(/* ... */);
+  if (nearestMilepost) {
+    // All interactions go through same pipeline
+    if (this.isTrainMovementMode) { /* handle movement */ }
+    if (this.isCity(nearestMilepost) && this.isSamePoint(/* ... */)) { /* handle city */ }
+  }
+});
+
+// ❌ Don't: Separate handlers
+this.scene.input.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+  if (this.isTrainMovementMode) { /* movement logic */ }
+});
+this.scene.input.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+  if (!this.isDrawingMode) { /* city logic */ }
+});
+```
+
+### 3. **Create Focused Helper Methods**
+- Extract simple, testable utility functions for common checks
+- Keep helper methods focused on single responsibilities
+- Make them reusable across the codebase
+
+```typescript
+// ✅ Do: Focused helpers
+private isCity(gridPoint: GridPoint): boolean {
+  return (
+    gridPoint.terrain === TerrainType.MajorCity ||
+    gridPoint.terrain === TerrainType.MediumCity ||
+    gridPoint.terrain === TerrainType.SmallCity
+  );
+}
+
+private isSamePoint(point1: Point | null, point2: Point | null): boolean {
+  if (point1 && point2) {
+    return point1.row === point2.row && point1.col === point2.col;
+  }
+  return false;
+}
+
+// ❌ Don't: Complex abstractions
+private async shouldShowLoadDialog(player: Player, cityData: any): Promise<boolean> {
+  // Unnecessary abstraction that duplicates existing logic
+}
+```
+
+### 4. **Maintain Existing Patterns**
+- Follow the established patterns in the codebase
+- Use the same architectural approaches as existing similar functionality
+- Don't introduce new patterns unless absolutely necessary
+
+```typescript
+// ✅ Do: Follow existing pattern
+// Existing: handleTrainPlacement -> handleMovement -> handleCityArrival
+// New: handleTrainPlacement -> handleMovement + handleCityArrival (same pattern)
+
+// ❌ Don't: Create new patterns
+// New: separate input handlers, different processing pipeline
+```
+
+### 5. **Reuse Existing Infrastructure**
+- Leverage existing methods and utilities
+- Don't recreate functionality that already exists
+- Extend existing methods rather than creating parallel ones
+
+```typescript
+// ✅ Do: Reuse existing methods
+const nearestMilepost = this.findNearestMilepostOnOwnTrack(/* ... */);
+await this.handleCityArrival(currentPlayer, nearestMilepost); // Existing method
+
+// ❌ Don't: Recreate existing logic
+const clickedPoint = this.trackDrawingManager.getGridPointAtPosition(/* ... */);
+// ... recreate city arrival logic
+```
+
+## Implementation Checklist
+
+When extending existing logic:
+
+1. **Analyze the existing flow first** - understand how similar functionality is currently implemented
+2. **Look for extension points** - identify where new functionality can be added to existing methods
+3. **Reuse existing infrastructure** - leverage existing methods, utilities, and patterns
+4. **Create focused helpers** - extract simple utility methods for common checks
+5. **Maintain consistency** - follow the same patterns and architectural approaches
+6. **Minimize changes** - add the minimum code necessary to achieve the goal
+7. **Test the integration** - ensure the new functionality works with existing systems
+
+## Common Anti-Patterns to Avoid
+
+- **Creating separate handlers** for related functionality
+- **Duplicating existing logic** instead of reusing it
+- **Adding unnecessary abstractions** that don't provide value
+- **Violating single responsibility** by creating complex multi-purpose methods
+- **Breaking existing patterns** without good reason
+- **Over-engineering solutions** when simple extensions would suffice
+
 # ⚙️ TypeScript Game Architecture Guide for Coding Agent
 
 ## 🌟 Purpose
@@ -434,6 +567,11 @@ Always release clients after use.
 7. Serial Execution for DB-Heavy Tests
 If tests interact heavily with the database and are not designed for parallelism, run them serially (one after another) to avoid race conditions and deadlocks.
 8. No Disabling of Triggers Unless Absolutely Necessary
+Disabling triggers can break referential integrity and should be avoided in test cleanup.
+9. Explicit Error Handling
+Always check for and handle errors during setup and cleanup, and fail tests clearly if cleanup/setup fails.
+10. Document Test Cleanup Strategy
+Always document the cleanup and isolation strategy at the top of each test file for future maintainers.
 Disabling triggers can break referential integrity and should be avoided in test cleanup.
 9. Explicit Error Handling
 Always check for and handle errors during setup and cleanup, and fail tests clearly if cleanup/setup fails.
