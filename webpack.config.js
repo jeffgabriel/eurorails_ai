@@ -14,11 +14,15 @@ module.exports = {
         loader: 'ts-loader',
         exclude: [
           /node_modules/,
-          /src\/client\/lobby/
+          /src\/client_backup_/
         ],
         options: {
           configFile: 'tsconfig.webpack.json'
         }
+      },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader', 'postcss-loader'],
       },
       {
         test: /\.(png|svg|jpg|jpeg|gif)$/i,

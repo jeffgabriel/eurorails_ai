@@ -1,37 +1,144 @@
 import React from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useAuthStore } from './lobby/store/auth.store';
+import { LoginPage } from './lobby/features/auth/LoginPage';
+import { RegisterPage } from './lobby/features/auth/RegisterPage';
+import { LobbyPage } from './lobby/features/lobby/LobbyPage';
+import { GamePage } from './lobby/features/game/GamePage';
+import { NotFound } from './lobby/shared/NotFound';
+import { ErrorBoundary } from './lobby/shared/ErrorBoundary';
+import { Toaster } from './lobby/components/ui/sonner';
+import { debug } from './lobby/shared/config';
+import './lobby/index.css';
+
+interface ProtectedRouteProps {
+  children: React.ReactNode;
+}
+
+function ProtectedRoute({ children }: ProtectedRouteProps) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const isDevelopment = import.meta.env.DEV;
+  
+  // Allow access in development mode or if authenticated
+  if (!isAuthenticated && !isDevelopment) {
+    return <Navigate to="/login" replace />;
+  }
+  
+  return <>{children}</>;
+}
+
+interface PublicRouteProps {
+  children: React.ReactNode;
+}
+
+function PublicRoute({ children }: PublicRouteProps) {
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  
+  if (isAuthenticated) {
+    return <Navigate to="/lobby" replace />;
+  }
+  
+  return <>{children}</>;
+}
 
 export default function App() {
+  const { loadPersistedAuth, setDevAuth, isLoading } = useAuthStore();
+  const isDevelopment = import.meta.env.DEV;
+
+  React.useEffect(() => {
+    // In development mode, set dev authentication
+    if (isDevelopment) {
+      debug.log('Development mode detected, setting dev authentication...');
+      setDevAuth();
+      return;
+    }
+    
+    // Load persisted authentication on app start
+    debug.log('App starting, loading persisted auth...');
+    
+    try {
+      loadPersistedAuth();
+    } catch (error) {
+      debug.error('Error loading persisted auth:', error);
+    }
+    
+    // Log current location for debugging route issues
+    debug.log('Current location:', window.location.href);
+  }, [loadPersistedAuth, setDevAuth, isDevelopment]);
+
+  if (isLoading) {
+    return (
+      <div className="size-full flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          <p className="text-muted-foreground">Loading EuroRails...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <h1>EuroRails AI - Integration Test</h1>
-      <p>This is a test to verify the basic React integration is working.</p>
-      <div style={{ marginTop: '20px' }}>
-        <button 
-          onClick={() => alert('React is working!')}
-          style={{ 
-            padding: '10px 20px', 
-            fontSize: '16px', 
-            backgroundColor: '#007bff', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '5px',
-            cursor: 'pointer'
-          }}
-        >
-          Test React
-        </button>
+    <ErrorBoundary>
+      <div className="size-full bg-background text-foreground">
+        <BrowserRouter>
+          <Routes>
+            <Route
+              path="/login"
+              element={
+                <PublicRoute>
+                  <ErrorBoundary>
+                    <LoginPage />
+                  </ErrorBoundary>
+                </PublicRoute>
+              }
+            />
+            <Route
+              path="/register"
+              element={
+                <PublicRoute>
+                  <ErrorBoundary>
+                    <RegisterPage />
+                  </ErrorBoundary>
+                </PublicRoute>
+              }
+            />
+            <Route
+              path="/lobby"
+              element={
+                <ProtectedRoute>
+                  <ErrorBoundary>
+                    <LobbyPage />
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/game/:id"
+              element={
+                <ProtectedRoute>
+                  <ErrorBoundary>
+                    <GamePage />
+                  </ErrorBoundary>
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/" element={<Navigate to="/lobby" replace />} />
+            
+            {/* Handle preview_page.html specifically */}
+            <Route 
+              path="/preview_page.html" 
+              element={<Navigate to="/lobby" replace />} 
+            />
+            
+            {/* Catch-all route for unknown paths */}
+            <Route 
+              path="*" 
+              element={<NotFound />} 
+            />
+          </Routes>
+        </BrowserRouter>
+        <Toaster />
       </div>
-      
-      <div style={{ marginTop: '40px', padding: '20px', border: '1px solid #ccc', borderRadius: '5px' }}>
-        <h2>Integration Status</h2>
-        <ul>
-          <li>✅ Basic React app working</li>
-          <li>✅ Webpack build working</li>
-          <li>✅ Dev server running</li>
-          <li>🔄 Lobby components ready for integration</li>
-          <li>⏳ Game client integration pending</li>
-        </ul>
-      </div>
-    </div>
+    </ErrorBoundary>
   );
 }
