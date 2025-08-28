@@ -45,6 +45,15 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
+    historyApiFallback: {
+      index: '/',
+      rewrites: [
+        { from: /^\/lobby/, to: '/' },
+        { from: /^\/login/, to: '/' },
+        { from: /^\/register/, to: '/' },
+        { from: /^\/game\/.*/, to: '/' }
+      ]
+    },
     proxy: [
       {
         context: ['/api'],
