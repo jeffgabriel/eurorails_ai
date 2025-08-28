@@ -64,7 +64,7 @@ interface LobbyActions {
 
 type LobbyStore = LobbyState & LobbyActions;
 
-const isDevelopment = import.meta.env.DEV;
+const isDevelopment = process.env.NODE_ENV === 'development';
 
 export const useLobbyStore = create<LobbyStore>((set, get) => ({
   // Initial state

@@ -17,7 +17,7 @@ interface ProtectedRouteProps {
 
 function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const isDevelopment = import.meta.env.DEV;
+  const isDevelopment = process.env.NODE_ENV === 'development';
   
   // Allow access in development mode or if authenticated
   if (!isAuthenticated && !isDevelopment) {
@@ -43,7 +43,7 @@ function PublicRoute({ children }: PublicRouteProps) {
 
 export default function App() {
   const { loadPersistedAuth, setDevAuth, isLoading } = useAuthStore();
-  const isDevelopment = import.meta.env.DEV;
+  const isDevelopment = process.env.NODE_ENV === 'development';
 
   React.useEffect(() => {
     // In development mode, set dev authentication

@@ -15,7 +15,7 @@ interface ProtectedRouteProps {
 
 function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const isDevelopment = import.meta.env?.DEV || process.env.NODE_ENV === 'development';
+  const isDevelopment = process.env.NODE_ENV === 'development';
   
   // Allow access in development mode or if authenticated
   if (!isAuthenticated && !isDevelopment) {

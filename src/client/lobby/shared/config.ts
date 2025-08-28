@@ -9,17 +9,19 @@ interface Config {
 }
 
 function getEnvVar(key: string, defaultValue: string): string {
-  if (typeof import.meta === 'undefined' || !import.meta.env) {
-    return defaultValue;
+  // For webpack, we can access process.env directly
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key] || defaultValue;
   }
   
-  return import.meta.env[key] || defaultValue;
+  // Fallback for browser environment
+  return defaultValue;
 }
 
 export const config: Config = {
   apiBaseUrl: getEnvVar('VITE_API_BASE_URL', 'http://localhost:3000'),
   socketUrl: getEnvVar('VITE_SOCKET_URL', 'http://localhost:3000'),
-  isDevelopment: getEnvVar('NODE_ENV', 'development') === 'development',
+  isDevelopment: process.env.NODE_ENV === 'development',
   debugEnabled: getEnvVar('VITE_DEBUG', 'false') === 'true',
 };
 

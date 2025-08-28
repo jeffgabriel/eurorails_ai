@@ -104,7 +104,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   loadPersistedAuth: async () => {
     const token = localStorage.getItem(JWT_STORAGE_KEY);
     const userJson = localStorage.getItem(USER_STORAGE_KEY);
-    const isDevelopment = import.meta.env.DEV;
+    const isDevelopment = process.env.NODE_ENV === 'development';
     
     // In development mode, set authenticated state without API validation
     if (isDevelopment) {

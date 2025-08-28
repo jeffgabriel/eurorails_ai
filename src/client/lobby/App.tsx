@@ -7,7 +7,7 @@ import { debug } from './shared/config';
 
 export default function App() {
   const { loadPersistedAuth, setDevAuth, isLoading } = useAuthStore();
-  const isDevelopment = import.meta.env.DEV;
+  const isDevelopment = process.env.NODE_ENV === 'development';
 
   useEffect(() => {
     // In development mode, set dev authentication

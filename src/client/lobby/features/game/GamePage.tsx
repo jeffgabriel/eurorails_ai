@@ -12,7 +12,7 @@ import { useAuthStore } from '../../store/auth.store';
 import { useGameStore } from '../../store/game.store';
 import { getErrorMessage } from '../../shared/api';
 
-const isDevelopment = import.meta.env.DEV;
+const isDevelopment = process.env.NODE_ENV === 'development';
 
 export function GamePage() {
   const { id: gameId } = useParams<{ id: string }>();

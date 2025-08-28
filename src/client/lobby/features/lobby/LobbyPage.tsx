@@ -74,7 +74,7 @@ export function LobbyPage() {
             <p className="text-sm text-muted-foreground">
               Welcome, {user?.username}
             </p>
-            {import.meta.env.DEV && (
+            {process.env.NODE_ENV === 'development' && (
               <p className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded mt-1 inline-block">
                 🧪 Development Mode - Using Mock Data
               </p>
@@ -164,7 +164,7 @@ export function LobbyPage() {
             </Card>
 
             {/* Development Mode - Available Test Games */}
-            {import.meta.env.DEV && (
+            {process.env.NODE_ENV === 'development' && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
