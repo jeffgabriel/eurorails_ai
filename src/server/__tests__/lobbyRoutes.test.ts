@@ -19,11 +19,12 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
 async function cleanupTestData(gameIds: string[], playerIds: string[]) {
   await runQuery(async (client) => {
     // Delete in dependency order to avoid constraint errors
-    if (gameIds.length > 0) {
-      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
-    }
+    // Players must be deleted before games due to foreign key constraints
     if (playerIds.length > 0) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
+    }
+    if (gameIds.length > 0) {
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
   });
 }
@@ -69,6 +70,7 @@ describe('Lobby API Integration Tests', () => {
       // 2. Join the game
       const joinedGame = await LobbyService.joinGame(game.joinCode, testUserId2);
       expect(joinedGame.id).toBe(game.id);
+      testPlayerIds.push(testUserId2);
 
       // 3. Verify players are in the game
       let players = await LobbyService.getGamePlayers(game.id);
@@ -105,6 +107,7 @@ describe('Lobby API Integration Tests', () => {
       
       for (const playerId of playerIds) {
         await LobbyService.joinGame(game.joinCode, playerId);
+        testPlayerIds.push(playerId);
       }
 
       // Verify all players are in the game
@@ -130,6 +133,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Add another player
       await LobbyService.joinGame(game.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
 
       // Creator leaves (should transfer ownership)
       await LobbyService.leaveGame(game.id, testUserId);
@@ -155,6 +159,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Add another player
       await LobbyService.joinGame(game.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
 
       // Remove creator first
       await LobbyService.leaveGame(game.id, testUserId);
@@ -187,6 +192,7 @@ describe('Lobby API Integration Tests', () => {
     it('should update player online status', async () => {
       // Add a player
       await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
 
       // Update presence
       await LobbyService.updatePlayerPresence(testUserId, false);
@@ -251,6 +257,8 @@ describe('Lobby API Integration Tests', () => {
       const joinPromises = playerIds.map(playerId => 
         LobbyService.joinGame(game.joinCode, playerId)
       );
+      // Track player IDs for cleanup
+      testPlayerIds.push(...playerIds);
 
       const results = await Promise.all(joinPromises);
 
@@ -291,6 +299,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Add a player and start the game
       await LobbyService.joinGame(game.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
       await LobbyService.startGame(game.id, testUserId);
 
       // Try to start again
@@ -307,6 +316,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Fill the game
       await LobbyService.joinGame(game.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
 
       // Try to join when full
       await expect(LobbyService.joinGame(game.joinCode, uuidv4()))
@@ -324,6 +334,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Add a player
       await LobbyService.joinGame(game.joinCode, testUserId2);
+      testPlayerIds.push(testUserId2);
 
       // Get player count
       let players = await LobbyService.getGamePlayers(game.id);
