@@ -1,4 +1,18 @@
 {
   "extends": "./tsconfig.client.json",
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/__tests__/**"]
+  "compilerOptions": {
+    "noEmit": false,
+    "jsx": "react-jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": false
+  },
+  "include": ["src/client/**/*"],
+  "exclude": [
+    "node_modules", 
+    "dist", 
+    "**/*.test.ts", 
+    "**/__tests__/**", 
+    "src/client_backup_*"
+  ]
 }

@@ -2,7 +2,7 @@ const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 module.exports = {
-  entry: './src/client/index.ts',
+  entry: './src/client/index.tsx',
   output: {
     path: path.resolve(__dirname, 'dist/client'),
     filename: 'bundle.js',
@@ -12,10 +12,17 @@ module.exports = {
       {
         test: /\.tsx?$/,
         loader: 'ts-loader',
-        exclude: /node_modules/,
+        exclude: [
+          /node_modules/,
+          /src\/client_backup_/
+        ],
         options: {
           configFile: 'tsconfig.webpack.json'
         }
+      },
+      {
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader', 'postcss-loader'],
       },
       {
         test: /\.(png|svg|jpg|jpeg|gif)$/i,
@@ -38,6 +45,15 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
+    historyApiFallback: {
+      index: '/',
+      rewrites: [
+        { from: /^\/lobby/, to: '/' },
+        { from: /^\/login/, to: '/' },
+        { from: /^\/register/, to: '/' },
+        { from: /^\/game\/.*/, to: '/' }
+      ]
+    },
     proxy: [
       {
         context: ['/api'],
