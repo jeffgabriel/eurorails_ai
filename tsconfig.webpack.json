@@ -13,7 +13,6 @@
     "dist", 
     "**/*.test.ts", 
     "**/__tests__/**", 
-    "src/client/lobby/**/*",
     "src/client_backup_*"
   ]
 }
