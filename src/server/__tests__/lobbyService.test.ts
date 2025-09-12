@@ -78,7 +78,7 @@ describe('LobbyService', () => {
       expect(game).toBeDefined();
       expect(game.id).toBeDefined();
       expect(game.joinCode).toHaveLength(8);
-      expect(game.joinCode).toMatch(/^[A-Z0-9]{8}$/);
+      expect(game.joinCode).toMatch(/^[A-F0-9]{8}$/);
       expect(game.createdBy).toBeDefined();
       expect(game.status).toBe('IN_SETUP');
       expect(game.maxPlayers).toBe(4);
@@ -282,8 +282,8 @@ describe('LobbyService', () => {
       expect(players[1].isOnline).toBe(true);
     });
 
-    it('should return empty array for game with no players', async () => {
-      // Create a new game and don't add any players
+    it('should return array with creator for newly created game', async () => {
+      // Create a new game which automatically adds the creator as a player
       const gameData2: CreateGameData = {
         createdByUserId: testUserId
       };
@@ -487,17 +487,15 @@ describe('LobbyService', () => {
       // This test verifies that if an error occurs during game creation,
       // the transaction is properly rolled back
       const gameData: CreateGameData = {
-        createdByUserId: testUserId
+        createdByUserId: '' // Invalid empty user ID to trigger validation error
       };
 
-      // Mock a database error by using an invalid user ID that might cause constraint issues
-      // (This is a simplified test - in a real scenario, you might mock the database)
-      const game = await LobbyService.createGame(gameData);
-      testGameIds.push(game.id);
-
-      // Verify the game was created successfully
-      expect(game).toBeDefined();
-      expect(game.id).toBeDefined();
+      // Expect the createGame to throw a validation error
+      await expect(LobbyService.createGame(gameData))
+        .rejects
+        .toThrow('createdByUserId is required');
+      
+      // Transaction should be rolled back automatically on error
     });
 
     it('should rollback joinGame on error', async () => {
@@ -572,7 +570,7 @@ describe('LobbyService', () => {
       testGameIds.push(game.id);
 
       // Join codes should only contain alphanumeric characters
-      expect(game.joinCode).toMatch(/^[A-Z0-9]{8}$/);
+      expect(game.joinCode).toMatch(/^[A-F0-9]{8}$/);
     });
   });
 });
