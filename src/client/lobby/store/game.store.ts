@@ -81,7 +81,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // Join the game room
       socketService.join(gameId);
       
-    } catch (error) {
+    } catch (_error) {
       set({
         isLoading: false,
         connectionStatus: 'disconnected',
@@ -117,7 +117,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     try {
       socketService.sendAction(gameState.id, type, payload, clientSeq);
-    } catch (error) {
+    } catch (_error) {
       get().setError({
         code: 'ACTION_ERROR',
         message: 'Failed to send action to server',
@@ -125,14 +125,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
   },
 
-  applyStateInit: (gameState: GameState, serverSeq: number) => {
+  applyStateInit: (gameState: GameState) => {
     set({
       gameState,
       error: null,
     });
   },
 
-  applyStatePatch: (patch: Partial<GameState>, serverSeq: number) => {
+  applyStatePatch: (patch: Partial<GameState>) => {
     const currentState = get().gameState;
     if (!currentState) {
       // Request full state if we don't have current state
@@ -154,7 +154,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
-  applyTurnChange: (currentTurnUserId: ID, serverSeq: number) => {
+  applyTurnChange: (currentTurnUserId: ID) => {
     const currentState = get().gameState;
     if (!currentState) return;
 

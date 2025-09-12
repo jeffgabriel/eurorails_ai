@@ -1,7 +1,7 @@
 // features/game/Toasts.tsx
 import { useEffect } from 'react';
 import { toast } from 'sonner';
-import { UserPlus, UserMinus, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { useGameStore } from '../../store/game.store';
 import { useAuthStore } from '../../store/auth.store';
 

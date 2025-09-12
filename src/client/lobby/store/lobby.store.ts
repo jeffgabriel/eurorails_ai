@@ -84,8 +84,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       // Generate a new mock game
       const newGame: Game = {
         id: `game-${Date.now()}`,
-        joinCode: Math.random().toString(36).substring(2, 6).toUpperCase() + 
-                 Math.random().toString(36).substring(2, 6).toUpperCase(),
+        joinCode: Math.random().toString(36).substring(2, 10).toUpperCase(),
         createdBy: 'dev-user',
         status: 'IN_SETUP',
         maxPlayers: 4,

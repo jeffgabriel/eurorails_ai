@@ -19,8 +19,11 @@ function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
   const isDevelopment = process.env.NODE_ENV === 'development';
   
-  // Allow access in development mode or if authenticated
-  if (!isAuthenticated && !isDevelopment) {
+  // Only allow development bypass for localhost in development mode
+  const isLocalhost = typeof window !== 'undefined' && 
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  
+  if (!isAuthenticated && !(isDevelopment && isLocalhost)) {
     return <Navigate to="/login" replace />;
   }
   

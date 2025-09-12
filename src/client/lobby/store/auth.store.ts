@@ -25,7 +25,7 @@ type AuthStore = AuthState & AuthActions;
 const JWT_STORAGE_KEY = 'eurorails.jwt';
 const USER_STORAGE_KEY = 'eurorails.user';
 
-export const useAuthStore = create<AuthStore>((set, get) => ({
+export const useAuthStore = create<AuthStore>((set) => ({
   // Initial state
   user: null,
   token: null,
@@ -106,16 +106,21 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const userJson = localStorage.getItem(USER_STORAGE_KEY);
     const isDevelopment = process.env.NODE_ENV === 'development';
     
-    // In development mode, set authenticated state without API validation
-    if (isDevelopment) {
-      set({
-        user: { id: 'dev-user', username: 'dev-user', email: 'dev@example.com' },
-        token: 'dev-token',
-        isAuthenticated: true,
-        isLoading: false,
-        error: null,
-      });
-      return;
+    // In development mode, only set authenticated state for localhost
+    if (isDevelopment && typeof window !== 'undefined') {
+      const isLocalhost = window.location.hostname === 'localhost' || 
+                         window.location.hostname === '127.0.0.1';
+      
+      if (isLocalhost) {
+        set({
+          user: { id: 'dev-user', username: 'dev-user', email: 'dev@example.com' },
+          token: 'dev-token',
+          isAuthenticated: true,
+          isLoading: false,
+          error: null,
+        });
+        return;
+      }
     }
     
     if (!token || !userJson) {
@@ -123,8 +128,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     try {
-      const user = JSON.parse(userJson);
-      
       // Validate token is still valid by making an API call
       set({ isLoading: true });
       const currentUser = await api.getCurrentUser();
@@ -156,12 +159,20 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   },
 
   setDevAuth: () => {
-    set({
-      user: { id: 'dev-user', username: 'dev-user', email: 'dev@example.com' },
-      token: 'dev-token',
-      isAuthenticated: true,
-      isLoading: false,
-      error: null,
-    });
+    // Only allow dev auth for localhost in development mode
+    if (typeof window !== 'undefined') {
+      const isLocalhost = window.location.hostname === 'localhost' || 
+                         window.location.hostname === '127.0.0.1';
+      
+      if (isLocalhost) {
+        set({
+          user: { id: 'dev-user', username: 'dev-user', email: 'dev@example.com' },
+          token: 'dev-token',
+          isAuthenticated: true,
+          isLoading: false,
+          error: null,
+        });
+      }
+    }
   },
 }));

@@ -25,11 +25,7 @@ export function NotFound() {
   };
 
   const handleGoBack = () => {
-    if (window.history.length > 1) {
-      navigate(-1);
-    } else {
-      handleGoHome();
-    }
+    navigate(-1);
   };
 
   return (
