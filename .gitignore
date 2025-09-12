@@ -28,4 +28,5 @@ npm-debug.log*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db coverage/
+Thumbs.db 
+coverage/
