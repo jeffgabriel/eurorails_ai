@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
+import { requestLogger, requestLoggingMiddleware } from '../middleware/requestLogger';
 
 // Extend the Request type to include requestId
 declare global {
@@ -38,15 +39,10 @@ interface UpdatePresenceRequest {
   isOnline: boolean;
 }
 
-// Request logging middleware for lobby routes
-function logLobbyRequest(req: Request, res: Response, next: Function): void {
-  const requestId = req.requestId || 'unknown';
-  console.log(`[${new Date().toISOString()}] [${requestId}] ${req.method} ${req.path}`, {
-    body: req.body,
-    query: req.query,
-    params: req.params
-  });
-  next();
+// Enhanced request logging for lobby operations
+function logLobbyOperation(operation: string, data?: any, req?: Request): void {
+  const requestId = req?.requestId || 'unknown';
+  requestLogger.logApiOperation(operation, data, requestId);
 }
 
 // Helper function to validate required fields
@@ -79,9 +75,11 @@ function validateUUID(uuid: string, fieldName: string, res: Response): boolean {
 }
 
 // POST /api/lobby/games - Create a new game
-router.post('/games', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.post('/games', asyncHandler(async (req: Request, res: Response) => {
   const { isPublic, maxPlayers, createdByUserId }: CreateGameRequest = req.body;
   const userId = createdByUserId || req.headers['x-user-id'] as string;
+  
+  logLobbyOperation('Create game request', { isPublic, maxPlayers, userId }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ userId }, res)) {
@@ -111,6 +109,12 @@ router.post('/games', logLobbyRequest, asyncHandler(async (req: Request, res: Re
   
   const game = await LobbyService.createGame(gameData);
   
+  logLobbyOperation('Game created successfully', { 
+    gameId: game.id, 
+    joinCode: game.joinCode,
+    createdBy: userId 
+  }, req);
+  
   res.status(201).json({
     success: true,
     data: game
@@ -118,9 +122,11 @@ router.post('/games', logLobbyRequest, asyncHandler(async (req: Request, res: Re
 }));
 
 // POST /api/lobby/games/join - Join an existing game
-router.post('/games/join', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.post('/games/join', asyncHandler(async (req: Request, res: Response) => {
   const { joinCode, userId }: JoinGameRequest = req.body;
   const user = userId || req.headers['x-user-id'] as string;
+  
+  logLobbyOperation('Join game request', { joinCode, userId: user }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ joinCode, user }, res)) {
@@ -144,6 +150,12 @@ router.post('/games/join', logLobbyRequest, asyncHandler(async (req: Request, re
   
   const game = await LobbyService.joinGame(joinCode.toUpperCase(), user);
   
+  logLobbyOperation('Player joined game successfully', { 
+    gameId: game.id, 
+    joinCode: joinCode,
+    userId: user 
+  }, req);
+  
   res.status(200).json({
     success: true,
     data: game
@@ -151,8 +163,10 @@ router.post('/games/join', logLobbyRequest, asyncHandler(async (req: Request, re
 }));
 
 // GET /api/lobby/games/:id - Get game information
-router.get('/games/:id', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.get('/games/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  
+  logLobbyOperation('Get game request', { gameId: id }, req);
   
   // Validate UUID format
   if (!validateUUID(id, 'gameId', res)) {
@@ -177,8 +191,10 @@ router.get('/games/:id', logLobbyRequest, asyncHandler(async (req: Request, res:
 }));
 
 // GET /api/lobby/games/:id/players - Get all players in a game
-router.get('/games/:id/players', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.get('/games/:id/players', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
+  
+  logLobbyOperation('Get game players request', { gameId: id }, req);
   
   // Validate UUID format
   if (!validateUUID(id, 'gameId', res)) {
@@ -194,10 +210,12 @@ router.get('/games/:id/players', logLobbyRequest, asyncHandler(async (req: Reque
 }));
 
 // POST /api/lobby/games/:id/start - Start a game
-router.post('/games/:id/start', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.post('/games/:id/start', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { creatorUserId }: StartGameRequest = req.body;
   const user = creatorUserId || req.headers['x-user-id'] as string;
+  
+  logLobbyOperation('Start game request', { gameId: id, creatorUserId: user }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ user }, res)) {
@@ -218,10 +236,12 @@ router.post('/games/:id/start', logLobbyRequest, asyncHandler(async (req: Reques
 }));
 
 // POST /api/lobby/games/:id/leave - Leave a game
-router.post('/games/:id/leave', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.post('/games/:id/leave', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const { userId }: LeaveGameRequest = req.body;
   const user = userId || req.headers['x-user-id'] as string;
+  
+  logLobbyOperation('Leave game request', { gameId: id, userId: user }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ user }, res)) {
@@ -242,9 +262,11 @@ router.post('/games/:id/leave', logLobbyRequest, asyncHandler(async (req: Reques
 }));
 
 // POST /api/lobby/players/presence - Update player online status
-router.post('/players/presence', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.post('/players/presence', asyncHandler(async (req: Request, res: Response) => {
   const { userId, isOnline }: UpdatePresenceRequest = req.body;
   const user = userId || req.headers['x-user-id'] as string;
+  
+  logLobbyOperation('Update player presence request', { userId: user, isOnline }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ user, isOnline }, res)) {
@@ -275,7 +297,9 @@ router.post('/players/presence', logLobbyRequest, asyncHandler(async (req: Reque
 }));
 
 // GET /api/lobby/health - Health check endpoint
-router.get('/health', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+router.get('/health', asyncHandler(async (req: Request, res: Response) => {
+  logLobbyOperation('Health check', { service: 'lobby-api' }, req);
+  
   res.status(200).json({
     success: true,
     message: 'Lobby service is healthy',

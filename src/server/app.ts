@@ -8,11 +8,15 @@ import {
   errorHandler, 
   notFoundHandler 
 } from './middleware/errorHandler';
+import { requestLoggingMiddleware } from './middleware/requestLogger';
 
 const app = express();
 
 // Request ID middleware (must be first)
 app.use(addRequestId);
+
+// Request logging middleware
+app.use(requestLoggingMiddleware);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { LobbyError } from '../services/lobbyService';
+import { requestLogger } from './requestLogger';
 
 // Extend the Request type to include requestId
 declare global {
@@ -44,14 +45,16 @@ export function errorHandler(error: any, req: Request, res: Response, next: Next
   const path = req.path;
   const method = req.method;
 
-  // Log error details
-  console.error(`[${timestamp}] [${requestId}] Error in ${method} ${path}:`, {
+  // Log error details using structured logging
+  requestLogger.error(`Error in ${method} ${path}`, {
     error: error.message,
     stack: error.stack,
+    method,
+    path,
     body: req.body,
     query: req.query,
     params: req.params
-  });
+  }, requestId);
 
   // Handle different error types
   let statusCode: number;
@@ -129,7 +132,11 @@ export function notFoundHandler(req: Request, res: Response, next: NextFunction)
   const requestId = req.requestId || 'unknown';
   const timestamp = new Date().toISOString();
   
-  console.warn(`[${timestamp}] [${requestId}] 404 - Route not found: ${req.method} ${req.path}`);
+  requestLogger.warn(`404 - Route not found: ${req.method} ${req.path}`, {
+    method: req.method,
+    path: req.path,
+    query: req.query
+  }, requestId);
 
   const errorResponse: ErrorResponse = {
     error: 'NOT_FOUND',
