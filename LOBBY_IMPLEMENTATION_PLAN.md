@@ -4,21 +4,61 @@
 This document outlines the step-by-step plan to implement game creation functionality from the lobby in the EuroRails AI project. The goal is to allow users to create games, generate unique join codes, invite players, and start games from the lobby interface.
 
 ## Project Structure
-- **Total Issues**: 5 GitHub issues (#66-#70)
-- **Estimated Total Effort**: 16-21 hours
+- **Total Issues**: 6 GitHub issues (#64, #66-#70)
+- **Estimated Total Effort**: 20-26 hours
 - **Actual Effort So Far**: ~10 hours
 - **Dependencies**: Sequential implementation (each task depends on the previous)
 
 ## 🎯 Current Status
+- ⏳ **Phase 0**: User Authentication Foundation - PENDING (Issue #64)
 - ✅ **Phase 1**: Database Foundation - COMPLETED
 - ✅ **Phase 2**: Backend Service Layer - COMPLETED
 - ✅ **Phase 3**: API Routes - COMPLETED (implemented in Phase 2)
 - 🚧 **Phase 4**: Frontend Integration - READY TO START
 - ⏳ **Phase 5**: Testing & Deployment - PENDING
 
-**Latest**: Backend complete, ready for frontend integration
+**Latest**: Backend complete, ready for frontend integration (authentication can be added later)
+
+## 📝 **Issue #64 Status**
+**Current Implementation**: Uses simple `user_id` UUIDs without authentication table
+**Issue #64 Requirements**: Full user authentication with users table, passwords, and JWT tokens
+**Decision**: Phase 0 (Issue #64) can be implemented later as it doesn't block current lobby functionality
 
 ## Implementation Phases
+
+### Phase 0: User Authentication Foundation (Issue #64) ⏳ PENDING
+**Estimated Effort**: 4-5 hours
+**Dependencies**: None
+**Status**: Partially implemented (missing users table)
+
+#### Tasks
+1. Create users table with authentication fields:
+   - `id` (UUID PRIMARY KEY)
+   - `username` (VARCHAR(50) UNIQUE NOT NULL)
+   - `email` (VARCHAR(255) UNIQUE NOT NULL)
+   - `password_hash` (VARCHAR(255) NOT NULL)
+   - `created_at` (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+   - `last_active` (TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+2. Update games table to reference users:
+   - `created_by_user_id` (UUID REFERENCES users(id))
+3. Update players table to reference users:
+   - `user_id` (UUID REFERENCES users(id)) - Already implemented
+4. Create authentication endpoints:
+   - `POST /auth/register` - User registration
+   - `POST /auth/login` - User login
+   - `GET /auth/me` - Get current user
+5. Add password hashing and JWT tokens
+6. Update lobby service to work with user authentication
+
+#### Checkpoints
+- [ ] Users table created
+- [ ] Authentication endpoints implemented
+- [ ] Password hashing working
+- [ ] JWT token system implemented
+- [ ] Lobby service updated for user auth
+- [ ] All tests passing with authentication
+
+---
 
 ### Phase 1: Database Foundation (Issue #66)
 **Estimated Effort**: 2-3 hours
@@ -154,6 +194,8 @@ This document outlines the step-by-step plan to implement game creation function
 ## Technical Architecture
 
 ### Database Schema Changes
+
+#### Current Implementation (Phase 1-3)
 ```sql
 -- Games table additions
 ALTER TABLE games 
@@ -166,6 +208,25 @@ ADD COLUMN lobby_status TEXT CHECK (lobby_status IN ('IN_SETUP', 'ACTIVE', 'COMP
 ALTER TABLE players 
 ADD COLUMN user_id UUID,
 ADD COLUMN is_online BOOLEAN DEFAULT true;
+```
+
+#### Future Implementation (Phase 0 - Issue #64)
+```sql
+-- Users table for authentication
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username VARCHAR(50) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Update games table to reference users
+ALTER TABLE games 
+ADD COLUMN created_by_user_id UUID REFERENCES users(id);
+
+-- Players table already has user_id (implemented in Phase 1)
 ```
 
 ### Service Layer Structure
