@@ -275,7 +275,13 @@ components:
   schemas:
     CreateGameRequest:
       type: object
+      required:
+        - userId
       properties:
+        userId:
+          type: string
+          format: uuid
+          description: User ID of the game creator
         isPublic:
           type: boolean
           default: false
@@ -393,6 +399,7 @@ components:
 
     Player:
       type: object
+      required: [id, name, color, money, trainType, turnNumber, isOnline, createdAt]
       properties:
         id:
           type: string
