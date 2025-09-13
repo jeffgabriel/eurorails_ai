@@ -207,7 +207,7 @@ describe('SettingsScene Unit Tests', () => {
                 }))
             });
             await scene['endGame']();
-            expect(scene.scene.start).toHaveBeenCalledWith('SetupScene', {
+            expect(scene.scene?.start).toHaveBeenCalledWith('SetupScene', {
                 gameState: {
                     id: '',
                     players: [],
@@ -221,7 +221,7 @@ describe('SettingsScene Unit Tests', () => {
         it('should handle failed game end', async () => {
             global.fetch = jest.fn().mockRejectedValue(new Error('Failed to end game'));
             await scene['endGame']();
-            expect(scene.scene.start).not.toHaveBeenCalled();
+            expect(scene.scene?.start).not.toHaveBeenCalled();
         });
     });
 }); 

@@ -1,5 +1,5 @@
 // shared/api.ts
-import type { 
+import { 
   User, 
   AuthResult, 
   Game, 
