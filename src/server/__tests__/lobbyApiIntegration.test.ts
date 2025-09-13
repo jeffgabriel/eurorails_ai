@@ -470,7 +470,7 @@ describe('Lobby API HTTP Integration Tests', () => {
   });
 
   describe('POST /api/lobby/players/presence - Update Presence', () => {
-    it('should update player presence successfully', async () => {
+    it('should return 404 when updating presence for non-existent player', async () => {
       const presenceData = {
         userId: testUserId,
         isOnline: true
@@ -516,7 +516,7 @@ describe('Lobby API HTTP Integration Tests', () => {
     });
 
     it('should handle malformed JSON', async () => {
-      const response = await request(app)
+      await request(app)
         .post('/api/lobby/games')
         .set('Content-Type', 'application/json')
         .send('invalid json')
