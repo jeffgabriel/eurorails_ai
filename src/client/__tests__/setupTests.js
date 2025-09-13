@@ -1,15 +1,17 @@
 // src/client/__tests__/setupTests.js
 require('jest-canvas-mock');
 
-// Minimal Scene shim (pure JS)
-class Scene {
-  constructor(config) {
-    Object.assign(this, config);
+// Only run mocks in test environment
+if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
+  // Minimal Scene shim (pure JS)
+  class Scene {
+    constructor(config) {
+      Object.assign(this, config);
+    }
   }
-}
 
-// Phaser-ish mocks
-const mockTime = {
+  // Phaser-ish mocks
+  const mockTime = {
   delayedCall: jest.fn((delay, callback) => {
     callback();
     return { destroy: jest.fn() };
@@ -284,8 +286,9 @@ Object.defineProperty(window, 'localStorage', {
   writable: true,
 });
 
-// Export mocks for tests that want them
-module.exports = {
-  mocks: { text: mockText, time: mockTime, add: mockAdd, input: mockInput, cameras: mockCameras },
-  MockScene: MockScene,
-};
+  // Export mocks for tests that want them
+  module.exports = {
+    mocks: { text: mockText, time: mockTime, add: mockAdd, input: mockInput, cameras: mockCameras },
+    MockScene: MockScene,
+  };
+}
