@@ -8,6 +8,7 @@ import {
   errorHandler, 
   notFoundHandler 
 } from './middleware/errorHandler';
+import { requestLoggingMiddleware } from './middleware/requestLogger';
 
 const app = express();
 
@@ -17,6 +18,9 @@ app.use(addRequestId);
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging middleware (after body parsing)
+app.use(requestLoggingMiddleware);
 
 // Static files
 app.use(express.static(path.join(__dirname, '../../public')));
