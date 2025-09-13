@@ -11,6 +11,15 @@ declare global {
   }
 }
 
+// Extend the Request type to include requestId
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string;
+    }
+  }
+}
+
 // Error response interface
 interface ErrorResponse {
   error: string;
