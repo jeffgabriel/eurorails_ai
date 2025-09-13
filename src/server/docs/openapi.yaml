@@ -1,0 +1,528 @@
+openapi: 3.0.3
+info:
+  title: EuroRails Lobby API
+  description: API for game lobby management in EuroRails AI
+  version: 1.0.0
+  contact:
+    name: EuroRails AI Team
+    url: https://github.com/jeffgabriel/eurorails_ai
+servers:
+  - url: http://localhost:3000/api/lobby
+    description: Development server
+paths:
+  /games:
+    post:
+      summary: Create a new game
+      description: Creates a new game lobby with a unique join code
+      operationId: createGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateGameRequest'
+            examples:
+              public_game:
+                summary: Public game with 6 players
+                value:
+                  isPublic: true
+                  maxPlayers: 6
+              private_game:
+                summary: Private game with default settings
+                value:
+                  isPublic: false
+      responses:
+        '201':
+          description: Game created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                validation_error:
+                  summary: Missing required field
+                  value:
+                    error: "VALIDATION_ERROR"
+                    message: "Missing required field: userId"
+                    details: "userId is required"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/join:
+    post:
+      summary: Join an existing game
+      description: Joins a game using a join code
+      operationId: joinGame
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JoinGameRequest'
+      responses:
+        '200':
+          description: Successfully joined game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found or invalid join code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/{id}:
+    get:
+      summary: Get game information
+      description: Retrieves information about a specific game
+      operationId: getGame
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Game UUID
+      responses:
+        '200':
+          description: Game information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GameResponse'
+        '400':
+          description: Invalid UUID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Game not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/{id}/players:
+    get:
+      summary: Get game players
+      description: Retrieves all players currently in a game
+      operationId: getGamePlayers
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Game UUID
+      responses:
+        '200':
+          description: Players retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlayersResponse'
+        '400':
+          description: Invalid UUID format
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/{id}/start:
+    post:
+      summary: Start a game
+      description: Changes game status from WAITING to ACTIVE
+      operationId: startGame
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Game UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StartGameRequest'
+      responses:
+        '200':
+          description: Game started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Validation error or insufficient players
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Not authorized to start game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /games/{id}/leave:
+    post:
+      summary: Leave a game
+      description: Removes a player from a game
+      operationId: leaveGame
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Game UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveGameRequest'
+      responses:
+        '200':
+          description: Successfully left game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Player not in game
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /players/presence:
+    post:
+      summary: Update player presence
+      description: Updates a player's online/offline status
+      operationId: updatePlayerPresence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePresenceRequest'
+      responses:
+        '200':
+          description: Presence updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Player not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health check
+      description: Checks the health status of the lobby service
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+components:
+  schemas:
+    CreateGameRequest:
+      type: object
+      properties:
+        isPublic:
+          type: boolean
+          default: false
+          description: Whether the game is publicly visible
+        maxPlayers:
+          type: integer
+          minimum: 2
+          maximum: 6
+          default: 4
+          description: Maximum number of players
+        createdByUserId:
+          type: string
+          format: uuid
+          description: Creator's user ID (optional if x-user-id header is provided)
+      example:
+        isPublic: true
+        maxPlayers: 6
+
+    JoinGameRequest:
+      type: object
+      required:
+        - joinCode
+      properties:
+        joinCode:
+          type: string
+          pattern: '^[A-Z0-9]{8}$'
+          description: 8-character alphanumeric join code
+        userId:
+          type: string
+          format: uuid
+          description: User ID (optional if x-user-id header is provided)
+      example:
+        joinCode: "ABC12345"
+
+    StartGameRequest:
+      type: object
+      properties:
+        creatorUserId:
+          type: string
+          format: uuid
+          description: Creator's user ID (optional if x-user-id header is provided)
+      example:
+        creatorUserId: "123e4567-e89b-12d3-a456-426614174000"
+
+    LeaveGameRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: User ID (optional if x-user-id header is provided)
+      example:
+        userId: "123e4567-e89b-12d3-a456-426614174000"
+
+    UpdatePresenceRequest:
+      type: object
+      required:
+        - isOnline
+      properties:
+        userId:
+          type: string
+          format: uuid
+          description: User ID (optional if x-user-id header is provided)
+        isOnline:
+          type: boolean
+          description: Player's online status
+      example:
+        userId: "123e4567-e89b-12d3-a456-426614174000"
+        isOnline: true
+
+    Game:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique game identifier
+        joinCode:
+          type: string
+          pattern: '^[A-Z0-9]{8}$'
+          description: 8-character join code
+        createdBy:
+          type: string
+          format: uuid
+          description: Creator's user ID
+        maxPlayers:
+          type: integer
+          minimum: 2
+          maximum: 6
+          description: Maximum number of players
+        isPublic:
+          type: boolean
+          description: Whether game is publicly visible
+        status:
+          type: string
+          enum: [WAITING, ACTIVE]
+          description: Current game status
+        createdAt:
+          type: string
+          format: date-time
+          description: Game creation timestamp
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+      example:
+        id: "123e4567-e89b-12d3-a456-426614174000"
+        joinCode: "ABC12345"
+        createdBy: "123e4567-e89b-12d3-a456-426614174000"
+        maxPlayers: 4
+        isPublic: false
+        status: "WAITING"
+        createdAt: "2025-09-13T00:00:00.000Z"
+        updatedAt: "2025-09-13T00:00:00.000Z"
+
+    Player:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique player identifier
+        name:
+          type: string
+          description: Player display name
+        color:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          description: Player color (hex code)
+        money:
+          type: integer
+          minimum: 0
+          description: Player's money
+        trainType:
+          type: string
+          enum: [Freight, Fast Freight, Heavy Freight, Superfreight]
+          description: Player's train type
+        turnNumber:
+          type: integer
+          minimum: 1
+          description: Player's turn order
+        isOnline:
+          type: boolean
+          description: Player's online status
+        createdAt:
+          type: string
+          format: date-time
+          description: Player creation timestamp
+      example:
+        id: "123e4567-e89b-12d3-a456-426614174000"
+        name: "Player 1"
+        color: "#FF0000"
+        money: 50
+        trainType: "Freight"
+        turnNumber: 1
+        isOnline: true
+        createdAt: "2025-09-13T00:00:00.000Z"
+
+    GameResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          $ref: '#/components/schemas/Game'
+
+    PlayersResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Player'
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          description: Success message
+      example:
+        success: true
+        message: "Operation completed successfully"
+
+    HealthResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Lobby service is healthy"
+        timestamp:
+          type: string
+          format: date-time
+          description: Current timestamp
+        service:
+          type: string
+          example: "lobby-api"
+      example:
+        success: true
+        message: "Lobby service is healthy"
+        timestamp: "2025-09-13T00:00:00.000Z"
+        service: "lobby-api"
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error code
+          enum:
+            - VALIDATION_ERROR
+            - GAME_NOT_FOUND
+            - GAME_FULL
+            - GAME_ALREADY_STARTED
+            - INVALID_JOIN_CODE
+            - NOT_GAME_CREATOR
+            - INSUFFICIENT_PLAYERS
+            - PLAYER_NOT_IN_GAME
+            - PLAYER_NOT_FOUND
+            - NOT_FOUND
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: string
+          description: Additional error details
+      example:
+        error: "VALIDATION_ERROR"
+        message: "Missing required field: userId"
+        details: "userId is required"
+
+  securitySchemes:
+    UserIdHeader:
+      type: apiKey
+      in: header
+      name: x-user-id
+      description: User identification header
+
+security:
+  - UserIdHeader: []
