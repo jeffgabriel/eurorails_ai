@@ -1,6 +1,8 @@
 // src/client/__tests__/setupTests.js
 require('jest-canvas-mock');
 
+// Jest is available globally in test environment
+
 // Only run mocks in test environment
 if (process.env.NODE_ENV === 'test' || process.env.JEST_WORKER_ID) {
   // Minimal Scene shim (pure JS)
@@ -266,13 +268,21 @@ globalThis.Phaser = {
 };
 
 // ---- FIXED FETCH MOCK ----
-if (!('fetch' in globalThis)) {
-  globalThis.fetch = jest.fn();
+if (!globalThis.fetch || !globalThis.fetch._isMockFunction) {
+  globalThis.fetch = jest.fn().mockImplementation((url, options) => {
+    // Simulate network errors for specific URLs or conditions
+    if (url.includes('/error')) {
+      return Promise.reject(new Error('Network error'));
+    }
+    // Default successful response
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => '',
+    });
+  });
 }
-globalThis.fetch = jest.fn().mockResolvedValue({
-  ok: true,
-  json: async () => ({}),
-});
 
 // ---- LOCALSTORAGE MOCK ----
 Object.defineProperty(window, 'localStorage', {

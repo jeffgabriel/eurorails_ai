@@ -5,7 +5,6 @@ module.exports = {
   maxWorkers: 1, // prevent DB deadlocks
 
   // Shared defaults (projects can override)
-  transformIgnorePatterns: ['/node_modules/(?!(phaser)/)'],
   moduleNameMapper: {
     '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',
     '^@/(.*)$': '<rootDir>/src/$1',
