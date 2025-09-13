@@ -3,10 +3,12 @@ import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 
-// Extend the Request type to include requestId
-declare module 'express' {
-  interface Request {
-    requestId?: string;
+// Extend the Request type to include requestId (needed for this file)
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string;
+    }
   }
 }
 
