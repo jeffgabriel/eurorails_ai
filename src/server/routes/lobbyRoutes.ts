@@ -2,6 +2,15 @@ import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 
+// Extend the Request type to include requestId (needed for this file)
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string;
+    }
+  }
+}
+
 const router = express.Router();
 
 // Request/Response interfaces
