@@ -5,7 +5,7 @@ import { TerrainType, GameState, GridPoint } from '../../shared/types/GameTypes'
 import { MapRenderer } from '../components/MapRenderer';
 
 describe('TrackDrawingManager', () => {
-    let scene: MockScene;
+    let scene: InstanceType<typeof MockScene>;
     let mapContainer: any;
     let gameState: GameState;
     let gridPoints: GridPoint[][];
@@ -550,7 +550,7 @@ describe('TrackDrawingManager', () => {
     });
 
     describe('Real-time Cost Display', () => {
-        let scene: MockScene;
+        let scene: InstanceType<typeof MockScene>;
         let mapContainer: any;
         let gameState: GameState;
         let gridPoints: GridPoint[][];
@@ -714,7 +714,7 @@ describe('TrackDrawingManager', () => {
             trackDrawingManager.toggleDrawingMode();
             
             // Simulate the scene update event to process any queued cost updates
-            scene.events.emit('update');
+            scene.events?.emit('update');
             
             // Should call callback with accumulated cost (10 from previous session)
             expect(costUpdateCallback).toHaveBeenCalledWith(10);
@@ -758,10 +758,12 @@ describe('TrackDrawingManager', () => {
                 event: null
             };
             
-            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
+            if (scene.cameras?.main) {
+                scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
                 x: majorCityPoint.x, 
                 y: majorCityPoint.y 
             });
+            }
             
             // First click to set starting point
             (trackDrawingManager as any).handleDrawingClick(mockPointer);
@@ -773,10 +775,12 @@ describe('TrackDrawingManager', () => {
             jest.spyOn(trackDrawingManager, 'getGridPointAtPosition')
                 .mockReturnValueOnce(targetPoint);
             
-            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
+            if (scene.cameras?.main) {
+                scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ 
                 x: targetPoint.x, 
                 y: targetPoint.y 
             });
+            }
             
             // Set up preview path
             (trackDrawingManager as any).previewPath = [majorCityPoint, targetPoint];
@@ -785,7 +789,7 @@ describe('TrackDrawingManager', () => {
             (trackDrawingManager as any).handleDrawingClick(mockPointer);
             
             // Simulate the scene update event to process any queued cost updates
-            scene.events.emit('update');
+            scene.events?.emit('update');
             
             // Should update with previous (15) + new segment cost (1 for clear terrain) = 16
             expect(costUpdateCallback).toHaveBeenCalledWith(16);
@@ -824,7 +828,9 @@ describe('TrackDrawingManager', () => {
                 terrain: TerrainType.Water
             };
             
-            scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: 300, y: 300 });
+            if (scene.cameras?.main) {
+                scene.cameras.main.getWorldPoint = jest.fn().mockReturnValue({ x: 300, y: 300 });
+            }
             
             // Mock getGridPointAtPosition to return water point
             jest.spyOn(trackDrawingManager, 'getGridPointAtPosition').mockReturnValue(waterPoint);

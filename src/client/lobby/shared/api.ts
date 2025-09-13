@@ -1,15 +1,15 @@
 // shared/api.ts
-import type { 
-  User, 
-  AuthResult, 
-  Game, 
-  Player, 
+import type {
+  User,
+  AuthResult,
+  Game,
+  Player,
   ApiError,
   LoginForm,
   RegisterForm,
   CreateGameForm,
   JoinGameForm,
-  ID 
+  ID
 } from './types';
 import { config, debug } from './config';
 

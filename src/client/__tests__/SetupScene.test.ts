@@ -85,7 +85,7 @@ describe('SetupScene Unit Tests', () => {
         scene['errorText'] = {
             setText: jest.fn().mockReturnThis(),
             setOrigin: jest.fn().mockReturnThis()
-        } as unknown as GameObjects.Text;
+        } as any;
     });
 
     afterEach(() => {
@@ -248,7 +248,7 @@ describe('SetupScene Unit Tests', () => {
             await scene['startGame']();
             expect(global.fetch).toHaveBeenCalled();
             expect(scene['gameState'].status).toBe('active');
-            expect(scene.scene.start).toHaveBeenCalledWith('GameScene', { gameState: scene['gameState'] });
+            expect(scene.scene?.start).toHaveBeenCalledWith('GameScene', { gameState: scene['gameState'] });
         });
     });
 }); 
