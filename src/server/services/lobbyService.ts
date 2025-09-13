@@ -26,56 +26,79 @@ export interface Player {
   gameId: string;
 }
 
-export class LobbyService {
-  /**
-   * Generate a unique 6-character join code
-   */
-  private static generateJoinCode(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < 6; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
+// Custom error types for better error handling
+export class LobbyError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode: number = 400
+  ) {
+    super(message);
+    this.name = 'LobbyError';
   }
+}
 
+export class GameNotFoundError extends LobbyError {
+  constructor(message: string = 'Game not found') {
+    super(message, 'GAME_NOT_FOUND', 404);
+  }
+}
+
+export class GameFullError extends LobbyError {
+  constructor(message: string = 'Game is full') {
+    super(message, 'GAME_FULL', 400);
+  }
+}
+
+export class GameAlreadyStartedError extends LobbyError {
+  constructor(message: string = 'Game has already started') {
+    super(message, 'GAME_ALREADY_STARTED', 400);
+  }
+}
+
+export class InvalidJoinCodeError extends LobbyError {
+  constructor(message: string = 'Invalid join code') {
+    super(message, 'INVALID_JOIN_CODE', 400);
+  }
+}
+
+export class NotGameCreatorError extends LobbyError {
+  constructor(message: string = 'Only the game creator can perform this action') {
+    super(message, 'NOT_GAME_CREATOR', 403);
+  }
+}
+
+export class InsufficientPlayersError extends LobbyError {
+  constructor(message: string = 'Need at least 2 players to start the game') {
+    super(message, 'INSUFFICIENT_PLAYERS', 400);
+  }
+}
+
+export class LobbyService {
   /**
    * Create a new game
    */
   static async createGame(data: CreateGameData): Promise<Game> {
+    // Input validation
+    if (!data.createdByUserId) {
+      throw new LobbyError('createdByUserId is required', 'MISSING_USER_ID', 400);
+    }
+    
+    if (data.maxPlayers && (data.maxPlayers < 2 || data.maxPlayers > 6)) {
+      throw new LobbyError('maxPlayers must be between 2 and 6', 'INVALID_MAX_PLAYERS', 400);
+    }
+
     const client = await db.connect();
     
     try {
       await client.query('BEGIN');
       
-      // Generate a unique join code
-      let joinCode: string;
-      let attempts = 0;
-      const maxAttempts = 10;
-      
-      do {
-        joinCode = this.generateJoinCode();
-        const existingGame = await client.query(
-          'SELECT id FROM games WHERE join_code = $1',
-          [joinCode]
-        );
-        
-        if (existingGame.rows.length === 0) {
-          break;
-        }
-        
-        attempts++;
-        if (attempts >= maxAttempts) {
-          throw new Error('Unable to generate unique join code');
-        }
-      } while (true);
-      
-      // Create the game
+      // Create the game using the database function for join code generation
       const gameResult = await client.query(
         `INSERT INTO games (join_code, max_players, is_public, lobby_status) 
-         VALUES ($1, $2, $3, $4) 
+         VALUES (generate_unique_join_code(), $1, $2, $3) 
          RETURNING id, join_code, max_players, is_public, lobby_status, created_at`,
-        [joinCode, data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP']
+        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP']
       );
       
       const game = gameResult.rows[0];
@@ -119,26 +142,37 @@ export class LobbyService {
    * Join an existing game
    */
   static async joinGame(joinCode: string, userId: string): Promise<Game> {
+    // Input validation
+    if (!joinCode || joinCode.trim().length === 0) {
+      throw new InvalidJoinCodeError('Join code is required');
+    }
+    
+    if (!userId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+
     const client = await db.connect();
     
     try {
+      await client.query('BEGIN');
+      
       // Find the game by join code
       const gameResult = await client.query(
         `SELECT g.*, p.id as creator_player_id 
          FROM games g 
          LEFT JOIN players p ON g.created_by = p.id 
          WHERE g.join_code = $1`,
-        [joinCode]
+        [joinCode.toUpperCase()]
       );
       
       if (gameResult.rows.length === 0) {
-        throw new Error('Game not found');
+        throw new InvalidJoinCodeError('Game not found with that join code');
       }
       
       const game = gameResult.rows[0];
       
       if (game.lobby_status !== 'IN_SETUP') {
-        throw new Error('Game has already started');
+        throw new GameAlreadyStartedError();
       }
       
       // Check if player is already in the game
@@ -149,6 +183,7 @@ export class LobbyService {
       
       if (existingPlayer.rows.length > 0) {
         // Player already in game, return game info
+        await client.query('COMMIT');
         return {
           id: game.id,
           joinCode: game.join_code,
@@ -168,7 +203,7 @@ export class LobbyService {
       
       const playerCount = parseInt(playerCountResult.rows[0].count);
       if (playerCount >= game.max_players) {
-        throw new Error('Game is full');
+        throw new GameFullError();
       }
       
       // Add player to the game
@@ -190,6 +225,8 @@ export class LobbyService {
         [game.id, userId, `Player ${playerCount + 1}`, playerColor]
       );
       
+      await client.query('COMMIT');
+      
       return {
         id: game.id,
         joinCode: game.join_code,
@@ -199,6 +236,9 @@ export class LobbyService {
         isPublic: game.is_public,
         createdAt: game.created_at,
       };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
     } finally {
       client.release();
     }
@@ -208,6 +248,11 @@ export class LobbyService {
    * Get game by ID
    */
   static async getGame(gameId: string): Promise<Game | null> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+
     const result = await db.query(
       `SELECT g.*, p.id as creator_player_id 
        FROM games g 
@@ -236,6 +281,11 @@ export class LobbyService {
    * Get players in a game
    */
   static async getGamePlayers(gameId: string): Promise<Player[]> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+
     const result = await db.query(
       `SELECT id, user_id, name, color, is_online, game_id 
        FROM players 
@@ -258,9 +308,20 @@ export class LobbyService {
    * Start a game (change status from IN_SETUP to ACTIVE)
    */
   static async startGame(gameId: string, creatorUserId: string): Promise<void> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+    
+    if (!creatorUserId) {
+      throw new LobbyError('creatorUserId is required', 'MISSING_USER_ID', 400);
+    }
+
     const client = await db.connect();
     
     try {
+      await client.query('BEGIN');
+      
       // Verify the user is the creator
       const gameResult = await client.query(
         `SELECT g.*, p.user_id as creator_user_id 
@@ -271,17 +332,17 @@ export class LobbyService {
       );
       
       if (gameResult.rows.length === 0) {
-        throw new Error('Game not found');
+        throw new GameNotFoundError();
       }
       
       const game = gameResult.rows[0];
       
       if (game.creator_user_id !== creatorUserId) {
-        throw new Error('Only the game creator can start the game');
+        throw new NotGameCreatorError();
       }
       
       if (game.lobby_status !== 'IN_SETUP') {
-        throw new Error('Game has already started');
+        throw new GameAlreadyStartedError();
       }
       
       // Check minimum players
@@ -292,7 +353,7 @@ export class LobbyService {
       
       const playerCount = parseInt(playerCountResult.rows[0].count);
       if (playerCount < 2) {
-        throw new Error('Need at least 2 players to start the game');
+        throw new InsufficientPlayersError();
       }
       
       // Update game status
@@ -300,6 +361,11 @@ export class LobbyService {
         'UPDATE games SET lobby_status = $1, status = $2 WHERE id = $3',
         ['ACTIVE', 'initialBuild', gameId]
       );
+      
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
     } finally {
       client.release();
     }
@@ -309,19 +375,79 @@ export class LobbyService {
    * Leave a game
    */
   static async leaveGame(gameId: string, userId: string): Promise<void> {
-    await db.query(
-      'DELETE FROM players WHERE game_id = $1 AND user_id = $2',
-      [gameId, userId]
-    );
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
     
-    // If no players left, delete the game
-    const playerCountResult = await db.query(
-      'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
-      [gameId]
-    );
+    if (!userId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+
+    const client = await db.connect();
     
-    if (parseInt(playerCountResult.rows[0].count) === 0) {
-      await db.query('DELETE FROM games WHERE id = $1', [gameId]);
+    try {
+      await client.query('BEGIN');
+      
+      // Check if player exists in the game
+      const playerResult = await client.query(
+        'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+        [gameId, userId]
+      );
+      
+      if (playerResult.rows.length === 0) {
+        throw new LobbyError('Player not found in this game', 'PLAYER_NOT_IN_GAME', 404);
+      }
+      
+      // Check if this is the creator
+      const isCreator = await client.query(
+        'SELECT created_by FROM games WHERE id = $1',
+        [gameId]
+      );
+      
+      if (isCreator.rows[0].created_by === playerResult.rows[0].id) {
+        // If this is the creator, we need to transfer ownership or delete the game
+        const remainingPlayers = await client.query(
+          'SELECT id FROM players WHERE game_id = $1 AND user_id != $2 ORDER BY created_at LIMIT 1',
+          [gameId, userId]
+        );
+        
+        if (remainingPlayers.rows.length > 0) {
+          // Transfer ownership to another player
+          await client.query(
+            'UPDATE games SET created_by = $1 WHERE id = $2',
+            [remainingPlayers.rows[0].id, gameId]
+          );
+        } else {
+          // No other players, delete the game first
+          await client.query('DELETE FROM games WHERE id = $1', [gameId]);
+          await client.query('COMMIT');
+          return; // Exit early since game is deleted
+        }
+      }
+      
+      // Remove the player
+      await client.query(
+        'DELETE FROM players WHERE game_id = $1 AND user_id = $2',
+        [gameId, userId]
+      );
+      
+      // If no players left, delete the game
+      const playerCountResult = await client.query(
+        'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
+        [gameId]
+      );
+      
+      if (parseInt(playerCountResult.rows[0].count) === 0) {
+        await client.query('DELETE FROM games WHERE id = $1', [gameId]);
+      }
+      
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
   }
 
@@ -329,9 +455,22 @@ export class LobbyService {
    * Update player online status
    */
   static async updatePlayerPresence(userId: string, isOnline: boolean): Promise<void> {
-    await db.query(
+    // Input validation
+    if (!userId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+    
+    if (typeof isOnline !== 'boolean') {
+      throw new LobbyError('isOnline must be a boolean', 'INVALID_IS_ONLINE', 400);
+    }
+
+    const result = await db.query(
       'UPDATE players SET is_online = $1 WHERE user_id = $2',
       [isOnline, userId]
     );
+    
+    if (result.rowCount === 0) {
+      throw new LobbyError('Player not found', 'PLAYER_NOT_FOUND', 404);
+    }
   }
 }

@@ -1,0 +1,278 @@
+import express, { Request, Response } from 'express';
+import { LobbyService, CreateGameData } from '../services/lobbyService';
+import { asyncHandler } from '../middleware/errorHandler';
+
+const router = express.Router();
+
+// Request/Response interfaces
+interface CreateGameRequest {
+  isPublic?: boolean;
+  maxPlayers?: number;
+  createdByUserId?: string;
+}
+
+interface JoinGameRequest {
+  joinCode: string;
+  userId?: string;
+}
+
+interface StartGameRequest {
+  creatorUserId: string;
+}
+
+interface LeaveGameRequest {
+  userId: string;
+}
+
+interface UpdatePresenceRequest {
+  userId: string;
+  isOnline: boolean;
+}
+
+// Request logging middleware for lobby routes
+function logLobbyRequest(req: Request, res: Response, next: Function): void {
+  const requestId = req.requestId || 'unknown';
+  console.log(`[${new Date().toISOString()}] [${requestId}] ${req.method} ${req.path}`, {
+    body: req.body,
+    query: req.query,
+    params: req.params
+  });
+  next();
+}
+
+// Helper function to validate required fields
+function validateRequiredFields(fields: Record<string, any>, res: Response): boolean {
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined || value === null || value === '') {
+      res.status(400).json({
+        error: 'VALIDATION_ERROR',
+        message: `Missing required field: ${key}`,
+        details: `${key} is required`
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+// Helper function to validate UUID format
+function validateUUID(uuid: string, fieldName: string, res: Response): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(uuid)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: `Invalid ${fieldName} format`,
+      details: `${fieldName} must be a valid UUID`
+    });
+    return false;
+  }
+  return true;
+}
+
+// POST /api/lobby/games - Create a new game
+router.post('/games', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { isPublic, maxPlayers, createdByUserId }: CreateGameRequest = req.body;
+  const userId = createdByUserId || req.headers['x-user-id'] as string;
+  
+  // Validate required fields
+  if (!validateRequiredFields({ userId }, res)) {
+    return;
+  }
+  
+  // Validate UUID format
+  if (!validateUUID(userId, 'userId', res)) {
+    return;
+  }
+  
+  // Validate maxPlayers if provided
+  if (maxPlayers !== undefined && (maxPlayers < 2 || maxPlayers > 6)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'maxPlayers must be between 2 and 6',
+      details: 'Invalid maxPlayers value'
+    });
+    return;
+  }
+  
+  const gameData: CreateGameData = {
+    createdByUserId: userId,
+    maxPlayers: maxPlayers || 4,
+    isPublic: isPublic || false
+  };
+  
+  const game = await LobbyService.createGame(gameData);
+  
+  res.status(201).json({
+    success: true,
+    data: game
+  });
+}));
+
+// POST /api/lobby/games/join - Join an existing game
+router.post('/games/join', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { joinCode, userId }: JoinGameRequest = req.body;
+  const user = userId || req.headers['x-user-id'] as string;
+  
+  // Validate required fields
+  if (!validateRequiredFields({ joinCode, user }, res)) {
+    return;
+  }
+  
+  // Validate UUID format for userId
+  if (!validateUUID(user, 'userId', res)) {
+    return;
+  }
+  
+  // Validate join code format (8 alphanumeric characters)
+  if (!/^[A-Z0-9]{8}$/i.test(joinCode)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid join code format',
+      details: 'Join code must be 8 alphanumeric characters'
+    });
+    return;
+  }
+  
+  const game = await LobbyService.joinGame(joinCode.toUpperCase(), user);
+  
+  res.status(200).json({
+    success: true,
+    data: game
+  });
+}));
+
+// GET /api/lobby/games/:id - Get game information
+router.get('/games/:id', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  
+  // Validate UUID format
+  if (!validateUUID(id, 'gameId', res)) {
+    return;
+  }
+  
+  const game = await LobbyService.getGame(id);
+  
+  if (!game) {
+    res.status(404).json({
+      error: 'GAME_NOT_FOUND',
+      message: 'Game not found',
+      details: 'No game found with the provided ID'
+    });
+    return;
+  }
+  
+  res.status(200).json({
+    success: true,
+    data: game
+  });
+}));
+
+// GET /api/lobby/games/:id/players - Get all players in a game
+router.get('/games/:id/players', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  
+  // Validate UUID format
+  if (!validateUUID(id, 'gameId', res)) {
+    return;
+  }
+  
+  const players = await LobbyService.getGamePlayers(id);
+  
+  res.status(200).json({
+    success: true,
+    data: players
+  });
+}));
+
+// POST /api/lobby/games/:id/start - Start a game
+router.post('/games/:id/start', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { creatorUserId }: StartGameRequest = req.body;
+  const user = creatorUserId || req.headers['x-user-id'] as string;
+  
+  // Validate required fields
+  if (!validateRequiredFields({ user }, res)) {
+    return;
+  }
+  
+  // Validate UUID format
+  if (!validateUUID(id, 'gameId', res) || !validateUUID(user, 'userId', res)) {
+    return;
+  }
+  
+  await LobbyService.startGame(id, user);
+  
+  res.status(200).json({
+    success: true,
+    message: 'Game started successfully'
+  });
+}));
+
+// POST /api/lobby/games/:id/leave - Leave a game
+router.post('/games/:id/leave', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { userId }: LeaveGameRequest = req.body;
+  const user = userId || req.headers['x-user-id'] as string;
+  
+  // Validate required fields
+  if (!validateRequiredFields({ user }, res)) {
+    return;
+  }
+  
+  // Validate UUID format
+  if (!validateUUID(id, 'gameId', res) || !validateUUID(user, 'userId', res)) {
+    return;
+  }
+  
+  await LobbyService.leaveGame(id, user);
+  
+  res.status(200).json({
+    success: true,
+    message: 'Left game successfully'
+  });
+}));
+
+// POST /api/lobby/players/presence - Update player online status
+router.post('/players/presence', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  const { userId, isOnline }: UpdatePresenceRequest = req.body;
+  const user = userId || req.headers['x-user-id'] as string;
+  
+  // Validate required fields
+  if (!validateRequiredFields({ user, isOnline }, res)) {
+    return;
+  }
+  
+  // Validate UUID format
+  if (!validateUUID(user, 'userId', res)) {
+    return;
+  }
+  
+  // Validate isOnline is boolean
+  if (typeof isOnline !== 'boolean') {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'isOnline must be a boolean',
+      details: 'Invalid isOnline value'
+    });
+    return;
+  }
+  
+  await LobbyService.updatePlayerPresence(user, isOnline);
+  
+  res.status(200).json({
+    success: true,
+    message: 'Player presence updated successfully'
+  });
+}));
+
+// GET /api/lobby/health - Health check endpoint
+router.get('/health', logLobbyRequest, asyncHandler(async (req: Request, res: Response) => {
+  res.status(200).json({
+    success: true,
+    message: 'Lobby service is healthy',
+    timestamp: new Date().toISOString(),
+    service: 'lobby-api'
+  });
+}));
+
+export default router;
