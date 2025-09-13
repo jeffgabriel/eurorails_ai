@@ -3,20 +3,9 @@ import { LobbyError } from '../services/lobbyService';
 import { requestLogger } from './requestLogger';
 
 // Extend the Request type to include requestId
-declare global {
-  namespace Express {
-    interface Request {
-      requestId?: string;
-    }
-  }
-}
-
-// Extend the Request type to include requestId
-declare global {
-  namespace Express {
-    interface Request {
-      requestId?: string;
-    }
+declare module 'express' {
+  interface Request {
+    requestId?: string;
   }
 }
 

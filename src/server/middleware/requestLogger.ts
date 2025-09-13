@@ -120,7 +120,7 @@ class RequestLogger {
       body: this.sanitizeBody(req.body),
       headers: this.sanitizeHeaders(req.headers),
       userAgent: req.get('User-Agent'),
-      ip: req.ip || req.connection.remoteAddress,
+      ip: req.ip,
       timestamp: new Date().toISOString()
     };
 

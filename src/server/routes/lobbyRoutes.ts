@@ -1,14 +1,12 @@
 import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
-import { requestLogger, requestLoggingMiddleware } from '../middleware/requestLogger';
+import { requestLogger } from '../middleware/requestLogger';
 
 // Extend the Request type to include requestId
-declare global {
-  namespace Express {
-    interface Request {
-      requestId?: string;
-    }
+declare module 'express' {
+  interface Request {
+    requestId?: string;
   }
 }
 
