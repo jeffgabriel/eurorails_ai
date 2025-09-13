@@ -15,12 +15,12 @@ const app = express();
 // Request ID middleware (must be first)
 app.use(addRequestId);
 
-// Request logging middleware
-app.use(requestLoggingMiddleware);
-
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging middleware (after body parsing)
+app.use(requestLoggingMiddleware);
 
 // Static files
 app.use(express.static(path.join(__dirname, '../../public')));
