@@ -185,7 +185,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         message: 'Game ID is required',
       };
       set({ error: createUserFriendlyError(error) });
-      return;
+      throw error;
     }
 
     try {
