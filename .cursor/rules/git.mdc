@@ -7,3 +7,5 @@ owner: jeffgabriel
 repository: eurorails_ai
 
 every branch should be created with a prefix of the current user's first name;
+
+Assume that new branches need to be setup to track remote on push, and that you cannot just push a new branch.
