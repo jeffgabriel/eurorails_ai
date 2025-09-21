@@ -78,10 +78,7 @@ const handleError = (error: unknown, retryCount: number, maxRetries: number = 3)
   const friendlyError = createUserFriendlyError(apiError);
   
   if (isRetryableError(apiError) && retryCount < maxRetries) {
-    return {
-      ...friendlyError,
-      message: `${friendlyError.message} (Retry ${retryCount + 1}/${maxRetries})`,
-    };
+    return friendlyError;
   }
   
   return friendlyError;
@@ -121,12 +118,12 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       return result.game;
     } catch (error) {
-      const handledError = handleError(error, state.retryCount);
+      const handledError = handleError(error, get().retryCount);
       
       set({
         isLoading: false,
         error: handledError,
-        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
+        retryCount: isRetryableError(handledError) ? get().retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -166,12 +163,12 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       return result.game;
     } catch (error) {
-      const handledError = handleError(error, state.retryCount);
+      const handledError = handleError(error, get().retryCount);
       
       set({
         isLoading: false,
         error: handledError,
-        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
+        retryCount: isRetryableError(handledError) ? get().retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -200,12 +197,12 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         retryCount: 0,
       });
     } catch (error) {
-      const handledError = handleError(error, state.retryCount);
+      const handledError = handleError(error, get().retryCount);
       
       set({
         isLoading: false,
         error: handledError,
-        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
+        retryCount: isRetryableError(handledError) ? get().retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -234,6 +231,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       set({
         error: handledError,
+        isLoading: false,
       });
     }
   },
@@ -286,12 +284,12 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         retryCount: 0,
       });
     } catch (error) {
-      const handledError = handleError(error, state.retryCount);
+      const handledError = handleError(error, get().retryCount);
       
       set({
         isLoading: false,
         error: handledError,
-        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
+        retryCount: isRetryableError(handledError) ? get().retryCount + 1 : 0,
       });
       throw handledError;
     }

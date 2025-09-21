@@ -175,7 +175,7 @@ describe('LobbyStore Error Handling', () => {
       
       const state = useLobbyStore.getState();
       expect(state.retryCount).toBe(1);
-      expect(state.error?.message).toContain('(Retry 1/3)');
+      expect(state.error?.message).toBe('Internal server error');
     });
 
     it('should not retry non-retryable errors', async () => {
