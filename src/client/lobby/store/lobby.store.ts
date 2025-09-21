@@ -20,7 +20,6 @@ interface LobbyActions {
   leaveGame: () => void;
   updatePlayerPresence: (userId: ID, isOnline: boolean) => void;
   clearError: () => void;
-  retryLastAction: () => Promise<void>;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -39,9 +38,43 @@ const createUserFriendlyError = (error: ApiError): ApiError => {
   };
 };
 
+// Helper function to safely convert unknown error to ApiError
+const normalizeError = (error: unknown): ApiError => {
+  // If it's already an ApiError-like object, validate and return it
+  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+    const errorObj = error as Record<string, unknown>;
+    return {
+      code: String(errorObj.code),
+      message: String(errorObj.message),
+    };
+  }
+  
+  // If it's an Error object, convert to ApiError
+  if (error instanceof Error) {
+    return {
+      code: 'UNKNOWN_ERROR',
+      message: error.message,
+    };
+  }
+  
+  // If it's a string, convert to ApiError
+  if (typeof error === 'string') {
+    return {
+      code: 'UNKNOWN_ERROR',
+      message: error,
+    };
+  }
+  
+  // For any other type, convert to string and create ApiError
+  return {
+    code: 'UNKNOWN_ERROR',
+    message: String(error),
+  };
+};
+
 // Helper function to handle errors with retry logic
 const handleError = (error: unknown, retryCount: number, maxRetries: number = 3): ApiError => {
-  const apiError = error as ApiError;
+  const apiError = normalizeError(error);
   const friendlyError = createUserFriendlyError(apiError);
   
   if (isRetryableError(apiError) && retryCount < maxRetries) {
@@ -79,7 +112,8 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
       // Load initial players
       try {
-        await get().loadGamePlayers(result.game.id);
+        const playerResult = await api.getGamePlayers(result.game.id);
+        set({ players: playerResult.players });
       } catch (playerError) {
         // If loading players fails, log but don't fail the entire operation
         console.warn('Failed to load initial players:', playerError);
@@ -92,7 +126,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       set({
         isLoading: false,
         error: handledError,
-        retryCount: state.retryCount + 1,
+        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -137,7 +171,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       set({
         isLoading: false,
         error: handledError,
-        retryCount: state.retryCount + 1,
+        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -171,7 +205,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       set({
         isLoading: false,
         error: handledError,
-        retryCount: state.retryCount + 1,
+        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -257,7 +291,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       set({
         isLoading: false,
         error: handledError,
-        retryCount: state.retryCount + 1,
+        retryCount: isRetryableError(handledError) ? state.retryCount + 1 : 0,
       });
       throw handledError;
     }
@@ -287,19 +321,4 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     set({ error: null, retryCount: 0 });
   },
 
-  retryLastAction: async () => {
-    const state = get();
-    
-    if (!state.error || state.retryCount >= 3) {
-      return;
-    }
-
-    // Clear error and retry the last action
-    set({ error: null, retryCount: state.retryCount + 1 });
-    
-    // Note: In a real implementation, you might want to store the last action
-    // and its parameters to retry it. For now, we'll just clear the error
-    // and let the user retry manually.
-    console.log('Retry functionality available - user can retry the last action');
-  },
 }));

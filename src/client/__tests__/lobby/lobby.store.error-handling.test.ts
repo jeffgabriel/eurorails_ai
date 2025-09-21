@@ -194,7 +194,7 @@ describe('LobbyStore Error Handling', () => {
       }
       
       const state = useLobbyStore.getState();
-      expect(state.retryCount).toBe(1);
+      expect(state.retryCount).toBe(0);
       expect(state.error?.message).not.toContain('(Retry');
     });
   });
@@ -280,7 +280,60 @@ describe('LobbyStore Error Handling', () => {
       
       expect(result).toEqual(game);
       expect(useLobbyStore.getState().currentGame).toEqual(game);
+      // Player loading failure should be logged but not set as main error
       expect(useLobbyStore.getState().error).toBeNull();
+    });
+  });
+
+  describe('Error Normalization', () => {
+    it('should handle different error types safely', async () => {
+      // Test with Error object
+      mockApi.createGame.mockRejectedValueOnce(new Error('Network error'));
+      
+      try {
+        await useLobbyStore.getState().createGame();
+        fail('Expected function to throw');
+      } catch (error) {
+        // Expected to throw
+      }
+      
+      let state = useLobbyStore.getState();
+      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.message).toBe('Network error');
+      
+      // Reset state
+      useLobbyStore.setState({ error: null, retryCount: 0 });
+      
+      // Test with string error
+      mockApi.createGame.mockRejectedValueOnce('String error message');
+      
+      try {
+        await useLobbyStore.getState().createGame();
+        fail('Expected function to throw');
+      } catch (error) {
+        // Expected to throw
+      }
+      
+      state = useLobbyStore.getState();
+      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.message).toBe('String error message');
+      
+      // Reset state
+      useLobbyStore.setState({ error: null, retryCount: 0 });
+      
+      // Test with undefined error
+      mockApi.createGame.mockRejectedValueOnce(undefined);
+      
+      try {
+        await useLobbyStore.getState().createGame();
+        fail('Expected function to throw');
+      } catch (error) {
+        // Expected to throw
+      }
+      
+      state = useLobbyStore.getState();
+      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.message).toBe('undefined');
     });
   });
 });
