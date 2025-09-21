@@ -59,6 +59,8 @@ describe('Lobby E2E - Simple Verification', () => {
       createdBy: 'user-123',
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
+      isPublic: true,
+      createdAt: '2023-01-01T00:00:00Z',
     };
 
     // Mock API response
@@ -83,6 +85,8 @@ describe('Lobby E2E - Simple Verification', () => {
       createdBy: 'user-456',
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
+      isPublic: true,
+      createdAt: '2023-01-01T00:00:00Z',
     };
 
     const mockPlayers = [
@@ -117,6 +121,8 @@ describe('Lobby E2E - Simple Verification', () => {
       createdBy: 'user-123',
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
+      isPublic: true,
+      createdAt: '2023-01-01T00:00:00Z',
     };
 
     // Set up initial state

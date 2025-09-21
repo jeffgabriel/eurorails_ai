@@ -16,12 +16,24 @@ import { config, debug } from './config';
 class ApiClient {
   private getAuthHeaders(): Record<string, string> {
     const token = localStorage.getItem('eurorails.jwt');
+    const userJson = localStorage.getItem('eurorails.user');
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
     
     if (token) {
       headers.Authorization = `Bearer ${token}`;
+    }
+    
+    if (userJson) {
+      try {
+        const user = JSON.parse(userJson);
+        if (user.id) {
+          headers['x-user-id'] = user.id;
+        }
+      } catch (error) {
+        console.warn('Failed to parse user from localStorage:', error);
+      }
     }
     
     return headers;
