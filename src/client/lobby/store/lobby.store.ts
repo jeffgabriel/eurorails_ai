@@ -219,12 +219,15 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       throw error;
     }
 
+    set({ isLoading: true, error: null });
+
     try {
       const result = await api.getGamePlayers(gameId);
       
       set({
         players: result.players,
         error: null, // Clear any previous errors on success
+        isLoading: false,
       });
     } catch (error) {
       const handledError = handleError(error, 0); // Don't retry for player loading
