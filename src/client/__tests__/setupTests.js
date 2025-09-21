@@ -273,9 +273,9 @@ if (!globalThis.fetch || !globalThis.fetch._isMockFunction) {
   globalThis.fetch = jest.fn().mockImplementation((url, options) => {
     // Skip mocking for integration tests (tests that make real HTTP requests)
     if (url.includes('localhost:3001') || url.includes('/api/lobby/')) {
-      // For integration tests, use the real fetch implementation
-      // This will use Node.js built-in fetch (Node 18+) or fallback to node-fetch
-      return globalThis.fetch(url, options);
+      // For integration tests, use the real fetch (Node.js built-in)
+      // This will work in the integration project (Node environment)
+      return fetch(url, options);
     }
     
     // Simulate network errors for specific URLs or conditions

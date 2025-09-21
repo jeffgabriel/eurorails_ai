@@ -35,8 +35,8 @@ describe('PlayerService Integration Tests', () => {
         await runQuery(async (client) => {
             // Delete in dependency order to avoid constraint errors
             await client.query('DELETE FROM player_tracks');
+            await client.query('DELETE FROM games'); // Delete games first (they reference players)
             await client.query('DELETE FROM players');
-            await client.query('DELETE FROM games');
         });
     });
 
