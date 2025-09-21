@@ -336,4 +336,97 @@ describe('LobbyStore Error Handling', () => {
       expect(state.error?.message).toBe('undefined');
     });
   });
+
+  describe('Loading States', () => {
+    it('should set loading to true at start and false on completion for createGame', async () => {
+      const game = {
+        id: 'game-123',
+        joinCode: 'ABC123',
+        createdBy: 'user-1',
+        status: 'IN_SETUP' as const,
+        maxPlayers: 4,
+      };
+      
+      mockApi.createGame.mockResolvedValueOnce({ game });
+      mockApi.getGamePlayers.mockResolvedValueOnce({ players: [] });
+      
+      // Initially not loading
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+      
+      const createPromise = useLobbyStore.getState().createGame();
+      
+      // Should be loading immediately after call
+      expect(useLobbyStore.getState().isLoading).toBe(true);
+      
+      await createPromise;
+      
+      // Should not be loading after completion
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+    });
+
+    it('should set loading to true at start and false on error for createGame', async () => {
+      mockApi.createGame.mockRejectedValueOnce(new Error('API Error'));
+      
+      // Initially not loading
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+      
+      try {
+        await useLobbyStore.getState().createGame();
+        fail('Expected function to throw');
+      } catch (error) {
+        // Expected to throw
+      }
+      
+      // Should not be loading after error
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+    });
+
+    it('should set loading to true at start and false on completion for loadGamePlayers', async () => {
+      const players = [
+        {
+          id: 'player-1',
+          userId: 'user-1',
+          name: 'Player 1',
+          color: '#FF0000',
+          money: 50,
+          trainType: 'Freight' as const,
+          turnNumber: 1,
+          isOnline: true,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      
+      mockApi.getGamePlayers.mockResolvedValueOnce({ players });
+      
+      // Initially not loading
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+      
+      const loadPromise = useLobbyStore.getState().loadGamePlayers('game-123');
+      
+      // Should be loading immediately after call
+      expect(useLobbyStore.getState().isLoading).toBe(true);
+      
+      await loadPromise;
+      
+      // Should not be loading after completion
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+    });
+
+    it('should set loading to true at start and false on error for loadGamePlayers', async () => {
+      mockApi.getGamePlayers.mockRejectedValueOnce(new Error('API Error'));
+      
+      // Initially not loading
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+      
+      try {
+        await useLobbyStore.getState().loadGamePlayers('game-123');
+        fail('Expected function to throw');
+      } catch (error) {
+        // Expected to throw
+      }
+      
+      // Should not be loading after error
+      expect(useLobbyStore.getState().isLoading).toBe(false);
+    });
+  });
 });
