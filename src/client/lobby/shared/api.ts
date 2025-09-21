@@ -83,48 +83,53 @@ class ApiClient {
 
   // Game endpoints
   async createGame(data: CreateGameForm = {}): Promise<{ game: Game }> {
-    return this.request<{ game: Game }>('/api/lobby/games', {
+    const response = await this.request<{ success: boolean; data: Game }>('/api/lobby/games', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return { game: response.data };
   }
 
   async joinGame(data: JoinGameForm): Promise<{ game: Game }> {
-    return this.request<{ game: Game }>('/api/lobby/games/join', {
+    const response = await this.request<{ success: boolean; data: Game }>('/api/lobby/games/join', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return { game: response.data };
   }
 
   async getGame(gameId: ID): Promise<{ game: Game }> {
-    return this.request<{ game: Game }>(`/api/lobby/games/${gameId}`);
+    const response = await this.request<{ success: boolean; data: Game }>(`/api/lobby/games/${gameId}`);
+    return { game: response.data };
   }
 
   async getGamePlayers(gameId: ID): Promise<{ players: Player[] }> {
-    return this.request<{ players: Player[] }>(`/api/lobby/games/${gameId}/players`);
+    const response = await this.request<{ success: boolean; data: Player[] }>(`/api/lobby/games/${gameId}/players`);
+    return { players: response.data };
   }
 
   async startGame(gameId: ID): Promise<void> {
-    await this.request<void>(`/api/lobby/games/${gameId}/start`, {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/start`, {
       method: 'POST',
     });
   }
 
   async leaveGame(gameId: ID): Promise<void> {
-    await this.request<void>(`/api/lobby/games/${gameId}/leave`, {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/leave`, {
       method: 'POST',
     });
   }
 
   async updatePlayerPresence(userId: ID, isOnline: boolean): Promise<void> {
-    await this.request<void>('/api/lobby/players/presence', {
+    await this.request<{ success: boolean; message: string }>('/api/lobby/players/presence', {
       method: 'POST',
       body: JSON.stringify({ userId, isOnline }),
     });
   }
 
   async healthCheck(): Promise<{ message: string }> {
-    return this.request<{ message: string }>('/api/lobby/health');
+    const response = await this.request<{ success: boolean; message: string; timestamp: string; service: string }>('/api/lobby/health');
+    return { message: response.message };
   }
 }
 

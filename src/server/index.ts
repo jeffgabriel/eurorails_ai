@@ -7,6 +7,7 @@ import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
 import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
+import lobbyRoutes from './routes/lobbyRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './services/playerService';
 
@@ -76,6 +77,7 @@ app.use('/api/tracks', trackRoutes);
 app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
+app.use('/api/lobby', lobbyRoutes);
 
 // Log registered routes
 console.log('Registered routes:');
