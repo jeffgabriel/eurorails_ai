@@ -10,6 +10,7 @@ import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './services/playerService';
+import { addRequestId } from './middleware/errorHandler';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -29,6 +30,7 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(addRequestId);
 
 // Session configuration
 app.use(session({
