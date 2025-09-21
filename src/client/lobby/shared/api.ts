@@ -83,36 +83,48 @@ class ApiClient {
 
   // Game endpoints
   async createGame(data: CreateGameForm = {}): Promise<{ game: Game }> {
-    // TODO(server): Implement create game endpoint
-    return this.request<{ game: Game }>('/games', {
+    return this.request<{ game: Game }>('/api/lobby/games', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async joinGame(data: JoinGameForm): Promise<{ game: Game }> {
-    // TODO(server): Implement join game endpoint
-    return this.request<{ game: Game }>('/games/join', {
+    return this.request<{ game: Game }>('/api/lobby/games/join', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async getGame(gameId: ID): Promise<{ game: Game }> {
-    // TODO(server): Implement get game endpoint
-    return this.request<{ game: Game }>(`/games/${gameId}`);
+    return this.request<{ game: Game }>(`/api/lobby/games/${gameId}`);
   }
 
   async getGamePlayers(gameId: ID): Promise<{ players: Player[] }> {
-    // TODO(server): Implement get game players endpoint
-    return this.request<{ players: Player[] }>(`/games/${gameId}/players`);
+    return this.request<{ players: Player[] }>(`/api/lobby/games/${gameId}/players`);
   }
 
   async startGame(gameId: ID): Promise<void> {
-    // TODO(server): Implement start game endpoint
-    await this.request<void>(`/games/${gameId}/start`, {
+    await this.request<void>(`/api/lobby/games/${gameId}/start`, {
       method: 'POST',
     });
+  }
+
+  async leaveGame(gameId: ID): Promise<void> {
+    await this.request<void>(`/api/lobby/games/${gameId}/leave`, {
+      method: 'POST',
+    });
+  }
+
+  async updatePlayerPresence(userId: ID, isOnline: boolean): Promise<void> {
+    await this.request<void>('/api/lobby/players/presence', {
+      method: 'POST',
+      body: JSON.stringify({ userId, isOnline }),
+    });
+  }
+
+  async healthCheck(): Promise<{ message: string }> {
+    return this.request<{ message: string }>('/api/lobby/health');
   }
 }
 
