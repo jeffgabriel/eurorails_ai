@@ -24,10 +24,13 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  // Mock user in localStorage
+  // Mock user and JWT token in localStorage
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
     if (key === 'eurorails.user') {
       return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Test User' });
+    }
+    if (key === 'eurorails.jwt') {
+      return 'test-jwt-token';
     }
     return null;
   });
