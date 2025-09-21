@@ -16,12 +16,19 @@ const mockLocalStorage = {
   clear: jest.fn(),
 } as unknown as Storage;
 
-beforeAll(() => {
+beforeAll(async () => {
   // Mock global objects for Node environment
   global.localStorage = mockLocalStorage;
   global.window = {
     localStorage: mockLocalStorage,
   } as any;
+  
+  // Verify server is running before tests
+  try {
+    await api.healthCheck();
+  } catch (err) {
+    throw new Error('Server is not available for integration tests');
+  }
 });
 
 beforeEach(() => {
@@ -38,6 +45,9 @@ beforeEach(() => {
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
     if (key === 'eurorails.user') {
       return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Test User' });
+    }
+    if (key === 'eurorails.jwt') {
+      return 'mock-jwt-token';
     }
     return null;
   });

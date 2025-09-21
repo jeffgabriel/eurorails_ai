@@ -34,18 +34,18 @@ const isRetryableError = (error: ApiError): boolean => {
 const createUserFriendlyError = (error: ApiError): ApiError => {
   return {
     ...error,
-    message: getErrorMessage(error),
+    message: error.message || getErrorMessage(error),
   };
 };
 
 // Helper function to safely convert unknown error to ApiError
 const normalizeError = (error: unknown): ApiError => {
   // If it's already an ApiError-like object, validate and return it
-  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
     const errorObj = error as Record<string, unknown>;
     return {
       code: String(errorObj.code),
-      message: String(errorObj.message),
+      message: errorObj.message ? String(errorObj.message) : 'Unknown error',
     };
   }
   

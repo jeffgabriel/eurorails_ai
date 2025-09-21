@@ -60,7 +60,7 @@ describe('Lobby E2E - Simple Verification', () => {
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
       isPublic: true,
-      createdAt: '2023-01-01T00:00:00Z',
+      createdAt: new Date('2023-01-01T00:00:00Z'),
     };
 
     // Mock API response
@@ -86,7 +86,7 @@ describe('Lobby E2E - Simple Verification', () => {
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
       isPublic: true,
-      createdAt: '2023-01-01T00:00:00Z',
+      createdAt: new Date('2023-01-01T00:00:00Z'),
     };
 
     const mockPlayers = [
@@ -114,7 +114,7 @@ describe('Lobby E2E - Simple Verification', () => {
     expect(useLobbyStore.getState().error).toBeNull();
   });
 
-  it('should verify startGame updates game status locally', async () => {
+  it('should change game status from IN_SETUP to ACTIVE when startGame is called', async () => {
     const mockGame = {
       id: 'game-123',
       joinCode: 'ABC123',
@@ -122,7 +122,7 @@ describe('Lobby E2E - Simple Verification', () => {
       status: 'IN_SETUP' as const,
       maxPlayers: 4,
       isPublic: true,
-      createdAt: '2023-01-01T00:00:00Z',
+      createdAt: new Date('2023-01-01T00:00:00Z'),
     };
 
     // Set up initial state
@@ -137,6 +137,9 @@ describe('Lobby E2E - Simple Verification', () => {
     mockApi.startGame.mockResolvedValueOnce();
 
     const store = useLobbyStore.getState();
+    
+    // Verify initial state is IN_SETUP
+    expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
     await store.startGame('game-123');
 
     // Verify the actual behavior - status should be updated locally

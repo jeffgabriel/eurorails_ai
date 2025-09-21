@@ -10,6 +10,7 @@ jest.mock('../../lobby/shared/api', () => ({
     getGame: jest.fn(),
     getGamePlayers: jest.fn(),
     startGame: jest.fn(),
+    leaveGame: jest.fn(),
   },
   getErrorMessage: jest.fn(),
 }));
@@ -65,8 +66,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       const mockPlayers = [
@@ -121,8 +122,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       // Mock API responses - game creation succeeds, player loading fails
@@ -158,8 +159,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       const mockPlayers = [
@@ -221,12 +222,10 @@ describe('Lobby End-to-End Flows', () => {
 
       const store = useLobbyStore.getState();
       
-      try {
-        await store.joinGame(joinData);
-        fail('Expected function to throw');
-      } catch (error) {
-        // Expected to throw
-      }
+      await expect(store.joinGame(joinData)).rejects.toMatchObject({
+        code: 'INVALID_JOIN_CODE',
+        message: 'Invalid join code',
+      });
       
       // Should have error state
       expect(useLobbyStore.getState().error?.code).toBe('INVALID_JOIN_CODE');
@@ -245,8 +244,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       const mockStartedGame = {
@@ -312,8 +311,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       // Set up initial state with only one player
@@ -340,12 +339,10 @@ describe('Lobby End-to-End Flows', () => {
 
       const store = useLobbyStore.getState();
       
-      try {
-        await store.startGame('game-123');
-        fail('Expected function to throw');
-      } catch (error) {
-        // Expected to throw
-      }
+      await expect(store.startGame('game-123')).rejects.toMatchObject({
+        code: 'INSUFFICIENT_PLAYERS',
+        message: 'At least 2 players required to start game',
+      });
       
       // Should have error state
       expect(useLobbyStore.getState().error?.code).toBe('INSUFFICIENT_PLAYERS');
@@ -363,8 +360,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       const mockPlayers = [
@@ -420,8 +417,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       // Mock API to fail first time, succeed second time
@@ -495,8 +492,8 @@ describe('Lobby End-to-End Flows', () => {
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
         isPublic: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
       };
 
       const mockPlayers = [

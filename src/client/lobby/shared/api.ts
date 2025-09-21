@@ -68,7 +68,11 @@ class ApiClient {
       throw errorData;
     }
 
-    return response.json();
+    const result = await response.json() as any;
+    if (typeof result.success === 'boolean' && !result.success) {
+      throw { code: result.code || `API_${endpoint}`, message: result.message || 'API error' };
+    }
+    return result as T;
   }
 
   // Auth endpoints

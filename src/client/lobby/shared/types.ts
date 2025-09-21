@@ -27,7 +27,7 @@ export interface Game {
   status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE';
   maxPlayers: number;
   isPublic: boolean;
-  createdAt: string;
+  createdAt: Date;
 }
 
 // Minimal game state for UI

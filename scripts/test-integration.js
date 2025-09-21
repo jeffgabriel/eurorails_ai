@@ -1,5 +1,12 @@
 #!/usr/bin/env node
 
+// Ensure Node.js 18+ for built-in fetch
+const [major] = process.versions.node.split('.').map(Number);
+if (major < 18) {
+  console.error('This script requires Node.js 18 or higher. Detected version: ' + process.version);
+  process.exit(1);
+}
+
 /**
  * Manual Integration Test Script
  * Tests real client-server communication outside of Jest
