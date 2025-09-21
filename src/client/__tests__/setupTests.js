@@ -268,8 +268,19 @@ globalThis.Phaser = {
 };
 
 // ---- FIXED FETCH MOCK ----
+// Skip fetch mocking for integration tests
 if (!globalThis.fetch || !globalThis.fetch._isMockFunction) {
+  const originalFetch = globalThis.fetch;
   globalThis.fetch = jest.fn().mockImplementation((url, options) => {
+    // Skip mocking for integration tests (tests that make real HTTP requests)
+    if (url.includes('localhost:3001') || url.includes('/api/lobby/')) {
+      // Use the original fetch for integration tests
+      if (typeof originalFetch === 'function') {
+        return originalFetch(url, options);
+      }
+      throw new Error('Fetch API is not available in this test environment for integration request: ' + url);
+    }
+    
     // Simulate network errors for specific URLs or conditions
     if (url.includes('/error')) {
       return Promise.reject(new Error('Network error'));

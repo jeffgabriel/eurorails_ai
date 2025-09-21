@@ -16,12 +16,24 @@ import { config, debug } from './config';
 class ApiClient {
   private getAuthHeaders(): Record<string, string> {
     const token = localStorage.getItem('eurorails.jwt');
+    const userJson = localStorage.getItem('eurorails.user');
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     };
     
     if (token) {
       headers.Authorization = `Bearer ${token}`;
+    }
+    
+    if (userJson) {
+      try {
+        const user = JSON.parse(userJson);
+        if (user.id) {
+          headers['x-user-id'] = user.id;
+        }
+      } catch (error) {
+        console.warn('Failed to parse user from localStorage:', error);
+      }
     }
     
     return headers;
@@ -56,7 +68,11 @@ class ApiClient {
       throw errorData;
     }
 
-    return response.json();
+    const result = await response.json() as any;
+    if (typeof result.success === 'boolean' && !result.success) {
+      throw { code: result.code || `API_${endpoint}`, message: result.message || 'API error' };
+    }
+    return result as T;
   }
 
   // Auth endpoints
@@ -83,36 +99,53 @@ class ApiClient {
 
   // Game endpoints
   async createGame(data: CreateGameForm = {}): Promise<{ game: Game }> {
-    // TODO(server): Implement create game endpoint
-    return this.request<{ game: Game }>('/games', {
+    const response = await this.request<{ success: boolean; data: Game }>('/api/lobby/games', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return { game: response.data };
   }
 
   async joinGame(data: JoinGameForm): Promise<{ game: Game }> {
-    // TODO(server): Implement join game endpoint
-    return this.request<{ game: Game }>('/games/join', {
+    const response = await this.request<{ success: boolean; data: Game }>('/api/lobby/games/join', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return { game: response.data };
   }
 
   async getGame(gameId: ID): Promise<{ game: Game }> {
-    // TODO(server): Implement get game endpoint
-    return this.request<{ game: Game }>(`/games/${gameId}`);
+    const response = await this.request<{ success: boolean; data: Game }>(`/api/lobby/games/${gameId}`);
+    return { game: response.data };
   }
 
   async getGamePlayers(gameId: ID): Promise<{ players: Player[] }> {
-    // TODO(server): Implement get game players endpoint
-    return this.request<{ players: Player[] }>(`/games/${gameId}/players`);
+    const response = await this.request<{ success: boolean; data: Player[] }>(`/api/lobby/games/${gameId}/players`);
+    return { players: response.data };
   }
 
   async startGame(gameId: ID): Promise<void> {
-    // TODO(server): Implement start game endpoint
-    await this.request<void>(`/games/${gameId}/start`, {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/start`, {
       method: 'POST',
     });
+  }
+
+  async leaveGame(gameId: ID): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/leave`, {
+      method: 'POST',
+    });
+  }
+
+  async updatePlayerPresence(userId: ID, isOnline: boolean): Promise<void> {
+    await this.request<{ success: boolean; message: string }>('/api/lobby/players/presence', {
+      method: 'POST',
+      body: JSON.stringify({ userId, isOnline }),
+    });
+  }
+
+  async healthCheck(): Promise<{ message: string }> {
+    const response = await this.request<{ success: boolean; message: string; timestamp: string; service: string }>('/api/lobby/health');
+    return { message: response.message };
   }
 }
 

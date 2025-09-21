@@ -17,8 +17,8 @@ interface LobbyActions {
   loadCurrentGame: (gameId: ID) => Promise<void>;
   loadGamePlayers: (gameId: ID) => Promise<void>;
   startGame: (gameId: ID) => Promise<void>;
-  leaveGame: () => void;
-  updatePlayerPresence: (userId: ID, isOnline: boolean) => void;
+  leaveGame: () => Promise<void>;
+  updatePlayerPresence: (userId: ID, isOnline: boolean) => Promise<void>;
   clearError: () => void;
 }
 
@@ -34,18 +34,18 @@ const isRetryableError = (error: ApiError): boolean => {
 const createUserFriendlyError = (error: ApiError): ApiError => {
   return {
     ...error,
-    message: getErrorMessage(error),
+    message: error.message || getErrorMessage(error),
   };
 };
 
 // Helper function to safely convert unknown error to ApiError
 const normalizeError = (error: unknown): ApiError => {
   // If it's already an ApiError-like object, validate and return it
-  if (typeof error === 'object' && error !== null && 'code' in error && 'message' in error) {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
     const errorObj = error as Record<string, unknown>;
     return {
       code: String(errorObj.code),
-      message: String(errorObj.message),
+      message: errorObj.message ? String(errorObj.message) : 'Unknown error',
     };
   }
   
@@ -298,7 +298,17 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     }
   },
 
-  leaveGame: () => {
+  leaveGame: async () => {
+    const currentGame = get().currentGame;
+    if (currentGame) {
+      try {
+        await api.leaveGame(currentGame.id);
+      } catch (error) {
+        // Log error but don't fail the operation
+        console.warn('Failed to leave game on server:', error);
+      }
+    }
+    
     set({
       currentGame: null,
       players: [],
@@ -307,7 +317,15 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     });
   },
 
-  updatePlayerPresence: (userId: ID, isOnline: boolean) => {
+  updatePlayerPresence: async (userId: ID, isOnline: boolean) => {
+    try {
+      await api.updatePlayerPresence(userId, isOnline);
+    } catch (error) {
+      // Log error but don't fail the operation
+      console.warn('Failed to update player presence on server:', error);
+    }
+    
+    // Update local state regardless of server success
     const currentPlayers = get().players;
     const updatedPlayers = currentPlayers.map(player =>
       player.userId === userId

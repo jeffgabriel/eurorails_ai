@@ -119,6 +119,8 @@ describe('LobbyStore Error Handling', () => {
           createdBy: 'user-1',
           status: 'ACTIVE',
           maxPlayers: 4,
+          isPublic: true,
+          createdAt: new Date('2023-01-01T00:00:00Z'),
         },
       });
 
@@ -218,6 +220,8 @@ describe('LobbyStore Error Handling', () => {
           createdBy: 'user-1',
           status: 'IN_SETUP' as const,
           maxPlayers: 4,
+          isPublic: true,
+          createdAt: new Date('2023-01-01T00:00:00Z'),
         },
       });
       mockApi.getGamePlayers.mockResolvedValueOnce({ players: [] });
@@ -270,6 +274,8 @@ describe('LobbyStore Error Handling', () => {
         createdBy: 'user-1',
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
+        isPublic: true,
+        createdAt: new Date('2023-01-01T00:00:00Z'),
       };
       
       mockApi.createGame.mockResolvedValueOnce({ game });
@@ -345,6 +351,8 @@ describe('LobbyStore Error Handling', () => {
         createdBy: 'user-1',
         status: 'IN_SETUP' as const,
         maxPlayers: 4,
+        isPublic: true,
+        createdAt: new Date('2023-01-01T00:00:00Z'),
       };
       
       mockApi.createGame.mockResolvedValueOnce({ game });
