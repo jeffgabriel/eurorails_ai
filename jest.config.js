@@ -17,6 +17,7 @@ module.exports = {
       displayName: 'client',
       testEnvironment: 'jsdom',
       testMatch: ['<rootDir>/src/client/__tests__/**/*.test.ts'],
+      testPathIgnorePatterns: ['<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/client/__tests__/setupTests.js'], // use the JS setup we just fixed
       testEnvironmentOptions: { url: 'http://localhost' },
 
@@ -58,6 +59,30 @@ module.exports = {
         ],
       },
       transformIgnorePatterns: ['/node_modules/'],
+    },
+
+    {
+      displayName: 'integration',
+      testEnvironment: 'node',
+      testMatch: ['<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts'],
+      transform: {
+        '^.+\\.(ts|tsx)$': [
+          'ts-jest',
+          {
+            tsconfig: 'tsconfig.json',
+            diagnostics: { ignoreCodes: [1343] },
+            isolatedModules: false,
+            useESM: false,
+          },
+        ],
+        '^.+\\.(js|jsx)$': 'babel-jest'
+      },
+      moduleNameMapper: {
+        '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',
+        '^@/(.*)$': '<rootDir>/src/$1',
+      },
+      moduleDirectories: ['node_modules', 'src'],
+      moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
     },
 
     {
