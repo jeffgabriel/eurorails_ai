@@ -216,19 +216,19 @@ describe('Lobby End-to-End Flows', () => {
 
       // Mock API error
       mockApi.joinGame.mockRejectedValueOnce({
-        code: 'INVALID_JOIN_CODE',
+        error: 'INVALID_JOIN_CODE',
         message: 'Invalid join code',
       });
 
       const store = useLobbyStore.getState();
       
       await expect(store.joinGame(joinData)).rejects.toMatchObject({
-        code: 'INVALID_JOIN_CODE',
+        error: 'INVALID_JOIN_CODE',
         message: 'Invalid join code',
       });
       
       // Should have error state
-      expect(useLobbyStore.getState().error?.code).toBe('INVALID_JOIN_CODE');
+      expect(useLobbyStore.getState().error?.error).toBe('INVALID_JOIN_CODE');
       expect(useLobbyStore.getState().isLoading).toBe(false);
       expect(useLobbyStore.getState().currentGame).toBeNull();
       expect(useLobbyStore.getState().players).toEqual([]);
@@ -333,19 +333,19 @@ describe('Lobby End-to-End Flows', () => {
 
       // Mock API error
       mockApi.startGame.mockRejectedValueOnce({
-        code: 'INSUFFICIENT_PLAYERS',
+        error: 'INSUFFICIENT_PLAYERS',
         message: 'At least 2 players required to start game',
       });
 
       const store = useLobbyStore.getState();
       
       await expect(store.startGame('game-123')).rejects.toMatchObject({
-        code: 'INSUFFICIENT_PLAYERS',
+        error: 'INSUFFICIENT_PLAYERS',
         message: 'At least 2 players required to start game',
       });
       
       // Should have error state
-      expect(useLobbyStore.getState().error?.code).toBe('INSUFFICIENT_PLAYERS');
+      expect(useLobbyStore.getState().error?.error).toBe('INSUFFICIENT_PLAYERS');
       expect(useLobbyStore.getState().isLoading).toBe(false);
       expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP'); // Should remain unchanged
     });
@@ -424,7 +424,7 @@ describe('Lobby End-to-End Flows', () => {
       // Mock API to fail first time, succeed second time
       mockApi.createGame
         .mockRejectedValueOnce({
-          code: 'HTTP_500',
+          error: 'HTTP_500',
           message: 'Internal server error',
         })
         .mockResolvedValueOnce({ game: mockGame });
@@ -441,7 +441,7 @@ describe('Lobby End-to-End Flows', () => {
       }
       
       // Should have error state and retry count
-      expect(useLobbyStore.getState().error?.code).toBe('HTTP_500');
+      expect(useLobbyStore.getState().error?.error).toBe('HTTP_500');
       expect(useLobbyStore.getState().retryCount).toBe(1);
       expect(useLobbyStore.getState().isLoading).toBe(false);
       
@@ -463,7 +463,7 @@ describe('Lobby End-to-End Flows', () => {
 
       // Mock API to fail with non-retryable error
       mockApi.createGame.mockRejectedValueOnce({
-        code: 'VALIDATION_ERROR',
+        error: 'VALIDATION_ERROR',
         message: 'Invalid game data',
       });
 
@@ -477,7 +477,7 @@ describe('Lobby End-to-End Flows', () => {
       }
       
       // Should have error state and retry count reset to 0 for non-retryable errors
-      expect(useLobbyStore.getState().error?.code).toBe('VALIDATION_ERROR');
+      expect(useLobbyStore.getState().error?.error).toBe('VALIDATION_ERROR');
       expect(useLobbyStore.getState().retryCount).toBe(0); // Should reset to 0 for non-retryable errors
       expect(useLobbyStore.getState().isLoading).toBe(false);
     });

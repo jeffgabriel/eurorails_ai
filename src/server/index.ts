@@ -8,6 +8,7 @@ import gameRoutes from './routes/gameRoutes';
 import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
+import authRoutes from './routes/authRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
@@ -74,6 +75,7 @@ app.use(async (req, res, next) => {
 });
 
 // API Routes - make sure this comes before static file serving
+app.use('/api/auth', authRoutes);
 app.use('/api/players', playerRoutes);
 app.use('/api/tracks', trackRoutes);
 app.use('/api/game', gameRoutes);

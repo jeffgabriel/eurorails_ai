@@ -3,6 +3,7 @@ import path from 'path';
 import gameRoutes from './routes/gameRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
+import authRoutes from './routes/authRoutes';
 import { 
   addRequestId, 
   errorHandler, 
@@ -26,6 +27,7 @@ app.use(requestLoggingMiddleware);
 app.use(express.static(path.join(__dirname, '../../public')));
 
 // API Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/game', gameRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);

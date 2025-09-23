@@ -5,6 +5,32 @@
 
 import { api } from '../../lobby/shared/api';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
+import { db } from '../../../server/db';
+import { v4 as uuidv4 } from 'uuid';
+
+// Helper function to run database queries with proper connection handling
+async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
+  const client = await db.connect();
+  try {
+    return await queryFn(client);
+  } finally {
+    client.release();
+  }
+}
+
+// Helper function to clean up test data
+async function cleanupTestData(gameIds: string[], playerIds: string[]) {
+  await runQuery(async (client) => {
+    // Delete in dependency order to avoid constraint errors
+    // First delete games (which will cascade delete players), then any remaining players
+    if (gameIds.length > 0) {
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
+    }
+    if (playerIds.length > 0) {
+      await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
+    }
+  });
+}
 
 // Mock localStorage for user identification
 const mockLocalStorage = {
@@ -38,6 +64,61 @@ beforeEach(() => {
 
 describe('True End-to-End Tests - Database Outcomes', () => {
   const TEST_TIMEOUT = 15000; // Longer timeout for database operations
+  let testGameIds: string[] = [];
+  let testPlayerIds: string[] = [];
+  let testUserId: string;
+  let testUserId2: string;
+  let testUserId3: string;
+  let testUserId4: string;
+
+  beforeAll(async () => {
+    // Generate test user IDs
+    testUserId = '123e4567-e89b-12d3-a456-426614174000';
+    testUserId2 = '123e4567-e89b-12d3-a456-426614174001';
+    testUserId3 = '123e4567-e89b-12d3-a456-426614174002';
+    testUserId4 = '123e4567-e89b-12d3-a456-426614174003';
+    
+    // Create test users in the database
+    await runQuery(async (client) => {
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId, 'testuser1', 'test1@example.com', 'hashedpassword1']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId3, 'testuser3', 'test3@example.com', 'hashedpassword3']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId4, 'testuser4', 'test4@example.com', 'hashedpassword4']
+      );
+    });
+  });
+
+  afterEach(async () => {
+    // Clean up test data after each test
+    await cleanupTestData(testGameIds, testPlayerIds);
+    testGameIds = [];
+    testPlayerIds = [];
+  });
+
+  afterAll(async () => {
+    // Final cleanup
+    await cleanupTestData(testGameIds, testPlayerIds);
+    
+    // Clean up test users
+    await runQuery(async (client) => {
+      await client.query('DELETE FROM users WHERE id = $1 OR id = $2 OR id = $3 OR id = $4', 
+        [testUserId, testUserId2, testUserId3, testUserId4]);
+    });
+    
+    // Close database connection pool
+    await db.end();
+  });
 
   describe('Game Creation Outcomes', () => {
     it('should create game and verify it exists in database', async () => {
@@ -47,6 +128,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       };
       const createResult = await api.createGame(gameData);
       const gameId = createResult.game.id;
+      testGameIds.push(gameId);
 
       // 2. Verify game exists by retrieving it
       const retrievedGame = await api.getGame(gameId);
@@ -69,6 +151,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       };
       const createResult = await api.createGame(gameData);
       const gameId = createResult.game.id;
+      testGameIds.push(gameId);
 
       // 2. Wait a moment to ensure database write
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -86,6 +169,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
       const joinCode = createResult.game.joinCode;
+      testGameIds.push(gameId);
 
       // 2. Join game with different user
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -114,6 +198,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
       const joinCode = createResult.game.joinCode;
+      testGameIds.push(gameId);
 
       // 2. Join with player 2
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -148,6 +233,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 1. Create game
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
+      testGameIds.push(gameId);
 
       // 2. Add second player (required to start game)
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -176,6 +262,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 1. Create game and join
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
+      testGameIds.push(gameId);
 
       // 2. Update presence to offline
       await api.updatePlayerPresence('123e4567-e89b-12d3-a456-426614174000', false);
@@ -202,6 +289,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
       const originalJoinCode = createResult.game.joinCode;
+      testGameIds.push(gameId);
 
       // 2. Perform multiple operations
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -230,6 +318,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
       const joinCode = createResult.game.joinCode;
+      testGameIds.push(gameId);
 
       // 2. Perform sequential joins (more realistic than true concurrency in tests)
       // This tests the same scenario but avoids mock timing issues

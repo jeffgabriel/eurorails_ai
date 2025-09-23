@@ -7,6 +7,32 @@
 import { useLobbyStore } from '../../lobby/store/lobby.store';
 import { api } from '../../lobby/shared/api';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
+import { db } from '../../../server/db';
+import { v4 as uuidv4 } from 'uuid';
+
+// Helper function to run database queries with proper connection handling
+async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
+  const client = await db.connect();
+  try {
+    return await queryFn(client);
+  } finally {
+    client.release();
+  }
+}
+
+// Helper function to clean up test data
+async function cleanupTestData(gameIds: string[], playerIds: string[]) {
+  await runQuery(async (client) => {
+    // Delete in dependency order to avoid constraint errors
+    // First delete games (which will cascade delete players), then any remaining players
+    if (gameIds.length > 0) {
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
+    }
+    if (playerIds.length > 0) {
+      await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
+    }
+  });
+}
 
 // Mock localStorage for user identification
 const mockLocalStorage = {
@@ -56,6 +82,48 @@ beforeEach(() => {
 describe('Integration Tests - Real Server Communication', () => {
   // Test timeout for real server calls
   const TEST_TIMEOUT = 10000;
+  let testGameIds: string[] = [];
+  let testPlayerIds: string[] = [];
+  let testUserId: string;
+  let testUserId2: string;
+
+  beforeAll(async () => {
+    // Generate test user IDs
+    testUserId = '123e4567-e89b-12d3-a456-426614174000';
+    testUserId2 = '123e4567-e89b-12d3-a456-426614174001';
+    
+    // Create test users in the database
+    await runQuery(async (client) => {
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId, 'testuser1', 'test1@example.com', 'hashedpassword1']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
+      );
+    });
+  });
+
+  afterEach(async () => {
+    // Clean up test data after each test
+    await cleanupTestData(testGameIds, testPlayerIds);
+    testGameIds = [];
+    testPlayerIds = [];
+  });
+
+  afterAll(async () => {
+    // Final cleanup
+    await cleanupTestData(testGameIds, testPlayerIds);
+    
+    // Clean up test users
+    await runQuery(async (client) => {
+      await client.query('DELETE FROM users WHERE id = $1 OR id = $2', [testUserId, testUserId2]);
+    });
+    
+    // Close database connection pool
+    await db.end();
+  });
 
   describe('API Client Integration', () => {
     it('should call real server health endpoint', async () => {
@@ -72,6 +140,7 @@ describe('Integration Tests - Real Server Communication', () => {
       };
 
       const result = await api.createGame(gameData);
+      testGameIds.push(result.game.id);
       
       expect(result.game).toBeDefined();
       expect(result.game.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
@@ -86,6 +155,7 @@ describe('Integration Tests - Real Server Communication', () => {
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
       const joinCode = createResult.game.joinCode;
+      testGameIds.push(gameId);
 
       // Then join the game
       const joinData: JoinGameForm = {
@@ -107,6 +177,7 @@ describe('Integration Tests - Real Server Communication', () => {
       };
 
       const result = await useLobbyStore.getState().createGame(gameData);
+      testGameIds.push(result.id);
       
       expect(result).toBeDefined();
       expect(result.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);

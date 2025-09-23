@@ -3,19 +3,27 @@ import { db } from '../db';
 describe('Lobby Migration (Phase 1)', () => {
   let testGameId: string;
   let testPlayerId: string;
+  let testUserId: string;
 
   beforeAll(async () => {
-    // Create a test player first
+    // Create a test user first
+    const userResult = await db.query(
+      'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
+      ['testuser', 'test@example.com', 'hashedpassword']
+    );
+    testUserId = userResult.rows[0].id;
+
+    // Create a test player
     const playerResult = await db.query(
-      'INSERT INTO players (name, color) VALUES ($1, $2) RETURNING id',
-      ['Test Player', '#FF0000']
+      'INSERT INTO players (name, color, user_id) VALUES ($1, $2, $3) RETURNING id',
+      ['Test Player', '#FF0000', testUserId]
     );
     testPlayerId = playerResult.rows[0].id;
 
     // Create a test game
     const gameResult = await db.query(
       'INSERT INTO games (join_code, created_by, is_public, lobby_status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING id, join_code',
-      [testPlayerId, true, 'IN_SETUP']
+      [testUserId, true, 'IN_SETUP']
     );
     testGameId = gameResult.rows[0].id;
   });
@@ -24,6 +32,8 @@ describe('Lobby Migration (Phase 1)', () => {
     // Clean up test data
     await db.query('DELETE FROM games WHERE id = $1', [testGameId]);
     await db.query('DELETE FROM players WHERE id = $1', [testPlayerId]);
+    // Clean up test user (this will cascade delete the player due to foreign key)
+    await db.query('DELETE FROM users WHERE username = $1', ['testuser']);
   });
 
   describe('Games table new fields', () => {
@@ -41,7 +51,7 @@ describe('Lobby Migration (Phase 1)', () => {
         'SELECT created_by FROM games WHERE id = $1',
         [testGameId]
       );
-      expect(result.rows[0].created_by).toBe(testPlayerId);
+      expect(result.rows[0].created_by).toBe(testUserId);
     });
 
     it('should have is_public field', async () => {
@@ -67,7 +77,7 @@ describe('Lobby Migration (Phase 1)', () => {
         'SELECT user_id FROM players WHERE id = $1',
         [testPlayerId]
       );
-      expect(result.rows[0].user_id).toBeNull(); // Should be null by default
+      expect(result.rows[0].user_id).toBe(testUserId); // Should reference the user
     });
 
     it('should have is_online field', async () => {
@@ -170,25 +180,25 @@ describe('Lobby Migration (Phase 1)', () => {
 
   describe('End-to-end functionality', () => {
     it('should allow creating a game with all new fields', async () => {
-      const newPlayerResult = await db.query(
-        'INSERT INTO players (name, color) VALUES ($1, $2) RETURNING id',
-        ['Another Player', '#00FF00']
+      const newUserResult = await db.query(
+        'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
+        ['Another User', 'another@example.com', 'hashedpassword']
       );
-      const newPlayerId = newPlayerResult.rows[0].id;
+      const newUserId = newUserResult.rows[0].id;
 
       const newGameResult = await db.query(
         'INSERT INTO games (join_code, created_by, is_public, lobby_status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING *',
-        [newPlayerId, false, 'IN_SETUP']
+        [newUserId, false, 'IN_SETUP']
       );
 
       expect(newGameResult.rows[0].join_code).toBeDefined();
-      expect(newGameResult.rows[0].created_by).toBe(newPlayerId);
+      expect(newGameResult.rows[0].created_by).toBe(newUserId);
       expect(newGameResult.rows[0].is_public).toBe(false);
       expect(newGameResult.rows[0].lobby_status).toBe('IN_SETUP');
 
       // Clean up
       await db.query('DELETE FROM games WHERE id = $1', [newGameResult.rows[0].id]);
-      await db.query('DELETE FROM players WHERE id = $1', [newPlayerId]);
+      await db.query('DELETE FROM users WHERE id = $1', [newUserId]);
     });
   });
 });

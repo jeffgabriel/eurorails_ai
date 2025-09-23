@@ -113,10 +113,10 @@ export class LobbyService {
       
       const player = playerResult.rows[0];
       
-      // Update the game with the creator reference
+      // Update the game with the creator reference (user ID, not player ID)
       await client.query(
         'UPDATE games SET created_by = $1 WHERE id = $2',
-        [player.id, game.id]
+        [data.createdByUserId, game.id]
       );
       
       await client.query('COMMIT');
@@ -254,9 +254,8 @@ export class LobbyService {
     }
 
     const result = await db.query(
-      `SELECT g.*, p.id as creator_player_id 
+      `SELECT g.*, g.created_by as creator_user_id 
        FROM games g 
-       LEFT JOIN players p ON g.created_by = p.id 
        WHERE g.id = $1`,
       [gameId]
     );
@@ -269,7 +268,7 @@ export class LobbyService {
     return {
       id: game.id,
       joinCode: game.join_code,
-      createdBy: game.creator_player_id,
+      createdBy: game.creator_user_id,
       status: game.lobby_status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
@@ -324,9 +323,8 @@ export class LobbyService {
       
       // Verify the user is the creator
       const gameResult = await client.query(
-        `SELECT g.*, p.user_id as creator_user_id 
+        `SELECT g.*, g.created_by as creator_user_id 
          FROM games g 
-         JOIN players p ON g.created_by = p.id 
          WHERE g.id = $1`,
         [gameId]
       );
