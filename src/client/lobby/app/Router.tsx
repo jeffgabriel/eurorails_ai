@@ -1,14 +1,16 @@
 // app/Router.tsx
+import React, { useEffect, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { useEffect } from 'react';
 import { useAuthStore } from '../store/auth.store';
 import { LoginPage } from '../features/auth/LoginPage';
 import { RegisterPage } from '../features/auth/RegisterPage';
 import { LobbyPage } from '../features/lobby/LobbyPage';
-import { GamePage } from '../features/game/GamePage';
 import { NotFound } from '../shared/NotFound';
 import { ErrorBoundary } from '../shared/ErrorBoundary';
 import { debug } from '../shared/config';
+
+// Lazy load the GamePage component to avoid bundling Phaser until needed
+const GamePage = React.lazy(() => import('../features/game/GamePage').then(module => ({ default: module.GamePage })));
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -93,7 +95,16 @@ export function Router() {
           element={
             <ProtectedRoute>
               <ErrorBoundary>
-                <GamePage />
+                <Suspense fallback={
+                  <div className="size-full flex items-center justify-center bg-background">
+                    <div className="flex flex-col items-center gap-4">
+                      <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                      <p className="text-muted-foreground">Loading game...</p>
+                    </div>
+                  </div>
+                }>
+                  <GamePage />
+                </Suspense>
               </ErrorBoundary>
             </ProtectedRoute>
           }
