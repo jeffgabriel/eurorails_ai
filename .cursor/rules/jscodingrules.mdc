@@ -27,6 +27,7 @@ description: Applies general coding rules across all file types to maintain code
 - Replace hardcoded values with named constants to improve code clarity and maintainability.
 - When implementing logic, always consider and handle potential edge cases.
 - Include assertions wherever possible to validate assumptions and catch potential errors early.
+- **NO FAILED TESTS ALLOWED**: All tests must pass. Fix any failing tests immediately before proceeding with other work. This is a hard and fast rule that cannot be violated.
 
 Here are our unified coding principles for the JavaScript/TypeScript codebase:
 

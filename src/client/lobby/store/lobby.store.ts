@@ -27,7 +27,7 @@ type LobbyStore = LobbyState & LobbyActions;
 // Helper function to determine if an error is retryable
 const isRetryableError = (error: ApiError): boolean => {
   const retryableCodes = ['HTTP_500', 'HTTP_502', 'HTTP_503', 'HTTP_504', 'NETWORK_ERROR'];
-  return retryableCodes.includes(error.code) || error.code.startsWith('HTTP_5');
+  return retryableCodes.includes(error.error) || error.error.startsWith('HTTP_5');
 };
 
 // Helper function to create user-friendly error messages
@@ -41,10 +41,10 @@ const createUserFriendlyError = (error: ApiError): ApiError => {
 // Helper function to safely convert unknown error to ApiError
 const normalizeError = (error: unknown): ApiError => {
   // If it's already an ApiError-like object, validate and return it
-  if (typeof error === 'object' && error !== null && 'code' in error) {
+  if (typeof error === 'object' && error !== null && 'error' in error) {
     const errorObj = error as Record<string, unknown>;
     return {
-      code: String(errorObj.code),
+      error: String(errorObj.error),
       message: errorObj.message ? String(errorObj.message) : 'Unknown error',
     };
   }
@@ -52,7 +52,7 @@ const normalizeError = (error: unknown): ApiError => {
   // If it's an Error object, convert to ApiError
   if (error instanceof Error) {
     return {
-      code: 'UNKNOWN_ERROR',
+      error: 'UNKNOWN_ERROR',
       message: error.message,
     };
   }
@@ -60,14 +60,14 @@ const normalizeError = (error: unknown): ApiError => {
   // If it's a string, convert to ApiError
   if (typeof error === 'string') {
     return {
-      code: 'UNKNOWN_ERROR',
+      error: 'UNKNOWN_ERROR',
       message: error,
     };
   }
   
   // For any other type, convert to string and create ApiError
   return {
-    code: 'UNKNOWN_ERROR',
+    error: 'UNKNOWN_ERROR',
     message: String(error),
   };
 };
@@ -133,7 +133,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     // Validate join code format
     if (!joinData.joinCode || joinData.joinCode.trim().length === 0) {
       const error: ApiError = {
-        code: 'INVALID_JOIN_CODE',
+        error: 'INVALID_JOIN_CODE',
         message: 'Join code is required',
       };
       set({ error: createUserFriendlyError(error) });
@@ -178,7 +178,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     // Validate game ID
     if (!gameId || gameId.trim().length === 0) {
       const error: ApiError = {
-        code: 'INVALID_GAME_ID',
+        error: 'INVALID_GAME_ID',
         message: 'Game ID is required',
       };
       set({ error: createUserFriendlyError(error) });
@@ -212,7 +212,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     // Validate game ID
     if (!gameId || gameId.trim().length === 0) {
       const error: ApiError = {
-        code: 'INVALID_GAME_ID',
+        error: 'INVALID_GAME_ID',
         message: 'Game ID is required',
       };
       set({ error: createUserFriendlyError(error) });
@@ -243,7 +243,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     // Validate game ID
     if (!gameId || gameId.trim().length === 0) {
       const error: ApiError = {
-        code: 'INVALID_GAME_ID',
+        error: 'INVALID_GAME_ID',
         message: 'Game ID is required',
       };
       set({ error: createUserFriendlyError(error) });
@@ -254,7 +254,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     const currentGame = get().currentGame;
     if (!currentGame) {
       const error: ApiError = {
-        code: 'NO_CURRENT_GAME',
+        error: 'NO_CURRENT_GAME',
         message: 'No game selected',
       };
       set({ error: createUserFriendlyError(error) });
@@ -264,7 +264,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     // Check if game is already started
     if (currentGame.status === 'ACTIVE') {
       const error: ApiError = {
-        code: 'GAME_ALREADY_STARTED',
+        error: 'GAME_ALREADY_STARTED',
         message: 'Game has already started',
       };
       set({ error: createUserFriendlyError(error) });

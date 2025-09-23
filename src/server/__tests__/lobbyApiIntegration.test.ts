@@ -40,6 +40,18 @@ describe('Lobby API HTTP Integration Tests', () => {
     // Generate test user IDs
     testUserId = uuidv4();
     testUserId2 = uuidv4();
+    
+    // Create test users in the database
+    await runQuery(async (client) => {
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId, 'testuser1', 'test1@example.com', 'hashedpassword1']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
+      );
+    });
   });
 
   afterEach(async () => {
@@ -52,6 +64,11 @@ describe('Lobby API HTTP Integration Tests', () => {
   afterAll(async () => {
     // Final cleanup
     await cleanupTestData(testGameIds, testPlayerIds);
+    
+    // Clean up test users
+    await runQuery(async (client) => {
+      await client.query('DELETE FROM users WHERE id = $1 OR id = $2', [testUserId, testUserId2]);
+    });
   });
 
   describe('POST /api/lobby/games - Create Game', () => {

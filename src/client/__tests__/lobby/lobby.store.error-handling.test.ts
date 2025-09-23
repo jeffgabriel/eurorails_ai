@@ -39,13 +39,13 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'INVALID_JOIN_CODE',
+          error: 'INVALID_JOIN_CODE',
           message: 'Join code is required',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('INVALID_JOIN_CODE');
+      expect(state.error?.error).toBe('INVALID_JOIN_CODE');
     });
 
     it('should throw error for empty game ID in loadCurrentGame', async () => {
@@ -54,13 +54,13 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'INVALID_GAME_ID',
+          error: 'INVALID_GAME_ID',
           message: 'Game ID is required',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('INVALID_GAME_ID');
+      expect(state.error?.error).toBe('INVALID_GAME_ID');
     });
 
     it('should throw error for empty game ID in loadGamePlayers', async () => {
@@ -69,13 +69,13 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'INVALID_GAME_ID',
+          error: 'INVALID_GAME_ID',
           message: 'Game ID is required',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('INVALID_GAME_ID');
+      expect(state.error?.error).toBe('INVALID_GAME_ID');
     });
 
     it('should throw error for empty game ID in startGame', async () => {
@@ -84,13 +84,13 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'INVALID_GAME_ID',
+          error: 'INVALID_GAME_ID',
           message: 'Game ID is required',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('INVALID_GAME_ID');
+      expect(state.error?.error).toBe('INVALID_GAME_ID');
     });
   });
 
@@ -101,13 +101,13 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'NO_CURRENT_GAME',
+          error: 'NO_CURRENT_GAME',
           message: 'No game selected',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('NO_CURRENT_GAME');
+      expect(state.error?.error).toBe('NO_CURRENT_GAME');
     });
 
     it('should throw error when starting already started game', async () => {
@@ -129,20 +129,20 @@ describe('LobbyStore Error Handling', () => {
         fail('Expected function to throw');
       } catch (error) {
         expect(error).toEqual({
-          code: 'GAME_ALREADY_STARTED',
+          error: 'GAME_ALREADY_STARTED',
           message: 'Game has already started',
         });
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('GAME_ALREADY_STARTED');
+      expect(state.error?.error).toBe('GAME_ALREADY_STARTED');
     });
   });
 
   describe('API Error Handling', () => {
     it('should handle API errors and set error state', async () => {
       const apiError: ApiError = {
-        code: 'GAME_NOT_FOUND',
+        error: 'GAME_NOT_FOUND',
         message: 'Game not found',
       };
       
@@ -156,13 +156,13 @@ describe('LobbyStore Error Handling', () => {
       }
       
       const state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('GAME_NOT_FOUND');
+      expect(state.error?.error).toBe('GAME_NOT_FOUND');
       expect(state.isLoading).toBe(false);
     });
 
     it('should track retry count for retryable errors', async () => {
       const retryableError: ApiError = {
-        code: 'HTTP_500',
+        error: 'HTTP_500',
         message: 'Internal server error',
       };
       
@@ -182,7 +182,7 @@ describe('LobbyStore Error Handling', () => {
 
     it('should not retry non-retryable errors', async () => {
       const nonRetryableError: ApiError = {
-        code: 'GAME_NOT_FOUND',
+        error: 'GAME_NOT_FOUND',
         message: 'Game not found',
       };
       
@@ -206,7 +206,7 @@ describe('LobbyStore Error Handling', () => {
       // First, set an error
       useLobbyStore.setState({
         error: {
-          code: 'TEST_ERROR',
+          error: 'TEST_ERROR',
           message: 'Test error',
         },
         retryCount: 1,
@@ -236,7 +236,7 @@ describe('LobbyStore Error Handling', () => {
     it('should clear error and retry count on leaveGame', () => {
       useLobbyStore.setState({
         error: {
-          code: 'TEST_ERROR',
+          error: 'TEST_ERROR',
           message: 'Test error',
         },
         retryCount: 2,
@@ -252,7 +252,7 @@ describe('LobbyStore Error Handling', () => {
     it('should clear error and retry count on clearError', () => {
       useLobbyStore.setState({
         error: {
-          code: 'TEST_ERROR',
+          error: 'TEST_ERROR',
           message: 'Test error',
         },
         retryCount: 2,
@@ -304,7 +304,7 @@ describe('LobbyStore Error Handling', () => {
       }
       
       let state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.error).toBe('UNKNOWN_ERROR');
       expect(state.error?.message).toBe('Network error');
       
       // Reset state
@@ -321,7 +321,7 @@ describe('LobbyStore Error Handling', () => {
       }
       
       state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.error).toBe('UNKNOWN_ERROR');
       expect(state.error?.message).toBe('String error message');
       
       // Reset state
@@ -338,7 +338,7 @@ describe('LobbyStore Error Handling', () => {
       }
       
       state = useLobbyStore.getState();
-      expect(state.error?.code).toBe('UNKNOWN_ERROR');
+      expect(state.error?.error).toBe('UNKNOWN_ERROR');
       expect(state.error?.message).toBe('undefined');
     });
   });

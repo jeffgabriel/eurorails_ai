@@ -58,10 +58,15 @@ class ApiClient {
     if (!response.ok) {
       let errorData: ApiError;
       try {
-        errorData = await response.json();
+        const errorResponse = await response.json();
+        errorData = {
+          error: errorResponse.error || `HTTP_${response.status}`,
+          message: errorResponse.message || response.statusText || 'Network error',
+          details: errorResponse.details
+        };
       } catch {
         errorData = {
-          code: `HTTP_${response.status}`,
+          error: `HTTP_${response.status}`,
           message: response.statusText || 'Network error',
         };
       }
@@ -70,31 +75,35 @@ class ApiClient {
 
     const result = await response.json() as any;
     if (typeof result.success === 'boolean' && !result.success) {
-      throw { code: result.code || `API_${endpoint}`, message: result.message || 'API error' };
+      throw { 
+        error: result.error || `API_${endpoint}`, 
+        message: result.message || 'API error',
+        details: result.details
+      };
     }
     return result as T;
   }
 
   // Auth endpoints
   async register(data: RegisterForm): Promise<AuthResult> {
-    // TODO(server): Implement register endpoint
-    return this.request<AuthResult>('/auth/register', {
+    const response = await this.request<{ success: boolean; data: AuthResult; message: string }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return response.data;
   }
 
   async login(data: LoginForm): Promise<AuthResult> {
-    // TODO(server): Implement login endpoint
-    return this.request<AuthResult>('/auth/login', {
+    const response = await this.request<{ success: boolean; data: AuthResult; message: string }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(data),
     });
+    return response.data;
   }
 
   async getCurrentUser(): Promise<User> {
-    // TODO(server): Implement current user endpoint
-    return this.request<User>('/me');
+    const response = await this.request<{ success: boolean; data: { user: User }; message: string }>('/api/auth/me');
+    return response.data.user;
   }
 
   // Game endpoints
@@ -154,18 +163,31 @@ export const api = new ApiClient();
 // Utility function to handle common API error codes
 export function getErrorMessage(error: ApiError): string {
   const commonMessages: Record<string, string> = {
+    // Auth errors
+    LOGIN_FAILED: 'Invalid email or password',
+    REGISTRATION_FAILED: 'Registration failed',
     INVALID_CREDENTIALS: 'Invalid email or password',
     USER_EXISTS: 'User already exists with this email',
+    UNAUTHORIZED: 'Authentication required',
+    EMAIL_NOT_VERIFIED: 'Email verification required',
+    INVALID_REFRESH_TOKEN: 'Invalid or expired refresh token',
+    PASSWORD_CHANGE_FAILED: 'Password change failed',
+    
+    // Game errors
     GAME_NOT_FOUND: 'Game not found',
     GAME_FULL: 'Game is full',
     GAME_ALREADY_STARTED: 'Game has already started',
     INVALID_JOIN_CODE: 'Invalid join code',
     NOT_GAME_CREATOR: 'Only the game creator can start the game',
+    
+    // HTTP errors
     HTTP_401: 'Authentication required',
     HTTP_403: 'Access forbidden',
     HTTP_404: 'Resource not found',
     HTTP_500: 'Server error',
+    VALIDATION_ERROR: 'Invalid input data',
+    INTERNAL_SERVER_ERROR: 'Server error',
   };
 
-  return commonMessages[error.code] || error.message || 'An error occurred';
+  return commonMessages[error.error] || error.message || 'An error occurred';
 }

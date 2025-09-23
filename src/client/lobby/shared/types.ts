@@ -5,11 +5,15 @@ export interface User {
   id: ID;
   username: string;
   email: string;
+  emailVerified: boolean;
+  createdAt: Date;
+  lastActive: Date;
 }
 
 export interface AuthResult {
   user: User;
   token: string;
+  refreshToken?: string;
 }
 
 export interface Player {
@@ -45,9 +49,9 @@ export interface GameState {
 
 // API Error types
 export interface ApiError {
-  code: string;
+  error: string;
   message: string;
-  details?: unknown;
+  details?: string;
 }
 
 // Socket.IO event types
@@ -74,6 +78,7 @@ export interface RegisterForm {
   username: string;
   email: string;
   password: string;
+  confirmPassword: string;
 }
 
 export interface CreateGameForm {

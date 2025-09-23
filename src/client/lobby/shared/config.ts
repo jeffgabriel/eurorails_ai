@@ -19,8 +19,8 @@ function getEnvVar(key: string, defaultValue: string): string {
 }
 
 export const config: Config = {
-  apiBaseUrl: getEnvVar('VITE_API_BASE_URL', 'http://localhost:3000'),
-  socketUrl: getEnvVar('VITE_SOCKET_URL', 'http://localhost:3000'),
+  apiBaseUrl: getEnvVar('VITE_API_BASE_URL', 'http://localhost:3001'),
+  socketUrl: getEnvVar('VITE_SOCKET_URL', 'http://localhost:3001'),
   isDevelopment: process.env.NODE_ENV === 'development',
   debugEnabled: getEnvVar('VITE_DEBUG', 'false') === 'true',
 };

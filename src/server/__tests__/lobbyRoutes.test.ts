@@ -34,11 +34,53 @@ describe('Lobby API Integration Tests', () => {
   let testPlayerIds: string[] = [];
   let testUserId: string;
   let testUserId2: string;
+  let testUserId3: string;
+  let testUserId4: string;
+  let testUserId5: string;
+  let testUserId6: string;
+  let testUserId7: string;
 
   beforeAll(async () => {
     // Generate test user IDs
     testUserId = uuidv4();
     testUserId2 = uuidv4();
+    testUserId3 = uuidv4();
+    testUserId4 = uuidv4();
+    testUserId5 = uuidv4();
+    testUserId6 = uuidv4();
+    testUserId7 = uuidv4();
+    
+    // Create test users in the database
+    await runQuery(async (client) => {
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId, 'testuser1', 'test1@example.com', 'hashedpassword1']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId3, 'testuser3', 'test3@example.com', 'hashedpassword3']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId4, 'testuser4', 'test4@example.com', 'hashedpassword4']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId5, 'testuser5', 'test5@example.com', 'hashedpassword5']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId6, 'testuser6', 'test6@example.com', 'hashedpassword6']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId7, 'testuser7', 'test7@example.com', 'hashedpassword7']
+      );
+    });
   });
 
   afterEach(async () => {
@@ -51,6 +93,12 @@ describe('Lobby API Integration Tests', () => {
   afterAll(async () => {
     // Final cleanup
     await cleanupTestData(testGameIds, testPlayerIds);
+    
+    // Clean up test users
+    await runQuery(async (client) => {
+      await client.query('DELETE FROM users WHERE id = $1 OR id = $2 OR id = $3 OR id = $4 OR id = $5 OR id = $6 OR id = $7', 
+        [testUserId, testUserId2, testUserId3, testUserId4, testUserId5, testUserId6, testUserId7]);
+    });
   });
 
   describe('End-to-End Lobby Workflow', () => {
@@ -103,7 +151,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Add multiple players
-      const playerIds = [uuidv4(), uuidv4(), uuidv4()];
+      const playerIds = [testUserId2, testUserId3, testUserId4];
       
       for (const playerId of playerIds) {
         await LobbyService.joinGame(game.joinCode, playerId);
@@ -223,8 +271,8 @@ describe('Lobby API Integration Tests', () => {
   describe('Concurrent Operations', () => {
     it('should handle concurrent game creation', async () => {
       // Create multiple games simultaneously
-      const promises = Array.from({ length: 5 }, () => 
-        LobbyService.createGame({ createdByUserId: uuidv4() })
+      const promises = Array.from({ length: 5 }, (_, i) => 
+        LobbyService.createGame({ createdByUserId: [testUserId, testUserId2, testUserId3, testUserId4, testUserId5][i] })
       );
 
       const games = await Promise.all(promises);
@@ -253,7 +301,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Multiple players try to join simultaneously
-      const playerIds = Array.from({ length: 4 }, () => uuidv4());
+      const playerIds = [testUserId2, testUserId3, testUserId4, testUserId5];
       const joinPromises = playerIds.map(playerId => 
         LobbyService.joinGame(game.joinCode, playerId)
       );
@@ -319,7 +367,7 @@ describe('Lobby API Integration Tests', () => {
       testPlayerIds.push(testUserId2);
 
       // Try to join when full
-      await expect(LobbyService.joinGame(game.joinCode, uuidv4()))
+      await expect(LobbyService.joinGame(game.joinCode, testUserId6))
         .rejects.toThrow('Game is full');
     });
   });
@@ -359,7 +407,7 @@ describe('Lobby API Integration Tests', () => {
       // Create multiple games
       for (let i = 0; i < 10; i++) {
         const game = await LobbyService.createGame({
-          createdByUserId: uuidv4()
+          createdByUserId: testUserId7
         });
         games.push(game);
         testGameIds.push(game.id);

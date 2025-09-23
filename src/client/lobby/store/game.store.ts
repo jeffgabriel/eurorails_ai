@@ -73,7 +73,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
       socketService.onError((error) => {
         get().setError({
-          code: error.code,
+          error: error.code,
           message: error.message,
         });
       });
@@ -86,7 +86,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         isLoading: false,
         connectionStatus: 'disconnected',
         error: {
-          code: 'CONNECTION_ERROR',
+          error: 'CONNECTION_ERROR',
           message: 'Failed to connect to game server',
         },
       });
@@ -119,7 +119,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       socketService.sendAction(gameState.id, type, payload, clientSeq);
     } catch (_error) {
       get().setError({
-        code: 'ACTION_ERROR',
+        error: 'ACTION_ERROR',
         message: 'Failed to send action to server',
       });
     }

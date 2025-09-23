@@ -45,11 +45,41 @@ describe('LobbyService', () => {
   let testPlayerIds: string[] = [];
   let testUserId: string;
   let testUserId2: string;
+  let testUserId3: string;
+  let testUserId4: string;
+  let testUserId5: string;
 
   beforeAll(async () => {
     // Generate test user IDs
     testUserId = uuidv4();
     testUserId2 = uuidv4();
+    testUserId3 = uuidv4();
+    testUserId4 = uuidv4();
+    testUserId5 = uuidv4();
+    
+    // Create test users in the database
+    await runQuery(async (client) => {
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId, 'testuser1', 'test1@example.com', 'hashedpassword1']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId3, 'testuser3', 'test3@example.com', 'hashedpassword3']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId4, 'testuser4', 'test4@example.com', 'hashedpassword4']
+      );
+      await client.query(
+        'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+        [testUserId5, 'testuser5', 'test5@example.com', 'hashedpassword5']
+      );
+    });
   });
 
   afterEach(async () => {
@@ -62,6 +92,12 @@ describe('LobbyService', () => {
   afterAll(async () => {
     // Final cleanup
     await cleanupTestData(testGameIds, testPlayerIds);
+    
+    // Clean up test users
+    await runQuery(async (client) => {
+      await client.query('DELETE FROM users WHERE id = $1 OR id = $2 OR id = $3 OR id = $4 OR id = $5', 
+        [testUserId, testUserId2, testUserId3, testUserId4, testUserId5]);
+    });
   });
 
   describe('createGame', () => {
@@ -203,12 +239,12 @@ describe('LobbyService', () => {
 
     it('should throw error when game is full', async () => {
       // Fill up the game (max 4 players, creator + 3 more)
-      await LobbyService.joinGame(testJoinCode, uuidv4());
-      await LobbyService.joinGame(testJoinCode, uuidv4());
-      await LobbyService.joinGame(testJoinCode, uuidv4());
+      await LobbyService.joinGame(testJoinCode, testUserId2);
+      await LobbyService.joinGame(testJoinCode, testUserId3);
+      await LobbyService.joinGame(testJoinCode, testUserId4);
 
       // Try to join when full
-      await expect(LobbyService.joinGame(testJoinCode, uuidv4())).rejects.toThrow(GameFullError);
+      await expect(LobbyService.joinGame(testJoinCode, testUserId5)).rejects.toThrow(GameFullError);
     });
 
     it('should throw error when game has already started', async () => {
@@ -219,7 +255,7 @@ describe('LobbyService', () => {
       await LobbyService.startGame(testGame.id, testUserId);
 
       // Try to join started game
-      await expect(LobbyService.joinGame(testJoinCode, uuidv4())).rejects.toThrow(GameAlreadyStartedError);
+      await expect(LobbyService.joinGame(testJoinCode, testUserId3)).rejects.toThrow(GameAlreadyStartedError);
     });
   });
 
@@ -271,7 +307,7 @@ describe('LobbyService', () => {
     it('should get players for a game', async () => {
       // Add some players
       await LobbyService.joinGame(testGame.joinCode, testUserId2);
-      await LobbyService.joinGame(testGame.joinCode, uuidv4());
+      await LobbyService.joinGame(testGame.joinCode, testUserId3);
 
       const players = await LobbyService.getGamePlayers(testGame.id);
 
@@ -532,8 +568,8 @@ describe('LobbyService', () => {
   describe('Edge Cases', () => {
     it('should handle concurrent game creation', async () => {
       // Create multiple games simultaneously
-      const promises = Array.from({ length: 5 }, () => 
-        LobbyService.createGame({ createdByUserId: uuidv4() })
+      const promises = Array.from({ length: 5 }, (_, i) => 
+        LobbyService.createGame({ createdByUserId: [testUserId, testUserId2, testUserId3, testUserId4, testUserId5][i] })
       );
 
       const games = await Promise.all(promises);
@@ -548,7 +584,7 @@ describe('LobbyService', () => {
     });
 
     it('should handle valid UUID user IDs', async () => {
-      const validUserId = uuidv4();
+      const validUserId = testUserId;
       
       const gameData: CreateGameData = {
         createdByUserId: validUserId

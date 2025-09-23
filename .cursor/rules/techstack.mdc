@@ -1,7 +1,5 @@
 ---
-description: These are the core elements of the tech stack to be used.
-globs: 
-alwaysApply: false
+alwaysApply: true
 ---
 Tech Stack
 Frontend (Game Rendering & UI)

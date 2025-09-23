@@ -112,7 +112,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
                          window.location.hostname === '127.0.0.1';
       
       if (isLocalhost) {
-        const devUser = { id: '123e4567-e89b-12d3-a456-426614174000', username: 'dev-user', email: 'dev@example.com' };
+        const devUser = { 
+          id: '123e4567-e89b-12d3-a456-426614174000', 
+          username: 'dev-user', 
+          email: 'dev@example.com',
+          emailVerified: true,
+          createdAt: new Date(),
+          lastActive: new Date()
+        };
         
         // Store in localStorage for API client
         localStorage.setItem('eurorails.jwt', 'dev-token');
@@ -171,7 +178,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
                          window.location.hostname === '127.0.0.1';
       
       if (isLocalhost) {
-        const devUser = { id: '123e4567-e89b-12d3-a456-426614174000', username: 'dev-user', email: 'dev@example.com' };
+        const devUser = { 
+          id: '123e4567-e89b-12d3-a456-426614174000', 
+          username: 'dev-user', 
+          email: 'dev@example.com',
+          emailVerified: true,
+          createdAt: new Date(),
+          lastActive: new Date()
+        };
         
         // Also store in localStorage for API client
         localStorage.setItem('eurorails.jwt', 'dev-token');
