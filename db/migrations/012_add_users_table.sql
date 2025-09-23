@@ -39,8 +39,13 @@ BEGIN
 END $$;
 
 -- Update games table to reference users instead of players
--- Handle existing game data to avoid FK violation
-UPDATE games SET created_by = NULL WHERE created_by IS NOT NULL;
+-- Migrate existing game creators by mapping player IDs to user IDs
+UPDATE games g
+SET created_by = p.user_id
+FROM players p WHERE g.created_by = p.id;
+
+-- Handle orphaned games (games with created_by that don't have corresponding players)
+UPDATE games SET created_by = NULL WHERE created_by IS NOT NULL AND created_by NOT IN (SELECT id FROM users);
 
 -- Drop both possible constraint names
 ALTER TABLE games 
