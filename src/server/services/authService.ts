@@ -41,10 +41,11 @@ export class AuthService {
   /**
    * Generate refresh token
    */
-  private static generateRefreshToken(): string {
+  private static generateRefreshToken(userId: string): string {
     return jwt.sign(
       { 
         type: 'refresh',
+        userId,
         iat: Math.floor(Date.now() / 1000),
         exp: Math.floor(Date.now() / 1000) + (7 * 24 * 60 * 60) // 7 days
       },
@@ -176,7 +177,7 @@ export class AuthService {
 
     const user = this.rowToUser(result.rows[0]);
     const token = this.generateAccessToken(user);
-    const refreshToken = this.generateRefreshToken();
+    const refreshToken = this.generateRefreshToken(user.id);
 
     return {
       user,
@@ -212,7 +213,7 @@ export class AuthService {
     // Convert to User object and generate tokens
     const userObj = this.rowToUser(user);
     const token = this.generateAccessToken(userObj);
-    const refreshToken = this.generateRefreshToken();
+    const refreshToken = this.generateRefreshToken(userObj.id);
 
     return {
       user: userObj,
@@ -267,8 +268,12 @@ export class AuthService {
       }
 
       // Generate new tokens
-      const newToken = this.generateAccessToken({} as User); // We'll need to get user data
-      const newRefreshToken = this.generateRefreshToken();
+      const user = await this.findUserById(decoded.userId);
+      if (!user) {
+        throw new Error(`User not found: ${decoded.userId}`);
+      }
+      const newToken = this.generateAccessToken(user);
+      const newRefreshToken = this.generateRefreshToken(user.id);
 
       return {
         token: newToken,

@@ -39,6 +39,9 @@ BEGIN
 END $$;
 
 -- Update games table to reference users instead of players
+-- Handle existing game data to avoid FK violation
+UPDATE games SET created_by = NULL WHERE created_by IS NOT NULL;
+
 -- Drop both possible constraint names
 ALTER TABLE games 
 DROP CONSTRAINT IF EXISTS fk_games_created_by;

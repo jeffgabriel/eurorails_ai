@@ -24,12 +24,12 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
 async function cleanupTestData(gameIds: string[], playerIds: string[]) {
   await runQuery(async (client) => {
     // Delete in dependency order to avoid constraint errors
-    // First delete games (which will cascade delete players), then any remaining players
-    if (gameIds.length > 0) {
-      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
-    }
+    // First delete players (to satisfy foreign key constraints), then any remaining games
     if (playerIds.length > 0) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
+    }
+    if (gameIds.length > 0) {
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
   });
 }
