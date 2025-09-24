@@ -442,7 +442,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
   restoreGameState: async () => {
     const stored = loadFromStorage();
     if (stored) {
-      // Always fetch fresh data from server, but use localStorage as immediate fallback
+      // Always fetch fresh data from server, but handle different error types appropriately
       try {
         // Try to get fresh data from server
         const gameResult = await api.getGame(stored.game!.id);
@@ -457,7 +457,16 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         get().saveGameState();
         return true;
       } catch (error) {
-        // If server fetch fails, use localStorage data but log warning
+        const apiError = normalizeError(error);
+        
+        // If game not found (404), clear stale state and return false
+        if (apiError.error === 'HTTP_404' || apiError.message.includes('not found')) {
+          console.warn('Game not found, clearing stale state:', stored.game!.id);
+          get().clearGameState();
+          return false;
+        }
+        
+        // For other errors (network issues, etc.), use localStorage data as fallback
         console.warn('Failed to fetch fresh game state from server, using localStorage:', error);
         set({
           currentGame: stored.game,
