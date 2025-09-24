@@ -43,7 +43,7 @@ export interface TrainState {
     justCrossedFerry?: boolean;
 }
 
-export type GameStatus = 'setup' | 'active' | 'completed';
+export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';
 
 export interface Game {
     id: string;

@@ -374,7 +374,7 @@ router.post('/game/:gameId/status', async (req, res) => {
         const { gameId } = req.params;
         const { status } = req.body;
 
-        if (!status || !['setup', 'active', 'completed'].includes(status)) {
+        if (!status || !['setup', 'active', 'completed', 'abandoned'].includes(status)) {
             return res.status(400).json({
                 error: 'Validation error',
                 details: 'Invalid game status'
