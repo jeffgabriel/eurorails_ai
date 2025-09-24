@@ -117,6 +117,7 @@
     "typescript": "^5.8.2",
     "vite": "*",
     "webpack": "^5.65.0",
+    "webpack-bundle-analyzer": "^4.10.2",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.2.2",
     "whatwg-fetch": "^3.6.20"

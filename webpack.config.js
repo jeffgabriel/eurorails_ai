@@ -5,7 +5,28 @@ module.exports = {
   entry: './src/client/index.tsx',
   output: {
     path: path.resolve(__dirname, 'dist/client'),
-    filename: 'bundle.js',
+    filename: '[name].[contenthash].js',
+    clean: true,
+  },
+  optimization: {
+    splitChunks: {
+      chunks: 'all',
+      cacheGroups: {
+        phaser: {
+          test: /[\\/]node_modules[\\/]phaser[\\/]/,
+          name: 'phaser',
+          chunks: 'all',
+          priority: 20,
+          enforce: true,
+        },
+        vendor: {
+          test: /[\\/]node_modules[\\/](?!phaser)[\\/]/,
+          name: 'vendors',
+          chunks: 'all',
+          priority: 10,
+        },
+      },
+    },
   },
   module: {
     rules: [
