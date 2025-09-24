@@ -20,7 +20,7 @@ module.exports = {
           enforce: true,
         },
         vendor: {
-          test: /[\\/]node_modules[\\/]/,
+          test: /[\\/]node_modules[\\/](?!phaser)[\\/]/,
           name: 'vendors',
           chunks: 'all',
           priority: 10,
