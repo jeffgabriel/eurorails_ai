@@ -77,6 +77,14 @@ export function LobbyPage() {
     recoverState();
   }, [gameId, currentGame, loadGameFromUrl, restoreGameState, navigate]);
 
+  // Navigate to lobby with game ID when currentGame changes (from create/join operations)
+  useEffect(() => {
+    if (currentGame && !gameId) {
+      // We have a current game but no gameId in URL - navigate to lobby with game ID
+      navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+    }
+  }, [currentGame, gameId, navigate]);
+
   const handleStartGame = async () => {
     if (!currentGame) return;
 

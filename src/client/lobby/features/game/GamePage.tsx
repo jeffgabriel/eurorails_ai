@@ -81,62 +81,6 @@ export function GamePage() {
     );
   }
 
-  // In development mode, show mock data
-  if (isDevelopment && !gameState) {
-    const mockGameState = {
-      id: gameId || 'dev-game',
-      players: [
-        { id: '1', userId: '1', name: 'Dev Player 1', color: '#ff0000', isOnline: true },
-        { id: '2', userId: '2', name: 'Dev Player 2', color: '#00ff00', isOnline: true },
-      ],
-      currentTurnUserId: '1',
-      tracks: []
-    };
-
-    return (
-      <div className="size-full bg-background flex flex-col">
-        {/* Header */}
-        <header className="border-b border-border bg-card px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={handleBackToLobby}
-            >
-              <ArrowLeft className="size-4 mr-2" />
-              Back to Lobby
-            </Button>
-            
-            <div className="text-sm text-muted-foreground">
-              Game ID: {gameId || 'dev-game'} (Development Mode)
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="text-sm text-muted-foreground">
-              Development Mode - No Authentication Required
-            </div>
-          </div>
-        </header>
-
-        {/* Main game area */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* Game canvas */}
-          <div className="flex-1 relative">
-            <PhaserCanvas gameState={mockGameState} />
-          </div>
-
-          {/* Right sidebar - players and game info */}
-          <div className="w-80 border-l border-border bg-card">
-            <PlayerSidebar gameState={mockGameState} />
-          </div>
-        </div>
-
-        {/* Toast notifications */}
-        <Toasts />
-      </div>
-    );
-  }
 
   return (
     <div className="size-full bg-background flex flex-col">
