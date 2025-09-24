@@ -1,6 +1,6 @@
 // features/lobby/LobbyPage.tsx
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Users, LogOut, Play } from 'lucide-react';
 import { Button } from '../../components/ui/button';
@@ -16,6 +16,7 @@ import { getErrorMessage } from '../../shared/api';
 
 export function LobbyPage() {
   const navigate = useNavigate();
+  const { gameId } = useParams<{ gameId?: string }>();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   
@@ -27,8 +28,13 @@ export function LobbyPage() {
     error, 
     clearError,
     startGame,
-    leaveGame 
+    leaveGame,
+    loadGameFromUrl,
+    restoreGameState
   } = useLobbyStore();
+  
+  // Get function to access store state
+  const get = useLobbyStore.getState;
 
   useEffect(() => {
     if (error) {
@@ -36,6 +42,48 @@ export function LobbyPage() {
       clearError();
     }
   }, [error, clearError]);
+
+  // State recovery on component mount
+  useEffect(() => {
+    const recoverState = async () => {
+      if (gameId && !currentGame) {
+        // Load from URL
+        try {
+          await loadGameFromUrl(gameId);
+        } catch (error) {
+          console.warn('Failed to load game from URL:', error);
+          // If URL load fails, try localStorage
+          const restored = await restoreGameState();
+          if (!restored) {
+            // If both fail, redirect to main lobby
+            toast.error('Game not found. Redirecting to lobby...');
+            navigate('/lobby');
+          }
+        }
+      } else if (!gameId && !currentGame) {
+        // Try to restore from localStorage
+        const restored = await restoreGameState();
+        if (restored) {
+          // Get the updated currentGame from the store
+          const updatedGame = get().currentGame;
+          if (updatedGame) {
+            // Redirect to lobby with game ID
+            navigate(`/lobby/game/${updatedGame.id}`);
+          }
+        }
+      }
+    };
+    
+    recoverState();
+  }, [gameId]);
+
+  // Navigate to lobby with game ID when currentGame changes (from create/join operations)
+  useEffect(() => {
+    if (currentGame && !gameId) {
+      // We have a current game but no gameId in URL - navigate to lobby with game ID
+      navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+    }
+  }, [currentGame, gameId, navigate]);
 
   const handleStartGame = async () => {
     if (!currentGame) return;
@@ -52,6 +100,8 @@ export function LobbyPage() {
   const handleLeaveGame = () => {
     leaveGame();
     toast.info('Left the game');
+    // Navigate back to main lobby page
+    navigate('/lobby');
   };
 
   const handleLogout = () => {
@@ -63,6 +113,20 @@ export function LobbyPage() {
     currentGame.createdBy === user?.id && 
     currentGame.status === 'IN_SETUP' &&
     players.length >= 2; // Minimum players needed
+
+  // Show loading state when recovering game state
+  if (isLoading && !currentGame) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+          <p className="text-muted-foreground">
+            {gameId ? 'Loading game...' : 'Restoring game state...'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">

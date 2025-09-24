@@ -81,6 +81,16 @@ export function Router() {
           }
         />
         <Route
+          path="/lobby/game/:gameId"
+          element={
+            <ProtectedRoute>
+              <ErrorBoundary>
+                <LobbyPage />
+              </ErrorBoundary>
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/lobby"
           element={
             <ProtectedRoute>
