@@ -11,7 +11,7 @@ export interface Game {
   id: string;
   joinCode: string;
   createdBy: string;
-  status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE';
+  status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
@@ -124,7 +124,7 @@ export class LobbyService {
       return {
         id: game.id,
         joinCode: game.join_code,
-        createdBy: player.id,
+        createdBy: data.createdByUserId, // Use user ID, not player ID
         status: game.lobby_status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
@@ -158,9 +158,8 @@ export class LobbyService {
       
       // Find the game by join code
       const gameResult = await client.query(
-        `SELECT g.*, p.id as creator_player_id 
+        `SELECT g.*, g.created_by as creator_user_id 
          FROM games g 
-         LEFT JOIN players p ON g.created_by = p.id 
          WHERE g.join_code = $1`,
         [joinCode.toUpperCase()]
       );
@@ -187,7 +186,7 @@ export class LobbyService {
         return {
           id: game.id,
           joinCode: game.join_code,
-          createdBy: game.creator_player_id,
+          createdBy: game.creator_user_id,
           status: game.lobby_status,
           maxPlayers: game.max_players,
           isPublic: game.is_public,
@@ -230,7 +229,7 @@ export class LobbyService {
       return {
         id: game.id,
         joinCode: game.join_code,
-        createdBy: game.creator_player_id,
+        createdBy: game.creator_user_id,
         status: game.lobby_status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
@@ -397,30 +396,31 @@ export class LobbyService {
         throw new LobbyError('Player not found in this game', 'PLAYER_NOT_IN_GAME', 404);
       }
       
-      // Check if this is the creator
+      // Check if this is the creator (compare user IDs)
       const isCreator = await client.query(
         'SELECT created_by FROM games WHERE id = $1',
         [gameId]
       );
       
-      if (isCreator.rows[0].created_by === playerResult.rows[0].id) {
-        // If this is the creator, we need to transfer ownership or delete the game
+      if (isCreator.rows[0].created_by === userId) {
+        // If this is the creator, we need to transfer ownership or abandon the game
         const remainingPlayers = await client.query(
-          'SELECT id FROM players WHERE game_id = $1 AND user_id != $2 ORDER BY created_at LIMIT 1',
+          'SELECT user_id FROM players WHERE game_id = $1 AND user_id != $2 ORDER BY created_at LIMIT 1',
           [gameId, userId]
         );
         
         if (remainingPlayers.rows.length > 0) {
-          // Transfer ownership to another player
+          // Transfer ownership to another player (use user_id, not player id)
           await client.query(
             'UPDATE games SET created_by = $1 WHERE id = $2',
-            [remainingPlayers.rows[0].id, gameId]
+            [remainingPlayers.rows[0].user_id, gameId]
           );
         } else {
-          // No other players, delete the game first
-          await client.query('DELETE FROM games WHERE id = $1', [gameId]);
-          await client.query('COMMIT');
-          return; // Exit early since game is deleted
+          // No other players, mark game as abandoned instead of deleting
+          await client.query(
+            'UPDATE games SET lobby_status = $1 WHERE id = $2',
+            ['ABANDONED', gameId]
+          );
         }
       }
       
@@ -430,14 +430,17 @@ export class LobbyService {
         [gameId, userId]
       );
       
-      // If no players left, delete the game
+      // If no players left, mark game as abandoned instead of deleting
       const playerCountResult = await client.query(
         'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
         [gameId]
       );
       
       if (parseInt(playerCountResult.rows[0].count) === 0) {
-        await client.query('DELETE FROM games WHERE id = $1', [gameId]);
+        await client.query(
+          'UPDATE games SET lobby_status = $1 WHERE id = $2',
+          ['ABANDONED', gameId]
+        );
       }
       
       await client.query('COMMIT');
