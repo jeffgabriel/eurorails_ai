@@ -20,6 +20,11 @@ interface LobbyActions {
   leaveGame: () => Promise<void>;
   updatePlayerPresence: (userId: ID, isOnline: boolean) => Promise<void>;
   clearError: () => void;
+  // New methods for state recovery
+  loadGameFromUrl: (gameId: ID) => Promise<void>;
+  restoreGameState: () => Promise<boolean>;
+  saveGameState: () => void;
+  clearGameState: () => void;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -84,6 +89,57 @@ const handleError = (error: unknown, retryCount: number, maxRetries: number = 3)
   return friendlyError;
 };
 
+// localStorage helper functions for state persistence
+const STORAGE_KEYS = {
+  CURRENT_GAME: 'eurorails.currentGame',
+  CURRENT_PLAYERS: 'eurorails.currentPlayers',
+  GAME_TIMESTAMP: 'eurorails.gameTimestamp',
+};
+
+const saveToStorage = (game: Game | null, players: Player[]) => {
+  if (game) {
+    localStorage.setItem(STORAGE_KEYS.CURRENT_GAME, JSON.stringify(game));
+    localStorage.setItem(STORAGE_KEYS.CURRENT_PLAYERS, JSON.stringify(players));
+    localStorage.setItem(STORAGE_KEYS.GAME_TIMESTAMP, Date.now().toString());
+  }
+};
+
+const loadFromStorage = (): { game: Game | null; players: Player[] } | null => {
+  try {
+    const gameStr = localStorage.getItem(STORAGE_KEYS.CURRENT_GAME);
+    const playersStr = localStorage.getItem(STORAGE_KEYS.CURRENT_PLAYERS);
+    const timestampStr = localStorage.getItem(STORAGE_KEYS.GAME_TIMESTAMP);
+    
+    if (!gameStr || !playersStr || !timestampStr) {
+      return null;
+    }
+    
+    // Check if data is not too old (e.g., 1 hour)
+    const timestamp = parseInt(timestampStr);
+    const maxAge = 60 * 60 * 1000; // 1 hour
+    
+    if (Date.now() - timestamp > maxAge) {
+      clearStorage();
+      return null;
+    }
+    
+    return {
+      game: JSON.parse(gameStr),
+      players: JSON.parse(playersStr),
+    };
+  } catch (error) {
+    console.warn('Failed to load game state from localStorage:', error);
+    clearStorage();
+    return null;
+  }
+};
+
+const clearStorage = () => {
+  Object.values(STORAGE_KEYS).forEach(key => {
+    localStorage.removeItem(key);
+  });
+};
+
 export const useLobbyStore = create<LobbyStore>((set, get) => ({
   // Initial state
   currentGame: null,
@@ -115,6 +171,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         // If loading players fails, log but don't fail the entire operation
         console.warn('Failed to load initial players:', playerError);
       }
+      
+      // Save to localStorage
+      get().saveGameState();
       
       return result.game;
     } catch (error) {
@@ -160,6 +219,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         // If loading players fails, log but don't fail the entire operation
         console.warn('Failed to load game players:', playerError);
       }
+      
+      // Save to localStorage
+      get().saveGameState();
       
       return result.game;
     } catch (error) {
@@ -309,12 +371,8 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       }
     }
     
-    set({
-      currentGame: null,
-      players: [],
-      error: null,
-      retryCount: 0,
-    });
+    // Clear localStorage and state
+    get().clearGameState();
   },
 
   updatePlayerPresence: async (userId: ID, isOnline: boolean) => {
@@ -334,6 +392,77 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     );
     
     set({ players: updatedPlayers });
+  },
+
+  // New state recovery methods
+  loadGameFromUrl: async (gameId: ID) => {
+    set({ isLoading: true, error: null });
+    
+    try {
+      // Validate game ID format
+      if (!gameId || typeof gameId !== 'string' || gameId.trim().length === 0) {
+        throw new Error('Invalid game ID');
+      }
+      
+      // Load game details
+      const gameResult = await api.getGame(gameId);
+      const playersResult = await api.getGamePlayers(gameId);
+      
+      // Validate game exists and is accessible
+      if (!gameResult.game) {
+        throw new Error('Game not found');
+      }
+      
+      set({
+        currentGame: gameResult.game,
+        players: playersResult.players,
+        isLoading: false,
+      });
+      
+      // Save to localStorage for quick recovery
+      get().saveGameState();
+    } catch (error) {
+      const handledError = handleError(error, get().retryCount);
+      set({
+        isLoading: false,
+        error: {
+          ...handledError,
+          message: 'Failed to load game. Redirecting to lobby...'
+        },
+        retryCount: isRetryableError(handledError) ? get().retryCount + 1 : 0,
+      });
+      
+      // Clear invalid state
+      get().clearGameState();
+      throw handledError;
+    }
+  },
+
+  restoreGameState: async () => {
+    const stored = loadFromStorage();
+    if (stored) {
+      set({
+        currentGame: stored.game,
+        players: stored.players,
+      });
+      return true;
+    }
+    return false;
+  },
+
+  saveGameState: () => {
+    const { currentGame, players } = get();
+    saveToStorage(currentGame, players);
+  },
+
+  clearGameState: () => {
+    clearStorage();
+    set({
+      currentGame: null,
+      players: [],
+      error: null,
+      retryCount: 0,
+    });
   },
 
   clearError: () => {
