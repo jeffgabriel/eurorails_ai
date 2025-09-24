@@ -6,6 +6,7 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, 'dist/client'),
     filename: '[name].[contenthash].js',
+    publicPath: '/',
     clean: true,
   },
   optimization: {

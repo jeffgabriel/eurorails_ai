@@ -100,6 +100,8 @@ export function LobbyPage() {
   const handleLeaveGame = () => {
     leaveGame();
     toast.info('Left the game');
+    // Navigate back to main lobby page
+    navigate('/lobby');
   };
 
   const handleLogout = () => {
