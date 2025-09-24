@@ -134,8 +134,29 @@ class ApiClient {
   }
 
   async startGame(gameId: ID): Promise<void> {
+    // Get user ID from localStorage to send as creatorUserId
+    const userJson = localStorage.getItem('eurorails.user');
+    let creatorUserId: string | undefined;
+    
+    if (userJson) {
+      try {
+        const user = JSON.parse(userJson);
+        creatorUserId = user.id;
+      } catch (error) {
+        console.warn('Failed to parse user from localStorage:', error);
+      }
+    }
+    
+    if (!creatorUserId) {
+      throw {
+        error: 'MISSING_USER_ID',
+        message: 'User ID not found in localStorage',
+      };
+    }
+    
     await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/start`, {
       method: 'POST',
+      body: JSON.stringify({ creatorUserId }),
     });
   }
 

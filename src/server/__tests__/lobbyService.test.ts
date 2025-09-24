@@ -442,9 +442,10 @@ describe('LobbyService', () => {
       // Now remove the last player
       await LobbyService.leaveGame(testGame.id, testUserId2);
 
-      // Verify game is deleted
+      // Verify game is marked as abandoned instead of deleted
       game = await LobbyService.getGame(testGame.id);
-      expect(game).toBeNull();
+      expect(game).not.toBeNull();
+      expect(game?.status).toBe('ABANDONED');
     });
 
     it('should throw error for player not in game', async () => {

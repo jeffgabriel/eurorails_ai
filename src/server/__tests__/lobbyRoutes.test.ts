@@ -219,9 +219,10 @@ describe('Lobby API Integration Tests', () => {
       // Remove last player
       await LobbyService.leaveGame(game.id, testUserId2);
 
-      // Verify game is deleted
+      // Verify game is marked as abandoned instead of deleted
       remainingGame = await LobbyService.getGame(game.id);
-      expect(remainingGame).toBeNull();
+      expect(remainingGame).not.toBeNull();
+      expect(remainingGame?.status).toBe('ABANDONED');
     });
   });
 
@@ -392,11 +393,12 @@ describe('Lobby API Integration Tests', () => {
       await LobbyService.leaveGame(game.id, testUserId2);
       await LobbyService.leaveGame(game.id, testUserId);
 
-      // Verify game is deleted
-      const deletedGame = await LobbyService.getGame(game.id);
-      expect(deletedGame).toBeNull();
+      // Verify game is marked as abandoned instead of deleted
+      const abandonedGame = await LobbyService.getGame(game.id);
+      expect(abandonedGame).not.toBeNull();
+      expect(abandonedGame?.status).toBe('ABANDONED');
 
-      // Verify no orphaned players
+      // Verify no orphaned players (players are still removed when game is abandoned)
       const remainingPlayers = await LobbyService.getGamePlayers(game.id);
       expect(remainingPlayers).toHaveLength(0);
     });
