@@ -75,7 +75,7 @@ export function LobbyPage() {
     };
     
     recoverState();
-  }, [gameId, currentGame, loadGameFromUrl, restoreGameState, navigate]);
+  }, [gameId]);
 
   // Navigate to lobby with game ID when currentGame changes (from create/join operations)
   useEffect(() => {
