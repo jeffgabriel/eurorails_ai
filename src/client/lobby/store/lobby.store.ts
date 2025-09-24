@@ -25,6 +25,7 @@ interface LobbyActions {
   restoreGameState: () => Promise<boolean>;
   saveGameState: () => void;
   clearGameState: () => void;
+  refreshGameState: () => Promise<void>;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -114,9 +115,9 @@ const loadFromStorage = (): { game: Game | null; players: Player[] } | null => {
       return null;
     }
     
-    // Check if data is not too old (e.g., 1 hour)
+    // Check if data is not too old (e.g., 5 minutes for real-time game state)
     const timestamp = parseInt(timestampStr);
-    const maxAge = 60 * 60 * 1000; // 1 hour
+    const maxAge = 5 * 60 * 1000; // 5 minutes
     
     if (Date.now() - timestamp > maxAge) {
       clearStorage();
@@ -441,11 +442,29 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
   restoreGameState: async () => {
     const stored = loadFromStorage();
     if (stored) {
-      set({
-        currentGame: stored.game,
-        players: stored.players,
-      });
-      return true;
+      // Always fetch fresh data from server, but use localStorage as immediate fallback
+      try {
+        // Try to get fresh data from server
+        const gameResult = await api.getGame(stored.game!.id);
+        const playersResult = await api.getGamePlayers(stored.game!.id);
+        
+        set({
+          currentGame: gameResult.game,
+          players: playersResult.players,
+        });
+        
+        // Update localStorage with fresh data
+        get().saveGameState();
+        return true;
+      } catch (error) {
+        // If server fetch fails, use localStorage data but log warning
+        console.warn('Failed to fetch fresh game state from server, using localStorage:', error);
+        set({
+          currentGame: stored.game,
+          players: stored.players,
+        });
+        return true;
+      }
     }
     return false;
   },
@@ -463,6 +482,30 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       error: null,
       retryCount: 0,
     });
+  },
+
+  refreshGameState: async () => {
+    const { currentGame } = get();
+    if (!currentGame) {
+      throw new Error('No current game to refresh');
+    }
+    
+    try {
+      const gameResult = await api.getGame(currentGame.id);
+      const playersResult = await api.getGamePlayers(currentGame.id);
+      
+      set({
+        currentGame: gameResult.game,
+        players: playersResult.players,
+      });
+      
+      // Update localStorage with fresh data
+      get().saveGameState();
+    } catch (error) {
+      const handledError = handleError(error, 0);
+      set({ error: handledError });
+      throw handledError;
+    }
   },
 
   clearError: () => {
