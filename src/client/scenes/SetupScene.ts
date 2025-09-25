@@ -1,6 +1,5 @@
 import 'phaser';
 import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY } from '../../shared/types/GameTypes';
-import { GameScene } from './GameScene';
 import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
 import { DemandCard } from '../../shared/types/DemandCard';
@@ -12,6 +11,7 @@ export class SetupScene extends Phaser.Scene {
     private errorText?: Phaser.GameObjects.Text;
     private playerList?: Phaser.GameObjects.Text;
     private demandDeckService: DemandDeckService;
+    private isLobbyGame: boolean = false;
 
     constructor() {
         super({ 
@@ -31,10 +31,15 @@ export class SetupScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState; gameId?: string }) {
+        console.log('SetupScene init called with data:', data);
         // If we have a specific gameId, try to load that game
         if (data.gameId) {
+            console.log('Loading specific game with ID:', data.gameId);
+            this.isLobbyGame = true;
             this.loadSpecificGame(data.gameId);
         } else {
+            console.log('No gameId provided, fetching active game');
+            this.isLobbyGame = false;
             // Always try to fetch the active game from the backend
             this.fetchAndSetActiveGame();
         }
@@ -42,51 +47,75 @@ export class SetupScene extends Phaser.Scene {
 
     private async loadSpecificGame(gameId: string) {
         try {
-            const response = await fetch(`/api/lobby/games/${gameId}`);
-            if (response.ok) {
-                const gameData = await response.json();
-                
-                // Convert lobby players to game players format
-                const gamePlayers: Player[] = (gameData.players || []).map((lobbyPlayer: any) => ({
-                    id: lobbyPlayer.id,
-                    name: lobbyPlayer.name,
-                    color: lobbyPlayer.color,
-                    money: 50, // Default starting money
-                    trainType: 'freight',
-                    turnNumber: 0,
-                    trainState: {
-                        position: null,
-                        remainingMovement: 0,
-                        movementHistory: [],
-                        loads: []
-                    },
-                    hand: [] // Will be populated by demand deck service
-                }));
-                
-                // Convert lobby game data to our game state format
-                this.gameState = {
-                    id: gameData.id,
-                    players: gamePlayers,
-                    currentPlayerIndex: 0,
-                    status: gameData.status === 'ACTIVE' ? 'active' : 'setup',
-                    maxPlayers: gameData.maxPlayers || 6
-                };
-                
-                // If game is active and has players, start the game scene
-                if (this.gameState.status === 'active' && this.gameState.players.length > 0) {
-                    this.scene.start('GameScene', { gameState: this.gameState });
-                    return;
-                }
-                
-                // If game is in setup and has players, show the setup screen with existing players
-                if (this.gameState.status === 'setup' && this.gameState.players.length > 0) {
-                    // Set up the UI to show existing players instead of adding new ones
-                    this.setupExistingPlayers();
-                    return;
-                }
+            // First, fetch the game data
+            const gameResponse = await fetch(`/api/lobby/games/${gameId}`);
+            if (!gameResponse.ok) {
+                throw new Error(`Failed to fetch game: ${gameResponse.status}`);
             }
+            
+            const gameData = await gameResponse.json();
+            const game = gameData.data; // The API returns { success: true, data: game }
+            
+            console.log('Raw game data from API:', game);
+            console.log('Game created at:', game.createdAt);
+            console.log('Game status:', game.status);
+            
+            // Then, fetch the players for this game
+            const playersResponse = await fetch(`/api/lobby/games/${gameId}/players`);
+            if (!playersResponse.ok) {
+                throw new Error(`Failed to fetch players: ${playersResponse.status}`);
+            }
+            
+            const playersData = await playersResponse.json();
+            const lobbyPlayers = playersData.data; // The API returns { success: true, data: players }
+            
+            console.log('Game has', lobbyPlayers.length, 'players');
+            
+            // Convert lobby players to game players format
+            const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => ({
+                id: lobbyPlayer.id,
+                name: lobbyPlayer.name,
+                color: lobbyPlayer.color,
+                money: INITIAL_PLAYER_MONEY, // Use the constant from GameTypes
+                trainType: 'freight',
+                turnNumber: 0,
+                trainState: {
+                    position: null,
+                    remainingMovement: 0,
+                    movementHistory: [],
+                    loads: []
+                },
+                hand: [] // Will be populated by demand deck service
+            }));
+            
+            // Convert lobby game data to our game state format
+            this.gameState = {
+                id: game.id,
+                players: gamePlayers,
+                currentPlayerIndex: 0,
+                status: game.status === 'ACTIVE' ? 'active' : 'setup',
+                maxPlayers: game.maxPlayers || 6
+            };
+            
+            // If game is in setup and has players, show the setup screen with existing players
+            if (this.gameState.status === 'setup' && this.gameState.players.length > 0) {
+                console.log('Showing setup screen with', this.gameState.players.length, 'players');
+                this.setupExistingPlayers();
+                return;
+            }
+            
+            // If game is in setup but has no players, show waiting message
+            if (this.gameState.status === 'setup' && this.gameState.players.length === 0) {
+                console.log('Game in setup but no players yet');
+                this.setupExistingPlayers(); // This will show the waiting message
+                return;
+            }
+            
         } catch (error) {
             console.error('Error loading specific game:', error);
+            // Show error message to user
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            this.showErrorMessage(`Failed to load game: ${errorMessage}`);
         }
         
         // If we can't load the specific game, fall back to normal setup
@@ -94,6 +123,8 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private setupExistingPlayers() {
+        console.log('setupExistingPlayers called with', this.gameState.players.length, 'players');
+        
         // Add a full-screen white background rectangle to ensure complete coverage
         this.add.rectangle(
             this.scale.width / 2,
@@ -121,9 +152,18 @@ export class SetupScene extends Phaser.Scene {
 
         // Add start game button if we have enough players
         if (this.gameState.players.length >= 2) {
+            console.log('Adding start game button - game has', this.gameState.players.length, 'players');
             this.addStartGameButton();
+        } else if (this.gameState.players.length === 0) {
+            console.log('No players yet, showing waiting message');
+            this.add.text(this.scale.width / 2, 300, 'No players have joined yet. Waiting for players to join...', {
+                color: '#666666',
+                fontSize: '16px',
+                align: 'center'
+            }).setOrigin(0.5);
         } else {
-            this.add.text(this.scale.width / 2, 300, 'Waiting for more players...', {
+            console.log('Not enough players yet, showing waiting message');
+            this.add.text(this.scale.width / 2, 300, `Waiting for more players... (${this.gameState.players.length}/2 minimum)`, {
                 color: '#666666',
                 fontSize: '16px',
                 align: 'center'
@@ -134,6 +174,15 @@ export class SetupScene extends Phaser.Scene {
     private displayExistingPlayers() {
         const startY = 150;
         const playerSpacing = 40;
+        
+        if (this.gameState.players.length === 0) {
+            this.add.text(this.scale.width / 2, startY, 'No players yet', {
+                color: '#999999',
+                fontSize: '16px',
+                align: 'center'
+            }).setOrigin(0.5);
+            return;
+        }
         
         this.gameState.players.forEach((player, index) => {
             const y = startY + (index * playerSpacing);
@@ -151,6 +200,8 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private addStartGameButton() {
+        console.log('addStartGameButton called');
+        
         const button = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height - 100,
@@ -168,6 +219,7 @@ export class SetupScene extends Phaser.Scene {
         }).setOrigin(0.5);
         
         button.on('pointerdown', () => {
+            console.log('Start Game button clicked!');
             this.startGame();
         });
     }
@@ -176,17 +228,120 @@ export class SetupScene extends Phaser.Scene {
         return parseInt(hex.replace('#', ''), 16);
     }
 
+
+    private showGameInProgressMessage() {
+        // Add a full-screen white background rectangle
+        this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            this.scale.width,
+            this.scale.height,
+            0xffffff
+        ).setOrigin(0.5);
+
+        // Add title
+        this.add.text(this.scale.width / 2, 50, 'Game In Progress', {
+            color: '#000000',
+            fontSize: '32px'
+        }).setOrigin(0.5);
+
+        // Add message
+        this.add.text(this.scale.width / 2, this.scale.height / 2, 'This game is already in progress.\nYou cannot join an active game.', {
+            color: '#666666',
+            fontSize: '18px',
+            align: 'center',
+            wordWrap: { width: this.scale.width - 40 }
+        }).setOrigin(0.5);
+
+        // Add back button
+        const backButton = this.add.rectangle(this.scale.width / 2, this.scale.height - 100, 200, 50, 0x4CAF50);
+        backButton.setStrokeStyle(2, 0x000000);
+        backButton.setInteractive();
+        this.add.text(this.scale.width / 2, this.scale.height - 100, 'Back to Lobby', {
+            color: '#000000',
+            fontSize: '18px'
+        }).setOrigin(0.5);
+        
+        backButton.on('pointerdown', () => {
+            window.location.href = '/lobby';
+        });
+    }
+
+    private showErrorMessage(message: string) {
+        // Clear any existing error text
+        if (this.errorText) {
+            this.errorText.destroy();
+        }
+        
+        // Add a full-screen white background rectangle
+        this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            this.scale.width,
+            this.scale.height,
+            0xffffff
+        ).setOrigin(0.5);
+
+        // Add title
+        this.add.text(this.scale.width / 2, 50, 'Game Setup', {
+            color: '#000000',
+            fontSize: '32px'
+        }).setOrigin(0.5);
+
+        // Add error message
+        this.errorText = this.add.text(this.scale.width / 2, this.scale.height / 2, message, {
+            color: '#ff0000',
+            fontSize: '18px',
+            align: 'center',
+            wordWrap: { width: this.scale.width - 40 }
+        }).setOrigin(0.5);
+
+        // Add back button
+        const backButton = this.add.rectangle(this.scale.width / 2, this.scale.height - 100, 200, 50, 0x4CAF50);
+        backButton.setStrokeStyle(2, 0x000000);
+        backButton.setInteractive();
+        this.add.text(this.scale.width / 2, this.scale.height - 100, 'Back to Lobby', {
+            color: '#000000',
+            fontSize: '18px'
+        }).setOrigin(0.5);
+        
+        backButton.on('pointerdown', () => {
+            window.location.href = '/lobby';
+        });
+    }
+
     private async startGame() {
+        console.log('startGame called for game', this.gameState.id);
+        
         // Update game status to active
         try {
+            // Get user ID from localStorage (same way as lobby store does)
+            const userJson = localStorage.getItem('eurorails.user');
+            let userId = '';
+            if (userJson) {
+                try {
+                    const user = JSON.parse(userJson);
+                    userId = user.id;
+                } catch (error) {
+                    console.warn('Failed to parse user from localStorage:', error);
+                }
+            }
+            
             const response = await fetch(`/api/lobby/games/${this.gameState.id}/start`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                }
+                    'x-user-id': userId,
+                },
+                body: JSON.stringify({
+                    creatorUserId: userId
+                })
             });
 
             if (response.ok) {
+                console.log('Game started successfully, updating local game state to active');
+                // Update local game state to active
+                this.gameState.status = 'active';
                 // Start the game scene
                 this.scene.start('GameScene', { gameState: this.gameState });
             } else {
@@ -236,6 +391,16 @@ export class SetupScene extends Phaser.Scene {
             0xffffff
         ).setOrigin(0.5);
 
+        // Only proceed with the old setup logic if we're not loading from the lobby
+        if (!this.isLobbyGame) {
+            // This is the old standalone setup flow - not used when loading from lobby
+            console.log('Using old standalone setup flow');
+            this.setupStandaloneGame();
+        }
+        // If we're loading from lobby, the loadSpecificGame method will handle the setup
+    }
+
+    private async setupStandaloneGame() {
         // Check for active game first
         try {
             const response = await fetch('/api/players/game/active');

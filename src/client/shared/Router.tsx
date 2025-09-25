@@ -4,7 +4,7 @@ import { useAuthStore } from '../lobby/store/auth.store';
 import { LoginPage } from '../lobby/features/auth/LoginPage';
 import { RegisterPage } from '../lobby/features/auth/RegisterPage';
 import { LobbyPage } from '../lobby/features/lobby/LobbyPage';
-import { GamePage } from '../lobby/features/game/GamePage';
+// GamePage component was removed - games are now handled by the main App.tsx
 import { NotFound } from '../lobby/shared/NotFound';
 import { ErrorBoundary } from '../lobby/shared/ErrorBoundary';
 import { debug } from '../lobby/shared/config';
@@ -89,7 +89,17 @@ export function Router() {
           element={
             <ProtectedRoute>
               <ErrorBoundary>
-                <GamePage />
+                <div className="size-full flex items-center justify-center bg-background">
+                  <div className="flex flex-col items-center gap-4">
+                    <p className="text-muted-foreground">Game functionality moved to main app</p>
+                    <button 
+                      onClick={() => window.location.href = '/game/' + window.location.pathname.split('/').pop()}
+                      className="px-4 py-2 bg-accent text-accent-foreground rounded"
+                    >
+                      Go to Game
+                    </button>
+                  </div>
+                </div>
               </ErrorBoundary>
             </ProtectedRoute>
           }

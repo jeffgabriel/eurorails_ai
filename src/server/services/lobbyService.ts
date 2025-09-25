@@ -121,15 +121,15 @@ export class LobbyService {
       
       await client.query('COMMIT');
       
-      return {
-        id: game.id,
-        joinCode: game.join_code,
-        createdBy: data.createdByUserId, // Use user ID, not player ID
-        status: game.lobby_status,
-        maxPlayers: game.max_players,
-        isPublic: game.is_public,
-        createdAt: game.created_at,
-      };
+    return {
+      id: game.id,
+      joinCode: game.join_code,
+      createdBy: data.createdByUserId, // Use user ID, not player ID
+      status: game.lobby_status,
+      maxPlayers: game.max_players,
+      isPublic: game.is_public,
+      createdAt: game.created_at,
+    };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -302,9 +302,6 @@ export class LobbyService {
     }));
   }
 
-  /**
-   * Start a game (change status from IN_SETUP to ACTIVE)
-   */
   static async startGame(gameId: string, creatorUserId: string): Promise<void> {
     // Input validation
     if (!gameId || gameId.trim().length === 0) {

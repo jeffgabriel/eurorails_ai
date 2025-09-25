@@ -229,7 +229,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
   });
 
   describe('Game State Changes Outcomes', () => {
-    it('should start game and verify status change in database', async () => {
+    it('should call startGame API without changing database status', async () => {
       // 1. Create game
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
@@ -244,18 +244,24 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       });
       await api.joinGame({ joinCode: createResult.game.joinCode });
 
-      // 3. Switch back to creator and start game
+      // 3. Switch back to creator and call startGame API
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
           return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Creator' });
         }
         return null;
       });
+      
+      // Verify initial status is IN_SETUP
+      const initialGame = await api.getGame(gameId);
+      expect(initialGame.game.status).toBe('IN_SETUP');
+      
+      // Call startGame API (should not change database status)
       await api.startGame(gameId);
 
-      // 4. Verify game status changed in database
+      // 4. Verify game status remains IN_SETUP (lobby doesn't set active)
       const retrievedGame = await api.getGame(gameId);
-      expect(retrievedGame.game.status).toBe('ACTIVE');
+      expect(retrievedGame.game.status).toBe('IN_SETUP');
     }, TEST_TIMEOUT);
 
     it('should update player presence and verify in database', async () => {

@@ -27,7 +27,6 @@ export function LobbyPage() {
     isLoading, 
     error, 
     clearError,
-    startGame,
     leaveGame,
     loadGameFromUrl,
     restoreGameState
@@ -96,13 +95,9 @@ export function LobbyPage() {
   const handleStartGame = async () => {
     if (!currentGame) return;
 
-    try {
-      await startGame(currentGame.id);
-      toast.success('Game started!');
-      navigate(`/game/${currentGame.id}`);
-    } catch {
-      // Error handling is done via the error state and useEffect
-    }
+    // Just navigate to the game setup - don't call the start game API
+    toast.success('Going to game setup!');
+    navigate(`/game/${currentGame.id}`);
   };
 
   const handleLeaveGame = () => {

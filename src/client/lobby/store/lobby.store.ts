@@ -338,17 +338,13 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     set({ isLoading: true, error: null, retryCount: 0 });
     
     try {
-      await api.startGame(gameId);
-      
-      // Update game status locally (optimistic update)
+      // Lobby startGame does nothing - just sets loading to false
+      // The actual game start happens in SetupScene
       set({
-        currentGame: {
-          ...currentGame,
-          status: 'ACTIVE',
-        },
         isLoading: false,
         retryCount: 0,
       });
+      
     } catch (error) {
       const handledError = handleError(error, get().retryCount);
       
