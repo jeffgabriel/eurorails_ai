@@ -30,9 +30,42 @@ export class SetupScene extends Phaser.Scene {
         
     }
 
-    init(data: { gameState?: GameState }) {
-        // Always try to fetch the active game from the backend
-        this.fetchAndSetActiveGame();
+    init(data: { gameState?: GameState; gameId?: string }) {
+        // If we have a specific gameId, try to load that game
+        if (data.gameId) {
+            this.loadSpecificGame(data.gameId);
+        } else {
+            // Always try to fetch the active game from the backend
+            this.fetchAndSetActiveGame();
+        }
+    }
+
+    private async loadSpecificGame(gameId: string) {
+        try {
+            const response = await fetch(`/api/lobby/games/${gameId}`);
+            if (response.ok) {
+                const gameData = await response.json();
+                // Convert lobby game data to our game state format
+                this.gameState = {
+                    id: gameData.id,
+                    players: gameData.players || [],
+                    currentPlayerIndex: 0,
+                    status: gameData.status === 'ACTIVE' ? 'active' : 'setup',
+                    maxPlayers: gameData.maxPlayers || 6
+                };
+                
+                // If game is active and has players, start the game scene
+                if (this.gameState.status === 'active' && this.gameState.players.length > 0) {
+                    this.scene.start('GameScene', { gameState: this.gameState });
+                    return;
+                }
+            }
+        } catch (error) {
+            console.error('Error loading specific game:', error);
+        }
+        
+        // If we can't load the specific game, fall back to normal setup
+        this.gameState.id = gameId;
     }
 
     private async fetchAndSetActiveGame() {

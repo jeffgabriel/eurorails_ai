@@ -10,8 +10,8 @@ import { Toaster } from './lobby/components/ui/sonner';
 import { debug } from './lobby/shared/config';
 import './lobby/index.css';
 
-// Lazy load the GamePage component to avoid bundling Phaser until needed
-const GamePage = React.lazy(() => import('./lobby/features/game/GamePage').then(module => ({ default: module.GamePage })));
+// Lazy load the standalone game component
+const StandaloneGame = React.lazy(() => import('./game/StandaloneGame').then(module => ({ default: module.StandaloneGame })));
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -140,7 +140,7 @@ export default function App() {
                         </div>
                       </div>
                     }>
-                      <GamePage />
+                      <StandaloneGame />
                     </Suspense>
                   </ErrorBoundary>
                 </ProtectedRoute>
