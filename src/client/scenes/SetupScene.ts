@@ -45,10 +45,28 @@ export class SetupScene extends Phaser.Scene {
             const response = await fetch(`/api/lobby/games/${gameId}`);
             if (response.ok) {
                 const gameData = await response.json();
+                
+                // Convert lobby players to game players format
+                const gamePlayers: Player[] = (gameData.players || []).map((lobbyPlayer: any) => ({
+                    id: lobbyPlayer.id,
+                    name: lobbyPlayer.name,
+                    color: lobbyPlayer.color,
+                    money: 50, // Default starting money
+                    trainType: 'freight',
+                    turnNumber: 0,
+                    trainState: {
+                        position: null,
+                        remainingMovement: 0,
+                        movementHistory: [],
+                        loads: []
+                    },
+                    hand: [] // Will be populated by demand deck service
+                }));
+                
                 // Convert lobby game data to our game state format
                 this.gameState = {
                     id: gameData.id,
-                    players: gameData.players || [],
+                    players: gamePlayers,
                     currentPlayerIndex: 0,
                     status: gameData.status === 'ACTIVE' ? 'active' : 'setup',
                     maxPlayers: gameData.maxPlayers || 6
@@ -59,6 +77,13 @@ export class SetupScene extends Phaser.Scene {
                     this.scene.start('GameScene', { gameState: this.gameState });
                     return;
                 }
+                
+                // If game is in setup and has players, show the setup screen with existing players
+                if (this.gameState.status === 'setup' && this.gameState.players.length > 0) {
+                    // Set up the UI to show existing players instead of adding new ones
+                    this.setupExistingPlayers();
+                    return;
+                }
             }
         } catch (error) {
             console.error('Error loading specific game:', error);
@@ -66,6 +91,110 @@ export class SetupScene extends Phaser.Scene {
         
         // If we can't load the specific game, fall back to normal setup
         this.gameState.id = gameId;
+    }
+
+    private setupExistingPlayers() {
+        // Add a full-screen white background rectangle to ensure complete coverage
+        this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            this.scale.width,
+            this.scale.height,
+            0xffffff
+        ).setOrigin(0.5);
+
+        // Add title
+        this.add.text(this.scale.width / 2, 50, 'Game Setup', {
+            color: '#000000',
+            fontSize: '32px'
+        }).setOrigin(0.5);
+
+        // Add instructions
+        this.add.text(this.scale.width / 2, 100, 'Players in this game:', {
+            color: '#000000',
+            fontSize: '18px',
+            align: 'center'
+        }).setOrigin(0.5);
+
+        // Display existing players
+        this.displayExistingPlayers();
+
+        // Add start game button if we have enough players
+        if (this.gameState.players.length >= 2) {
+            this.addStartGameButton();
+        } else {
+            this.add.text(this.scale.width / 2, 300, 'Waiting for more players...', {
+                color: '#666666',
+                fontSize: '16px',
+                align: 'center'
+            }).setOrigin(0.5);
+        }
+    }
+
+    private displayExistingPlayers() {
+        const startY = 150;
+        const playerSpacing = 40;
+        
+        this.gameState.players.forEach((player, index) => {
+            const y = startY + (index * playerSpacing);
+            
+            // Player color indicator
+            const colorRect = this.add.rectangle(100, y, 20, 20, this.hexToNumber(player.color));
+            colorRect.setStrokeStyle(2, 0x000000);
+            
+            // Player name
+            this.add.text(140, y, player.name, {
+                color: '#000000',
+                fontSize: '16px'
+            }).setOrigin(0, 0.5);
+        });
+    }
+
+    private addStartGameButton() {
+        const button = this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height - 100,
+            200,
+            50,
+            0x4CAF50
+        );
+        
+        button.setStrokeStyle(2, 0x000000);
+        button.setInteractive();
+        
+        this.add.text(this.scale.width / 2, this.scale.height - 100, 'Start Game', {
+            color: '#000000',
+            fontSize: '18px'
+        }).setOrigin(0.5);
+        
+        button.on('pointerdown', () => {
+            this.startGame();
+        });
+    }
+
+    private hexToNumber(hex: string): number {
+        return parseInt(hex.replace('#', ''), 16);
+    }
+
+    private async startGame() {
+        // Update game status to active
+        try {
+            const response = await fetch(`/api/lobby/games/${this.gameState.id}/start`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+            });
+
+            if (response.ok) {
+                // Start the game scene
+                this.scene.start('GameScene', { gameState: this.gameState });
+            } else {
+                console.error('Failed to start game:', await response.json());
+            }
+        } catch (error) {
+            console.error('Error starting game:', error);
+        }
     }
 
     private async fetchAndSetActiveGame() {
@@ -357,46 +486,4 @@ export class SetupScene extends Phaser.Scene {
         return cards;
     }
 
-    private async startGame() {
-        if (this.gameState.players.length < 2) {
-            this.showError('At least 2 players are required to start');
-            return;
-        }
-
-        try {
-            // Ensure demand cards are loaded
-            await this.demandDeckService.loadCards();
-            
-            // Deal initial hands to all players
-            for (const player of this.gameState.players) {
-                if (player.hand.length === 0) {
-                    player.hand = await this.getPlayerHand();
-                }
-            }
-
-            // Update game status to active
-            const response = await fetch(`/api/players/game/${this.gameState.id}/status`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    status: 'active'
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to start game');
-            }
-
-            // Update local game state
-            this.gameState.status = 'active';
-
-            // Switch to game scene
-            this.scene.start('GameScene', { gameState: this.gameState });
-        } catch (error) {
-            console.error('Error starting game:', error);
-            this.showError('Failed to start game. Please try again.');
-        }
-    }
 } 

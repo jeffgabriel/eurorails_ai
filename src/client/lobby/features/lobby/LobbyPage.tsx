@@ -67,8 +67,12 @@ export function LobbyPage() {
           // Get the updated currentGame from the store
           const updatedGame = get().currentGame;
           if (updatedGame) {
-            // Redirect to lobby with game ID
-            navigate(`/lobby/game/${updatedGame.id}`);
+            // Only redirect if we're not already on a game route
+            const currentPath = window.location.pathname;
+            if (!currentPath.startsWith('/game/')) {
+              // Redirect to lobby with game ID
+              navigate(`/lobby/game/${updatedGame.id}`);
+            }
           }
         }
       }
@@ -80,8 +84,12 @@ export function LobbyPage() {
   // Navigate to lobby with game ID when currentGame changes (from create/join operations)
   useEffect(() => {
     if (currentGame && !gameId) {
-      // We have a current game but no gameId in URL - navigate to lobby with game ID
-      navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+      // Only redirect if we're not already on a game route
+      const currentPath = window.location.pathname;
+      if (!currentPath.startsWith('/game/')) {
+        // We have a current game but no gameId in URL - navigate to lobby with game ID
+        navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+      }
     }
   }, [currentGame, gameId, navigate]);
 
