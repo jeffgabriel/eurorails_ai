@@ -76,7 +76,7 @@ export class UIManager {
       await nextPlayerCallback();
       this.setupUIOverlay();
       this.trainInteractionManager.updateTrainZOrders();
-      this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
+      await this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
 
       const newPlayer =
         this.gameState.players[this.gameState.currentPlayerIndex];
@@ -107,7 +107,7 @@ export class UIManager {
         const previousSessionsCost = this.trackDrawingManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
         const currentSessionCost = this.trackDrawingManager.getCurrentTurnBuildCost();
         const totalCost = previousSessionsCost + currentSessionCost;
-        this.setupPlayerHand(this.isDrawingMode, totalCost);
+        this.setupPlayerHand(this.isDrawingMode, totalCost).catch(console.error);
       },
       () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0
     );
@@ -194,12 +194,12 @@ export class UIManager {
     this.leaderboardManager.update(this.uiContainer);
   }
 
-  public setupPlayerHand(
+  public async setupPlayerHand(
     isDrawingMode: boolean = false,
     currentTrackCost: number = 0
-  ): void {
+  ): Promise<void> {
     // Update the player hand display with the current container
-    this.playerHandDisplay.update(isDrawingMode, currentTrackCost, this.playerHandContainer);
+    await this.playerHandDisplay.update(isDrawingMode, currentTrackCost, this.playerHandContainer);
   }
 
   public cleanupCityDropdowns(): void {

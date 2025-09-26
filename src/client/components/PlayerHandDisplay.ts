@@ -34,7 +34,7 @@ export class PlayerHandDisplay {
     this.container = this.scene.add.container(0, 0);
   }
   
-  public update(isDrawingMode: boolean = false, currentTrackCost: number = 0, targetContainer: Phaser.GameObjects.Container): void {
+  public async update(isDrawingMode: boolean = false, currentTrackCost: number = 0, targetContainer: Phaser.GameObjects.Container): Promise<void> {
     if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
       return;
     }
@@ -54,7 +54,7 @@ export class PlayerHandDisplay {
 
     // Create the background, cards, and player info sections and add to handArea
     this.createHandBackground(handArea);
-    this.createDemandCardSection(handArea);
+    await this.createDemandCardSection(handArea);
     this.createTrainSection(handArea);
     this.createPlayerInfoSection(isDrawingMode, currentTrackCost, handArea);
 
@@ -79,12 +79,34 @@ export class PlayerHandDisplay {
     targetContainer.add(handBackground);
   }
 
-  private createDemandCardSection(targetContainer: Phaser.GameObjects.Container): void {
+  private async createDemandCardSection(targetContainer: Phaser.GameObjects.Container): Promise<void> {
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
 
     // Clear existing cards
     this.cards.forEach(card => card.destroy());
     this.cards = [];
+
+    // If player has no cards (lobby players), try to draw some
+    if (currentPlayer.hand.length === 0) {
+      console.log(`Player ${currentPlayer.name} has no cards, drawing demand cards...`);
+      try {
+        // Import DemandDeckService dynamically to avoid circular dependencies
+        const { DemandDeckService } = await import('../../shared/services/DemandDeckService');
+        const deckService = new DemandDeckService();
+        await deckService.loadCards();
+        
+        // Draw 3 cards for the player
+        for (let i = 0; i < 3; i++) {
+          const card = await deckService.drawCard();
+          if (card) {
+            currentPlayer.hand.push(card);
+          }
+        }
+        console.log(`Drew ${currentPlayer.hand.length} cards for player ${currentPlayer.name}`);
+      } catch (error) {
+        console.error('Failed to draw demand cards for player:', error);
+      }
+    }
 
     // Create new cards
     currentPlayer.hand.forEach((card, index) => {
