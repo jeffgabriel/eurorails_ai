@@ -54,7 +54,6 @@ jobs:
           name: Teardown
           when: always
           command: |
-            docker logs project-********db-1
             docker compose down
             
 
