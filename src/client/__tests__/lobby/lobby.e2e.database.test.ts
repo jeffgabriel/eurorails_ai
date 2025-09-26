@@ -229,7 +229,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
   });
 
   describe('Game State Changes Outcomes', () => {
-    it('should call startGame API without changing database status', async () => {
+    it('should call startGame API and change database status to ACTIVE', async () => {
       // 1. Create game
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
@@ -256,12 +256,12 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       const initialGame = await api.getGame(gameId);
       expect(initialGame.game.status).toBe('IN_SETUP');
       
-      // Call startGame API (should not change database status)
+      // Call startGame API (should change database status to ACTIVE)
       await api.startGame(gameId);
 
-      // 4. Verify game status remains IN_SETUP (lobby doesn't set active)
+      // 4. Verify game status changed to ACTIVE
       const retrievedGame = await api.getGame(gameId);
-      expect(retrievedGame.game.status).toBe('IN_SETUP');
+      expect(retrievedGame.game.status).toBe('ACTIVE');
     }, TEST_TIMEOUT);
 
     it('should update player presence and verify in database', async () => {
