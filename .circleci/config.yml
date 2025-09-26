@@ -53,7 +53,10 @@ jobs:
       - run:
           name: Teardown
           when: always
-          command: docker compose down
+          command: |
+            docker logs project-********db-1
+            docker compose down
+            
 
 workflows:
   version: 2
