@@ -12,6 +12,7 @@ export interface Game {
   joinCode: string;
   createdBy: string;
   status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
+  gameStatus: 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
@@ -126,6 +127,7 @@ export class LobbyService {
       joinCode: game.join_code,
       createdBy: data.createdByUserId, // Use user ID, not player ID
       status: game.lobby_status,
+      gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
       createdAt: game.created_at,
@@ -188,6 +190,7 @@ export class LobbyService {
           joinCode: game.join_code,
           createdBy: game.creator_user_id,
           status: game.lobby_status,
+          gameStatus: game.status,
           maxPlayers: game.max_players,
           isPublic: game.is_public,
           createdAt: game.created_at,
@@ -231,6 +234,7 @@ export class LobbyService {
         joinCode: game.join_code,
         createdBy: game.creator_user_id,
         status: game.lobby_status,
+        gameStatus: game.status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
         createdAt: game.created_at,
@@ -269,6 +273,7 @@ export class LobbyService {
       joinCode: game.join_code,
       createdBy: game.creator_user_id,
       status: game.lobby_status,
+      gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
       createdAt: game.created_at,

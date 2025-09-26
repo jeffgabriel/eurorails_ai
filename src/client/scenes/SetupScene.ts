@@ -58,18 +58,20 @@ export class SetupScene extends Phaser.Scene {
             
             console.log('Raw game data from API:', game);
             console.log('Game created at:', game.createdAt);
-            console.log('Game status:', game.status);
-            
+            console.log('Game lobby status:', game.status);
+            console.log('Game status:', game.gameStatus);
+
             // Then, fetch the players for this game
             const playersResponse = await fetch(`/api/lobby/games/${gameId}/players`);
             if (!playersResponse.ok) {
                 throw new Error(`Failed to fetch players: ${playersResponse.status}`);
             }
-            
+
             const playersData = await playersResponse.json();
             const lobbyPlayers = playersData.data; // The API returns { success: true, data: players }
-            
+
             console.log('Game has', lobbyPlayers.length, 'players');
+            console.log('lobbyPlayers:', lobbyPlayers);
             
             // Convert lobby players to game players format
             const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => ({
@@ -89,25 +91,37 @@ export class SetupScene extends Phaser.Scene {
             }));
             
             // Convert lobby game data to our game state format
+            // Use gameStatus (actual game state) instead of status (lobby status)
+            // Treat null gameStatus as 'setup'
+            const effectiveGameStatus = game.gameStatus || 'setup';
+            console.log('Effective game status:', effectiveGameStatus);
+
             this.gameState = {
                 id: game.id,
                 players: gamePlayers,
                 currentPlayerIndex: 0,
-                status: game.status === 'ACTIVE' ? 'active' : 'setup',
+                status: effectiveGameStatus === 'setup' ? 'setup' : 'active',
                 maxPlayers: game.maxPlayers || 6
             };
-            
-            // If game is in setup and has players, show the setup screen with existing players
-            if (this.gameState.status === 'setup' && this.gameState.players.length > 0) {
-                console.log('Showing setup screen with', this.gameState.players.length, 'players');
-                this.setupExistingPlayers();
+            console.log('Updated gameState:', this.gameState);
+
+            // If game is in setup status (or null, which we treat as setup), show the setup screen
+            if (effectiveGameStatus === 'setup') {
+                console.log('Game is in setup status, checking player count:', this.gameState.players.length);
+                if (this.gameState.players.length > 0) {
+                    console.log('Showing setup screen with', this.gameState.players.length, 'players');
+                    this.setupExistingPlayers();
+                } else {
+                    console.log('Game in setup but no players yet');
+                    this.setupExistingPlayers(); // This will show the waiting message
+                }
                 return;
             }
             
-            // If game is in setup but has no players, show waiting message
-            if (this.gameState.status === 'setup' && this.gameState.players.length === 0) {
-                console.log('Game in setup but no players yet');
-                this.setupExistingPlayers(); // This will show the waiting message
+            // If game is in initialBuild or active status, transition to game scene
+            if (game.gameStatus === 'initialBuild' || game.gameStatus === 'active') {
+                console.log('Game is in', game.gameStatus, 'status, transitioning to game scene');
+                this.scene.start('GameScene', { gameState: this.gameState });
                 return;
             }
             
@@ -123,7 +137,8 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private setupExistingPlayers() {
-        console.log('setupExistingPlayers called with', this.gameState.players.length, 'players');
+        console.log('DEBUG: setupExistingPlayers called with', this.gameState.players.length, 'players');
+        console.log('DEBUG: this.gameState:', this.gameState);
         
         // Add a full-screen white background rectangle to ensure complete coverage
         this.add.rectangle(

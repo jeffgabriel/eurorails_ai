@@ -95,15 +95,32 @@ app._router.stack.forEach((r: any) => {
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));
-
-// SPA fallback - this should come after API routes
-app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
-});
+// Also serve public assets
+app.use('/assets', express.static(path.join(__dirname, '../../public/assets')));
 
 // Debug endpoint
 app.get('/api/test', (req, res) => {
     res.json({ message: 'API is working' });
+});
+
+// SPA fallback - this should come after all other routes
+app.get('*', (req, res, next) => {
+    // Skip if this is an API route
+    if (req.path.startsWith('/api/')) {
+        return next();
+    }
+    
+    // Skip if this is an asset route
+    if (req.path.startsWith('/assets/')) {
+        return next();
+    }
+    
+    // Skip if this is a static file (has file extension)
+    if (req.path.includes('.')) {
+        return next();
+    }
+    
+    res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
 });
 
 // Initialize database and start server
