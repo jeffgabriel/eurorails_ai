@@ -12,7 +12,7 @@ export interface Game {
   joinCode: string;
   createdBy: string;
   status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
-  gameStatus: 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
+  gameStatus: 'setup' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
@@ -96,10 +96,10 @@ export class LobbyService {
       
       // Create the game using the database function for join code generation
       const gameResult = await client.query(
-        `INSERT INTO games (join_code, max_players, is_public, lobby_status) 
-         VALUES (generate_unique_join_code(), $1, $2, $3) 
-         RETURNING id, join_code, max_players, is_public, lobby_status, created_at`,
-        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP']
+        `INSERT INTO games (join_code, max_players, is_public, lobby_status, status) 
+         VALUES (generate_unique_join_code(), $1, $2, $3, $4) 
+         RETURNING id, join_code, max_players, is_public, lobby_status, status, created_at`,
+        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP', 'setup']
       );
       
       const game = gameResult.rows[0];
@@ -358,7 +358,7 @@ export class LobbyService {
       // Update game status
       await client.query(
         'UPDATE games SET lobby_status = $1, status = $2 WHERE id = $3',
-        ['ACTIVE', 'initialBuild', gameId]
+        ['ACTIVE', 'active', gameId]
       );
       
       await client.query('COMMIT');

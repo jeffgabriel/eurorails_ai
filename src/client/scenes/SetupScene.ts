@@ -132,8 +132,7 @@ export class SetupScene extends Phaser.Scene {
             this.showErrorMessage(`Failed to load game: ${errorMessage}`);
         }
         
-        // If we can't load the specific game, fall back to normal setup
-        this.gameState.id = gameId;
+        // If we can't load the specific game, error handling already occurred
     }
 
     private setupExistingPlayers() {

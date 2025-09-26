@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 
 export function StandaloneGame() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const gameRef = useRef<any>(null);
   const { id: gameId } = useParams<{ id: string }>();
 
   useEffect(() => {
@@ -23,8 +24,10 @@ export function StandaloneGame() {
     }
 
     // Dynamically import and initialize the game
-    import('./index').then(() => {
+    import('./index').then((gameModule) => {
       console.log('Standalone game initialized with ID:', gameId);
+      // Store reference to the game instance for cleanup
+      gameRef.current = gameModule.game;
     }).catch(error => {
       console.error('Failed to initialize game:', error);
       // Show error message to user
@@ -44,6 +47,12 @@ export function StandaloneGame() {
 
     // Cleanup on unmount
     return () => {
+      // Destroy the Phaser game instance to prevent memory leaks
+      if (gameRef.current) {
+        gameRef.current.destroy(true);
+        gameRef.current = null;
+      }
+      
       // Remove the game container
       const gameContainer = document.getElementById('game-container');
       if (gameContainer && containerRef.current) {

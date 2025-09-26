@@ -24,8 +24,8 @@ function getGameIdFromUrl(): string | null {
 // Create Phaser game configuration
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
-  width: '100%',
-  height: '100%',
+  width: 1920,
+  height: 1080,
   parent: 'game-container',
   backgroundColor: '#0b0e14',
   scale: {
@@ -37,6 +37,9 @@ const config: Phaser.Types.Core.GameConfig = {
 
 // Initialize the game
 const game = new Phaser.Game(config);
+
+// Export the game instance for cleanup
+export { game };
 
 // Get game ID and pass it to the setup scene
 const gameId = getGameIdFromUrl();

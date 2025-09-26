@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import gameRoutes from './routes/gameRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
@@ -33,7 +34,6 @@ app.use('/assets', express.static(path.join(__dirname, '../../public/assets')));
 
 // Test route to verify assets are accessible
 app.get('/test-asset', (req, res) => {
-  const fs = require('fs');
   const assetPath = path.join(__dirname, '../../public/assets/demand.png');
   console.log('Test asset path:', assetPath);
   console.log('Test asset exists:', fs.existsSync(assetPath));

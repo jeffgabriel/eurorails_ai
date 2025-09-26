@@ -114,7 +114,7 @@ describe('Lobby E2E - Simple Verification', () => {
     expect(useLobbyStore.getState().error).toBeNull();
   });
 
-  it('should call startGame API when startGame is called', async () => {
+  it('should not call startGame API and keep status IN_SETUP when startGame is called', async () => {
     const mockGame = {
       id: 'game-123',
       joinCode: 'ABC123',
