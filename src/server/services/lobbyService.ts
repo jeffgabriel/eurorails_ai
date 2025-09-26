@@ -12,6 +12,7 @@ export interface Game {
   joinCode: string;
   createdBy: string;
   status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
+  gameStatus: 'setup' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
@@ -95,10 +96,10 @@ export class LobbyService {
       
       // Create the game using the database function for join code generation
       const gameResult = await client.query(
-        `INSERT INTO games (join_code, max_players, is_public, lobby_status) 
-         VALUES (generate_unique_join_code(), $1, $2, $3) 
-         RETURNING id, join_code, max_players, is_public, lobby_status, created_at`,
-        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP']
+        `INSERT INTO games (join_code, max_players, is_public, lobby_status, status) 
+         VALUES (generate_unique_join_code(), $1, $2, $3, $4) 
+         RETURNING id, join_code, max_players, is_public, lobby_status, status, created_at`,
+        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP', 'setup']
       );
       
       const game = gameResult.rows[0];
@@ -121,15 +122,16 @@ export class LobbyService {
       
       await client.query('COMMIT');
       
-      return {
-        id: game.id,
-        joinCode: game.join_code,
-        createdBy: data.createdByUserId, // Use user ID, not player ID
-        status: game.lobby_status,
-        maxPlayers: game.max_players,
-        isPublic: game.is_public,
-        createdAt: game.created_at,
-      };
+    return {
+      id: game.id,
+      joinCode: game.join_code,
+      createdBy: data.createdByUserId, // Use user ID, not player ID
+      status: game.lobby_status,
+      gameStatus: game.status,
+      maxPlayers: game.max_players,
+      isPublic: game.is_public,
+      createdAt: game.created_at,
+    };
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -188,6 +190,7 @@ export class LobbyService {
           joinCode: game.join_code,
           createdBy: game.creator_user_id,
           status: game.lobby_status,
+          gameStatus: game.status,
           maxPlayers: game.max_players,
           isPublic: game.is_public,
           createdAt: game.created_at,
@@ -231,6 +234,7 @@ export class LobbyService {
         joinCode: game.join_code,
         createdBy: game.creator_user_id,
         status: game.lobby_status,
+        gameStatus: game.status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
         createdAt: game.created_at,
@@ -269,6 +273,7 @@ export class LobbyService {
       joinCode: game.join_code,
       createdBy: game.creator_user_id,
       status: game.lobby_status,
+      gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
       createdAt: game.created_at,
@@ -302,9 +307,6 @@ export class LobbyService {
     }));
   }
 
-  /**
-   * Start a game (change status from IN_SETUP to ACTIVE)
-   */
   static async startGame(gameId: string, creatorUserId: string): Promise<void> {
     // Input validation
     if (!gameId || gameId.trim().length === 0) {
@@ -356,7 +358,7 @@ export class LobbyService {
       // Update game status
       await client.query(
         'UPDATE games SET lobby_status = $1, status = $2 WHERE id = $3',
-        ['ACTIVE', 'initialBuild', gameId]
+        ['ACTIVE', 'active', gameId]
       );
       
       await client.query('COMMIT');

@@ -30,7 +30,8 @@ const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      // Return empty array when no game session exists (initial load)
+      return res.json([]);
     }
     
     const droppedLoads = await loadService.getDroppedLoads(gameId);

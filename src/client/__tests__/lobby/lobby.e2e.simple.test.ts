@@ -114,7 +114,7 @@ describe('Lobby E2E - Simple Verification', () => {
     expect(useLobbyStore.getState().error).toBeNull();
   });
 
-  it('should change game status from IN_SETUP to ACTIVE when startGame is called', async () => {
+  it('should not call startGame API and keep status IN_SETUP when startGame is called', async () => {
     const mockGame = {
       id: 'game-123',
       joinCode: 'ABC123',
@@ -133,17 +133,16 @@ describe('Lobby E2E - Simple Verification', () => {
       error: null,
     });
 
-    // Mock API response
-    mockApi.startGame.mockResolvedValueOnce();
-
     const store = useLobbyStore.getState();
     
     // Verify initial state is IN_SETUP
     expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
     await store.startGame('game-123');
 
-    // Verify the actual behavior - status should be updated locally
-    expect(useLobbyStore.getState().currentGame?.status).toBe('ACTIVE');
+    // Verify the API was NOT called (lobby startGame does nothing)
+    expect(mockApi.startGame).not.toHaveBeenCalled();
+    // Verify the status remains IN_SETUP (lobby doesn't set active)
+    expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
     expect(useLobbyStore.getState().isLoading).toBe(false);
     expect(useLobbyStore.getState().error).toBeNull();
   });

@@ -27,7 +27,6 @@ export function LobbyPage() {
     isLoading, 
     error, 
     clearError,
-    startGame,
     leaveGame,
     loadGameFromUrl,
     restoreGameState
@@ -50,6 +49,25 @@ export function LobbyPage() {
         // Load from URL
         try {
           await loadGameFromUrl(gameId);
+          
+          // Validate the loaded game
+          const game = get().currentGame;
+          if (!game) {
+            throw new Error('Game not found');
+          }
+          
+          // Validate game properties
+          if (!game.id || !game.joinCode || !game.status) {
+            throw new Error('Invalid game data');
+          }
+          
+          // Check if game is accessible (not abandoned or completed)
+          if (game.status === 'ABANDONED' || game.status === 'COMPLETE') {
+            toast.error('This game is no longer available');
+            navigate('/lobby');
+            return;
+          }
+          
         } catch (error) {
           console.warn('Failed to load game from URL:', error);
           // If URL load fails, try localStorage
@@ -67,8 +85,12 @@ export function LobbyPage() {
           // Get the updated currentGame from the store
           const updatedGame = get().currentGame;
           if (updatedGame) {
-            // Redirect to lobby with game ID
-            navigate(`/lobby/game/${updatedGame.id}`);
+            // Only redirect if we're not already on a game route
+            const currentPath = window.location.pathname;
+            if (!currentPath.startsWith('/game/')) {
+              // Redirect to lobby with game ID
+              navigate(`/lobby/game/${updatedGame.id}`);
+            }
           }
         }
       }
@@ -80,21 +102,21 @@ export function LobbyPage() {
   // Navigate to lobby with game ID when currentGame changes (from create/join operations)
   useEffect(() => {
     if (currentGame && !gameId) {
-      // We have a current game but no gameId in URL - navigate to lobby with game ID
-      navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+      // Only redirect if we're not already on a game route
+      const currentPath = window.location.pathname;
+      if (!currentPath.startsWith('/game/')) {
+        // We have a current game but no gameId in URL - navigate to lobby with game ID
+        navigate(`/lobby/game/${currentGame.id}`, { replace: true });
+      }
     }
   }, [currentGame, gameId, navigate]);
 
   const handleStartGame = async () => {
     if (!currentGame) return;
 
-    try {
-      await startGame(currentGame.id);
-      toast.success('Game started!');
-      navigate(`/game/${currentGame.id}`);
-    } catch {
-      // Error handling is done via the error state and useEffect
-    }
+    // Just navigate to the game setup - don't call the start game API
+    toast.success('Going to game setup!');
+    navigate(`/game/${currentGame.id}`);
   };
 
   const handleLeaveGame = () => {

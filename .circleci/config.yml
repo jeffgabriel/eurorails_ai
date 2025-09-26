@@ -27,7 +27,7 @@ jobs:
           name: Wait for postgresdb to be healthy
           command: |
             echo "Waiting for 'postgresdb' to be healthy..."
-            timeout=60
+            timeout=180
             while [ "$timeout" -gt 0 ]; do
               cid=$(docker compose ps -q postgresdb)
               status=$(docker inspect --format='{{.State.Health.Status}}' "$cid")
@@ -53,7 +53,9 @@ jobs:
       - run:
           name: Teardown
           when: always
-          command: docker compose down
+          command: |
+            docker compose down
+            
 
 workflows:
   version: 2

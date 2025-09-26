@@ -9,8 +9,7 @@ import { NotFound } from '../shared/NotFound';
 import { ErrorBoundary } from '../shared/ErrorBoundary';
 import { debug } from '../shared/config';
 
-// Lazy load the GamePage component to avoid bundling Phaser until needed
-const GamePage = React.lazy(() => import('../features/game/GamePage').then(module => ({ default: module.GamePage })));
+// GamePage component was removed - games are now handled by the main App.tsx
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -105,16 +104,17 @@ export function Router() {
           element={
             <ProtectedRoute>
               <ErrorBoundary>
-                <Suspense fallback={
-                  <div className="size-full flex items-center justify-center bg-background">
-                    <div className="flex flex-col items-center gap-4">
-                      <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                      <p className="text-muted-foreground">Loading game...</p>
-                    </div>
+                <div className="size-full flex items-center justify-center bg-background">
+                  <div className="flex flex-col items-center gap-4">
+                    <p className="text-muted-foreground">Game functionality moved to main app</p>
+                    <button 
+                      onClick={() => window.location.href = '/game/' + window.location.pathname.split('/').pop()}
+                      className="px-4 py-2 bg-accent text-accent-foreground rounded"
+                    >
+                      Go to Game
+                    </button>
                   </div>
-                }>
-                  <GamePage />
-                </Suspense>
+                </div>
               </ErrorBoundary>
             </ProtectedRoute>
           }
