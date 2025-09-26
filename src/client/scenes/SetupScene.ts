@@ -54,7 +54,22 @@ export class SetupScene extends Phaser.Scene {
             }
             
             const gameData = await gameResponse.json();
+            
+            // Validate API response structure
+            if (!gameData || typeof gameData !== 'object') {
+                throw new Error('Invalid game data response format');
+            }
+            
             const game = gameData.data; // The API returns { success: true, data: game }
+            
+            // Validate game data structure
+            if (!game || typeof game !== 'object') {
+                throw new Error('Invalid game data structure');
+            }
+            
+            if (!game.id || !game.joinCode || !game.status) {
+                throw new Error('Missing required game properties (id, joinCode, status)');
+            }
             
             console.log('Raw game data from API:', game);
             console.log('Game created at:', game.createdAt);
@@ -68,27 +83,49 @@ export class SetupScene extends Phaser.Scene {
             }
 
             const playersData = await playersResponse.json();
+            
+            // Validate players response structure
+            if (!playersData || typeof playersData !== 'object') {
+                throw new Error('Invalid players data response format');
+            }
+            
             const lobbyPlayers = playersData.data; // The API returns { success: true, data: players }
+            
+            // Validate players data structure
+            if (!Array.isArray(lobbyPlayers)) {
+                throw new Error('Players data must be an array');
+            }
 
             console.log('Game has', lobbyPlayers.length, 'players');
             console.log('lobbyPlayers:', lobbyPlayers);
             
             // Convert lobby players to game players format
-            const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => ({
-                id: lobbyPlayer.id,
-                name: lobbyPlayer.name,
-                color: lobbyPlayer.color,
-                money: INITIAL_PLAYER_MONEY, // Use the constant from GameTypes
-                trainType: 'freight',
-                turnNumber: 0,
-                trainState: {
+            const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => {
+                // Validate individual player data
+                if (!lobbyPlayer || typeof lobbyPlayer !== 'object') {
+                    throw new Error('Invalid player data structure');
+                }
+                
+                if (!lobbyPlayer.id || !lobbyPlayer.name || !lobbyPlayer.color) {
+                    throw new Error('Missing required player properties (id, name, color)');
+                }
+                
+                return {
+                    id: lobbyPlayer.id,
+                    name: lobbyPlayer.name,
+                    color: lobbyPlayer.color,
+                    money: INITIAL_PLAYER_MONEY, // Use the constant from GameTypes
+                    trainType: 'freight',
+                    turnNumber: 0,
+                    trainState: {
                     position: null,
                     remainingMovement: 0,
                     movementHistory: [],
                     loads: []
                 },
                 hand: [] // Will be populated by demand deck service
-            }));
+                };
+            });
             
             // Convert lobby game data to our game state format
             // Use gameStatus (actual game state) instead of status (lobby status)

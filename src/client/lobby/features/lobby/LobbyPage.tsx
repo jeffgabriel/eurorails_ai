@@ -49,6 +49,25 @@ export function LobbyPage() {
         // Load from URL
         try {
           await loadGameFromUrl(gameId);
+          
+          // Validate the loaded game
+          const game = get().currentGame;
+          if (!game) {
+            throw new Error('Game not found');
+          }
+          
+          // Validate game properties
+          if (!game.id || !game.joinCode || !game.status) {
+            throw new Error('Invalid game data');
+          }
+          
+          // Check if game is accessible (not abandoned or completed)
+          if (game.status === 'ABANDONED' || game.status === 'COMPLETE') {
+            toast.error('This game is no longer available');
+            navigate('/lobby');
+            return;
+          }
+          
         } catch (error) {
           console.warn('Failed to load game from URL:', error);
           // If URL load fails, try localStorage

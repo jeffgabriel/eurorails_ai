@@ -33,14 +33,17 @@ app.use(express.static(path.join(__dirname, '../../dist/client')));
 app.use('/assets', express.static(path.join(__dirname, '../../public/assets')));
 
 // Test route to verify assets are accessible
-app.get('/test-asset', (req, res) => {
+app.get('/test-asset', async (req, res) => {
   const assetPath = path.join(__dirname, '../../public/assets/demand.png');
   console.log('Test asset path:', assetPath);
-  console.log('Test asset exists:', fs.existsSync(assetPath));
   
-  if (fs.existsSync(assetPath)) {
+  try {
+    // Use async fs.access instead of synchronous existsSync
+    await fs.promises.access(assetPath);
+    console.log('Test asset exists: true');
     res.sendFile(assetPath);
-  } else {
+  } catch (error) {
+    console.log('Test asset exists: false');
     res.status(404).send('Asset not found');
   }
 });

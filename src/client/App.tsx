@@ -130,18 +130,20 @@ export default function App() {
             <Route
               path="/game/:id"
               element={
-                <ErrorBoundary>
-                  <Suspense fallback={
-                    <div className="size-full flex items-center justify-center bg-background">
-                      <div className="flex flex-col items-center gap-4">
-                        <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
-                        <p className="text-muted-foreground">Loading game...</p>
+                <ProtectedRoute>
+                  <ErrorBoundary>
+                    <Suspense fallback={
+                      <div className="size-full flex items-center justify-center bg-background">
+                        <div className="flex flex-col items-center gap-4">
+                          <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                          <p className="text-muted-foreground">Loading game...</p>
+                        </div>
                       </div>
-                    </div>
-                  }>
-                    <StandaloneGame />
-                  </Suspense>
-                </ErrorBoundary>
+                    }>
+                      <StandaloneGame />
+                    </Suspense>
+                  </ErrorBoundary>
+                </ProtectedRoute>
               }
             />
             <Route path="/" element={<Navigate to="/lobby" replace />} />
