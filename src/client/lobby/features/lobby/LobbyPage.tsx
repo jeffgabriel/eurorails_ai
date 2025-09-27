@@ -45,6 +45,12 @@ export function LobbyPage() {
   // State recovery on component mount
   useEffect(() => {
     const recoverState = async () => {
+      // Check if we have a current game and it's active
+      if (currentGame && currentGame.status === 'ACTIVE') {
+        navigate(`/game/${currentGame.id}`);
+        return;
+      }
+      
       if (gameId && !currentGame) {
         // Load from URL
         try {
@@ -68,8 +74,13 @@ export function LobbyPage() {
             return;
           }
           
+          // If game is active, redirect to the game
+          if (game.status === 'ACTIVE') {
+            navigate(`/game/${game.id}`);
+            return;
+          }
+          
         } catch (error) {
-          console.warn('Failed to load game from URL:', error);
           // If URL load fails, try localStorage
           const restored = await restoreGameState();
           if (!restored) {
