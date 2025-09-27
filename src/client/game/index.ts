@@ -27,7 +27,7 @@ const config: Phaser.Types.Core.GameConfig = {
   width: 1920,
   height: 1080,
   parent: 'game-container',
-  backgroundColor: '#0b0e14',
+  backgroundColor: '#ffffff',
   scale: {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
@@ -37,9 +37,6 @@ const config: Phaser.Types.Core.GameConfig = {
 
 // Initialize the game
 const game = new Phaser.Game(config);
-
-// Export the game instance for cleanup
-export { game };
 
 // Get game ID and pass it to the setup scene
 const gameId = getGameIdFromUrl();

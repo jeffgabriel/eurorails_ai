@@ -187,7 +187,7 @@ export class GameScene extends Phaser.Scene {
       // Always update the UI to show the current track cost during drawing mode
       if (this.trackManager.isInDrawingMode) {
         // The cost passed here is already the total cost including previous sessions
-        this.uiManager.setupPlayerHand(true, cost);
+        this.uiManager.setupPlayerHand(true, cost).catch(console.error);
       }
     });
 
@@ -227,7 +227,7 @@ export class GameScene extends Phaser.Scene {
 
     // Setup UI elements
     this.uiManager.setupUIOverlay();
-    this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+    await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
 
     // Show city selection for current player if needed - do this last to prevent cleanup
     const currentPlayer =
@@ -240,10 +240,10 @@ export class GameScene extends Phaser.Scene {
     this.game.loop.targetFps = 30;
 
     // Add event handler for scene resume
-    this.events.on("resume", () => {
+    this.events.on("resume", async () => {
       // Clear and recreate UI elements
       this.uiManager.setupUIOverlay();
-      this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
+      await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
 
       // Re-show city selection for current player if needed
       const currentPlayer =
@@ -285,7 +285,7 @@ export class GameScene extends Phaser.Scene {
     const totalCost = previousSessionsCost + currentSessionCost;
 
     // Always show the current cost until turn changes
-    this.uiManager.setupPlayerHand(isDrawingMode, totalCost);
+    await this.uiManager.setupPlayerHand(isDrawingMode, totalCost);
   }
 
   private async nextPlayerTurn(): Promise<void> {
@@ -402,6 +402,12 @@ export class GameScene extends Phaser.Scene {
   }
 
   private openSettings() {
+    // Add SettingsScene if it doesn't exist
+    if (!this.scene.manager.getScene("SettingsScene")) {
+      const { SettingsScene } = require("./SettingsScene");
+      this.scene.add("SettingsScene", SettingsScene);
+    }
+    
     // Pause this scene and start settings scene
     this.scene.pause();
     this.scene.launch("SettingsScene", { gameState: this.gameState });

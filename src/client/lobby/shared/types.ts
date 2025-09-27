@@ -29,6 +29,7 @@ export interface Game {
   joinCode: string;
   createdBy: ID;
   status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
+  gameStatus?: 'setup' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
