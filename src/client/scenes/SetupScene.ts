@@ -162,6 +162,13 @@ export class SetupScene extends Phaser.Scene {
                 return;
             }
             
+            // If game is completed or abandoned, show appropriate message
+            if (game.gameStatus === 'completed' || game.gameStatus === 'abandoned') {
+                console.log('Game is in', game.gameStatus, 'status, showing completion message');
+                this.showGameCompletionMessage(game.gameStatus);
+                return;
+            }
+            
         } catch (error) {
             console.error('Error loading specific game:', error);
             // Show error message to user
@@ -315,6 +322,70 @@ export class SetupScene extends Phaser.Scene {
         
         backButton.on('pointerdown', () => {
             window.location.href = '/lobby';
+        });
+    }
+
+    private showGameCompletionMessage(gameStatus: string) {
+        // Add a full-screen white background rectangle
+        this.add.rectangle(
+            this.scale.width / 2,
+            this.scale.height / 2,
+            this.scale.width,
+            this.scale.height,
+            0xffffff
+        ).setOrigin(0.5);
+
+        // Add title based on status
+        const title = gameStatus === 'completed' ? 'Game Completed' : 'Game Ended';
+        this.add.text(this.scale.width / 2, 50, title, {
+            color: '#000000',
+            fontSize: '32px'
+        }).setOrigin(0.5);
+
+        // Add message based on status
+        const message = gameStatus === 'completed' 
+            ? 'This game has been completed.\nAll players have finished playing.'
+            : 'This game has been ended.\nOne or more players have left the game.';
+        
+        this.add.text(this.scale.width / 2, this.scale.height / 2, message, {
+            color: '#666666',
+            fontSize: '18px',
+            align: 'center',
+            wordWrap: { width: this.scale.width - 40 }
+        }).setOrigin(0.5);
+
+        // Add back to lobby button
+        const backButton = this.add.rectangle(this.scale.width / 2, this.scale.height - 100, 200, 50, 0x4CAF50);
+        backButton.setStrokeStyle(2, 0x000000);
+        backButton.setInteractive();
+        this.add.text(this.scale.width / 2, this.scale.height - 100, 'Back to Lobby', {
+            color: '#000000',
+            fontSize: '18px'
+        }).setOrigin(0.5);
+        
+        backButton.on('pointerdown', () => {
+            window.location.href = '/lobby';
+        });
+
+        // Add new game button
+        const newGameButton = this.add.rectangle(this.scale.width / 2, this.scale.height - 170, 200, 50, 0x2196F3);
+        newGameButton.setStrokeStyle(2, 0x000000);
+        newGameButton.setInteractive();
+        this.add.text(this.scale.width / 2, this.scale.height - 170, 'New Game', {
+            color: '#ffffff',
+            fontSize: '18px'
+        }).setOrigin(0.5);
+        
+        newGameButton.on('pointerdown', () => {
+            // Start a new game by clearing the current game state
+            this.gameState = {
+                id: IdService.generateGameId(),
+                players: [],
+                currentPlayerIndex: 0,
+                status: 'setup',
+                maxPlayers: 6        
+            };
+            this.create();
         });
     }
 

@@ -45,8 +45,8 @@ export function LobbyPage() {
   // State recovery on component mount
   useEffect(() => {
     const recoverState = async () => {
-      // Check if we have a current game and it's active
-      if (currentGame && currentGame.status === 'ACTIVE') {
+      // Check if we have a current game and it's active (but not completed)
+      if (currentGame && currentGame.status === 'ACTIVE' && currentGame.gameStatus !== 'completed' && currentGame.gameStatus !== 'abandoned') {
         navigate(`/game/${currentGame.id}`);
         return;
       }
