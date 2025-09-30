@@ -397,7 +397,7 @@ describe('LobbyStore Error Handling', () => {
           name: 'Player 1',
           color: '#FF0000',
           money: 50,
-          trainType: 'Freight' as const,
+          trainType: 'freight' as const,
           turnNumber: 1,
           isOnline: true,
           createdAt: new Date().toISOString(),

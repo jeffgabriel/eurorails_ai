@@ -104,27 +104,27 @@ export const useAuthStore = create<AuthStore>((set) => ({
   loadPersistedAuth: async () => {
     const token = localStorage.getItem(JWT_STORAGE_KEY);
     const userJson = localStorage.getItem(USER_STORAGE_KEY);
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    
-    // In development mode, only set authenticated state for localhost
-    if (isDevelopment && typeof window !== 'undefined') {
-      const isLocalhost = window.location.hostname === 'localhost' || 
+    const devAuthEnabled = process.env.REACT_APP_DEV_AUTH === 'true';
+
+    // In dev auth mode, only set authenticated state for localhost
+    if (devAuthEnabled && typeof window !== 'undefined') {
+      const isLocalhost = window.location.hostname === 'localhost' ||
                          window.location.hostname === '127.0.0.1';
-      
+
       if (isLocalhost) {
-        const devUser = { 
-          id: '123e4567-e89b-12d3-a456-426614174000', 
-          username: 'dev-user', 
+        const devUser = {
+          id: '123e4567-e89b-12d3-a456-426614174000',
+          username: 'dev-user',
           email: 'dev@example.com',
           emailVerified: true,
           createdAt: new Date(),
           lastActive: new Date()
         };
-        
+
         // Store in localStorage for API client
         localStorage.setItem('eurorails.jwt', 'dev-token');
         localStorage.setItem('eurorails.user', JSON.stringify(devUser));
-        
+
         set({
           user: devUser,
           token: 'dev-token',

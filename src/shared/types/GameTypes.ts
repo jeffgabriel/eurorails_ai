@@ -9,12 +9,32 @@ export enum PlayerColor {
     BROWN = '#8B4513'   // Using saddle brown for better visibility
 }
 
+export enum TrainType {
+    Freight = 'freight',           // 2 loads, 9 mileposts
+    FastFreight = 'fast_freight',  // 2 loads, 12 mileposts
+    HeavyFreight = 'heavy_freight', // 3 loads, 9 mileposts
+    Superfreight = 'superfreight'   // 3 loads, 12 mileposts
+}
+
+export interface TrainProperties {
+    speed: number;
+    capacity: number;
+    spritePrefix: string;
+}
+
+export const TRAIN_PROPERTIES: Record<TrainType, TrainProperties> = {
+    [TrainType.Freight]: { speed: 9, capacity: 2, spritePrefix: 'train' },
+    [TrainType.FastFreight]: { speed: 12, capacity: 2, spritePrefix: 'train_12' },
+    [TrainType.HeavyFreight]: { speed: 9, capacity: 3, spritePrefix: 'train' },
+    [TrainType.Superfreight]: { speed: 12, capacity: 3, spritePrefix: 'train_12' }
+};
+
 export interface Player {
     id: string;  // Add unique identifier for database
     name: string;
     color: string;  // Hex color code
     money: number;
-    trainType: string;  // We'll expand this later with proper train types
+    trainType: TrainType;
     turnNumber: number;
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
@@ -66,7 +86,7 @@ export interface GameState {
         scrollX: number;
         scrollY: number;
     };
-    trainSprites?: Map<string, Phaser.GameObjects.Image>; // Map of player ID to train sprite}
+    trainSprites?: Map<string, any>; // Map of player ID to train sprite (client-side only)
 }
 
 export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money
@@ -128,8 +148,8 @@ export interface GridPoint extends Point {
     ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
     ocean?: string;
-    // Runtime properties
-    sprite?: Phaser.GameObjects.Graphics | Phaser.GameObjects.Image;
+    // Runtime properties (client-side only)
+    sprite?: any; // Phaser sprite object
     tracks?: Array<{ playerId: string }>;
 }
 

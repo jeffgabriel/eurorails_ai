@@ -1,5 +1,5 @@
 import { db } from "../db/index";
-import { Player, Game, GameStatus } from "../../shared/types/GameTypes";
+import { Player, Game, GameStatus, TrainType } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -85,7 +85,7 @@ export class PlayerService {
       player.name,
       normalizedColor,
       typeof player.money === "number" ? player.money : 50,
-      player.trainType || "Freight",
+      player.trainType || TrainType.Freight,
       player.trainState.position?.x || null,
       player.trainState.position?.y || null,
       player.trainState.position?.row || null,
@@ -157,7 +157,7 @@ export class PlayerService {
       }
 
       // Normalize the train type to match database format
-      const trainType = player.trainType || "Freight";
+      const trainType = player.trainType || TrainType.Freight;
 
       const query = `
                 UPDATE players 
@@ -347,8 +347,12 @@ export class PlayerService {
         // Log the processed hand data
         console.log(`Processed hand for player ${row.id}:`, handCards);
 
+        // Cast trainType from database string to TrainType enum
+        const trainType = row.trainType as TrainType;
+
         return {
           ...row,
+          trainType,
           trainState: {
             position:
               row.position_x !== null
@@ -414,7 +418,7 @@ export class PlayerService {
         name: "Player 1",
         color: "#ff0000",
         money: 50,
-        trainType: "Freight",
+        trainType: TrainType.Freight,
         turnNumber: 1,
         trainState: {
           position: { x: 0, y: 0, row: 0, col: 0 },

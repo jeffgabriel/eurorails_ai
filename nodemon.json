@@ -1,0 +1,18 @@
+{
+  "watch": ["src/server"],
+  "ext": "ts,js,json",
+  "ignore": [
+    "src/server/__tests__",
+    "node_modules",
+    "dist",
+    "*.test.ts",
+    "*.spec.ts"
+  ],
+  "exec": "npx ts-node src/server/index.ts",
+  "env": {
+    "NODE_ENV": "development",
+    "CLEAN_DB_ON_START": "false"
+  },
+  "delay": 1000,
+  "verbose": true
+}

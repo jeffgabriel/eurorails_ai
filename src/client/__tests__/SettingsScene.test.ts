@@ -1,6 +1,6 @@
 import 'jest-canvas-mock';
 import { SettingsScene } from '../scenes/SettingsScene';
-import { PlayerColor, GameStatus } from '../../shared/types/GameTypes';
+import { PlayerColor, GameStatus, TrainType } from '../../shared/types/GameTypes';
 import { MockScene } from './setupTests';
 
 // Mock fetch globally
@@ -111,7 +111,7 @@ describe('SettingsScene Unit Tests', () => {
             name: 'Test Player',
             color: PlayerColor.RED,
             money: 50,
-            trainType: 'Freight',
+            trainType: TrainType.Freight,
             turnNumber: 1,
             trainState: {
                 position: {x: 0, y: 0, row: 0, col: 0},
@@ -135,7 +135,7 @@ describe('SettingsScene Unit Tests', () => {
                 name: '',
                 color: '#0000FF',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -157,7 +157,7 @@ describe('SettingsScene Unit Tests', () => {
                 name: 'Test',
                 color: '#0000FF',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},

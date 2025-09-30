@@ -17,16 +17,16 @@ interface ProtectedRouteProps {
 
 function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  
-  // Only allow development bypass for localhost in development mode
-  const isLocalhost = typeof window !== 'undefined' && 
+  const devAuthEnabled = process.env.REACT_APP_DEV_AUTH === 'true';
+
+  // Only allow development bypass for localhost when explicitly enabled
+  const isLocalhost = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-  
-  if (!isAuthenticated && !(isDevelopment && isLocalhost)) {
+
+  if (!isAuthenticated && !(devAuthEnabled && isLocalhost)) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return <>{children}</>;
 }
 

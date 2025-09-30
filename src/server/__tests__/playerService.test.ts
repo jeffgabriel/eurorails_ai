@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { cleanDatabase } from '../db/index';
+import { TrainType } from '../../shared/types/GameTypes';
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -60,7 +61,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -83,7 +84,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -119,7 +120,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Player 1',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -136,7 +137,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Player 2',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -156,7 +157,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: 'invalid-color',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -177,7 +178,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -202,7 +203,7 @@ describe('PlayerService Integration Tests', () => {
                 name: 'Test Player',
                 color: '#FF0000',
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},

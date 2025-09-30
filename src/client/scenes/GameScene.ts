@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, TerrainType, Player } from "../../shared/types/GameTypes";
+import { GameState, Player, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -36,6 +36,7 @@ export class GameScene extends Phaser.Scene {
 
   constructor() {
     super({ key: "GameScene" });
+    console.log('🚀 GameScene: constructor() called');
     // Initialize with empty game state
     this.gameState = {
       id: "", // Will be set by SetupScene
@@ -48,6 +49,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: { gameState?: GameState }) {
+    console.log('🚀 GameScene: init() called with data:', data);
+    
     // If we get a gameState, always use it
     if (data.gameState) {
       this.gameState = {
@@ -114,6 +117,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   async create() {
+    console.log('🚀 GameScene: create() called');
+    console.log('🚀 GameScene: gameState in create:', this.gameState);
+    
     // Clear any existing containers
     this.children.removeAll(true);
     // Initialize services and load initial state
@@ -230,10 +236,22 @@ export class GameScene extends Phaser.Scene {
     await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
 
     // Show city selection for current player if needed - do this last to prevent cleanup
+    console.log('GameScene: Checking for city selection');
+    console.log('GameScene: gameState:', this.gameState);
+    console.log('GameScene: players:', this.gameState.players);
+    console.log('GameScene: currentPlayerIndex:', this.gameState.currentPlayerIndex);
+    
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
+    console.log('GameScene: currentPlayer:', currentPlayer);
+    console.log('GameScene: currentPlayer.trainState:', currentPlayer?.trainState);
+    console.log('GameScene: currentPlayer.trainState?.position:', currentPlayer?.trainState?.position);
+    
     if (!currentPlayer.trainState?.position) {
+      console.log('GameScene: No position found, showing city selection');
       this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
+    } else {
+      console.log('GameScene: Player has position, not showing city selection');
     }
 
     // Set a low frame rate for the scene
@@ -336,12 +354,13 @@ export class GameScene extends Phaser.Scene {
     // Handle ferry state transitions and teleportation at turn start
     await this.handleFerryTurnTransition(newCurrentPlayer);
 
-    // Reset movement points for the new player
-    const maxMovement =
-      newCurrentPlayer.trainType === "Fast Freight" ||
-      newCurrentPlayer.trainType === "Superfreight"
-        ? 12 // Fast trains
-        : 9; // Regular trains
+    // Reset movement points for the new player using TRAIN_PROPERTIES
+    const trainProps = TRAIN_PROPERTIES[newCurrentPlayer.trainType];
+    if (!trainProps) {
+      console.error(`Invalid train type: ${newCurrentPlayer.trainType}`);
+      return; // Prevent further execution with invalid data
+    }
+    const maxMovement = trainProps.speed;
 
     // Set movement based on ferry crossing
     if (newCurrentPlayer.trainState.justCrossedFerry) {

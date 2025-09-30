@@ -1,5 +1,6 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const webpack = require('webpack');
 
 module.exports = {
   entry: './src/client/index.tsx',
@@ -39,7 +40,9 @@ module.exports = {
           /src\/client_backup_/
         ],
         options: {
-          configFile: 'tsconfig.webpack.json'
+          configFile: 'tsconfig.webpack.json',
+          transpileOnly: true,
+          experimentalWatchApi: true
         }
       },
       {
@@ -59,6 +62,10 @@ module.exports = {
     new HtmlWebpackPlugin({
       template: './src/client/index.html',
     }),
+    new webpack.DefinePlugin({
+      'process.env.REACT_APP_MOCK_MODE': JSON.stringify(process.env.REACT_APP_MOCK_MODE || 'false'),
+      'process.env.REACT_APP_DEV_AUTH': JSON.stringify(process.env.REACT_APP_DEV_AUTH || 'false'),
+    }),
   ],
   devServer: {
     static: {
@@ -67,6 +74,8 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
+    liveReload: true,
+    watchFiles: ['src/**/*'],
     historyApiFallback: {
       index: '/',
       rewrites: [
@@ -93,5 +102,11 @@ module.exports = {
       }
     ]
   },
-  devtool: 'eval-source-map',
+  devtool: 'eval-cheap-module-source-map',
+  cache: {
+    type: 'filesystem',
+    buildDependencies: {
+      config: [__filename],
+    },
+  },
 }; 

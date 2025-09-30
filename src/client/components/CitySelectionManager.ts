@@ -41,27 +41,28 @@ export class CitySelectionManager {
       return;
     }
 
-    // Remove any existing dropdown DOM element
-    this.cleanupCityDropdowns();
+    try {
+      // Remove any existing dropdown DOM element
+      this.cleanupCityDropdowns();
 
-    // Find all major cities from the grid
-    const majorCities = [
-      ...new Map(
-        this.mapRenderer.gridPoints
-          .flat()
-          .filter((point) => point?.city?.type === TerrainType.MajorCity)
-          .map((point) => [
-            point.city!.name, // use name as key for uniqueness
-            {
-              name: point.city!.name,
-              x: point.x,
-              y: point.y,
-              row: point.row,
-              col: point.col,
-            },
-          ])
-      ).values(),
-    ];
+      // Find all major cities from the grid
+      const majorCities = [
+        ...new Map(
+          this.mapRenderer.gridPoints
+            .flat()
+            .filter((point) => point?.city?.type === TerrainType.MajorCity)
+            .map((point) => [
+              point.city!.name, // use name as key for uniqueness
+              {
+                name: point.city!.name,
+                x: point.x,
+                y: point.y,
+                row: point.row,
+                col: point.col,
+              },
+            ])
+        ).values(),
+      ];
 
     // Create dropdown (as a DOM element)
     const dropdown = document.createElement("select");
@@ -116,20 +117,35 @@ export class CitySelectionManager {
         selectedCity.row,
         selectedCity.col
       );
-      // Note: No longer removing dropdown here - it will be removed when track is built
     };
 
-    // Add the dropdown as a Phaser DOM element at the player info area (x=820, y=hand area)
+    // Position the dropdown in the player hand area (above player name)
     const handY = this.scene.scale.height - 280 + 20; // 20px from top of hand area
-    this.dropdownDomElement = this.scene.add.dom(820, handY, dropdown);
-    this.dropdownDomElement.setOrigin(0, 0);
-    this.dropdownDomElement.setDepth(1000); // Ensure it appears above other elements
+    dropdown.style.position = 'fixed';
+    dropdown.style.left = '820px'; // Right side of hand area
+    dropdown.style.top = `${handY}px`;
+    dropdown.style.zIndex = '10000';
+    dropdown.style.pointerEvents = 'auto';
+    
+    // Add to document body
+    document.body.appendChild(dropdown);
+    
+    // Store reference for cleanup
+    this.dropdownDomElement = dropdown as any; // Store direct reference for cleanup
+    
+    } catch (error) {
+      console.error('Error in city selection:', error);
+    }
   }
   
   public cleanupCityDropdowns(): void {
-    // Remove dropdown DOM element from scene if present
+    // Remove dropdown using stored reference
     if (this.dropdownDomElement) {
-      this.dropdownDomElement.destroy();
+      if (this.dropdownDomElement instanceof HTMLElement) {
+        this.dropdownDomElement.remove();
+      } else {
+        this.dropdownDomElement.destroy();
+      }
       this.dropdownDomElement = null;
     }
   }

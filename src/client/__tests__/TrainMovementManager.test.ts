@@ -1,5 +1,5 @@
 import { TrainMovementManager } from '../components/TrainMovementManager';
-import { TerrainType, TrackSegment, GridPoint, GameState, Player, FerryConnection, FerryPoint, Point, PlayerTrackState } from '../../shared/types/GameTypes';
+import { TerrainType, TrackSegment, GridPoint, GameState, Player, FerryConnection, FerryPoint, Point, PlayerTrackState, TrainType } from '../../shared/types/GameTypes';
 
 describe('TrainMovementManager calculateDistance', () => {
   let manager: TrainMovementManager;
@@ -167,7 +167,7 @@ describe('TrainMovementManager calculateDistance', () => {
         name: 'Test Player',
         color: '#FF0000',
         money: 100,
-        trainType: 'Freight',
+        trainType: TrainType.Freight,
         turnNumber: 1,
         trainState: {
           position: null,
@@ -265,7 +265,7 @@ describe('TrainMovementManager calculateDistance', () => {
         name: 'Test Player',
         color: '#FF0000',
         money: 100,
-        trainType: 'Freight',
+        trainType: TrainType.Freight,
         turnNumber: 1,
         trainState: {
           position: null,
@@ -314,7 +314,7 @@ describe('TrainMovementManager calculateDistance', () => {
         name: 'Test Player',
         color: '#FF0000',
         money: 100,
-        trainType: 'Freight',
+        trainType: TrainType.Freight,
         turnNumber: 1,
         trainState: {
           position: { row: 30, col: 34, x: 1630, y: 1300 },
@@ -453,7 +453,7 @@ describe('TrainMovementManager Ferry Movement', () => {
       id: 'p1',
       name: 'Test',
       color: '#000000',
-      trainType: 'Freight',
+      trainType: TrainType.Freight,
       money: 100,
       trainState: {
         position: { ...ferryPort },

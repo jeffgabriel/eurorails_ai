@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { GameState } from '../../shared/types/GameTypes';
+import { PlayerService } from './playerService';
 
 export class GameService {
     static async updateCameraState(gameId: string, cameraState: GameState['cameraState']): Promise<void> {
@@ -20,9 +21,13 @@ export class GameService {
         }
 
         const row = result.rows[0];
+
+        // Fetch players from the players table
+        const players = await PlayerService.getPlayers(gameId);
+
         return {
             id: row.id,
-            players: row.players,
+            players: players,
             currentPlayerIndex: row.current_player_index,
             status: row.status,
             maxPlayers: row.max_players,
