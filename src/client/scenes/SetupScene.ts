@@ -377,7 +377,7 @@ export class SetupScene extends Phaser.Scene {
         }).setOrigin(0.5);
         
         newGameButton.on('pointerdown', () => {
-            // Start a new game by clearing the current game state
+            // Start a new game by clearing the current game state and resetting lobby status
             this.gameState = {
                 id: IdService.generateGameId(),
                 players: [],
@@ -385,6 +385,8 @@ export class SetupScene extends Phaser.Scene {
                 status: 'setup',
                 maxPlayers: 6        
             };
+            // Reset lobby game status to allow proper setup flow
+            this.isLobbyGame = false;
             this.create();
         });
     }

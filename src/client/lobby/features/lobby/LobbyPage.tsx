@@ -74,8 +74,8 @@ export function LobbyPage() {
             return;
           }
           
-          // If game is active, redirect to the game
-          if (game.status === 'ACTIVE') {
+          // If game is active and not completed/abandoned, redirect to the game
+          if (game.status === 'ACTIVE' && game.gameStatus !== 'completed' && game.gameStatus !== 'abandoned') {
             navigate(`/game/${game.id}`);
             return;
           }
