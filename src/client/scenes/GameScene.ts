@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, TerrainType, Player, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
+import { GameState, Player, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -355,7 +355,12 @@ export class GameScene extends Phaser.Scene {
     await this.handleFerryTurnTransition(newCurrentPlayer);
 
     // Reset movement points for the new player using TRAIN_PROPERTIES
-    const maxMovement = TRAIN_PROPERTIES[newCurrentPlayer.trainType].speed;
+    const trainProps = TRAIN_PROPERTIES[newCurrentPlayer.trainType];
+    if (!trainProps) {
+      console.error(`Invalid train type: ${newCurrentPlayer.trainType}`);
+      return; // Prevent further execution with invalid data
+    }
+    const maxMovement = trainProps.speed;
 
     // Set movement based on ferry crossing
     if (newCurrentPlayer.trainState.justCrossedFerry) {

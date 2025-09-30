@@ -131,7 +131,7 @@ export class CitySelectionManager {
     document.body.appendChild(dropdown);
     
     // Store reference for cleanup
-    this.dropdownDomElement = null; // We're not using Phaser DOM element anymore
+    this.dropdownDomElement = dropdown as any; // Store direct reference for cleanup
     
     } catch (error) {
       console.error('Error in city selection:', error);
@@ -139,15 +139,13 @@ export class CitySelectionManager {
   }
   
   public cleanupCityDropdowns(): void {
-    // Remove dropdown from document body
-    const existingDropdown = document.querySelector('.city-selection-dropdown');
-    if (existingDropdown) {
-      existingDropdown.remove();
-    }
-    
-    // Also clean up Phaser DOM element if it exists
+    // Remove dropdown using stored reference
     if (this.dropdownDomElement) {
-      this.dropdownDomElement.destroy();
+      if (this.dropdownDomElement instanceof HTMLElement) {
+        this.dropdownDomElement.remove();
+      } else {
+        this.dropdownDomElement.destroy();
+      }
       this.dropdownDomElement = null;
     }
   }

@@ -487,7 +487,8 @@ export class TrainInteractionManager {
 
     const trainColor = colorMap[player.color.toUpperCase()] || "black";
     const trainProps = TRAIN_PROPERTIES[player.trainType];
-    const trainTexture = `${trainProps.spritePrefix}_${trainColor}`;
+    const spritePrefix = trainProps ? trainProps.spritePrefix : 'train';
+    const trainTexture = `${spritePrefix}_${trainColor}`;
 
     const trainSprite = this.scene.add.image(x, y, trainTexture);
     trainSprite.setScale(0.1); // Adjust scale as needed
