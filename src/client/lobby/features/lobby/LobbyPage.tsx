@@ -171,9 +171,9 @@ export function LobbyPage() {
             <p className="text-sm text-muted-foreground">
               Welcome, {user?.username}
             </p>
-            {process.env.NODE_ENV === 'development' && (
+            {process.env.REACT_APP_MOCK_MODE === 'true' && (
               <p className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded mt-1 inline-block">
-                🧪 Development Mode - Using Mock Data
+                🧪 Mock Mode - Using Mock Data
               </p>
             )}
           </div>
@@ -260,12 +260,12 @@ export function LobbyPage() {
               </CardContent>
             </Card>
 
-            {/* Development Mode - Available Test Games */}
-            {process.env.NODE_ENV === 'development' && (
+            {/* Mock Mode - Available Test Games */}
+            {process.env.REACT_APP_MOCK_MODE === 'true' && (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    🧪 Development Mode
+                    🧪 Mock Mode
                   </CardTitle>
                   <CardDescription>
                     Available test games for development and testing

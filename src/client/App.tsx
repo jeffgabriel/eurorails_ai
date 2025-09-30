@@ -19,16 +19,16 @@ interface ProtectedRouteProps {
 
 function ProtectedRoute({ children }: ProtectedRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  
-  // Only allow development bypass for localhost in development mode
-  const isLocalhost = typeof window !== 'undefined' && 
+  const devAuthEnabled = process.env.REACT_APP_DEV_AUTH === 'true';
+
+  // Only allow development bypass for localhost when explicitly enabled
+  const isLocalhost = typeof window !== 'undefined' &&
     (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-  
-  if (!isAuthenticated && !(isDevelopment && isLocalhost)) {
+
+  if (!isAuthenticated && !(devAuthEnabled && isLocalhost)) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return <>{children}</>;
 }
 
@@ -47,29 +47,21 @@ function PublicRoute({ children }: PublicRouteProps) {
 }
 
 export default function App() {
-  const { loadPersistedAuth, setDevAuth, isLoading } = useAuthStore();
-  const isDevelopment = process.env.NODE_ENV === 'development';
+  const { loadPersistedAuth, isLoading } = useAuthStore();
 
   React.useEffect(() => {
-    // In development mode, set dev authentication
-    if (isDevelopment) {
-      debug.log('Development mode detected, setting dev authentication...');
-      setDevAuth();
-      return;
-    }
-    
-    // Load persisted authentication on app start
+    // Load persisted authentication on app start (works for both dev and prod)
     debug.log('App starting, loading persisted auth...');
-    
+
     try {
       loadPersistedAuth();
     } catch (error) {
       debug.error('Error loading persisted auth:', error);
     }
-    
+
     // Log current location for debugging route issues
     debug.log('Current location:', window.location.href);
-  }, [loadPersistedAuth, setDevAuth, isDevelopment]);
+  }, [loadPersistedAuth]);
 
   if (isLoading) {
     return (

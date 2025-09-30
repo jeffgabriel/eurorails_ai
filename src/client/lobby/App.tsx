@@ -7,40 +7,32 @@ import { ErrorBoundary } from './shared/ErrorBoundary';
 import { debug } from './shared/config';
 
 export default function App() {
-  const { loadPersistedAuth, setDevAuth, isLoading: authLoading } = useAuthStore();
+  const { loadPersistedAuth, isLoading: authLoading } = useAuthStore();
   const { restoreGameState, isLoading: lobbyLoading } = useLobbyStore();
-  const isDevelopment = process.env.NODE_ENV === 'development';
 
   useEffect(() => {
-    // In development mode, set dev authentication
-    if (isDevelopment) {
-      debug.log('Development mode detected, setting dev authentication...');
-      setDevAuth();
-      return;
-    }
-    
     // Load persisted authentication on app start
     debug.log('App starting, loading persisted auth...');
-    
+
     try {
       loadPersistedAuth();
     } catch (error) {
       debug.error('Error loading persisted auth:', error);
     }
-    
+
     // Log current location for debugging route issues
     debug.log('Current location:', window.location.href);
-  }, [loadPersistedAuth, setDevAuth, isDevelopment]);
+  }, [loadPersistedAuth]);
 
   // Restore game state on app load (after auth is loaded)
   useEffect(() => {
-    if (!authLoading && !isDevelopment) {
+    if (!authLoading) {
       // Try to restore game state from localStorage
       restoreGameState().catch(error => {
         console.warn('Failed to restore game state on app load:', error);
       });
     }
-  }, [authLoading, isDevelopment, restoreGameState]);
+  }, [authLoading, restoreGameState]);
 
   const isLoading = authLoading || lobbyLoading;
 
