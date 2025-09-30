@@ -1,5 +1,5 @@
 import 'phaser';
-import { GameState, Player, PlayerColor } from '../../shared/types/GameTypes';
+import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 
 export class SettingsScene extends Phaser.Scene {
@@ -212,7 +212,7 @@ export class SettingsScene extends Phaser.Scene {
             name: '',
             color: PlayerColor.YELLOW, // Default color
             money: 50,
-            trainType: 'Freight',
+            trainType: TrainType.Freight,
             turnNumber: 1,
             trainState: {
                 position: {x: 0, y: 0, row: 0, col: 0},
@@ -519,7 +519,7 @@ export class SettingsScene extends Phaser.Scene {
                 name: newName,
                 color: this.selectedColor || PlayerColor.YELLOW,
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 trainState: {
                     position: null,
                     remainingMovement: 9,

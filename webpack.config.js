@@ -39,7 +39,9 @@ module.exports = {
           /src\/client_backup_/
         ],
         options: {
-          configFile: 'tsconfig.webpack.json'
+          configFile: 'tsconfig.webpack.json',
+          transpileOnly: true,
+          experimentalWatchApi: true
         }
       },
       {
@@ -67,6 +69,8 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
+    liveReload: true,
+    watchFiles: ['src/**/*'],
     historyApiFallback: {
       index: '/',
       rewrites: [
@@ -93,5 +97,11 @@ module.exports = {
       }
     ]
   },
-  devtool: 'eval-source-map',
+  devtool: 'eval-cheap-module-source-map',
+  cache: {
+    type: 'filesystem',
+    buildDependencies: {
+      config: [__filename],
+    },
+  },
 }; 

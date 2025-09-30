@@ -1,5 +1,5 @@
 import 'phaser';
-import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY } from '../../shared/types/GameTypes';
+import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
 import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
 import { DemandCard } from '../../shared/types/DemandCard';
@@ -115,7 +115,7 @@ export class SetupScene extends Phaser.Scene {
                     name: lobbyPlayer.name,
                     color: lobbyPlayer.color,
                     money: INITIAL_PLAYER_MONEY, // Use the constant from GameTypes
-                    trainType: 'freight',
+                    trainType: TrainType.Freight,
                     turnNumber: 0,
                     trainState: {
                     position: null,
@@ -158,7 +158,16 @@ export class SetupScene extends Phaser.Scene {
             // If game is in initialBuild or active status, transition to game scene
             if (game.gameStatus === 'initialBuild' || game.gameStatus === 'active') {
                 console.log('Game is in', game.gameStatus, 'status, transitioning to game scene');
-                this.scene.start('GameScene', { gameState: this.gameState });
+                console.log('Starting GameScene with gameState:', this.gameState);
+                console.log('Players in gameState:', this.gameState.players);
+                this.gameState.players.forEach((player, index) => {
+                    console.log(`Player ${index}:`, player);
+                });
+                try {
+                    this.scene.start('GameScene', { gameState: this.gameState });
+                } catch (error) {
+                    console.error('Error starting GameScene:', error);
+                }
                 return;
             }
             
@@ -709,7 +718,7 @@ export class SetupScene extends Phaser.Scene {
                         name,
                         color: this.selectedColor,
                         money: INITIAL_PLAYER_MONEY,
-                        trainType: 'Freight',  // Default train type
+                        trainType: TrainType.Freight,  // Default train type
                         turnNumber: 1,
                         trainState: {
                             position: {x: 0, y: 0, row: 0, col: 0},
@@ -730,7 +739,7 @@ export class SetupScene extends Phaser.Scene {
             const newPlayer = await response.json();
             this.gameState.players.push(newPlayer);
             // Update the train movement which isn't stored in the database.
-            newPlayer.trainType == 'Fast Freight' || newPlayer.trainType == 'Superfreight' ? newPlayer.trainState.remainingMovement = 12 : newPlayer.trainState.remainingMovement = 9;
+            newPlayer.trainType == TrainType.FastFreight || newPlayer.trainType == TrainType.Superfreight ? newPlayer.trainState.remainingMovement = 12 : newPlayer.trainState.remainingMovement = 9;
             this.updatePlayerList();
 
             // Reset input

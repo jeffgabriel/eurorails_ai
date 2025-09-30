@@ -1,5 +1,5 @@
 import { TrainCard } from '../components/TrainCard';
-import { Player } from '../../shared/types/GameTypes';
+import { Player, TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 
 describe("TrainCard", () => {
@@ -43,7 +43,7 @@ describe("TrainCard", () => {
       name: "Test Player",
       color: "#FF0000",
       money: 50,
-      trainType: "Freight",
+      trainType: TrainType.Freight,
       turnNumber: 1,
       trainState: {
         position: null,
@@ -69,15 +69,15 @@ describe("TrainCard", () => {
     jest.clearAllMocks();
 
     // Test Heavy Freight train (3 slots)
-    mockPlayer.trainType = "Heavy Freight";
+    mockPlayer.trainType = TrainType.HeavyFreight;
     trainCard = new TrainCard(mockScene, 0, 0, mockPlayer);
     expect(mockScene.add.rectangle).toHaveBeenCalledTimes(3);
   });
 
   it("should update train card image when train type changes", () => {
-    mockPlayer.trainType = "Fast Freight";
+    mockPlayer.trainType = TrainType.FastFreight;
     trainCard.updateTrainType();
-    expect(mockScene.add.image().setTexture).toHaveBeenCalledWith("train_card_fastfreight");
+    expect(mockScene.add.image().setTexture).toHaveBeenCalledWith("train_card_fast_freight");
   });
 
   it("should update load slots based on current loads", () => {

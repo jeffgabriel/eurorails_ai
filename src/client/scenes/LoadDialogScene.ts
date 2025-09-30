@@ -1,6 +1,6 @@
 // src/client/scenes/LoadDialogScene.ts
 import { Scene } from 'phaser';
-import { CityData, Player, GameState } from '../../shared/types/GameTypes';
+import { CityData, Player, GameState, TRAIN_PROPERTIES } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
 import { LoadType } from '../../shared/types/LoadTypes';
@@ -289,9 +289,8 @@ export class LoadDialogScene extends Scene {
                 this.player.trainState.loads = [];
             }
             
-            // Calculate train capacity
-            const maxCapacity = this.player.trainType === "Heavy Freight" || 
-                              this.player.trainType === "Superfreight" ? 3 : 2;
+            // Calculate train capacity using TRAIN_PROPERTIES
+            const maxCapacity = TRAIN_PROPERTIES[this.player.trainType].capacity;
                               
             // Check if train has space
             if (this.player.trainState.loads.length >= maxCapacity) {

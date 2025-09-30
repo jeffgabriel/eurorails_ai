@@ -7,6 +7,7 @@ import {
   TrackSegment,
   CityData,
   Point,
+  TRAIN_PROPERTIES,
 } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
@@ -485,10 +486,8 @@ export class TrainInteractionManager {
     };
 
     const trainColor = colorMap[player.color.toUpperCase()] || "black";
-    const trainTexture =
-      player.trainType === "Freight"
-        ? `train_${trainColor}`
-        : `train_12_${trainColor}`;
+    const trainProps = TRAIN_PROPERTIES[player.trainType];
+    const trainTexture = `${trainProps.spritePrefix}_${trainColor}`;
 
     const trainSprite = this.scene.add.image(x, y, trainTexture);
     trainSprite.setScale(0.1); // Adjust scale as needed

@@ -1,7 +1,7 @@
 import 'jest-canvas-mock';
 import { Scene } from 'phaser';
 import { SetupScene } from '../scenes/SetupScene';
-import { GameState, GameStatus, PlayerColor, INITIAL_PLAYER_MONEY } from '../../shared/types/GameTypes';
+import { GameState, GameStatus, PlayerColor, INITIAL_PLAYER_MONEY, TrainType } from '../../shared/types/GameTypes';
 import { mocks } from './setupTests';
 import { GameObjects } from 'phaser';
 import { IdService } from '../../shared/services/IdService';
@@ -145,7 +145,7 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Test Player',
                 color: PlayerColor.BLUE,
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -167,7 +167,7 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Player 1',
                 color: PlayerColor.RED,
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -192,7 +192,7 @@ describe('SetupScene Unit Tests', () => {
                 name: 'Player 1',
                 color: PlayerColor.RED,
                 money: 50,
-                trainType: 'Freight',
+                trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
                     position: {x: 0, y: 0, row: 0, col: 0},
@@ -214,7 +214,7 @@ describe('SetupScene Unit Tests', () => {
                     name: 'Player 1',
                     color: PlayerColor.RED,
                     money: 50,
-                    trainType: 'Freight',
+                    trainType: TrainType.Freight,
                     turnNumber: 1,
                     trainState: {
                         position: {x: 0, y: 0, row: 0, col: 0},
@@ -229,7 +229,7 @@ describe('SetupScene Unit Tests', () => {
                     name: 'Player 2',
                     color: PlayerColor.BLUE,
                     money: 50,
-                    trainType: 'Freight',
+                    trainType: TrainType.Freight,
                     turnNumber: 1,
                     trainState: {
                         position: {x: 0, y: 0, row: 0, col: 0},

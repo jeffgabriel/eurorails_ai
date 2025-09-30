@@ -1,5 +1,5 @@
 import "phaser";
-import { Player } from "../../shared/types/GameTypes";
+import { Player, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
 import { LoadType } from "../../shared/types/LoadTypes";
 
 export class TrainCard {
@@ -24,7 +24,7 @@ export class TrainCard {
     this.trainCard.setScale(0.165); // Scale down to 18% of original size
     
     // Create load slots based on train capacity
-    const capacity = player.trainType === "Heavy Freight" || player.trainType === "Superfreight" ? 3 : 2;
+    const capacity = TRAIN_PROPERTIES[player.trainType].capacity;
     this.createLoadSlots(capacity);
     
     // Add all elements to container
@@ -107,7 +107,7 @@ export class TrainCard {
     this.trainCard.setTexture(`train_card_${trainType}`);
     
     // Update load slots
-    const capacity = this.player.trainType === "Heavy Freight" || this.player.trainType === "Superfreight" ? 3 : 2;
+    const capacity = TRAIN_PROPERTIES[this.player.trainType].capacity;
     const currentCapacity = this.loadSlots.length;
     
     if (currentCapacity !== capacity) {
