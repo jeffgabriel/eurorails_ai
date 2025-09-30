@@ -20,6 +20,13 @@ jobs:
             docker compose version
 
       - run:
+          name: Pull and build images
+          command: |
+            docker compose pull postgresdb
+            docker compose build app
+          no_output_timeout: 10m
+
+      - run:
           name: Start services
           command: docker compose up -d
 
