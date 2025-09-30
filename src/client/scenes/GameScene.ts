@@ -401,10 +401,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private openSettings() {
+  private async openSettings() {
     // Add SettingsScene if it doesn't exist
     if (!this.scene.manager.getScene("SettingsScene")) {
-      const { SettingsScene } = require("./SettingsScene");
+      const module = await import("./SettingsScene");
+      const SettingsScene = module.SettingsScene;
       this.scene.add("SettingsScene", SettingsScene);
     }
     

@@ -76,7 +76,11 @@ export class UIManager {
       await nextPlayerCallback();
       this.setupUIOverlay();
       this.trainInteractionManager.updateTrainZOrders();
-      await this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
+      try {
+        await this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
+      } catch (error) {
+        console.error('Error setting up player hand:', error);
+      }
 
       const newPlayer =
         this.gameState.players[this.gameState.currentPlayerIndex];
