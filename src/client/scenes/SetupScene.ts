@@ -31,17 +31,13 @@ export class SetupScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState; gameId?: string }) {
-        console.log('SetupScene init called with data:', data);
         // If we have a specific gameId, try to load that game
         if (data.gameId) {
-            console.log('Loading specific game with ID:', data.gameId);
             this.isLobbyGame = true;
             this.loadSpecificGame(data.gameId);
         } else {
-            console.log('No gameId provided, fetching active game');
-            this.isLobbyGame = false;
-            // Always try to fetch the active game from the backend
-            this.fetchAndSetActiveGame();
+            console.log('No gameId provided, redirecting to lobby');
+            window.location.href = '/lobby';
         }
     }
 
@@ -70,11 +66,6 @@ export class SetupScene extends Phaser.Scene {
             if (!game.id || !game.joinCode || !game.status) {
                 throw new Error('Missing required game properties (id, joinCode, status)');
             }
-            
-            console.log('Raw game data from API:', game);
-            console.log('Game created at:', game.createdAt);
-            console.log('Game lobby status:', game.status);
-            console.log('Game status:', game.gameStatus);
 
             // Then, fetch the players for this game
             const playersResponse = await fetch(`/api/lobby/games/${gameId}/players`);
@@ -131,8 +122,6 @@ export class SetupScene extends Phaser.Scene {
             // Use gameStatus (actual game state) instead of status (lobby status)
             // Treat null gameStatus as 'setup'
             const effectiveGameStatus = game.gameStatus || 'setup';
-            console.log('Effective game status:', effectiveGameStatus);
-
             this.gameState = {
                 id: game.id,
                 players: gamePlayers,
@@ -144,25 +133,24 @@ export class SetupScene extends Phaser.Scene {
 
             // If game is in setup status (or null, which we treat as setup), show the setup screen
             if (effectiveGameStatus === 'setup') {
-                console.log('Game is in setup status, checking player count:', this.gameState.players.length);
-                if (this.gameState.players.length > 0) {
-                    console.log('Showing setup screen with', this.gameState.players.length, 'players');
-                    this.setupExistingPlayers();
-                } else {
-                    console.log('Game in setup but no players yet');
-                    this.setupExistingPlayers(); // This will show the waiting message
-                }
+                this.setupExistingPlayers();
                 return;
             }
             
             // If game is in initialBuild or active status, transition to game scene
             if (game.gameStatus === 'initialBuild' || game.gameStatus === 'active') {
-                console.log('Game is in', game.gameStatus, 'status, transitioning to game scene');
-                console.log('Starting GameScene with gameState:', this.gameState);
-                console.log('Players in gameState:', this.gameState.players);
-                this.gameState.players.forEach((player, index) => {
-                    console.log(`Player ${index}:`, player);
-                });
+                try {
+                    const response = await fetch(`/api/game/${game.id}`);
+                    if (!response.ok) {
+                        throw new Error('Failed to fetch active game state');
+                    }
+                    const activeGameState = await response.json();
+                    console.log('Active game state:', activeGameState);
+                    this.gameState = activeGameState;
+                } catch (error) {
+                    console.error('Error fetching active game state:', error);
+                    throw error; // Re-throw to handle it in the outer try-catch
+                }
                 try {
                     this.scene.start('GameScene', { gameState: this.gameState });
                 } catch (error) {
@@ -189,8 +177,6 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private setupExistingPlayers() {
-        console.log('DEBUG: setupExistingPlayers called with', this.gameState.players.length, 'players');
-        console.log('DEBUG: this.gameState:', this.gameState);
         
         // Add a full-screen white background rectangle to ensure complete coverage
         this.add.rectangle(
@@ -485,29 +471,6 @@ export class SetupScene extends Phaser.Scene {
         }
     }
 
-    private async fetchAndSetActiveGame() {
-        try {
-            const response = await fetch('/api/players/game/active');
-            if (response.ok) {
-                const activeGame = await response.json();
-                this.gameState = activeGame;
-                // Start game scene with active game
-                this.scene.start('GameScene', { gameState: activeGame });
-                return;
-            }
-        } catch (error) {
-            console.error('Error checking for active game:', error);
-        }
-        // No active game found, create a new one
-        const gameId = IdService.generateGameId();
-        this.gameState = {
-            id: gameId,
-            players: [],
-            currentPlayerIndex: 0,
-            status: 'setup',
-            maxPlayers: 6
-        };
-    }
 
     preload() {
         // Set background color
