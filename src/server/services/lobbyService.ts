@@ -5,6 +5,12 @@ export interface CreateGameData {
   isPublic?: boolean;
   maxPlayers?: number;
   createdByUserId: string;
+  creatorColor?: string;
+}
+
+export interface JoinGameData {
+  userId: string;
+  selectedColor?: string;
 }
 
 export interface Game {
@@ -104,12 +110,24 @@ export class LobbyService {
       
       const game = gameResult.rows[0];
       
+      // Get the username for the game creator
+      const userResult = await client.query(
+        'SELECT username FROM users WHERE id = $1',
+        [data.createdByUserId]
+      );
+      
+      if (userResult.rows.length === 0) {
+        throw new LobbyError('User not found', 'USER_NOT_FOUND', 404);
+      }
+      
+      const username = userResult.rows[0].username;
+      
       // Create the first player (game creator)
       const playerResult = await client.query(
         `INSERT INTO players (game_id, user_id, name, color) 
          VALUES ($1, $2, $3, $4) 
          RETURNING id`,
-        [game.id, data.createdByUserId, 'Player 1', '#ff0000']
+        [game.id, data.createdByUserId, username, data.creatorColor || '#ff0000']
       );
       
       const player = playerResult.rows[0];
@@ -143,13 +161,13 @@ export class LobbyService {
   /**
    * Join an existing game
    */
-  static async joinGame(joinCode: string, userId: string): Promise<Game> {
+  static async joinGame(joinCode: string, joinData: JoinGameData): Promise<Game> {
     // Input validation
     if (!joinCode || joinCode.trim().length === 0) {
       throw new InvalidJoinCodeError('Join code is required');
     }
     
-    if (!userId) {
+    if (!joinData.userId) {
       throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
     }
 
@@ -179,7 +197,7 @@ export class LobbyService {
       // Check if player is already in the game
       const existingPlayer = await client.query(
         'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
-        [game.id, userId]
+        [game.id, joinData.userId]  
       );
       
       if (existingPlayer.rows.length > 0) {
@@ -208,23 +226,51 @@ export class LobbyService {
         throw new GameFullError();
       }
       
-      // Add player to the game
-      const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
-      const usedColors = await client.query(
-        'SELECT color FROM players WHERE game_id = $1',
-        [game.id]
+      // Get the username for the joining player
+      const userResult = await client.query(
+        'SELECT username FROM users WHERE id = $1',
+        [joinData.userId]
       );
       
-      const availableColors = colors.filter(color => 
-        !usedColors.rows.some(row => row.color === color)
-      );
+      if (userResult.rows.length === 0) {
+        throw new LobbyError('User not found', 'USER_NOT_FOUND', 404);
+      }
       
-      const playerColor = availableColors[0] || colors[playerCount];
+      const username = userResult.rows[0].username;
+      
+      // Handle color selection
+      let playerColor;
+      if (joinData.selectedColor) {
+        // Check if the selected color is available
+        const colorCheck = await client.query(
+          'SELECT id FROM players WHERE game_id = $1 AND color = $2',
+          [game.id, joinData.selectedColor]
+        );
+        
+        if (colorCheck.rows.length > 0) {
+          throw new LobbyError('Color already taken', 'COLOR_TAKEN', 400);
+        }
+        
+        playerColor = joinData.selectedColor;
+      } else {
+        // Auto-assign color if none selected
+        const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+        const usedColors = await client.query(
+          'SELECT color FROM players WHERE game_id = $1',
+          [game.id]
+        );
+        
+        const availableColors = colors.filter(color => 
+          !usedColors.rows.some(row => row.color === color)
+        );
+        
+        playerColor = availableColors[0] || colors[playerCount];
+      }
       
       await client.query(
         `INSERT INTO players (game_id, user_id, name, color) 
          VALUES ($1, $2, $3, $4)`,
-        [game.id, userId, `Player ${playerCount + 1}`, playerColor]
+        [game.id, joinData.userId, username, playerColor]
       );
       
       await client.query('COMMIT');
@@ -305,6 +351,73 @@ export class LobbyService {
       isOnline: row.is_online,
       gameId: row.game_id,
     }));
+  }
+
+  /**
+   * Get game by join code
+   */
+  static async getGameByJoinCode(joinCode: string): Promise<Game | null> {
+    // Input validation
+    if (!joinCode || joinCode.trim().length === 0) {
+      throw new LobbyError('Join code is required', 'MISSING_JOIN_CODE', 400);
+    }
+
+    const result = await db.query(
+      `SELECT g.*, g.created_by as creator_user_id 
+       FROM games g 
+       WHERE g.join_code = $1`,
+      [joinCode.toUpperCase()]
+    );
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+    
+    const game = result.rows[0];
+    return {
+      id: game.id,
+      joinCode: game.join_code,
+      createdBy: game.creator_user_id,
+      status: game.lobby_status,
+      gameStatus: game.status,
+      maxPlayers: game.max_players,
+      isPublic: game.is_public,
+      createdAt: game.created_at,
+    };
+  }
+
+  /**
+   * Get available colors for a game
+   */
+  static async getAvailableColors(gameId: string): Promise<string[]> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+
+    // Check if game exists
+    const gameResult = await db.query(
+      'SELECT id FROM games WHERE id = $1',
+      [gameId]
+    );
+    
+    if (gameResult.rows.length === 0) {
+      throw new LobbyError('Game not found', 'GAME_NOT_FOUND', 404);
+    }
+
+    // Get used colors
+    const usedColorsResult = await db.query(
+      'SELECT color FROM players WHERE game_id = $1',
+      [gameId]
+    );
+    
+    const usedColors = usedColorsResult.rows.map(row => row.color);
+    
+    // All available colors
+    const allColors = ['#ff0000', '#0000ff', '#008000', '#ffd700', '#000000', '#8b4513'];
+    
+    // Return colors that are not in use
+    return allColors.filter(color => !usedColors.includes(color));
   }
 
   static async startGame(gameId: string, creatorUserId: string): Promise<void> {

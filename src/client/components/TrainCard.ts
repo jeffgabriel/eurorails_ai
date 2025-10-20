@@ -17,6 +17,22 @@ export class TrainCard {
     // Create main container
     this.container = scene.add.container(x, y);
     
+    // Validate player and trainType
+    if (!player) {
+      throw new Error('TrainCard: Player is required');
+    }
+    
+    if (!player.trainType) {
+      console.warn('TrainCard: Player trainType is undefined, defaulting to Freight');
+      player.trainType = TrainType.Freight;
+    }
+    
+    // Validate trainType exists in TRAIN_PROPERTIES
+    if (!TRAIN_PROPERTIES[player.trainType]) {
+      console.warn(`TrainCard: Unknown trainType "${player.trainType}", defaulting to Freight`);
+      player.trainType = TrainType.Freight;
+    }
+    
     // Create train card using the appropriate image
     const trainType = player.trainType.toLowerCase().replace(/[\s-]+/g, '');
     this.trainCard = scene.add.image(0, 0, `train_card_${trainType}`);
@@ -102,6 +118,17 @@ export class TrainCard {
 
   // Method to update train card when train type changes
   public updateTrainType() {
+    // Validate trainType
+    if (!this.player.trainType) {
+      console.warn('TrainCard.updateTrainType: Player trainType is undefined, defaulting to Freight');
+      this.player.trainType = TrainType.Freight;
+    }
+    
+    if (!TRAIN_PROPERTIES[this.player.trainType]) {
+      console.warn(`TrainCard.updateTrainType: Unknown trainType "${this.player.trainType}", defaulting to Freight`);
+      this.player.trainType = TrainType.Freight;
+    }
+    
     // Update train card image
     const trainType = this.player.trainType.toLowerCase().replace(/[\s-]+/g, '');
     this.trainCard.setTexture(`train_card_${trainType}`);

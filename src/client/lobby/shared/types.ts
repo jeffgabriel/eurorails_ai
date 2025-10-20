@@ -84,8 +84,10 @@ export interface RegisterForm {
 
 export interface CreateGameForm {
   isPublic?: boolean;
+  creatorColor?: string;
 }
 
 export interface JoinGameForm {
   joinCode: string;
+  selectedColor?: string;
 }

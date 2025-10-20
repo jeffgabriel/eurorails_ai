@@ -19,11 +19,13 @@ interface CreateGameRequest {
   isPublic?: boolean;
   maxPlayers?: number;
   createdByUserId?: string;
+  creatorColor?: string;
 }
 
 interface JoinGameRequest {
   joinCode: string;
   userId?: string;
+  selectedColor?: string;
 }
 
 interface StartGameRequest {
@@ -76,10 +78,10 @@ function validateUUID(uuid: string, fieldName: string, res: Response): boolean {
 
 // POST /api/lobby/games - Create a new game
 router.post('/games', asyncHandler(async (req: Request, res: Response) => {
-  const { isPublic, maxPlayers, createdByUserId }: CreateGameRequest = req.body;
+  const { isPublic, maxPlayers, createdByUserId, creatorColor }: CreateGameRequest = req.body;
   const userId = createdByUserId || req.headers['x-user-id'] as string;
   
-  logLobbyOperation('Create game request', { isPublic, maxPlayers, userId }, req);
+  logLobbyOperation('Create game request', { isPublic, maxPlayers, userId, creatorColor }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ userId }, res)) {
@@ -103,8 +105,9 @@ router.post('/games', asyncHandler(async (req: Request, res: Response) => {
   
   const gameData: CreateGameData = {
     createdByUserId: userId,
-    maxPlayers: maxPlayers || 4,
-    isPublic: isPublic || false
+    maxPlayers: maxPlayers || 6,
+    isPublic: isPublic || false,
+    creatorColor: creatorColor
   };
   
   const game = await LobbyService.createGame(gameData);
@@ -123,10 +126,10 @@ router.post('/games', asyncHandler(async (req: Request, res: Response) => {
 
 // POST /api/lobby/games/join - Join an existing game
 router.post('/games/join', asyncHandler(async (req: Request, res: Response) => {
-  const { joinCode, userId }: JoinGameRequest = req.body;
+  const { joinCode, userId, selectedColor }: JoinGameRequest = req.body;
   const user = userId || req.headers['x-user-id'] as string;
   
-  logLobbyOperation('Join game request', { joinCode, userId: user }, req);
+  logLobbyOperation('Join game request', { joinCode, userId: user, selectedColor }, req);
   
   // Validate required fields
   if (!validateRequiredFields({ joinCode, user }, res)) {
@@ -148,7 +151,7 @@ router.post('/games/join', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
   
-  const game = await LobbyService.joinGame(joinCode.toUpperCase(), user);
+  const game = await LobbyService.joinGame(joinCode.toUpperCase(), { userId: user, selectedColor });
   
   logLobbyOperation('Player joined game successfully', { 
     gameId: game.id, 
@@ -206,6 +209,57 @@ router.get('/games/:id/players', asyncHandler(async (req: Request, res: Response
   res.status(200).json({
     success: true,
     data: players
+  });
+}));
+
+// GET /api/lobby/games/by-join-code/:joinCode - Get game by join code
+router.get('/games/by-join-code/:joinCode', asyncHandler(async (req: Request, res: Response) => {
+  const { joinCode } = req.params;
+  
+  logLobbyOperation('Get game by join code request', { joinCode }, req);
+  
+  // Validate join code format (8 alphanumeric characters)
+  if (!/^[A-Z0-9]{8}$/i.test(joinCode)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid join code format',
+      details: 'Join code must be 8 alphanumeric characters'
+    });
+    return;
+  }
+  
+  const game = await LobbyService.getGameByJoinCode(joinCode.toUpperCase());
+  
+  if (!game) {
+    res.status(404).json({
+      error: 'GAME_NOT_FOUND',
+      message: 'Game not found with that join code'
+    });
+    return;
+  }
+  
+  res.status(200).json({
+    success: true,
+    data: game
+  });
+}));
+
+// GET /api/lobby/games/:id/available-colors - Get available colors for a game
+router.get('/games/:id/available-colors', asyncHandler(async (req: Request, res: Response) => {
+  const { id } = req.params;
+  
+  logLobbyOperation('Get available colors request', { gameId: id }, req);
+  
+  // Validate UUID format
+  if (!validateUUID(id, 'gameId', res)) {
+    return;
+  }
+  
+  const availableColors = await LobbyService.getAvailableColors(id);
+  
+  res.status(200).json({
+    success: true,
+    data: availableColors
   });
 }));
 

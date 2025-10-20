@@ -197,7 +197,7 @@ describe('LobbyService', () => {
     });
 
     it('should join a game with valid join code', async () => {
-      const joinedGame = await LobbyService.joinGame(testJoinCode, testUserId2);
+      const joinedGame = await LobbyService.joinGame(testJoinCode, { userId: testUserId2 });
 
       expect(joinedGame.id).toBe(testGame.id);
       expect(joinedGame.joinCode).toBe(testJoinCode);
@@ -206,32 +206,32 @@ describe('LobbyService', () => {
 
     it('should return same game if player already in game', async () => {
       // First join
-      const joinedGame1 = await LobbyService.joinGame(testJoinCode, testUserId2);
+      const joinedGame1 = await LobbyService.joinGame(testJoinCode, { userId: testUserId2 });
       
       // Second join (should return same game)
-      const joinedGame2 = await LobbyService.joinGame(testJoinCode, testUserId2);
+      const joinedGame2 = await LobbyService.joinGame(testJoinCode, { userId: testUserId2 });
 
       expect(joinedGame1.id).toBe(joinedGame2.id);
       expect(joinedGame1.joinCode).toBe(joinedGame2.joinCode);
     });
 
     it('should throw error for invalid join code', async () => {
-      await expect(LobbyService.joinGame('INVALID', testUserId2)).rejects.toThrow(InvalidJoinCodeError);
-      await expect(LobbyService.joinGame('INVALID', testUserId2)).rejects.toThrow('Game not found with that join code');
+      await expect(LobbyService.joinGame('INVALID', { userId: testUserId2 })).rejects.toThrow(InvalidJoinCodeError);
+      await expect(LobbyService.joinGame('INVALID', { userId: testUserId2 })).rejects.toThrow('Game not found with that join code');
     });
 
     it('should throw error for empty join code', async () => {
-      await expect(LobbyService.joinGame('', testUserId2)).rejects.toThrow(InvalidJoinCodeError);
-      await expect(LobbyService.joinGame('', testUserId2)).rejects.toThrow('Join code is required');
+      await expect(LobbyService.joinGame('', { userId: testUserId2 })).rejects.toThrow(InvalidJoinCodeError);
+      await expect(LobbyService.joinGame('', { userId: testUserId2 })).rejects.toThrow('Join code is required');
     });
 
     it('should throw error for missing userId', async () => {
-      await expect(LobbyService.joinGame(testJoinCode, '')).rejects.toThrow(LobbyError);
-      await expect(LobbyService.joinGame(testJoinCode, '')).rejects.toThrow('userId is required');
+      await expect(LobbyService.joinGame(testJoinCode, { userId: '' })).rejects.toThrow(LobbyError);
+      await expect(LobbyService.joinGame(testJoinCode, { userId: '' })).rejects.toThrow('userId is required');
     });
 
     it('should handle join code case insensitivity', async () => {
-      const joinedGame = await LobbyService.joinGame(testJoinCode.toLowerCase(), testUserId2);
+      const joinedGame = await LobbyService.joinGame(testJoinCode.toLowerCase(), { userId: testUserId2 });
 
       expect(joinedGame.id).toBe(testGame.id);
       expect(joinedGame.joinCode).toBe(testJoinCode);
@@ -239,23 +239,23 @@ describe('LobbyService', () => {
 
     it('should throw error when game is full', async () => {
       // Fill up the game (max 4 players, creator + 3 more)
-      await LobbyService.joinGame(testJoinCode, testUserId2);
-      await LobbyService.joinGame(testJoinCode, testUserId3);
-      await LobbyService.joinGame(testJoinCode, testUserId4);
+      await LobbyService.joinGame(testJoinCode, { userId: testUserId2 });
+      await LobbyService.joinGame(testJoinCode, { userId: testUserId3 });
+      await LobbyService.joinGame(testJoinCode, { userId: testUserId4 });
 
       // Try to join when full
-      await expect(LobbyService.joinGame(testJoinCode, testUserId5)).rejects.toThrow(GameFullError);
+      await expect(LobbyService.joinGame(testJoinCode, { userId: testUserId5 })).rejects.toThrow(GameFullError);
     });
 
     it('should throw error when game has already started', async () => {
       // Add a player first so we can start the game
-      await LobbyService.joinGame(testJoinCode, testUserId2);
+      await LobbyService.joinGame(testJoinCode, { userId: testUserId2 });
       
       // Start the game
       await LobbyService.startGame(testGame.id, testUserId);
 
       // Try to join started game
-      await expect(LobbyService.joinGame(testJoinCode, testUserId3)).rejects.toThrow(GameAlreadyStartedError);
+      await expect(LobbyService.joinGame(testJoinCode, { userId: testUserId3 })).rejects.toThrow(GameAlreadyStartedError);
     });
   });
 
@@ -306,8 +306,8 @@ describe('LobbyService', () => {
 
     it('should get players for a game', async () => {
       // Add some players
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
-      await LobbyService.joinGame(testGame.joinCode, testUserId3);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId3 });
 
       const players = await LobbyService.getGamePlayers(testGame.id);
 
@@ -351,7 +351,7 @@ describe('LobbyService', () => {
 
     it('should start game with valid creator', async () => {
       // Add another player
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
 
       await LobbyService.startGame(testGame.id, testUserId);
 
@@ -366,7 +366,7 @@ describe('LobbyService', () => {
     });
 
     it('should throw error for non-creator trying to start', async () => {
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
 
       await expect(LobbyService.startGame(testGame.id, testUserId2)).rejects.toThrow(NotGameCreatorError);
     });
@@ -378,7 +378,7 @@ describe('LobbyService', () => {
 
     it('should throw error for already started game', async () => {
       // Add player and start game
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
       await LobbyService.startGame(testGame.id, testUserId);
 
       // Try to start again
@@ -410,7 +410,7 @@ describe('LobbyService', () => {
 
     it('should remove player from game', async () => {
       // Add a player
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
 
       // Verify player is in game
       let players = await LobbyService.getGamePlayers(testGame.id);
@@ -427,7 +427,7 @@ describe('LobbyService', () => {
 
     it('should transfer ownership when creator leaves', async () => {
       // Add a player first
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
       
       // Remove the creator (ownership should transfer to the other player)
       await LobbyService.leaveGame(testGame.id, testUserId);
@@ -543,7 +543,7 @@ describe('LobbyService', () => {
       testGameIds.push(game.id);
 
       // Try to join with invalid data (should rollback)
-      await expect(LobbyService.joinGame('', testUserId2)).rejects.toThrow();
+      await expect(LobbyService.joinGame('', { userId: testUserId2 })).rejects.toThrow();
 
       // Verify no player was added
       const players = await LobbyService.getGamePlayers(game.id);
