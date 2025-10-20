@@ -12,7 +12,7 @@ import type { CreateGameForm } from '../../shared/types';
 
 const createGameSchema = z.object({
   isPublic: z.boolean().default(false),
-  creatorColor: z.string().optional(),
+  creatorColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Color must be a valid hex code (e.g., #ff0000)').optional(),
 });
 
 interface CreateGameModalProps {

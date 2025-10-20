@@ -144,19 +144,35 @@ export class PlayerHandDisplay {
   private createTrainSection(targetContainer: Phaser.GameObjects.Container): void {
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
 
-    // Create train card using the TrainCard component
-    this.trainCard = new TrainCard(
-      this.scene,
-      600, // Position after demand cards
-      13, // Position relative to hand area
-      currentPlayer
-    );
+    // Validate current player exists
+    if (!currentPlayer) {
+      console.error('PlayerHandDisplay.createTrainSection: No current player found');
+      return;
+    }
 
-    // Update the loads display
-    this.trainCard.updateLoads();
+    // Ensure player has a trainType
+    if (!currentPlayer.trainType) {
+      console.warn('PlayerHandDisplay.createTrainSection: Player missing trainType, defaulting to Freight');
+      currentPlayer.trainType = 'freight' as any; // Use any to avoid type issues
+    }
 
-    // Add the train card's container to the target container
-    targetContainer.add(this.trainCard.getContainer());
+    try {
+      // Create train card using the TrainCard component
+      this.trainCard = new TrainCard(
+        this.scene,
+        600, // Position after demand cards
+        13, // Position relative to hand area
+        currentPlayer
+      );
+
+      // Update the loads display
+      this.trainCard.updateLoads();
+
+      // Add the train card's container to the target container
+      targetContainer.add(this.trainCard.getContainer());
+    } catch (error) {
+      console.error('PlayerHandDisplay.createTrainSection: Failed to create train card:', error);
+    }
   }
 
   private createPlayerInfoSection(isDrawingMode: boolean, currentTrackCost: number, targetContainer: Phaser.GameObjects.Container): void {

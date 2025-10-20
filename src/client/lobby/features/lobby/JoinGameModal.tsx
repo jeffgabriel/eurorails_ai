@@ -29,7 +29,7 @@ const joinGameSchema = z.object({
     .min(1, 'Join code is required')
     .regex(/^[A-Z0-9]+$/, 'Join code must contain only letters and numbers')
     .transform(val => val.toUpperCase()),
-  selectedColor: z.string().optional(),
+  selectedColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Color must be a valid hex code (e.g., #ff0000)').optional(),
 });
 
 interface JoinGameModalProps {
@@ -68,11 +68,27 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
       
       // First, validate the join code by getting the game
       const gameResult = await api.getGameByJoinCode(joinCode);
+      
+      // Race condition prevention: Check if join code is still current
+      const currentJoinCode = form.getValues('joinCode');
+      if (currentJoinCode !== joinCode) {
+        console.log('Join code changed during validation, ignoring response');
+        return;
+      }
+      
       const gameId = gameResult.game.id;
       setValidatedGameId(gameId);
       
       // Then fetch available colors for this game
       const colorsResult = await api.getAvailableColors(gameId);
+      
+      // Race condition prevention: Check again if join code is still current
+      const currentJoinCodeAfterColors = form.getValues('joinCode');
+      if (currentJoinCodeAfterColors !== joinCode) {
+        console.log('Join code changed during colors fetch, ignoring response');
+        return;
+      }
+      
       setAvailableColors(colorsResult.colors);
       
       // Check if game is full (no available colors)
@@ -89,13 +105,17 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
       
     } catch (error) {
       console.error('Validation error:', error);
-      setValidatedGameId('');
-      setAvailableColors([]);
-      setJoinStep('code');
+      // Only update state if this is still the current join code
+      const currentJoinCode = form.getValues('joinCode');
+      if (currentJoinCode === joinCode) {
+        setValidatedGameId('');
+        setAvailableColors([]);
+        setJoinStep('code');
+      }
     } finally {
       setIsValidatingCode(false);
     }
-  }, [form]);
+  }, [form, api]);
 
   // Debounced validation effect
   useEffect(() => {
