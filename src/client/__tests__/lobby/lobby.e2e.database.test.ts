@@ -138,7 +138,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       expect(retrievedGame.game.joinCode).toBe(createResult.game.joinCode);
       expect(retrievedGame.game.status).toBe('IN_SETUP');
       expect(retrievedGame.game.isPublic).toBe(true);
-      expect(retrievedGame.game.maxPlayers).toBe(4);
+      expect(retrievedGame.game.maxPlayers).toBe(6); // Default max players is now 6
       // Note: createdBy might be different due to server-side user ID generation
       expect(retrievedGame.game.createdBy).toBeDefined();
       expect(typeof retrievedGame.game.createdBy).toBe('string');

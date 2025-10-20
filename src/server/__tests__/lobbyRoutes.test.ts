@@ -116,7 +116,7 @@ describe('Lobby API Integration Tests', () => {
       expect(game.joinCode).toHaveLength(8);
 
       // 2. Join the game
-      const joinedGame = await LobbyService.joinGame(game.joinCode, testUserId2);
+      const joinedGame = await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       expect(joinedGame.id).toBe(game.id);
       testPlayerIds.push(testUserId2);
 
@@ -154,7 +154,7 @@ describe('Lobby API Integration Tests', () => {
       const playerIds = [testUserId2, testUserId3, testUserId4];
       
       for (const playerId of playerIds) {
-        await LobbyService.joinGame(game.joinCode, playerId);
+        await LobbyService.joinGame(game.joinCode, { userId: playerId });
         testPlayerIds.push(playerId);
       }
 
@@ -180,7 +180,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Add another player
-      await LobbyService.joinGame(game.joinCode, testUserId2);
+      await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
 
       // Creator leaves (should transfer ownership)
@@ -206,7 +206,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Add another player
-      await LobbyService.joinGame(game.joinCode, testUserId2);
+      await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
 
       // Remove creator first
@@ -240,7 +240,7 @@ describe('Lobby API Integration Tests', () => {
 
     it('should update player online status', async () => {
       // Add a player
-      await LobbyService.joinGame(testGame.joinCode, testUserId2);
+      await LobbyService.joinGame(testGame.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
 
       // Update presence
@@ -304,7 +304,7 @@ describe('Lobby API Integration Tests', () => {
       // Multiple players try to join simultaneously
       const playerIds = [testUserId2, testUserId3, testUserId4, testUserId5];
       const joinPromises = playerIds.map(playerId => 
-        LobbyService.joinGame(game.joinCode, playerId)
+        LobbyService.joinGame(game.joinCode, { userId: playerId })
       );
       // Track player IDs for cleanup
       testPlayerIds.push(...playerIds);
@@ -324,7 +324,7 @@ describe('Lobby API Integration Tests', () => {
 
   describe('Error Scenarios', () => {
     it('should handle joining a non-existent game', async () => {
-      await expect(LobbyService.joinGame('NONEXIST', testUserId))
+      await expect(LobbyService.joinGame('NONEXIST', { userId: testUserId }))
         .rejects.toThrow('Game not found with that join code');
     });
 
@@ -347,7 +347,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Add a player and start the game
-      await LobbyService.joinGame(game.joinCode, testUserId2);
+      await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
       await LobbyService.startGame(game.id, testUserId);
 
@@ -364,11 +364,11 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Fill the game
-      await LobbyService.joinGame(game.joinCode, testUserId2);
+      await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
 
       // Try to join when full
-      await expect(LobbyService.joinGame(game.joinCode, testUserId6))
+      await expect(LobbyService.joinGame(game.joinCode, { userId: testUserId6 }))
         .rejects.toThrow('Game is full');
     });
   });
@@ -382,7 +382,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       // Add a player
-      await LobbyService.joinGame(game.joinCode, testUserId2);
+      await LobbyService.joinGame(game.joinCode, { userId: testUserId2 });
       testPlayerIds.push(testUserId2);
 
       // Get player count

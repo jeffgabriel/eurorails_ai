@@ -128,6 +128,16 @@ class ApiClient {
     return { game: response.data };
   }
 
+  async getGameByJoinCode(joinCode: string): Promise<{ game: Game }> {
+    const response = await this.request<{ success: boolean; data: Game }>(`/api/lobby/games/by-join-code/${joinCode}`);
+    return { game: response.data };
+  }
+
+  async getAvailableColors(gameId: ID): Promise<{ colors: string[] }> {
+    const response = await this.request<{ success: boolean; data: string[] }>(`/api/lobby/games/${gameId}/available-colors`);
+    return { colors: response.data };
+  }
+
   async getGamePlayers(gameId: ID): Promise<{ players: Player[] }> {
     const response = await this.request<{ success: boolean; data: Player[] }>(`/api/lobby/games/${gameId}/players`);
     return { players: response.data };

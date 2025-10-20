@@ -93,18 +93,33 @@ export class PlayerHandDisplay {
         // Import DemandDeckService dynamically to avoid circular dependencies
         const { DemandDeckService } = await import('../../shared/services/DemandDeckService');
         const deckService = new DemandDeckService();
+        console.log('Loading demand cards from server...');
         await deckService.loadCards();
+        console.log('Demand cards loaded successfully');
         
         // Draw 3 cards for the player
         for (let i = 0; i < 3; i++) {
           const card = await deckService.drawCard();
           if (card) {
             currentPlayer.hand.push(card);
+            console.log(`Drew card ${i + 1}:`, card);
+          } else {
+            console.warn(`Failed to draw card ${i + 1}`);
           }
         }
-        console.log(`Drew ${currentPlayer.hand.length} cards for player ${currentPlayer.name}`);
+        console.log(`Successfully drew ${currentPlayer.hand.length} cards for player ${currentPlayer.name}`);
       } catch (error) {
         console.error('Failed to draw demand cards for player:', error);
+        // Create placeholder cards so the UI doesn't break
+        console.log('Creating placeholder cards for UI display');
+        for (let i = 0; i < 3; i++) {
+          currentPlayer.hand.push({
+            id: `placeholder_${i}`,
+            demands: [
+              { city: 'PLACEHOLDER', resource: 'PLACEHOLDER', payment: 0 }
+            ]
+          } as any);
+        }
       }
     }
 
@@ -161,11 +176,11 @@ export class PlayerHandDisplay {
     const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
     const crayonTexture = `crayon_${crayonColor}`;
 
-    // Position crayon relative to player info
+    // Position crayon relative to hand area (right side, centered vertically)
     const crayonButton = this.scene.add
       .image(
-        820 + 200, // Position 200 pixels right of player info start
-        140, // Position relative to hand area
+        this.scene.scale.width - 100, // Position 100 pixels from right edge
+        this.HAND_HEIGHT / 2, // Center vertically in hand area
         crayonTexture
       )
       .setScale(0.15)
@@ -189,6 +204,9 @@ export class PlayerHandDisplay {
         this.toggleDrawingCallback();
       });
 
+    // Add crayon to the hand area container so it moves with the hand
+    targetContainer.add(crayonButton);
+
     // Determine cost display color based on constraints
     let costColor = "#ffffff"; // Default white
     let costWarning = "";
@@ -206,11 +224,18 @@ export class PlayerHandDisplay {
     // Build player info text
     let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
     
+    // Calculate position between train card (x: 600) and crayon (right side)
+    // Train card is at x: 600, crayon is at x: this.scene.scale.width - 100
+    // Position player info in the middle of this space
+    const trainCardX = 600;
+    const crayonX = this.scene.scale.width - 100;
+    const playerInfoX = trainCardX + (crayonX - trainCardX) / 2;
+
     // Create separate text objects for better color control
     const nameAndMoney = this.scene.add
       .text(
-        820,
-        100,
+        playerInfoX, // Position between train card and crayon
+        20, // Position relative to top of hand area
         playerInfoText,
         {
           color: "#ffffff",
@@ -218,13 +243,13 @@ export class PlayerHandDisplay {
           fontStyle: "bold",
         }
       )
-      .setOrigin(0, 0);
+      .setOrigin(0.5, 0); // Center horizontally
 
     // Create build cost as separate text with dynamic color
     const buildCostText = this.scene.add
       .text(
-        820,
-        145,
+        playerInfoX, // Position between train card and crayon
+        65, // Position relative to top of hand area
         `Build Cost: ${currentTrackCost}M${costWarning}`,
         {
           color: costColor,
@@ -232,7 +257,11 @@ export class PlayerHandDisplay {
           fontStyle: "bold",
         }
       )
-      .setOrigin(0, 0);
+      .setOrigin(0.5, 0); // Center horizontally
+
+    // Add player info texts to the hand area container
+    targetContainer.add(nameAndMoney);
+    targetContainer.add(buildCostText);
     
     // Add visual indicator for drawing mode
     if (isDrawingMode) {
@@ -249,8 +278,6 @@ export class PlayerHandDisplay {
     } else {
       crayonButton.setScale(0.15);
     }
-      
-    targetContainer.add([nameAndMoney, buildCostText, crayonButton]);
 
     // --- Undo button below crayon ---
     if (this.canUndo()) {

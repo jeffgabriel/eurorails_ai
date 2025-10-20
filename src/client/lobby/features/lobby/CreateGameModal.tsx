@@ -12,6 +12,7 @@ import type { CreateGameForm } from '../../shared/types';
 
 const createGameSchema = z.object({
   isPublic: z.boolean().default(false),
+  creatorColor: z.string().optional(),
 });
 
 interface CreateGameModalProps {
@@ -26,6 +27,7 @@ export function CreateGameModal({ open, onOpenChange }: CreateGameModalProps) {
     resolver: zodResolver(createGameSchema),
     defaultValues: {
       isPublic: false,
+      creatorColor: '#ff0000', // Default to red
     },
   });
 
@@ -77,6 +79,44 @@ export function CreateGameModal({ open, onOpenChange }: CreateGameModalProps) {
                       disabled={isLoading}
                     />
                   </FormControl>
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="creatorColor"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="text-base">Choose Your Color</FormLabel>
+                  <div className="grid grid-cols-3 gap-2 mt-2">
+                    {[
+                      { name: 'Red', value: '#ff0000' },
+                      { name: 'Blue', value: '#0000ff' },
+                      { name: 'Green', value: '#008000' },
+                      { name: 'Yellow', value: '#ffd700' },
+                      { name: 'Black', value: '#000000' },
+                      { name: 'Brown', value: '#8b4513' },
+                    ].map((color) => (
+                      <button
+                        key={color.value}
+                        type="button"
+                        className={`w-full h-12 rounded border-2 transition-all ${
+                          field.value === color.value
+                            ? 'border-gray-800 scale-105'
+                            : 'border-gray-300 hover:border-gray-500'
+                        }`}
+                        style={{ backgroundColor: color.value }}
+                        onClick={() => field.onChange(color.value)}
+                        disabled={isLoading}
+                      >
+                        <span className="text-white font-semibold text-xs drop-shadow-lg">
+                          {color.name}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <FormMessage />
                 </FormItem>
               )}
             />
