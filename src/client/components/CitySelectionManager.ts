@@ -120,9 +120,11 @@ export class CitySelectionManager {
     };
 
     // Position the dropdown in the player hand area (above player name)
+    // Use responsive positioning based on screen width
     const handY = this.scene.scale.height - 280 + 20; // 20px from top of hand area
+    const dropdownLeft = Math.min(820, this.scene.scale.width - 200); // Keep 200px margin from right
     dropdown.style.position = 'fixed';
-    dropdown.style.left = '820px'; // Right side of hand area
+    dropdown.style.left = `${dropdownLeft}px`;
     dropdown.style.top = `${handY}px`;
     dropdown.style.zIndex = '10000';
     dropdown.style.pointerEvents = 'auto';

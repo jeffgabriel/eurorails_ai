@@ -206,17 +206,36 @@ export class PlayerHandDisplay {
     // Build player info text
     let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
     
-    // Position info text below the city dropdown (which is at left: 820px)
-    // Dropdown is 180px wide, so center of dropdown is at 820 + 90 = 910px
-    const dropdownCenterX = 820 + 90; // 820 is left position, 90 is half of 180px width
+    // Calculate responsive positions based on scene width
+    // City dropdown positioning (matching CitySelectionManager)
+    const dropdownLeft = Math.min(820, this.scene.scale.width - 200);
+    const dropdownWidth = 180;
+    const dropdownCenterX = dropdownLeft + dropdownWidth / 2;
+    
+    // Create separate text objects for better color control
+    // Position below city dropdown but ensure responsive
+    const nameAndMoney = this.scene.add
+      .text(
+        dropdownCenterX, // Position below city dropdown
+        60, // Position below the dropdown (dropdown is ~40px tall at 20px from top)
+        playerInfoText,
+        {
+          color: "#ffffff",
+          fontSize: "20px",
+          fontStyle: "bold",
+        }
+      )
+      .setOrigin(0.5, 0); // Center horizontally
+
+    // Calculate text bounds to position crayon to the right
+    const textBounds = nameAndMoney.getBounds();
+    
+    // Position crayon to the right of the money text
+    const crayonX = textBounds.right + 40; // 40px spacing from text
+    const crayonY = 70; // Align vertically with money text area
     
     const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
     const crayonTexture = `crayon_${crayonColor}`;
-
-    // Position crayon to the right of the money text
-    // Calculate crayon position: dropdownCenterX (910px) + half dropdown width (90px) + spacing (40px) + crayon radius (~15px)
-    const crayonX = 910 + 90 + 40 + 15; // 1055px from left
-    const crayonY = 60 + 10; // Align vertically with money text area
     
     const crayonButton = this.scene.add
       .image(
@@ -245,22 +264,11 @@ export class PlayerHandDisplay {
         this.toggleDrawingCallback();
       });
 
+    // Add player info texts to the hand area container first so they render behind
+    targetContainer.add(nameAndMoney);
+    
     // Add crayon to the hand area container so it moves with the hand
     targetContainer.add(crayonButton);
-    
-    // Create separate text objects for better color control
-    const nameAndMoney = this.scene.add
-      .text(
-        dropdownCenterX, // Position below city dropdown
-        60, // Position below the dropdown (dropdown is ~40px tall at 20px from top)
-        playerInfoText,
-        {
-          color: "#ffffff",
-          fontSize: "20px",
-          fontStyle: "bold",
-        }
-      )
-      .setOrigin(0.5, 0); // Center horizontally
 
     // Create build cost as separate text with dynamic color
     const buildCostText = this.scene.add
@@ -276,8 +284,7 @@ export class PlayerHandDisplay {
       )
       .setOrigin(0.5, 0); // Center horizontally
 
-    // Add player info texts to the hand area container
-    targetContainer.add(nameAndMoney);
+    // Add build cost text to the hand area container
     targetContainer.add(buildCostText);
     
     // Add visual indicator for drawing mode
