@@ -270,6 +270,23 @@ export class GameScene extends Phaser.Scene {
         this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
       }
     });
+
+    // Add resize handler to update UI when browser window is resized
+    this.scale.on('resize', async () => {
+      // Wait a bit for the resize to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Recalculate track costs if in drawing mode
+      if (this.trackManager.isInDrawingMode) {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const previousSessionsCost = this.trackManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
+        const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
+        const totalCost = previousSessionsCost + currentSessionCost;
+        await this.uiManager.setupPlayerHand(true, totalCost);
+      } else {
+        await this.uiManager.setupPlayerHand(false);
+      }
+    });
   }
 
   private createSettingsButton(): Phaser.GameObjects.Container {

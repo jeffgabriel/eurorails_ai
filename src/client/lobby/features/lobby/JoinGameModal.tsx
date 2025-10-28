@@ -252,12 +252,16 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
                             <button
                               key={colorValue}
                               type="button"
-                              className={`w-full h-12 rounded border-2 transition-all ${
+                              className={`w-full h-12 rounded transition-all relative ${
                                 field.value === colorValue
-                                  ? 'border-gray-800 scale-105'
-                                  : 'border-gray-300 hover:border-gray-500'
+                                  ? 'scale-105 shadow-lg border-4'
+                                  : 'border-2 border-gray-300 hover:border-gray-500'
                               }`}
-                              style={{ backgroundColor: colorValue }}
+                              style={{ 
+                                backgroundColor: colorValue,
+                                borderColor: field.value === colorValue ? '#60a5fa' : undefined,
+                                boxShadow: field.value === colorValue ? '0 0 0 3px rgba(96, 165, 250, 0.5), 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)' : undefined
+                              }}
                               onClick={() => field.onChange(colorValue)}
                               disabled={isLoading}
                             >

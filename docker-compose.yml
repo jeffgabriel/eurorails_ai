@@ -7,6 +7,7 @@ services:
       - POSTGRES_PASSWORD=$DB_PASSWORD
       - POSTGRES_DB=$DB_NAME
       - MIGRATIONS_DIR=/migrations
+      - POSTGRES_INITDB_ARGS=--auth-host=trust
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $DB_USER -d $DB_NAME"]
       interval: 10s
@@ -16,7 +17,7 @@ services:
     ports:
       - $DB_DOCKER_PORT:$DB_PORT
     volumes:
-      - db:/var/lib/postgresql/data
+      - db:/var/lib/postgresql
       - ./db/scripts/init_db.sh:/docker-entrypoint-initdb.d/init_db.sh
       - ./db/migrations:/migrations
   app:

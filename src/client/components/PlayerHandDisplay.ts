@@ -189,14 +189,58 @@ export class PlayerHandDisplay {
       "#8B4513": "brown",
     };
 
+    // Determine cost display color based on constraints
+    let costColor = "#ffffff"; // Default white
+    let costWarning = "";
+    
+    if (currentTrackCost > currentPlayer.money) {
+      costColor = "#ff4444"; // Red for over budget
+      costWarning = " (Insufficient funds!)";
+    } else if (currentTrackCost > MAX_TURN_BUILD_COST) {
+      costColor = "#ff8800"; // Orange for over turn limit
+      costWarning = " (Over turn limit!)";
+    } else if (currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
+      costColor = "#ffff00"; // Yellow for approaching limit
+    }
+
+    // Build player info text
+    let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
+    
+    // Calculate responsive positions based on scene width
+    // City dropdown positioning (matching CitySelectionManager)
+    const dropdownLeft = Math.min(820, this.scene.scale.width - 200);
+    const dropdownWidth = 180;
+    const dropdownCenterX = dropdownLeft + dropdownWidth / 2;
+    
+    // Create separate text objects for better color control
+    // Position below city dropdown but ensure responsive
+    const nameAndMoney = this.scene.add
+      .text(
+        dropdownCenterX, // Position below city dropdown
+        60, // Position below the dropdown (dropdown is ~40px tall at 20px from top)
+        playerInfoText,
+        {
+          color: "#ffffff",
+          fontSize: "20px",
+          fontStyle: "bold",
+        }
+      )
+      .setOrigin(0.5, 0); // Center horizontally
+
+    // Calculate text bounds to position crayon to the right
+    const textBounds = nameAndMoney.getBounds();
+    
+    // Position crayon to the right of the money text
+    const crayonX = textBounds.right + 40; // 40px spacing from text
+    const crayonY = 70; // Align vertically with money text area
+    
     const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
     const crayonTexture = `crayon_${crayonColor}`;
-
-    // Position crayon relative to hand area (right side, centered vertically)
+    
     const crayonButton = this.scene.add
       .image(
-        this.scene.scale.width - 100, // Position 100 pixels from right edge
-        this.HAND_HEIGHT / 2, // Center vertically in hand area
+        crayonX,
+        crayonY,
         crayonTexture
       )
       .setScale(0.15)
@@ -220,52 +264,17 @@ export class PlayerHandDisplay {
         this.toggleDrawingCallback();
       });
 
+    // Add player info texts to the hand area container first so they render behind
+    targetContainer.add(nameAndMoney);
+    
     // Add crayon to the hand area container so it moves with the hand
     targetContainer.add(crayonButton);
-
-    // Determine cost display color based on constraints
-    let costColor = "#ffffff"; // Default white
-    let costWarning = "";
-    
-    if (currentTrackCost > currentPlayer.money) {
-      costColor = "#ff4444"; // Red for over budget
-      costWarning = " (Insufficient funds!)";
-    } else if (currentTrackCost > MAX_TURN_BUILD_COST) {
-      costColor = "#ff8800"; // Orange for over turn limit
-      costWarning = " (Over turn limit!)";
-    } else if (currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
-      costColor = "#ffff00"; // Yellow for approaching limit
-    }
-
-    // Build player info text
-    let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
-    
-    // Calculate position between train card (x: 600) and crayon (right side)
-    // Train card is at x: 600, crayon is at x: this.scene.scale.width - 100
-    // Position player info in the middle of this space
-    const trainCardX = 600;
-    const crayonX = this.scene.scale.width - 100;
-    const playerInfoX = trainCardX + (crayonX - trainCardX) / 2;
-
-    // Create separate text objects for better color control
-    const nameAndMoney = this.scene.add
-      .text(
-        playerInfoX, // Position between train card and crayon
-        20, // Position relative to top of hand area
-        playerInfoText,
-        {
-          color: "#ffffff",
-          fontSize: "20px",
-          fontStyle: "bold",
-        }
-      )
-      .setOrigin(0.5, 0); // Center horizontally
 
     // Create build cost as separate text with dynamic color
     const buildCostText = this.scene.add
       .text(
-        playerInfoX, // Position between train card and crayon
-        65, // Position relative to top of hand area
+        dropdownCenterX, // Position below city dropdown
+        105, // Position below money text
         `Build Cost: ${currentTrackCost}M${costWarning}`,
         {
           color: costColor,
@@ -275,8 +284,7 @@ export class PlayerHandDisplay {
       )
       .setOrigin(0.5, 0); // Center horizontally
 
-    // Add player info texts to the hand area container
-    targetContainer.add(nameAndMoney);
+    // Add build cost text to the hand area container
     targetContainer.add(buildCostText);
     
     // Add visual indicator for drawing mode
