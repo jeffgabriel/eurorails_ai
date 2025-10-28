@@ -7,7 +7,7 @@ services:
       - POSTGRES_PASSWORD=$DB_PASSWORD
       - POSTGRES_DB=$DB_NAME
       - MIGRATIONS_DIR=/migrations
-    command: postgres -c log_statement=all -c log_destination=stderr -c logging_collector=off
+      - POSTGRES_INITDB_ARGS=--auth-host=trust
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $DB_USER -d $DB_NAME"]
       interval: 10s

@@ -29,7 +29,19 @@ jobs:
 
       - run:
           name: Start services
-          command: docker compose up -d
+          command: |
+            docker compose up -d || {
+              echo "=== Docker Compose failed to start, showing logs ==="
+              docker compose logs
+              docker compose ps -a
+              exit 1
+            }
+
+      - run:
+          name: Show postgresdb logs in background
+          background: true
+          command: |
+            docker compose logs -f postgresdb
 
       - run:
           name: Wait for postgresdb to be healthy
@@ -50,7 +62,15 @@ jobs:
 
             if [ "$timeout" -le 0 ]; then
               echo "Postgres healthcheck timed out"
+              echo "=== Showing all logs ==="
               docker compose logs
+              echo "=== Showing postgresdb only ==="
+              docker compose logs postgresdb
+              echo "=== Container status ==="
+              docker compose ps -a
+              echo "=== Checking postgresdb health ==="
+              cid=$(docker compose ps -q postgresdb)
+              docker inspect "$cid" | grep -A 5 Health || echo "No health status found"
               exit 1
             fi
 
