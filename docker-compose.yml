@@ -7,12 +7,6 @@ services:
       - POSTGRES_PASSWORD=$DB_PASSWORD
       - POSTGRES_DB=$DB_NAME
       - MIGRATIONS_DIR=/migrations
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $DB_USER -d $DB_NAME"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
     ports:
       - $DB_DOCKER_PORT:$DB_PORT
     volumes:
@@ -22,7 +16,7 @@ services:
   app:
     depends_on:
       postgresdb:
-        condition: service_healthy
+        condition: service_started
     build: 
       context: .
       dockerfile: Dockerfile
