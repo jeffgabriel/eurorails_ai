@@ -142,7 +142,16 @@ class SocketService {
 
   onLobbyUpdate(callback: (data: { gameId: ID; players: any[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void): void {
     if (!this.socket) return;
+    // Remove old listener before adding new one to prevent duplicates
+    this.socket.off('lobby-updated');
     this.socket.on('lobby-updated', callback);
+  }
+
+  onGameStarted(callback: (data: { gameId: ID; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    // Remove old listener before adding new one to prevent duplicates
+    this.socket.off('game-started');
+    this.socket.on('game-started', callback);
   }
 
   getServerSeq(): number {

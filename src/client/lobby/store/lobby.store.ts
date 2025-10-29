@@ -30,6 +30,7 @@ interface LobbyActions {
   // Socket methods
   connectToLobbySocket: (gameId: ID, token: string) => void;
   disconnectFromLobbySocket: (gameId: ID) => void;
+  onGameStarted: (callback: (gameId: ID) => void) => void;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -577,6 +578,13 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     } catch (error) {
       console.error('Failed to disconnect from lobby socket:', error);
     }
+  },
+
+  onGameStarted: (callback: (gameId: ID) => void) => {
+    socketService.onGameStarted((data) => {
+      console.log('Game started event received:', data.gameId);
+      callback(data.gameId);
+    });
   },
 
 }));

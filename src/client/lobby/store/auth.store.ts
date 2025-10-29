@@ -153,17 +153,52 @@ export const useAuthStore = create<AuthStore>((set) => ({
         error: null,
       });
     } catch (error) {
-      // Token is invalid, clear storage
-      localStorage.removeItem(JWT_STORAGE_KEY);
-      localStorage.removeItem(USER_STORAGE_KEY);
+      const apiError = error as ApiError;
       
-      set({
-        user: null,
-        token: null,
-        isAuthenticated: false,
-        isLoading: false,
-        error: error as ApiError,
-      });
+      // Only clear storage if token is actually invalid (401, 403), not for network errors
+      const isAuthError = apiError.error === 'HTTP_401' || 
+                         apiError.error === 'HTTP_403' ||
+                         apiError.message?.includes('unauthorized') ||
+                         apiError.message?.includes('forbidden');
+      
+      if (isAuthError) {
+        console.warn('Invalid auth token, clearing storage');
+        // Token is invalid, clear storage
+        localStorage.removeItem(JWT_STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
+        
+        set({
+          user: null,
+          token: null,
+          isAuthenticated: false,
+          isLoading: false,
+          error: null,
+        });
+      } else {
+        // Network error or server not ready - keep localStorage and use stored user
+        console.warn('Server not available, using stored auth data');
+        
+        try {
+          const storedUser = JSON.parse(userJson);
+          
+          set({
+            user: storedUser,
+            token,
+            isAuthenticated: true,
+            isLoading: false,
+            error: null,
+          });
+        } catch {
+          // If parsing fails, just keep the state empty but don't clear storage
+          set({
+            user: null,
+            token: null,
+            isAuthenticated: false,
+            isLoading: false,
+            error: null,
+          });
+        }
+      }
     }
   },
 

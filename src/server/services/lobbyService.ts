@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
-import { emitLobbyUpdated } from './socketService';
+import { emitLobbyUpdated, emitToLobby } from './socketService';
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -485,6 +485,17 @@ export class LobbyService {
       );
       
       await client.query('COMMIT');
+      
+      // Emit socket event to notify all clients in the lobby that game is starting
+      try {
+        await emitToLobby(gameId, 'game-started', {
+          gameId,
+          timestamp: Date.now(),
+        });
+      } catch (socketError) {
+        // Log error but don't fail the start game operation
+        console.error('Failed to emit game-started event:', socketError);
+      }
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
