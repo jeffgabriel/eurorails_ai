@@ -43,7 +43,7 @@ describe('Socket.IO Lobby Integration', () => {
           expect(room).toMatch(/^lobby-/);
           return Promise.resolve();
         }),
-        to: jest.fn((_room: string) => ({
+        to: jest.fn(() => ({
           emit: jest.fn((event: string, data: any) => {
             expect(event).toBe('lobby-updated');
             expect(data.gameId).toBeDefined();
@@ -91,7 +91,7 @@ describe('Socket.IO Lobby Integration', () => {
           expect(room).toMatch(/^lobby-/);
           return Promise.resolve();
         }),
-        to: jest.fn((_room: string) => ({
+        to: jest.fn(() => ({
           emit: jest.fn((event: string, data: any) => {
             expect(event).toBe('lobby-updated');
             expect(data.action).toBe('player-left');

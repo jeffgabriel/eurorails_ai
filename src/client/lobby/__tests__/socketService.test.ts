@@ -5,7 +5,6 @@
  */
 
 import { socketService } from '../shared/socket';
-import { io } from 'socket.io-client';
 
 // Create a shared mock socket for verification
 const mockSocket = {
@@ -20,12 +19,7 @@ const mockSocket = {
 
 // Mock socket.io-client
 jest.mock('socket.io-client', () => {
-  const mockIo = jest.fn(() => {
-    // Make connected true after connect is called
-    mockSocket.connected = true;
-    return mockSocket;
-  });
-
+  const mockIo = jest.fn(() => mockSocket);
   return {
     io: mockIo,
   };
@@ -62,7 +56,9 @@ describe('SocketService', () => {
       expect(socketService.isConnected()).toBe(false);
       
       socketService.connect('test-token');
-      // In a real scenario, this would return true after connection
+      // Manually set connected state for this test to verify isConnected behavior
+      mockSocket.connected = true;
+      expect(socketService.isConnected()).toBe(true);
     });
   });
 
@@ -190,17 +186,6 @@ describe('SocketService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('join', { gameId });
     });
 
-    it('should send game action', () => {
-      const token = 'test-token';
-      const gameId = 'test-game-123';
-      
-      socketService.connect(token);
-      
-      expect(() => {
-        socketService.sendAction(gameId, 'test-action', { data: 'test' }, 0);
-      }).not.toThrow();
-    });
-
     it('should emit action event with correct parameters', () => {
       const token = 'test-token';
       const gameId = 'test-game-123';
@@ -294,4 +279,5 @@ describe('SocketService', () => {
     });
   });
 });
+
 
