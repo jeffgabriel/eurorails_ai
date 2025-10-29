@@ -1,5 +1,5 @@
 // features/auth/LoginPage.tsx
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -21,19 +21,18 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, isLoading, isAuthenticated, error, clearError } = useAuthStore();
 
-  // Preserve form values in sessionStorage to survive unmounts
-  const getStoredFormValues = (): LoginForm => {
+  // Preserve only email in sessionStorage (never store password)
+  const getStoredEmail = (): string => {
     try {
-      const stored = sessionStorage.getItem('loginFormValues');
-      return stored ? JSON.parse(stored) : { email: '', password: '' };
+      return sessionStorage.getItem('loginEmail') || '';
     } catch {
-      return { email: '', password: '' };
+      return '';
     }
   };
 
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    defaultValues: getStoredFormValues(),
+    defaultValues: { email: getStoredEmail(), password: '' },
   });
 
   useEffect(() => {
@@ -45,18 +44,24 @@ export function LoginPage() {
     console.log('[LoginPage] isLoading:', isLoading, 'isAuthenticated:', isAuthenticated, 'error:', error);
   }, [isLoading, isAuthenticated, error]);
 
-  // Save form values to sessionStorage on change
+  // Save only email to sessionStorage on change (never save password)
   useEffect(() => {
     const subscription = form.watch((values) => {
-      sessionStorage.setItem('loginFormValues', JSON.stringify(values));
+      if (values.email) {
+        try {
+          sessionStorage.setItem('loginEmail', values.email);
+        } catch {
+          // Ignore storage errors
+        }
+      }
     });
     return () => subscription.unsubscribe();
   }, [form]);
 
-  // Clear stored values on successful auth
+  // Clear stored email on successful auth
   useEffect(() => {
     if (isAuthenticated) {
-      sessionStorage.removeItem('loginFormValues');
+      sessionStorage.removeItem('loginEmail');
       navigate('/lobby', { replace: true });
     }
   }, [isAuthenticated, navigate]);
