@@ -37,13 +37,8 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
       const { gameId } = data;
       console.log(`Client ${socket.id} joining lobby for game ${gameId}`);
       socket.join(`lobby-${gameId}`);
-      
-      // Notify other players in the lobby
-      socket.to(`lobby-${gameId}`).emit('lobby-updated', {
-        gameId,
-        action: 'player-joined',
-        timestamp: Date.now(),
-      });
+      // Note: We don't emit lobby-updated here because the LobbyService
+      // handles emitting proper events with player data when players actually join/leave
     });
 
     // Handle leave lobby event
@@ -51,13 +46,8 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
       const { gameId } = data;
       console.log(`Client ${socket.id} leaving lobby for game ${gameId}`);
       socket.leave(`lobby-${gameId}`);
-      
-      // Notify other players in the lobby
-      socket.to(`lobby-${gameId}`).emit('lobby-updated', {
-        gameId,
-        action: 'player-left',
-        timestamp: Date.now(),
-      });
+      // Note: We don't emit lobby-updated here because the LobbyService
+      // handles emitting proper events with player data when players actually join/leave
     });
 
     // Handle other existing game events (preserve existing functionality)
