@@ -1,6 +1,6 @@
 // shared/socket.ts
 import { io, Socket } from 'socket.io-client';
-import type { ID, GameState, ClientToServerEvents, ServerToClientEvents } from './types';
+import type { ID, GameState, ClientToServerEvents, ServerToClientEvents, Player } from './types';
 import { config, debug } from './config';
 
 class SocketService {
@@ -121,6 +121,37 @@ class SocketService {
   onError(callback: (data: { code: string; message: string }) => void): void {
     if (!this.socket) return;
     this.socket.on('error', callback);
+  }
+
+  // Lobby-specific methods
+  joinLobby(gameId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('join-lobby', { gameId });
+    debug.log(`Joined lobby room for game ${gameId}`);
+  }
+
+  leaveLobby(gameId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('leave-lobby', { gameId });
+    debug.log(`Left lobby room for game ${gameId}`);
+  }
+
+  onLobbyUpdate(callback: (data: { gameId: ID; players: Player[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    // Remove old listener before adding new one to prevent duplicates
+    this.socket.off('lobby-updated');
+    this.socket.on('lobby-updated', callback);
+  }
+
+  onGameStarted(callback: (data: { gameId: ID; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    // Remove old listener before adding new one to prevent duplicates
+    this.socket.off('game-started');
+    this.socket.on('game-started', callback);
   }
 
   getServerSeq(): number {

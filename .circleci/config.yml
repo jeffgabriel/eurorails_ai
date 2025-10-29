@@ -76,7 +76,37 @@ jobs:
 
       - run:
           name: Run tests in /app
-          command: docker compose exec app sh -c "cd /app && npm test"
+          command: docker compose exec app sh -c "cd /app && mkdir -p test-results && npm test"
+          when: always
+
+      - run:
+          name: Copy test results from container
+          when: always
+          command: |
+            docker compose cp app:/app/test-results ./test-results || mkdir -p test-results
+
+      - run:
+          name: Copy coverage from container
+          when: always
+          command: |
+            docker compose cp app:/app/coverage ./coverage || true
+
+      - store_test_results:
+          path: test-results
+
+      - store_artifacts:
+          path: coverage
+          destination: test-coverage
+
+      - run:
+          name: Capture database logs before teardown
+          when: always
+          command: |
+            docker compose logs postgresdb > postgresdb.log || true
+
+      - store_artifacts:
+          path: postgresdb.log
+          destination: database-logs
 
       - run:
           name: Teardown

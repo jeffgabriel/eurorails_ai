@@ -4,6 +4,9 @@ module.exports = {
   testTimeout: 10000,
   maxWorkers: 1, // prevent DB deadlocks
 
+  // JUnit XML reporter for CircleCI
+  reporters: ['default', ['jest-junit', { outputDirectory: 'test-results' }]],
+
   // Shared defaults (projects can override)
   moduleNameMapper: {
     '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',

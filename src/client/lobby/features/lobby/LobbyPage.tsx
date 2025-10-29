@@ -12,7 +12,7 @@ import { JoinGameModal } from './JoinGameModal';
 import { GameRow } from './GameRow';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
-import { getErrorMessage } from '../../shared/api';
+import { getErrorMessage, api } from '../../shared/api';
 
 export function LobbyPage() {
   const navigate = useNavigate();
@@ -20,7 +20,7 @@ export function LobbyPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   
-  const { user, logout } = useAuthStore();
+  const { user, logout, token } = useAuthStore();
   const { 
     currentGame, 
     players, 
@@ -29,7 +29,10 @@ export function LobbyPage() {
     clearError,
     leaveGame,
     loadGameFromUrl,
-    restoreGameState
+    restoreGameState,
+    connectToLobbySocket,
+    disconnectFromLobbySocket,
+    onGameStarted
   } = useLobbyStore();
   
   // Get function to access store state
@@ -122,12 +125,41 @@ export function LobbyPage() {
     }
   }, [currentGame, gameId, navigate]);
 
-  const handleStartGame = async () => {
-    if (!currentGame) return;
+  // Socket connection for real-time lobby updates
+  useEffect(() => {
+    if (currentGame && currentGame.status === 'IN_SETUP' && token) {
+      // Connect to socket and join lobby room
+      console.log('Connecting to lobby socket for game:', currentGame.id);
+      connectToLobbySocket(currentGame.id, token);
+      
+      // Listen for game started event
+      onGameStarted((gameId) => {
+        console.log('Game started, navigating to game:', gameId);
+        navigate(`/game/${gameId}`);
+      });
+      
+      // Cleanup on unmount
+      return () => {
+        console.log('Disconnecting from lobby socket for game:', currentGame.id);
+        disconnectFromLobbySocket(currentGame.id);
+      };
+    }
+  }, [currentGame?.id, currentGame?.status, token, connectToLobbySocket, disconnectFromLobbySocket, onGameStarted, navigate]);
 
-    // Just navigate to the game setup - don't call the start game API
-    toast.success('Going to game setup!');
-    navigate(`/game/${currentGame.id}`);
+  const handleStartGame = async () => {
+    if (!currentGame || !user) return;
+
+    try {
+      // Call the API to start the game
+      await api.startGame(currentGame.id);
+      
+      toast.success('Game starting!');
+      // Navigate to the game - the socket event will also trigger this
+      navigate(`/game/${currentGame.id}`);
+    } catch (error) {
+      console.error('Failed to start game:', error);
+      toast.error('Failed to start game');
+    }
   };
 
   const handleLeaveGame = () => {
@@ -145,7 +177,7 @@ export function LobbyPage() {
   const canStartGame = currentGame && 
     currentGame.createdBy === user?.id && 
     currentGame.status === 'IN_SETUP' &&
-    players.length >= 2; // Minimum players needed
+    players && players.length >= 2; // Minimum players needed
 
   // Show loading state when recovering game state
   if (isLoading && !currentGame) {
@@ -349,11 +381,11 @@ export function LobbyPage() {
                 <div>
                   <h3 className="font-semibold mb-4 flex items-center gap-2">
                     <Users className="size-4" />
-                    Players ({players.length}/{currentGame.maxPlayers})
+                    Players ({(players?.length || 0)}/{currentGame.maxPlayers})
                   </h3>
                   
                   <div className="space-y-2">
-                    {players.length === 0 ? (
+                    {!players || players.length === 0 ? (
                       <p className="text-muted-foreground text-center py-4">
                         No players yet. Share the join code to invite others!
                       </p>
@@ -389,7 +421,7 @@ export function LobbyPage() {
                   <p className="text-sm text-muted-foreground text-center">
                     {currentGame.createdBy !== user?.id 
                       ? 'Waiting for the game creator to start the game...'
-                      : players.length < 2
+                      : !players || players.length < 2
                       ? 'Need at least 2 players to start the game'
                       : 'Ready to start!'
                     }

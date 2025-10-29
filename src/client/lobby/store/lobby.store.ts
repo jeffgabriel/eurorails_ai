@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import type { Game, Player, ApiError, CreateGameForm, JoinGameForm, ID } from '../shared/types';
 import { api, getErrorMessage } from '../shared/api';
+import { socketService } from '../shared/socket';
 
 interface LobbyState {
   currentGame: Game | null;
@@ -26,6 +27,10 @@ interface LobbyActions {
   saveGameState: () => void;
   clearGameState: () => void;
   refreshGameState: () => Promise<void>;
+  // Socket methods
+  connectToLobbySocket: (gameId: ID, token: string) => void;
+  disconnectFromLobbySocket: (gameId: ID) => void;
+  onGameStarted: (callback: (gameId: ID) => void) => void;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -523,6 +528,63 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   clearError: () => {
     set({ error: null, retryCount: 0 });
+  },
+
+  // Socket methods
+  connectToLobbySocket: async (gameId: ID, token: string) => {
+    try {
+      // Connect to socket if not already connected
+      if (!socketService.isConnected()) {
+        socketService.connect(token);
+      }
+      
+      // Join the lobby room
+      socketService.joinLobby(gameId);
+      
+      // Only refresh player list if we don't have players yet
+      const currentPlayers = get().players;
+      console.log('Connecting to lobby socket - current players:', currentPlayers?.length || 0);
+      if (!currentPlayers || currentPlayers.length === 0) {
+        try {
+          console.log('Loading players for game:', gameId);
+          await get().loadGamePlayers(gameId);
+          const afterLoad = get().players;
+          console.log('Players loaded, count:', afterLoad?.length || 0);
+        } catch (error) {
+          console.warn('Failed to load initial players on socket connect:', error);
+        }
+      }
+      
+      // Listen for lobby updates
+      socketService.onLobbyUpdate((data) => {
+        if (data.gameId === gameId) {
+          console.log('Lobby updated event received:', {
+            action: data.action,
+            playerCount: data.players?.length || 0,
+            players: data.players,
+          });
+          // Update player list
+          set({ players: data.players });
+        }
+      });
+    } catch (error) {
+      console.error('Failed to connect to lobby socket:', error);
+    }
+  },
+
+  disconnectFromLobbySocket: (gameId: ID) => {
+    try {
+      socketService.leaveLobby(gameId);
+    } catch (error) {
+      console.error('Failed to disconnect from lobby socket:', error);
+    }
+  },
+
+  onGameStarted: (callback: (gameId: ID) => void) => {
+    socketService.onGameStarted((data) => {
+      console.log('Game started event received:', data.gameId);
+      callback(data.gameId);
+    });
   },
 
 }));
