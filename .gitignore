@@ -30,3 +30,6 @@ npm-debug.log*
 ehthumbs.db
 Thumbs.db 
 coverage/
+
+# Test results
+test-results/
