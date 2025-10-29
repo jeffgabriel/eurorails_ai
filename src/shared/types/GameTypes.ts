@@ -31,6 +31,7 @@ export const TRAIN_PROPERTIES: Record<TrainType, TrainProperties> = {
 
 export interface Player {
     id: string;  // Add unique identifier for database
+    userId?: string;  // Optional user ID for authentication (matches players.user_id in database)
     name: string;
     color: string;  // Hex color code
     money: number;

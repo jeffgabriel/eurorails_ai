@@ -65,6 +65,12 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.scrollX = this.gameState.cameraState.scrollX;
         this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
       }
+      
+      // Initialize GameStateService if it exists and update game state to identify local player
+      if (this.gameStateService) {
+        this.gameStateService.updateGameState(this.gameState);
+      }
+      
       return;
     }
 
@@ -124,6 +130,14 @@ export class GameScene extends Phaser.Scene {
     this.children.removeAll(true);
     // Initialize services and load initial state
     this.gameStateService = new GameStateService(this.gameState);
+    
+    // Identify local player after GameStateService is created
+    const identified = this.gameStateService.initializeLocalPlayer();
+    if (!identified) {
+      console.warn('Warning: Could not identify local player. Some features may not work correctly.');
+      // Could show user a warning or handle spectator mode
+    }
+    
     await this.loadService.loadInitialState();
 
     // Create containers in the right order

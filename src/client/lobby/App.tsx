@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Router } from './app/Router';
 import { useAuthStore } from './store/auth.store';
 import { useLobbyStore } from './store/lobby.store';
@@ -7,36 +7,40 @@ import { ErrorBoundary } from './shared/ErrorBoundary';
 import { debug } from './shared/config';
 
 export default function App() {
-  const { loadPersistedAuth, isLoading: authLoading } = useAuthStore();
-  const { restoreGameState, isLoading: lobbyLoading } = useLobbyStore();
+  console.log('[App] Rendering');
+  const { loadPersistedAuth } = useAuthStore();
+  const { restoreGameState } = useLobbyStore();
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
   useEffect(() => {
     // Load persisted authentication on app start
     debug.log('App starting, loading persisted auth...');
 
-    try {
-      loadPersistedAuth();
-    } catch (error) {
-      debug.error('Error loading persisted auth:', error);
-    }
+    const initializeApp = async () => {
+      try {
+        await loadPersistedAuth();
+        await restoreGameState().catch(error => {
+          console.warn('Failed to restore game state on app load:', error);
+        });
+      } catch (error) {
+        debug.error('Error loading persisted auth:', error);
+      } finally {
+        console.log('[App] Initial load complete, showing router');
+        setInitialLoadComplete(true);
+      }
 
-    // Log current location for debugging route issues
-    debug.log('Current location:', window.location.href);
-  }, [loadPersistedAuth]);
+      // Log current location for debugging route issues
+      debug.log('Current location:', window.location.href);
+    };
 
-  // Restore game state on app load (after auth is loaded)
+    initializeApp();
+  }, [loadPersistedAuth, restoreGameState]);
+
   useEffect(() => {
-    if (!authLoading) {
-      // Try to restore game state from localStorage
-      restoreGameState().catch(error => {
-        console.warn('Failed to restore game state on app load:', error);
-      });
-    }
-  }, [authLoading, restoreGameState]);
+    console.log('[App] initialLoadComplete:', initialLoadComplete);
+  }, [initialLoadComplete]);
 
-  const isLoading = authLoading || lobbyLoading;
-
-  if (isLoading) {
+  if (!initialLoadComplete) {
     return (
       <div className="size-full flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">

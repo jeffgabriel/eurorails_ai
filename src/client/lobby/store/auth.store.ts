@@ -36,14 +36,14 @@ export const useAuthStore = create<AuthStore>((set) => ({
   // Actions
   login: async (credentials: LoginForm) => {
     set({ isLoading: true, error: null });
-    
+
     try {
       const result: AuthResult = await api.login(credentials);
-      
+
       // Persist auth data
       localStorage.setItem(JWT_STORAGE_KEY, result.token);
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(result.user));
-      
+
       set({
         user: result.user,
         token: result.token,
@@ -52,7 +52,13 @@ export const useAuthStore = create<AuthStore>((set) => ({
         error: null,
       });
     } catch (error) {
+      // Clear any existing auth data on login failure
+      localStorage.removeItem(JWT_STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
+
       set({
+        user: null,
+        token: null,
         isLoading: false,
         error: error as ApiError,
         isAuthenticated: false,
@@ -155,14 +161,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
     } catch (error) {
       const apiError = error as ApiError;
       
-      // Only clear storage if token is actually invalid (401, 403), not for network errors
-      const isAuthError = apiError.error === 'HTTP_401' || 
+      // Check for authentication errors
+      const isAuthError = apiError.error === 'UNAUTHORIZED' ||
+                         apiError.error === 'HTTP_401' || 
                          apiError.error === 'HTTP_403' ||
-                         apiError.message?.includes('unauthorized') ||
-                         apiError.message?.includes('forbidden');
+                         apiError.message?.toLowerCase().includes('unauthorized') ||
+                         apiError.message?.toLowerCase().includes('forbidden') ||
+                         apiError.message?.toLowerCase().includes('invalid') ||
+                         apiError.message?.toLowerCase().includes('expired');
       
       if (isAuthError) {
-        console.warn('Invalid auth token, clearing storage');
+        console.warn('Invalid or expired auth token, clearing storage');
         // Token is invalid, clear storage
         localStorage.removeItem(JWT_STORAGE_KEY);
         localStorage.removeItem(USER_STORAGE_KEY);
@@ -175,29 +184,21 @@ export const useAuthStore = create<AuthStore>((set) => ({
           error: null,
         });
       } else {
-        // Network error or server not ready - keep localStorage and use stored user
-        console.warn('Server not available, using stored auth data');
+        // For network errors or server not available, DON'T auto-authenticate
+        // This prevents stale/invalid auth from persisting
+        console.warn('Server not available or network error - clearing auth state for security');
         
-        try {
-          const storedUser = JSON.parse(userJson);
-          
-          set({
-            user: storedUser,
-            token,
-            isAuthenticated: true,
-            isLoading: false,
-            error: null,
-          });
-        } catch {
-          // If parsing fails, just keep the state empty but don't clear storage
-          set({
-            user: null,
-            token: null,
-            isAuthenticated: false,
-            isLoading: false,
-            error: null,
-          });
-        }
+        // Clear stored auth to prevent stale state
+        localStorage.removeItem(JWT_STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
+        
+        set({
+          user: null,
+          token: null,
+          isAuthenticated: false,
+          isLoading: false,
+          error: null,
+        });
       }
     }
   },

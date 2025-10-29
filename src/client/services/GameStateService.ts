@@ -1,8 +1,9 @@
 import { LoadType } from '../../shared/types/LoadTypes';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, Player } from '../../shared/types/GameTypes';
 
 export class GameStateService {
     private gameState: GameState;
+    private localPlayerId: string | null = null;
     
     constructor(gameState: GameState) {
         this.gameState = gameState;
@@ -49,11 +50,99 @@ export class GameStateService {
             
             const gameState = await gameResponse.json();
             this.gameState = gameState;
+            
+            // Identify local player after loading game state
+            this.initializeLocalPlayer();
+            
             return gameState;
         } catch (error) {
             console.error('Error loading game state:', error);
             return null;
         }
+    }
+    
+    /**
+     * Identifies and stores the local player ID based on authenticated user
+     * @returns true if local player was successfully identified
+     */
+    public initializeLocalPlayer(): boolean {
+        try {
+            // Get user from localStorage (same pattern as SetupScene.ts)
+            const userJson = localStorage.getItem('eurorails.user');
+            if (!userJson) {
+                console.warn('No user found in localStorage - cannot identify local player');
+                return false;
+            }
+
+            const user = JSON.parse(userJson);
+            const userId = user.id;
+
+            if (!userId) {
+                console.warn('User object missing id field');
+                return false;
+            }
+
+            // Find matching player in gameState by userId
+            const matchingPlayer = this.gameState.players.find(
+                player => player.userId === userId
+            );
+
+            if (!matchingPlayer) {
+                console.warn(`No player found for userId: ${userId}. Player may not be in this game.`);
+                // Could be spectator mode - handle gracefully
+                return false;
+            }
+
+            this.localPlayerId = matchingPlayer.id;
+            console.log(`Local player identified: ${matchingPlayer.name} (${this.localPlayerId})`);
+            return true;
+        } catch (error) {
+            console.error('Error identifying local player:', error);
+            return false;
+        }
+    }
+    
+    /**
+     * Update game state and re-identify local player
+     */
+    public updateGameState(gameState: GameState): void {
+        this.gameState = gameState;
+        this.initializeLocalPlayer();
+    }
+    
+    /**
+     * Get the local player's ID
+     */
+    public getLocalPlayerId(): string | null {
+        return this.localPlayerId;
+    }
+    
+    /**
+     * Get the local player object
+     */
+    public getLocalPlayer(): Player | null {
+        if (!this.localPlayerId) {
+            return null;
+        }
+        return this.gameState.players.find(p => p.id === this.localPlayerId) || null;
+    }
+    
+    /**
+     * Check if local player is the currently active player
+     */
+    public isCurrentPlayer(): boolean {
+        if (!this.localPlayerId) {
+            return false;
+        }
+        const currentPlayer = this.getCurrentPlayer();
+        return currentPlayer?.id === this.localPlayerId;
+    }
+    
+    /**
+     * Check if a given player ID is the local player
+     */
+    public isLocalPlayer(playerId: string): boolean {
+        return this.localPlayerId === playerId;
     }
     
     public getCurrentPlayer() {

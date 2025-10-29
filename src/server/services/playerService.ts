@@ -6,6 +6,7 @@ import { demandDeckService } from "./demandDeckService";
 
 interface PlayerRow {
   id: string;
+  user_id: string | null;
   name: string;
   color: string;
   money: number;
@@ -73,15 +74,16 @@ export class PlayerService {
 
     const query = `
             INSERT INTO players (
-                id, game_id, name, color, money, train_type,
+                id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
                 current_turn_number, hand, loads
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         `;
     const values = [
       player.id,
       gameId,
+      player.userId || null,  // Include userId if provided
       player.name,
       normalizedColor,
       typeof player.money === "number" ? player.money : 50,
@@ -162,17 +164,18 @@ export class PlayerService {
       const query = `
                 UPDATE players 
                 SET name = $1, 
-                    color = $2, 
-                    money = $3, 
-                    train_type = $4,
-                    position_x = $5,
-                    position_y = $6,
-                    position_row = $7,
-                    position_col = $8,
-                    current_turn_number = $11,
-                    hand = $12,
-                    loads = $13
-                WHERE game_id = $9 AND id = $10
+                    user_id = $2,
+                    color = $3, 
+                    money = $4, 
+                    train_type = $5,
+                    position_x = $6,
+                    position_y = $7,
+                    position_row = $8,
+                    position_col = $9,
+                    current_turn_number = $12,
+                    hand = $13,
+                    loads = $14
+                WHERE game_id = $10 AND id = $11
                 RETURNING *
             `;
       // Determine money value with proper type checking
@@ -180,6 +183,7 @@ export class PlayerService {
 
       const values = [
         player.name,
+        player.userId || null,  // Include userId if provided
         normalizedColor,
         moneyValue,
         trainType,
@@ -289,6 +293,7 @@ export class PlayerService {
       const query = `
                 SELECT 
                     players.id, 
+                    user_id,
                     name, 
                     color, 
                     money, 
@@ -352,6 +357,7 @@ export class PlayerService {
 
         return {
           ...row,
+          userId: row.user_id || undefined,  // Map user_id to userId (optional for backward compatibility)
           trainType,
           trainState: {
             position:

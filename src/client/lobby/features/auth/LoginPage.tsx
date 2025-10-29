@@ -1,5 +1,5 @@
 // features/auth/LoginPage.tsx
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,7 +10,6 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '../../components/ui/form';
 import { useAuthStore } from '../../store/auth.store';
-import { getErrorMessage } from '../../shared/api';
 import type { LoginForm } from '../../shared/types';
 
 const loginSchema = z.object({
@@ -20,37 +19,74 @@ const loginSchema = z.object({
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { login, isLoading, error, clearError, isAuthenticated } = useAuthStore();
+  const { login, isLoading, isAuthenticated, error, clearError } = useAuthStore();
+
+  // Preserve form values in sessionStorage to survive unmounts
+  const getStoredFormValues = (): LoginForm => {
+    try {
+      const stored = sessionStorage.getItem('loginFormValues');
+      return stored ? JSON.parse(stored) : { email: '', password: '' };
+    } catch {
+      return { email: '', password: '' };
+    }
+  };
 
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: getStoredFormValues(),
   });
 
   useEffect(() => {
+    console.log('[LoginPage] Mounted');
+    return () => console.log('[LoginPage] Unmounted');
+  }, []);
+
+  useEffect(() => {
+    console.log('[LoginPage] isLoading:', isLoading, 'isAuthenticated:', isAuthenticated, 'error:', error);
+  }, [isLoading, isAuthenticated, error]);
+
+  // Save form values to sessionStorage on change
+  useEffect(() => {
+    const subscription = form.watch((values) => {
+      sessionStorage.setItem('loginFormValues', JSON.stringify(values));
+    });
+    return () => subscription.unsubscribe();
+  }, [form]);
+
+  // Clear stored values on successful auth
+  useEffect(() => {
     if (isAuthenticated) {
+      sessionStorage.removeItem('loginFormValues');
       navigate('/lobby', { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
+  // Clear error when user starts typing
   useEffect(() => {
-    if (error) {
-      toast.error(getErrorMessage(error));
-      clearError();
-    }
-  }, [error, clearError]);
+    const subscription = form.watch(() => {
+      if (error) {
+        clearError();
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form, error, clearError]);
 
   const onSubmit = async (data: LoginForm) => {
+    clearError();
+
     try {
       await login(data);
       toast.success('Welcome back!');
-      navigate('/lobby', { replace: true });
-    } catch {
-      // Error handling is done via the error state and useEffect
+      // Navigation will happen via useEffect when isAuthenticated becomes true
+    } catch (error) {
+      // Error will be in the auth store
+      // Keep form values - they should persist
     }
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    form.handleSubmit(onSubmit)(e);
   };
 
   return (
@@ -70,7 +106,7 @@ export function LoginPage() {
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <form onSubmit={handleFormSubmit} className="space-y-4">
                 <FormField
                   control={form.control}
                   name="email"
@@ -97,8 +133,8 @@ export function LoginPage() {
                     <FormItem>
                       <FormLabel>Password</FormLabel>
                       <FormControl>
-                        <Input 
-                          type="password" 
+                        <Input
+                          type="password"
                           placeholder="Enter your password"
                           {...field}
                           disabled={isLoading}
@@ -109,9 +145,15 @@ export function LoginPage() {
                   )}
                 />
 
-                <Button 
-                  type="submit" 
-                  className="w-full" 
+                {error && (
+                  <div className="text-sm font-medium" style={{ color: '#dc2626' }}>
+                    Username or password are incorrect
+                  </div>
+                )}
+
+                <Button
+                  type="submit"
+                  className="w-full"
                   disabled={isLoading}
                 >
                   {isLoading ? 'Signing In...' : 'Sign In'}
