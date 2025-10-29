@@ -9,24 +9,17 @@
 
 import { Server as HTTPServer } from 'http';
 import { createServer } from 'http';
-import { initializeSocketIO } from '../services/socketService';
-import type { Socket as ClientSocket } from 'socket.io-client';
+import { initializeSocketIO, emitToLobby } from '../services/socketService';
 
 // Mock socket.io-client for testing
 // In a real integration test, you would use actual socket.io-client
 describe('Socket.IO Lobby Integration', () => {
   let httpServer: HTTPServer;
   let io: any;
-  let testPort: number;
 
   beforeAll((done) => {
     httpServer = createServer();
     httpServer.listen(() => {
-      const address = httpServer.address();
-      if (address && typeof address === 'object') {
-        testPort = address.port;
-      }
-      
       // Initialize Socket.IO
       io = initializeSocketIO(httpServer);
       done();
@@ -50,7 +43,7 @@ describe('Socket.IO Lobby Integration', () => {
           expect(room).toMatch(/^lobby-/);
           return Promise.resolve();
         }),
-        to: jest.fn((room: string) => ({
+        to: jest.fn((_room: string) => ({
           emit: jest.fn((event: string, data: any) => {
             expect(event).toBe('lobby-updated');
             expect(data.gameId).toBeDefined();
@@ -98,7 +91,7 @@ describe('Socket.IO Lobby Integration', () => {
           expect(room).toMatch(/^lobby-/);
           return Promise.resolve();
         }),
-        to: jest.fn((room: string) => ({
+        to: jest.fn((_room: string) => ({
           emit: jest.fn((event: string, data: any) => {
             expect(event).toBe('lobby-updated');
             expect(data.action).toBe('player-left');
@@ -197,8 +190,6 @@ describe('Socket.IO Lobby Integration', () => {
     });
 
     it('should handle uninitialized socket gracefully', () => {
-      const { emitToLobby } = require('../services/socketService');
-      
       expect(() => {
         emitToLobby('test-game', 'test-event', {});
       }).not.toThrow();

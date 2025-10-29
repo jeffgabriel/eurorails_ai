@@ -1,6 +1,6 @@
 // shared/socket.ts
 import { io, Socket } from 'socket.io-client';
-import type { ID, GameState, ClientToServerEvents, ServerToClientEvents } from './types';
+import type { ID, GameState, ClientToServerEvents, ServerToClientEvents, Player } from './types';
 import { config, debug } from './config';
 
 class SocketService {
@@ -140,7 +140,7 @@ class SocketService {
     debug.log(`Left lobby room for game ${gameId}`);
   }
 
-  onLobbyUpdate(callback: (data: { gameId: ID; players: any[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void): void {
+  onLobbyUpdate(callback: (data: { gameId: ID; players: Player[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void): void {
     if (!this.socket) return;
     // Remove old listener before adding new one to prevent duplicates
     this.socket.off('lobby-updated');

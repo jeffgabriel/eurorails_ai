@@ -147,8 +147,14 @@ async function startServer() {
         // Create HTTP server
         const server = http.createServer(app);
 
-        // Initialize Socket.IO
-        initializeSocketIO(server);
+        // Initialize Socket.IO with error handling
+        try {
+            initializeSocketIO(server);
+        } catch (error) {
+            console.error('Failed to initialize Socket.IO:', error);
+            // Continue server startup even if Socket.IO fails
+            // This allows the app to run without real-time features
+        }
 
         // Start server
         server.listen(port, () => {

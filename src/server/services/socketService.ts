@@ -34,6 +34,10 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
     // Handle join lobby event
     socket.on('join-lobby', (data: { gameId: string }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for join-lobby`);
+        return;
+      }
       const { gameId } = data;
       console.log(`Client ${socket.id} joining lobby for game ${gameId}`);
       socket.join(`lobby-${gameId}`);
@@ -43,6 +47,10 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
     // Handle leave lobby event
     socket.on('leave-lobby', (data: { gameId: string }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for leave-lobby`);
+        return;
+      }
       const { gameId } = data;
       console.log(`Client ${socket.id} leaving lobby for game ${gameId}`);
       socket.leave(`lobby-${gameId}`);
@@ -52,11 +60,23 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
 
     // Handle other existing game events (preserve existing functionality)
     socket.on('join', (data: { gameId: string }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for join`);
+        return;
+      }
       console.log(`Client ${socket.id} joining game ${data.gameId}`);
       socket.join(data.gameId);
     });
 
     socket.on('action', (data: { gameId: string; type: string; payload: unknown; clientSeq: number }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for action`);
+        return;
+      }
+      if (!data.type || typeof data.type !== 'string') {
+        console.warn(`Invalid action type from client ${socket.id}`);
+        return;
+      }
       console.log(`Client ${socket.id} sent action: ${data.type} for game ${data.gameId}`);
       // Forward action to other players in the game
       socket.to(data.gameId).emit('state:patch', {
