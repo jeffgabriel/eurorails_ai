@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import type { Game, Player, ApiError, CreateGameForm, JoinGameForm, ID } from '../shared/types';
 import { api, getErrorMessage } from '../shared/api';
+import { socketService } from '../shared/socket';
 
 interface LobbyState {
   currentGame: Game | null;
@@ -26,6 +27,9 @@ interface LobbyActions {
   saveGameState: () => void;
   clearGameState: () => void;
   refreshGameState: () => Promise<void>;
+  // Socket methods
+  connectToLobbySocket: (gameId: ID, token: string) => void;
+  disconnectFromLobbySocket: (gameId: ID) => void;
 }
 
 type LobbyStore = LobbyState & LobbyActions;
@@ -523,6 +527,38 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   clearError: () => {
     set({ error: null, retryCount: 0 });
+  },
+
+  // Socket methods
+  connectToLobbySocket: (gameId: ID, token: string) => {
+    try {
+      // Connect to socket if not already connected
+      if (!socketService.isConnected()) {
+        socketService.connect(token);
+      }
+      
+      // Join the lobby room
+      socketService.joinLobby(gameId);
+      
+      // Listen for lobby updates
+      socketService.onLobbyUpdate((data) => {
+        if (data.gameId === gameId) {
+          console.log('Lobby updated:', data.action);
+          // Update player list
+          set({ players: data.players });
+        }
+      });
+    } catch (error) {
+      console.error('Failed to connect to lobby socket:', error);
+    }
+  },
+
+  disconnectFromLobbySocket: (gameId: ID) => {
+    try {
+      socketService.leaveLobby(gameId);
+    } catch (error) {
+      console.error('Failed to disconnect from lobby socket:', error);
+    }
   },
 
 }));

@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
+import { emitLobbyUpdated } from './socketService';
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -274,6 +275,15 @@ export class LobbyService {
       );
       
       await client.query('COMMIT');
+      
+      // Emit socket event to notify other players in the lobby
+      try {
+        const players = await LobbyService.getGamePlayers(game.id);
+        await emitLobbyUpdated(game.id, 'player-joined', players);
+      } catch (socketError) {
+        // Log error but don't fail the join operation
+        console.error('Failed to emit lobby update:', socketError);
+      }
       
       return {
         id: game.id,
@@ -559,6 +569,15 @@ export class LobbyService {
       }
       
       await client.query('COMMIT');
+      
+      // Emit socket event to notify other players in the lobby
+      try {
+        const players = await LobbyService.getGamePlayers(gameId);
+        await emitLobbyUpdated(gameId, 'player-left', players);
+      } catch (socketError) {
+        // Log error but don't fail the leave operation
+        console.error('Failed to emit lobby update:', socketError);
+      }
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;

@@ -1,4 +1,5 @@
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import cors from 'cors';
 import session from 'express-session';
@@ -12,6 +13,7 @@ import authRoutes from './routes/authRoutes';
 import { checkDatabase } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
+import { initializeSocketIO } from './services/socketService';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -142,11 +144,18 @@ async function startServer() {
             // Don't exit - the game might already exist
         }
 
+        // Create HTTP server
+        const server = http.createServer(app);
+
+        // Initialize Socket.IO
+        initializeSocketIO(server);
+
         // Start server
-        const server = app.listen(port, () => {
+        server.listen(port, () => {
             console.log('=================================');
             console.log(`Server running in ${process.env.NODE_ENV} mode`);
             console.log(`API server listening on port ${port}`);
+            console.log(`Socket.IO initialized and ready`);
             console.log(`API routes available at http://localhost:${port}/api`);
             console.log('In development mode:');
             console.log('- Client dev server runs on port 3000');

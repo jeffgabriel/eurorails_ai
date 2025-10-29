@@ -20,7 +20,7 @@ export function LobbyPage() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   
-  const { user, logout } = useAuthStore();
+  const { user, logout, token } = useAuthStore();
   const { 
     currentGame, 
     players, 
@@ -29,7 +29,9 @@ export function LobbyPage() {
     clearError,
     leaveGame,
     loadGameFromUrl,
-    restoreGameState
+    restoreGameState,
+    connectToLobbySocket,
+    disconnectFromLobbySocket
   } = useLobbyStore();
   
   // Get function to access store state
@@ -121,6 +123,21 @@ export function LobbyPage() {
       }
     }
   }, [currentGame, gameId, navigate]);
+
+  // Socket connection for real-time lobby updates
+  useEffect(() => {
+    if (currentGame && currentGame.status === 'IN_SETUP' && token) {
+      // Connect to socket and join lobby room
+      console.log('Connecting to lobby socket for game:', currentGame.id);
+      connectToLobbySocket(currentGame.id, token);
+      
+      // Cleanup on unmount
+      return () => {
+        console.log('Disconnecting from lobby socket for game:', currentGame.id);
+        disconnectFromLobbySocket(currentGame.id);
+      };
+    }
+  }, [currentGame?.id, currentGame?.status, token, connectToLobbySocket, disconnectFromLobbySocket]);
 
   const handleStartGame = async () => {
     if (!currentGame) return;

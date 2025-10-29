@@ -123,6 +123,28 @@ class SocketService {
     this.socket.on('error', callback);
   }
 
+  // Lobby-specific methods
+  joinLobby(gameId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('join-lobby', { gameId });
+    debug.log(`Joined lobby room for game ${gameId}`);
+  }
+
+  leaveLobby(gameId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('leave-lobby', { gameId });
+    debug.log(`Left lobby room for game ${gameId}`);
+  }
+
+  onLobbyUpdate(callback: (data: { gameId: ID; players: any[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.on('lobby-updated', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }

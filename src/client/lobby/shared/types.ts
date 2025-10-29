@@ -59,6 +59,8 @@ export interface ApiError {
 export interface ClientToServerEvents {
   join: (data: { gameId: ID }) => void;
   action: (data: { gameId: ID; type: string; payload: unknown; clientSeq: number }) => void;
+  'join-lobby': (data: { gameId: ID }) => void;
+  'leave-lobby': (data: { gameId: ID }) => void;
 }
 
 export interface ServerToClientEvents {
@@ -67,6 +69,7 @@ export interface ServerToClientEvents {
   'presence:update': (data: { userId: ID; isOnline: boolean }) => void;
   'turn:change': (data: { currentTurnUserId: ID; serverSeq: number }) => void;
   'error': (data: { code: string; message: string }) => void;
+  'lobby-updated': (data: { gameId: ID; players: Player[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void;
 }
 
 // Form validation types

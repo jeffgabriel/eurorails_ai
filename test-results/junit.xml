@@ -1,0 +1,769 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="jest tests" tests="353" failures="0" errors="0" time="12.326">
+  <testsuite name="AuthService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:36" time="5.403" tests="21">
+    <testcase classname="AuthService register should register a new user successfully" name="AuthService register should register a new user successfully" time="0.286">
+    </testcase>
+    <testcase classname="AuthService register should hash password correctly" name="AuthService register should hash password correctly" time="0.241">
+    </testcase>
+    <testcase classname="AuthService register should throw error for duplicate email" name="AuthService register should throw error for duplicate email" time="0.254">
+    </testcase>
+    <testcase classname="AuthService register should throw error for duplicate username" name="AuthService register should throw error for duplicate username" time="0.239">
+    </testcase>
+    <testcase classname="AuthService register should validate email format" name="AuthService register should validate email format" time="0.001">
+    </testcase>
+    <testcase classname="AuthService register should validate password strength" name="AuthService register should validate password strength" time="0.001">
+    </testcase>
+    <testcase classname="AuthService login should login with valid credentials" name="AuthService login should login with valid credentials" time="0.485">
+    </testcase>
+    <testcase classname="AuthService login should throw error for invalid email" name="AuthService login should throw error for invalid email" time="0.24">
+    </testcase>
+    <testcase classname="AuthService login should throw error for invalid password" name="AuthService login should throw error for invalid password" time="0.47">
+    </testcase>
+    <testcase classname="AuthService login should update last_active timestamp on login" name="AuthService login should update last_active timestamp on login" time="0.472">
+    </testcase>
+    <testcase classname="AuthService verifyToken should verify valid token" name="AuthService verifyToken should verify valid token" time="0.238">
+    </testcase>
+    <testcase classname="AuthService verifyToken should return null for invalid token" name="AuthService verifyToken should return null for invalid token" time="0.001">
+    </testcase>
+    <testcase classname="AuthService refreshAccessToken should refresh access token with valid refresh token" name="AuthService refreshAccessToken should refresh access token with valid refresh token" time="0.238">
+    </testcase>
+    <testcase classname="AuthService refreshAccessToken should throw error for invalid refresh token" name="AuthService refreshAccessToken should throw error for invalid refresh token" time="0.237">
+    </testcase>
+    <testcase classname="AuthService password validation should reject passwords that are too short" name="AuthService password validation should reject passwords that are too short" time="0">
+    </testcase>
+    <testcase classname="AuthService password validation should reject passwords without uppercase letters" name="AuthService password validation should reject passwords without uppercase letters" time="0.001">
+    </testcase>
+    <testcase classname="AuthService password validation should reject passwords without lowercase letters" name="AuthService password validation should reject passwords without lowercase letters" time="0">
+    </testcase>
+    <testcase classname="AuthService password validation should reject passwords without numbers" name="AuthService password validation should reject passwords without numbers" time="0.001">
+    </testcase>
+    <testcase classname="AuthService username validation should reject usernames that are too short" name="AuthService username validation should reject usernames that are too short" time="0">
+    </testcase>
+    <testcase classname="AuthService username validation should reject usernames that are too long" name="AuthService username validation should reject usernames that are too long" time="0.001">
+    </testcase>
+    <testcase classname="AuthService username validation should reject usernames with invalid characters" name="AuthService username validation should reject usernames with invalid characters" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="Socket.IO Lobby Integration" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:42" time="0.098" tests="7">
+    <testcase classname="Socket.IO Lobby Integration Lobby Room Management should handle join-lobby event" name="Socket.IO Lobby Integration Lobby Room Management should handle join-lobby event" time="0.002">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Lobby Room Management should handle leave-lobby event" name="Socket.IO Lobby Integration Lobby Room Management should handle leave-lobby event" time="0">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Event Broadcasting should broadcast lobby-updated to all clients in room" name="Socket.IO Lobby Integration Event Broadcasting should broadcast lobby-updated to all clients in room" time="0">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Connection Lifecycle should handle client connect event" name="Socket.IO Lobby Integration Connection Lifecycle should handle client connect event" time="0.002">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Connection Lifecycle should handle client disconnect event" name="Socket.IO Lobby Integration Connection Lifecycle should handle client disconnect event" time="0">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Error Handling should handle socket errors gracefully" name="Socket.IO Lobby Integration Error Handling should handle socket errors gracefully" time="0">
+    </testcase>
+    <testcase classname="Socket.IO Lobby Integration Error Handling should handle uninitialized socket gracefully" name="Socket.IO Lobby Integration Error Handling should handle uninitialized socket gracefully" time="0.002">
+    </testcase>
+  </testsuite>
+  <testsuite name="True End-to-End Tests - Database Outcomes" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:42" time="1.659" tests="8">
+    <testcase classname="True End-to-End Tests - Database Outcomes Game Creation Outcomes should create game and verify it exists in database" name="True End-to-End Tests - Database Outcomes Game Creation Outcomes should create game and verify it exists in database" time="0.059">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Game Creation Outcomes should create game with different settings and verify persistence" name="True End-to-End Tests - Database Outcomes Game Creation Outcomes should create game with different settings and verify persistence" time="0.118">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Game Joining Outcomes should join game and verify player is added to database" name="True End-to-End Tests - Database Outcomes Game Joining Outcomes should join game and verify player is added to database" time="0.04">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Game Joining Outcomes should handle multiple players joining same game" name="True End-to-End Tests - Database Outcomes Game Joining Outcomes should handle multiple players joining same game" time="0.025">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Game State Changes Outcomes should call startGame API and change database status to ACTIVE" name="True End-to-End Tests - Database Outcomes Game State Changes Outcomes should call startGame API and change database status to ACTIVE" time="0.022">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Game State Changes Outcomes should update player presence and verify in database" name="True End-to-End Tests - Database Outcomes Game State Changes Outcomes should update player presence and verify in database" time="0.012">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Data Integrity and Persistence should maintain data integrity across multiple operations" name="True End-to-End Tests - Database Outcomes Data Integrity and Persistence should maintain data integrity across multiple operations" time="0.013">
+    </testcase>
+    <testcase classname="True End-to-End Tests - Database Outcomes Data Integrity and Persistence should handle concurrent operations without data corruption" name="True End-to-End Tests - Database Outcomes Data Integrity and Persistence should handle concurrent operations without data corruption" time="0.015">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrainCard" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:44" time="1.313" tests="6">
+    <testcase classname="TrainCard should create train card with correct image" name="TrainCard should create train card with correct image" time="0.001">
+    </testcase>
+    <testcase classname="TrainCard should create correct number of load slots based on train type" name="TrainCard should create correct number of load slots based on train type" time="0">
+    </testcase>
+    <testcase classname="TrainCard should update train card image when train type changes" name="TrainCard should update train card image when train type changes" time="0">
+    </testcase>
+    <testcase classname="TrainCard should update load slots based on current loads" name="TrainCard should update load slots based on current loads" time="0.001">
+    </testcase>
+    <testcase classname="TrainCard should handle visibility changes" name="TrainCard should handle visibility changes" time="0.002">
+    </testcase>
+    <testcase classname="TrainCard should clean up resources on destroy" name="TrainCard should clean up resources on destroy" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrackBuildingService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:45" time="1.07" tests="10">
+    <testcase classname="TrackBuildingService addPlayerTrack should allow building from a major city" name="TrackBuildingService addPlayerTrack should allow building from a major city" time="0.002">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should not allow building between non-connected points" name="TrackBuildingService addPlayerTrack should not allow building between non-connected points" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should allow building from existing network" name="TrackBuildingService addPlayerTrack should allow building from existing network" time="0.001">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should calculate correct costs for different terrain types" name="TrackBuildingService addPlayerTrack should calculate correct costs for different terrain types" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should enforce turn budget limit" name="TrackBuildingService addPlayerTrack should enforce turn budget limit" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should validate city connection limits" name="TrackBuildingService addPlayerTrack should validate city connection limits" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService addPlayerTrack should handle ferry connections correctly" name="TrackBuildingService addPlayerTrack should handle ferry connections correctly" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService isValidConnection should validate adjacent points" name="TrackBuildingService isValidConnection should validate adjacent points" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService isValidConnection should prevent building on water" name="TrackBuildingService isValidConnection should prevent building on water" time="0">
+    </testcase>
+    <testcase classname="TrackBuildingService isValidConnection should validate track crossing costs" name="TrackBuildingService isValidConnection should validate track crossing costs" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="Lobby API HTTP Integration Tests" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:46" time="0.61" tests="24">
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should create a new game successfully" name="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should create a new game successfully" time="0.057">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should create a private game successfully" name="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should create a private game successfully" time="0.013">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should validate required fields" name="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should validate required fields" time="0.008">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should validate maxPlayers range" name="Lobby API HTTP Integration Tests POST /api/lobby/games - Create Game should validate maxPlayers range" time="0.016">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should join a game successfully" name="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should join a game successfully" time="0.037">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should handle invalid join code" name="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should handle invalid join code" time="0.012">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should handle non-existent game" name="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should handle non-existent game" time="0.026">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should validate required fields" name="Lobby API HTTP Integration Tests POST /api/lobby/games/join - Join Game should validate required fields" time="0.009">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should get game information successfully" name="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should get game information successfully" time="0.011">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should handle non-existent game" name="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should handle non-existent game" time="0.009">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should validate UUID format" name="Lobby API HTTP Integration Tests GET /api/lobby/games/:id - Get Game should validate UUID format" time="0.01">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/games/:id/players - Get Game Players should get game players successfully" name="Lobby API HTTP Integration Tests GET /api/lobby/games/:id/players - Get Game Players should get game players successfully" time="0.017">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/games/:id/players - Get Game Players should handle non-existent game" name="Lobby API HTTP Integration Tests GET /api/lobby/games/:id/players - Get Game Players should handle non-existent game" time="0.013">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should start game successfully" name="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should start game successfully" time="0.028">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should handle insufficient players" name="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should handle insufficient players" time="0.023">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should handle non-creator trying to start" name="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/start - Start Game should handle non-creator trying to start" time="0.016">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/leave - Leave Game should leave game successfully" name="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/leave - Leave Game should leave game successfully" time="0.021">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/leave - Leave Game should handle non-existent game" name="Lobby API HTTP Integration Tests POST /api/lobby/games/:id/leave - Leave Game should handle non-existent game" time="0.014">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/players/presence - Update Presence should return 404 when updating presence for non-existent player" name="Lobby API HTTP Integration Tests POST /api/lobby/players/presence - Update Presence should return 404 when updating presence for non-existent player" time="0.005">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests POST /api/lobby/players/presence - Update Presence should validate required fields" name="Lobby API HTTP Integration Tests POST /api/lobby/players/presence - Update Presence should validate required fields" time="0.003">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests GET /api/lobby/health - Health Check should return health status" name="Lobby API HTTP Integration Tests GET /api/lobby/health - Health Check should return health status" time="0.003">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests Error Handling should handle 404 for unknown routes" name="Lobby API HTTP Integration Tests Error Handling should handle 404 for unknown routes" time="0.004">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests Error Handling should handle malformed JSON" name="Lobby API HTTP Integration Tests Error Handling should handle malformed JSON" time="0.009">
+    </testcase>
+    <testcase classname="Lobby API HTTP Integration Tests Request ID Tracking should include request ID in response headers" name="Lobby API HTTP Integration Tests Request ID Tracking should include request ID in response headers" time="0.003">
+    </testcase>
+  </testsuite>
+  <testsuite name="LobbyService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.259" tests="43">
+    <testcase classname="LobbyService createGame should create a game with valid data" name="LobbyService createGame should create a game with valid data" time="0.019">
+    </testcase>
+    <testcase classname="LobbyService createGame should create a game with default values" name="LobbyService createGame should create a game with default values" time="0.006">
+    </testcase>
+    <testcase classname="LobbyService createGame should throw error for missing createdByUserId" name="LobbyService createGame should throw error for missing createdByUserId" time="0.014">
+    </testcase>
+    <testcase classname="LobbyService createGame should throw error for invalid maxPlayers" name="LobbyService createGame should throw error for invalid maxPlayers" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService createGame should throw error for maxPlayers &gt; 6" name="LobbyService createGame should throw error for maxPlayers &gt; 6" time="0">
+    </testcase>
+    <testcase classname="LobbyService createGame should create unique join codes" name="LobbyService createGame should create unique join codes" time="0.007">
+    </testcase>
+    <testcase classname="LobbyService joinGame should join a game with valid join code" name="LobbyService joinGame should join a game with valid join code" time="0.023">
+    </testcase>
+    <testcase classname="LobbyService joinGame should return same game if player already in game" name="LobbyService joinGame should return same game if player already in game" time="0.012">
+    </testcase>
+    <testcase classname="LobbyService joinGame should throw error for invalid join code" name="LobbyService joinGame should throw error for invalid join code" time="0.004">
+    </testcase>
+    <testcase classname="LobbyService joinGame should throw error for empty join code" name="LobbyService joinGame should throw error for empty join code" time="0.003">
+    </testcase>
+    <testcase classname="LobbyService joinGame should throw error for missing userId" name="LobbyService joinGame should throw error for missing userId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService joinGame should handle join code case insensitivity" name="LobbyService joinGame should handle join code case insensitivity" time="0.005">
+    </testcase>
+    <testcase classname="LobbyService joinGame should throw error when game is full" name="LobbyService joinGame should throw error when game is full" time="0.009">
+    </testcase>
+    <testcase classname="LobbyService joinGame should throw error when game has already started" name="LobbyService joinGame should throw error when game has already started" time="0.008">
+    </testcase>
+    <testcase classname="LobbyService getGame should get game by valid ID" name="LobbyService getGame should get game by valid ID" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService getGame should return null for non-existent game" name="LobbyService getGame should return null for non-existent game" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService getGame should throw error for empty gameId" name="LobbyService getGame should throw error for empty gameId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService getGamePlayers should get players for a game" name="LobbyService getGamePlayers should get players for a game" time="0.008">
+    </testcase>
+    <testcase classname="LobbyService getGamePlayers should return array with creator for newly created game" name="LobbyService getGamePlayers should return array with creator for newly created game" time="0.003">
+    </testcase>
+    <testcase classname="LobbyService getGamePlayers should throw error for empty gameId" name="LobbyService getGamePlayers should throw error for empty gameId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService startGame should start game with valid creator" name="LobbyService startGame should start game with valid creator" time="0.006">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for non-existent game" name="LobbyService startGame should throw error for non-existent game" time="0.001">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for non-creator trying to start" name="LobbyService startGame should throw error for non-creator trying to start" time="0.003">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for insufficient players" name="LobbyService startGame should throw error for insufficient players" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for already started game" name="LobbyService startGame should throw error for already started game" time="0.004">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for empty gameId" name="LobbyService startGame should throw error for empty gameId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService startGame should throw error for empty creatorUserId" name="LobbyService startGame should throw error for empty creatorUserId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService leaveGame should remove player from game" name="LobbyService leaveGame should remove player from game" time="0.006">
+    </testcase>
+    <testcase classname="LobbyService leaveGame should transfer ownership when creator leaves" name="LobbyService leaveGame should transfer ownership when creator leaves" time="0.008">
+    </testcase>
+    <testcase classname="LobbyService leaveGame should throw error for player not in game" name="LobbyService leaveGame should throw error for player not in game" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService leaveGame should throw error for empty gameId" name="LobbyService leaveGame should throw error for empty gameId" time="0.001">
+    </testcase>
+    <testcase classname="LobbyService leaveGame should throw error for empty userId" name="LobbyService leaveGame should throw error for empty userId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService updatePlayerPresence should update player online status" name="LobbyService updatePlayerPresence should update player online status" time="0.003">
+    </testcase>
+    <testcase classname="LobbyService updatePlayerPresence should update player back to online" name="LobbyService updatePlayerPresence should update player back to online" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService updatePlayerPresence should throw error for non-existent player" name="LobbyService updatePlayerPresence should throw error for non-existent player" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService updatePlayerPresence should throw error for empty userId" name="LobbyService updatePlayerPresence should throw error for empty userId" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService updatePlayerPresence should throw error for invalid isOnline type" name="LobbyService updatePlayerPresence should throw error for invalid isOnline type" time="0.001">
+    </testcase>
+    <testcase classname="LobbyService Transaction Behavior should rollback createGame on error" name="LobbyService Transaction Behavior should rollback createGame on error" time="0.001">
+    </testcase>
+    <testcase classname="LobbyService Transaction Behavior should rollback joinGame on error" name="LobbyService Transaction Behavior should rollback joinGame on error" time="0.001">
+    </testcase>
+    <testcase classname="LobbyService Transaction Behavior should rollback startGame on error" name="LobbyService Transaction Behavior should rollback startGame on error" time="0.01">
+    </testcase>
+    <testcase classname="LobbyService Edge Cases should handle concurrent game creation" name="LobbyService Edge Cases should handle concurrent game creation" time="0.017">
+    </testcase>
+    <testcase classname="LobbyService Edge Cases should handle valid UUID user IDs" name="LobbyService Edge Cases should handle valid UUID user IDs" time="0.002">
+    </testcase>
+    <testcase classname="LobbyService Edge Cases should handle special characters in join codes" name="LobbyService Edge Cases should handle special characters in join codes" time="0.002">
+    </testcase>
+  </testsuite>
+  <testsuite name="Lobby API Integration Tests" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.218" tests="13">
+    <testcase classname="Lobby API Integration Tests End-to-End Lobby Workflow should complete full lobby workflow: create -&gt; join -&gt; start -&gt; leave" name="Lobby API Integration Tests End-to-End Lobby Workflow should complete full lobby workflow: create -&gt; join -&gt; start -&gt; leave" time="0.043">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests End-to-End Lobby Workflow should handle multiple players joining and leaving" name="Lobby API Integration Tests End-to-End Lobby Workflow should handle multiple players joining and leaving" time="0.011">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests End-to-End Lobby Workflow should handle ownership transfer when creator leaves" name="Lobby API Integration Tests End-to-End Lobby Workflow should handle ownership transfer when creator leaves" time="0.005">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests End-to-End Lobby Workflow should delete game when last player leaves" name="Lobby API Integration Tests End-to-End Lobby Workflow should delete game when last player leaves" time="0.007">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Player Presence Management should update player online status" name="Lobby API Integration Tests Player Presence Management should update player online status" time="0.006">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Concurrent Operations should handle concurrent game creation" name="Lobby API Integration Tests Concurrent Operations should handle concurrent game creation" time="0.018">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Concurrent Operations should handle concurrent joins to the same game" name="Lobby API Integration Tests Concurrent Operations should handle concurrent joins to the same game" time="0.031">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Error Scenarios should handle joining a non-existent game" name="Lobby API Integration Tests Error Scenarios should handle joining a non-existent game" time="0.019">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Error Scenarios should handle starting a game with insufficient players" name="Lobby API Integration Tests Error Scenarios should handle starting a game with insufficient players" time="0.004">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Error Scenarios should handle starting a game that has already started" name="Lobby API Integration Tests Error Scenarios should handle starting a game that has already started" time="0.008">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Error Scenarios should handle joining a full game" name="Lobby API Integration Tests Error Scenarios should handle joining a full game" time="0.005">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Data Integrity should maintain referential integrity when deleting games" name="Lobby API Integration Tests Data Integrity should maintain referential integrity when deleting games" time="0.009">
+    </testcase>
+    <testcase classname="Lobby API Integration Tests Data Integrity should generate unique join codes consistently" name="Lobby API Integration Tests Data Integrity should generate unique join codes consistently" time="0.013">
+    </testcase>
+  </testsuite>
+  <testsuite name="Integration Tests - Real Server Communication" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.099" tests="4">
+    <testcase classname="Integration Tests - Real Server Communication API Client Integration should call real server health endpoint" name="Integration Tests - Real Server Communication API Client Integration should call real server health endpoint" time="0.003">
+    </testcase>
+    <testcase classname="Integration Tests - Real Server Communication API Client Integration should create game with real server" name="Integration Tests - Real Server Communication API Client Integration should create game with real server" time="0.014">
+    </testcase>
+    <testcase classname="Integration Tests - Real Server Communication API Client Integration should join game with real server" name="Integration Tests - Real Server Communication API Client Integration should join game with real server" time="0.008">
+    </testcase>
+    <testcase classname="Integration Tests - Real Server Communication Lobby Store Integration should create game through store with real server" name="Integration Tests - Real Server Communication Lobby Store Integration should create game through store with real server" time="0.007">
+    </testcase>
+  </testsuite>
+  <testsuite name="LobbyStore Error Handling" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.043" tests="18">
+    <testcase classname="LobbyStore Error Handling Input Validation Errors should throw error for empty join code" name="LobbyStore Error Handling Input Validation Errors should throw error for empty join code" time="0.002">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in loadCurrentGame" name="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in loadCurrentGame" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in loadGamePlayers" name="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in loadGamePlayers" time="0.001">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in startGame" name="LobbyStore Error Handling Input Validation Errors should throw error for empty game ID in startGame" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Business Logic Validation Errors should throw error when starting game without current game" name="LobbyStore Error Handling Business Logic Validation Errors should throw error when starting game without current game" time="0.001">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Business Logic Validation Errors should throw error when starting already started game" name="LobbyStore Error Handling Business Logic Validation Errors should throw error when starting already started game" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling API Error Handling should handle API errors and set error state" name="LobbyStore Error Handling API Error Handling should handle API errors and set error state" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling API Error Handling should track retry count for retryable errors" name="LobbyStore Error Handling API Error Handling should track retry count for retryable errors" time="0.001">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling API Error Handling should not retry non-retryable errors" name="LobbyStore Error Handling API Error Handling should not retry non-retryable errors" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Error State Management should clear error on successful operation" name="LobbyStore Error Handling Error State Management should clear error on successful operation" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Error State Management should clear error and retry count on leaveGame" name="LobbyStore Error Handling Error State Management should clear error and retry count on leaveGame" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Error State Management should clear error and retry count on clearError" name="LobbyStore Error Handling Error State Management should clear error and retry count on clearError" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Graceful Degradation should handle player loading failure without failing main operation" name="LobbyStore Error Handling Graceful Degradation should handle player loading failure without failing main operation" time="0.013">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Error Normalization should handle different error types safely" name="LobbyStore Error Handling Error Normalization should handle different error types safely" time="0.001">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Loading States should set loading to true at start and false on completion for createGame" name="LobbyStore Error Handling Loading States should set loading to true at start and false on completion for createGame" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Loading States should set loading to true at start and false on error for createGame" name="LobbyStore Error Handling Loading States should set loading to true at start and false on error for createGame" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Loading States should set loading to true at start and false on completion for loadGamePlayers" name="LobbyStore Error Handling Loading States should set loading to true at start and false on completion for loadGamePlayers" time="0">
+    </testcase>
+    <testcase classname="LobbyStore Error Handling Loading States should set loading to true at start and false on error for loadGamePlayers" name="LobbyStore Error Handling Loading States should set loading to true at start and false on error for loadGamePlayers" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="SettingsScene Unit Tests" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.022" tests="6">
+    <testcase classname="SettingsScene Unit Tests Scene Initialization should initialize with empty game state" name="SettingsScene Unit Tests Scene Initialization should initialize with empty game state" time="0.002">
+    </testcase>
+    <testcase classname="SettingsScene Unit Tests Scene Initialization should update game state when initialized" name="SettingsScene Unit Tests Scene Initialization should update game state when initialized" time="0.001">
+    </testcase>
+    <testcase classname="SettingsScene Unit Tests Player Management should validate player name when saving changes" name="SettingsScene Unit Tests Player Management should validate player name when saving changes" time="0.001">
+    </testcase>
+    <testcase classname="SettingsScene Unit Tests Player Management should update player when save is successful" name="SettingsScene Unit Tests Player Management should update player when save is successful" time="0.001">
+    </testcase>
+    <testcase classname="SettingsScene Unit Tests Game End should handle successful game end" name="SettingsScene Unit Tests Game End should handle successful game end" time="0">
+    </testcase>
+    <testcase classname="SettingsScene Unit Tests Game End should handle failed game end" name="SettingsScene Unit Tests Game End should handle failed game end" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="Lobby End-to-End Flows" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.037" tests="10">
+    <testcase classname="Lobby End-to-End Flows Complete Game Creation Flow should handle complete game creation workflow" name="Lobby End-to-End Flows Complete Game Creation Flow should handle complete game creation workflow" time="0.002">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Game Creation Flow should handle game creation with player loading failure gracefully" name="Lobby End-to-End Flows Complete Game Creation Flow should handle game creation with player loading failure gracefully" time="0.009">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Game Joining Flow should handle complete game joining workflow" name="Lobby End-to-End Flows Complete Game Joining Flow should handle complete game joining workflow" time="0.001">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Game Joining Flow should handle join game with invalid join code" name="Lobby End-to-End Flows Complete Game Joining Flow should handle join game with invalid join code" time="0">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Game Start Flow should handle complete game start workflow" name="Lobby End-to-End Flows Complete Game Start Flow should handle complete game start workflow" time="0">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Game Start Flow should handle game start with insufficient players" name="Lobby End-to-End Flows Complete Game Start Flow should handle game start with insufficient players" time="0.001">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Complete Leave Game Flow should handle complete leave game workflow" name="Lobby End-to-End Flows Complete Leave Game Flow should handle complete leave game workflow" time="0">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Error Recovery and Retry Flow should handle retryable error and retry logic" name="Lobby End-to-End Flows Error Recovery and Retry Flow should handle retryable error and retry logic" time="0">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows Error Recovery and Retry Flow should handle non-retryable error without retry" name="Lobby End-to-End Flows Error Recovery and Retry Flow should handle non-retryable error without retry" time="0">
+    </testcase>
+    <testcase classname="Lobby End-to-End Flows State Consistency Across Operations should maintain consistent state across multiple operations" name="Lobby End-to-End Flows State Consistency Across Operations should maintain consistent state across multiple operations" time="0.006">
+    </testcase>
+  </testsuite>
+  <testsuite name="ApiClient" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.013" tests="1">
+    <testcase classname="ApiClient calls createGame endpoint with JSON headers" name="ApiClient calls createGame endpoint with JSON headers" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="Lobby E2E - Simple Verification" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.018" tests="3">
+    <testcase classname="Lobby E2E - Simple Verification should verify createGame returns Game object" name="Lobby E2E - Simple Verification should verify createGame returns Game object" time="0.001">
+    </testcase>
+    <testcase classname="Lobby E2E - Simple Verification should verify joinGame returns Game object" name="Lobby E2E - Simple Verification should verify joinGame returns Game object" time="0.001">
+    </testcase>
+    <testcase classname="Lobby E2E - Simple Verification should not call startGame API and keep status IN_SETUP when startGame is called" name="Lobby E2E - Simple Verification should not call startGame API and keep status IN_SETUP when startGame is called" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrainMovementManager calculateDistance" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.146" tests="21">
+    <testcase classname="TrainMovementManager calculateDistance Basic distance calculations should calculate horizontal distance correctly" name="TrainMovementManager calculateDistance Basic distance calculations should calculate horizontal distance correctly" time="0.006">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Basic distance calculations should calculate vertical distance correctly" name="TrainMovementManager calculateDistance Basic distance calculations should calculate vertical distance correctly" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Basic distance calculations should calculate diagonal distance correctly" name="TrainMovementManager calculateDistance Basic distance calculations should calculate diagonal distance correctly" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Real game scenario from track segments should calculate each segment distance correctly" name="TrainMovementManager calculateDistance Real game scenario from track segments should calculate each segment distance correctly" time="0.019">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Real game scenario from track segments should calculate total distance from start to end correctly" name="TrainMovementManager calculateDistance Real game scenario from track segments should calculate total distance from start to end correctly" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Real game scenario from track segments should handle edge case diagonal movements" name="TrainMovementManager calculateDistance Real game scenario from track segments should handle edge case diagonal movements" time="0.005">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Real game scenario from track segments should debug the exact problematic case: (34,30) to (39,39)" name="TrainMovementManager calculateDistance Real game scenario from track segments should debug the exact problematic case: (34,30) to (39,39)" time="0.002">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Real game scenario from track segments should show what path-based distance calculation should look like" name="TrainMovementManager calculateDistance Real game scenario from track segments should show what path-based distance calculation should look like" time="0.006">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle same point (zero distance)" name="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle same point (zero distance)" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle large distances" name="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle large distances" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle asymmetric distances" name="TrainMovementManager calculateDistance Edge cases and boundary conditions should handle asymmetric distances" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Edge cases and boundary conditions should be symmetric (distance A to B equals distance B to A)" name="TrainMovementManager calculateDistance Edge cases and boundary conditions should be symmetric (distance A to B equals distance B to A)" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Movement validation with cumulative distance should correctly validate a path that exceeds train movement (with track data)" name="TrainMovementManager calculateDistance Movement validation with cumulative distance should correctly validate a path that exceeds train movement (with track data)" time="0.001">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Movement validation with cumulative distance should expose the real bug: calculateDistance vs step-by-step movement" name="TrainMovementManager calculateDistance Movement validation with cumulative distance should expose the real bug: calculateDistance vs step-by-step movement" time="0">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Integration tests: Simulating actual canMoveTo behavior should track cumulative movement properly through sequential moves" name="TrainMovementManager calculateDistance Integration tests: Simulating actual canMoveTo behavior should track cumulative movement properly through sequential moves" time="0.011">
+    </testcase>
+    <testcase classname="TrainMovementManager calculateDistance Integration tests: Simulating actual canMoveTo behavior should properly validate the problematic diagonal sequence" name="TrainMovementManager calculateDistance Integration tests: Simulating actual canMoveTo behavior should properly validate the problematic diagonal sequence" time="0.014">
+    </testcase>
+    <testcase classname="TrainMovementManager Ferry Movement allows movement at half speed when ready to cross ferry" name="TrainMovementManager Ferry Movement allows movement at half speed when ready to cross ferry" time="0.003">
+    </testcase>
+    <testcase classname="TrainMovementManager Ferry Movement prevents movement when just arrived at ferry" name="TrainMovementManager Ferry Movement prevents movement when just arrived at ferry" time="0">
+    </testcase>
+    <testcase classname="TrainMovementManager Ferry Movement allows reversal when ready to cross ferry" name="TrainMovementManager Ferry Movement allows reversal when ready to cross ferry" time="0.004">
+    </testcase>
+    <testcase classname="TrainMovementManager Ferry Movement sets ferry state when arriving at ferry port" name="TrainMovementManager Ferry Movement sets ferry state when arriving at ferry port" time="0.003">
+    </testcase>
+    <testcase classname="TrainMovementManager Ferry Movement does not halve movement when not at a ferry port" name="TrainMovementManager Ferry Movement does not halve movement when not at a ferry port" time="0.003">
+    </testcase>
+  </testsuite>
+  <testsuite name="LoadService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:47" time="0.134" tests="17">
+    <testcase classname="LoadService Load Configuration should load all configured load types" name="LoadService Load Configuration should load all configured load types" time="0.002">
+    </testcase>
+    <testcase classname="LoadService Load Configuration should initialize correct counts for loads" name="LoadService Load Configuration should initialize correct counts for loads" time="0.001">
+    </testcase>
+    <testcase classname="LoadService City Load Availability should correctly identify loads available in specific cities" name="LoadService City Load Availability should correctly identify loads available in specific cities" time="0.001">
+    </testcase>
+    <testcase classname="LoadService City Load Availability should return empty array for unknown cities" name="LoadService City Load Availability should return empty array for unknown cities" time="0.002">
+    </testcase>
+    <testcase classname="LoadService City Load Availability should correctly check if specific loads are available at cities" name="LoadService City Load Availability should correctly check if specific loads are available at cities" time="0">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should get all dropped loads" name="LoadService Database Operations Dropped Loads should get all dropped loads" time="0.004">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should pick up a dropped load" name="LoadService Database Operations Dropped Loads should pick up a dropped load" time="0.004">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should handle returning a load to the tray" name="LoadService Database Operations Dropped Loads should handle returning a load to the tray" time="0.001">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should set a load in a city" name="LoadService Database Operations Dropped Loads should set a load in a city" time="0.002">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should handle setting a load in a city that already has one" name="LoadService Database Operations Dropped Loads should handle setting a load in a city that already has one" time="0.003">
+    </testcase>
+    <testcase classname="LoadService Database Operations Dropped Loads should handle errors in database operations" name="LoadService Database Operations Dropped Loads should handle errors in database operations" time="0.013">
+    </testcase>
+    <testcase classname="LoadService Database Operations loadConfigurationFromFile should load the configuration correctly" name="LoadService Database Operations loadConfigurationFromFile should load the configuration correctly" time="0.003">
+    </testcase>
+    <testcase classname="LoadService Database Operations getAvailableLoadsForCity should return load availability for a city" name="LoadService Database Operations getAvailableLoadsForCity should return load availability for a city" time="0">
+    </testcase>
+    <testcase classname="LoadService Database Operations getDroppedLoads should return dropped loads from the database" name="LoadService Database Operations getDroppedLoads should return dropped loads from the database" time="0.002">
+    </testcase>
+    <testcase classname="LoadService Database Operations setLoadInCity should add a dropped load to the database" name="LoadService Database Operations setLoadInCity should add a dropped load to the database" time="0.002">
+    </testcase>
+    <testcase classname="LoadService Database Operations returnLoad should remove a dropped load from the database" name="LoadService Database Operations returnLoad should remove a dropped load from the database" time="0.002">
+    </testcase>
+    <testcase classname="LoadService Initial Load Availability Each city should only have the loads configured in load_cities.json" name="LoadService Initial Load Availability Each city should only have the loads configured in load_cities.json" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="AuthRoutes" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.094" tests="17">
+    <testcase classname="AuthRoutes POST /api/auth/register should register a new user successfully" name="AuthRoutes POST /api/auth/register should register a new user successfully" time="0.012">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/register should return 400 for missing required fields" name="AuthRoutes POST /api/auth/register should return 400 for missing required fields" time="0.001">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/register should return 400 for invalid email format" name="AuthRoutes POST /api/auth/register should return 400 for invalid email format" time="0.001">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/register should return 400 for weak password" name="AuthRoutes POST /api/auth/register should return 400 for weak password" time="0.004">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/register should return 409 for duplicate email" name="AuthRoutes POST /api/auth/register should return 409 for duplicate email" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/register should return 409 for duplicate username" name="AuthRoutes POST /api/auth/register should return 409 for duplicate username" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/login should login with valid credentials" name="AuthRoutes POST /api/auth/login should login with valid credentials" time="0.001">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/login should return 400 for missing credentials" name="AuthRoutes POST /api/auth/login should return 400 for missing credentials" time="0.001">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/login should return 401 for invalid credentials" name="AuthRoutes POST /api/auth/login should return 401 for invalid credentials" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/logout should logout successfully" name="AuthRoutes POST /api/auth/logout should logout successfully" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/refresh-token should refresh token successfully" name="AuthRoutes POST /api/auth/refresh-token should refresh token successfully" time="0.001">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/refresh-token should return 400 for missing refresh token" name="AuthRoutes POST /api/auth/refresh-token should return 400 for missing refresh token" time="0">
+    </testcase>
+    <testcase classname="AuthRoutes POST /api/auth/refresh-token should return 401 for invalid refresh token" name="AuthRoutes POST /api/auth/refresh-token should return 401 for invalid refresh token" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes GET /api/auth/me should return user profile with valid token" name="AuthRoutes GET /api/auth/me should return user profile with valid token" time="0.002">
+    </testcase>
+    <testcase classname="AuthRoutes GET /api/auth/me should return 401 for missing authorization header" name="AuthRoutes GET /api/auth/me should return 401 for missing authorization header" time="0">
+    </testcase>
+    <testcase classname="AuthRoutes GET /api/auth/me should return 401 for invalid token" name="AuthRoutes GET /api/auth/me should return 401 for invalid token" time="0">
+    </testcase>
+    <testcase classname="AuthRoutes GET /api/auth/me should return 401 for non-existent user" name="AuthRoutes GET /api/auth/me should return 401 for non-existent user" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrackDrawingManager" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.091" tests="14">
+    <testcase classname="TrackDrawingManager Track Cost Calculation should calculate correct costs for different terrain types" name="TrackDrawingManager Track Cost Calculation should calculate correct costs for different terrain types" time="0.002">
+    </testcase>
+    <testcase classname="TrackDrawingManager Track Cost Calculation should correctly calculate costs when entering cities" name="TrackDrawingManager Track Cost Calculation should correctly calculate costs when entering cities" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Track Cost Calculation should apply major city connection cost correctly" name="TrackDrawingManager Track Cost Calculation should apply major city connection cost correctly" time="0.002">
+    </testcase>
+    <testcase classname="TrackDrawingManager getGridPointAtPosition should find the correct grid point based on world coordinates" name="TrackDrawingManager getGridPointAtPosition should find the correct grid point based on world coordinates" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager getGridPointAtPosition should correctly find grid points on both even and odd rows" name="TrackDrawingManager getGridPointAtPosition should correctly find grid points on both even and odd rows" time="0.003">
+    </testcase>
+    <testcase classname="TrackDrawingManager getGridPointAtPosition should return null for water terrain points" name="TrackDrawingManager getGridPointAtPosition should return null for water terrain points" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should register and call cost update callback" name="TrackDrawingManager Real-time Cost Display should register and call cost update callback" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should update cost during preview hover" name="TrackDrawingManager Real-time Cost Display should update cost during preview hover" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should accumulate costs across multiple drawing sessions" name="TrackDrawingManager Real-time Cost Display should accumulate costs across multiple drawing sessions" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should show correct total cost when adding segments" name="TrackDrawingManager Real-time Cost Display should show correct total cost when adding segments" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should reset cost display when hovering over invalid paths" name="TrackDrawingManager Real-time Cost Display should reset cost display when hovering over invalid paths" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should validate cost against player money and turn limit" name="TrackDrawingManager Real-time Cost Display should validate cost against player money and turn limit" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Real-time Cost Display should show different preview colors based on cost validity" name="TrackDrawingManager Real-time Cost Display should show different preview colors based on cost validity" time="0">
+    </testcase>
+    <testcase classname="State consistency on backend failure should not update local state if trackService.saveTrackState fails" name="State consistency on backend failure should not update local state if trackService.saveTrackState fails" time="0.01">
+    </testcase>
+  </testsuite>
+  <testsuite name="PlayerService Integration Tests" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.171" tests="9">
+    <testcase classname="PlayerService Integration Tests Game Operations should create a new game" name="PlayerService Integration Tests Game Operations should create a new game" time="0.022">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Game Operations should not throw when creating duplicate game" name="PlayerService Integration Tests Game Operations should not throw when creating duplicate game" time="0.003">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should create a new player" name="PlayerService Integration Tests Player Operations should create a new player" time="0.041">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should update an existing player" name="PlayerService Integration Tests Player Operations should update an existing player" time="0.04">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should prevent duplicate colors in the same game" name="PlayerService Integration Tests Player Operations should prevent duplicate colors in the same game" time="0.016">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should validate color format" name="PlayerService Integration Tests Player Operations should validate color format" time="0.003">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should delete a player" name="PlayerService Integration Tests Player Operations should delete a player" time="0.004">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Player Operations should cascade delete player tracks when player is deleted" name="PlayerService Integration Tests Player Operations should cascade delete player tracks when player is deleted" time="0.006">
+    </testcase>
+    <testcase classname="PlayerService Integration Tests Default Game should initialize default game with correct values" name="PlayerService Integration Tests Default Game should initialize default game with correct values" time="0.005">
+    </testcase>
+  </testsuite>
+  <testsuite name="Lobby Migration (Phase 1)" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.111" tests="13">
+    <testcase classname="Lobby Migration (Phase 1) Games table new fields should have join_code field" name="Lobby Migration (Phase 1) Games table new fields should have join_code field" time="0.002">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Games table new fields should have created_by field" name="Lobby Migration (Phase 1) Games table new fields should have created_by field" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Games table new fields should have is_public field" name="Lobby Migration (Phase 1) Games table new fields should have is_public field" time="0">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Games table new fields should have lobby_status field" name="Lobby Migration (Phase 1) Games table new fields should have lobby_status field" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Players table new fields should have user_id field" name="Lobby Migration (Phase 1) Players table new fields should have user_id field" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Players table new fields should have is_online field" name="Lobby Migration (Phase 1) Players table new fields should have is_online field" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) generate_unique_join_code function should generate unique join codes" name="Lobby Migration (Phase 1) generate_unique_join_code function should generate unique join codes" time="0.003">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) generate_unique_join_code function should generate alphanumeric codes" name="Lobby Migration (Phase 1) generate_unique_join_code function should generate alphanumeric codes" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Indexes should have games table indexes" name="Lobby Migration (Phase 1) Indexes should have games table indexes" time="0.01">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Indexes should have players table indexes" name="Lobby Migration (Phase 1) Indexes should have players table indexes" time="0.001">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Constraints should enforce lobby_status check constraint" name="Lobby Migration (Phase 1) Constraints should enforce lobby_status check constraint" time="0.01">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) Constraints should enforce unique join_code constraint" name="Lobby Migration (Phase 1) Constraints should enforce unique join_code constraint" time="0.014">
+    </testcase>
+    <testcase classname="Lobby Migration (Phase 1) End-to-end functionality should allow creating a game with all new fields" name="Lobby Migration (Phase 1) End-to-end functionality should allow creating a game with all new fields" time="0.025">
+    </testcase>
+  </testsuite>
+  <testsuite name="SocketService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.046" tests="10">
+    <testcase classname="SocketService initializeSocketIO should initialize Socket.IO server" name="SocketService initializeSocketIO should initialize Socket.IO server" time="0.003">
+    </testcase>
+    <testcase classname="SocketService initializeSocketIO should return same instance on subsequent calls" name="SocketService initializeSocketIO should return same instance on subsequent calls" time="0">
+    </testcase>
+    <testcase classname="SocketService initializeSocketIO should configure CORS correctly" name="SocketService initializeSocketIO should configure CORS correctly" time="0">
+    </testcase>
+    <testcase classname="SocketService emitToLobby should emit event to all clients in lobby room" name="SocketService emitToLobby should emit event to all clients in lobby room" time="0.001">
+    </testcase>
+    <testcase classname="SocketService emitToLobby should not throw when calling emitToLobby" name="SocketService emitToLobby should not throw when calling emitToLobby" time="0.001">
+    </testcase>
+    <testcase classname="SocketService emitLobbyUpdated should emit lobby updated event with player data" name="SocketService emitLobbyUpdated should emit lobby updated event with player data" time="0">
+    </testcase>
+    <testcase classname="SocketService emitLobbyUpdated should handle player-left action" name="SocketService emitLobbyUpdated should handle player-left action" time="0.001">
+    </testcase>
+    <testcase classname="SocketService Socket event handling should handle connection event" name="SocketService Socket event handling should handle connection event" time="0">
+    </testcase>
+    <testcase classname="SocketService getSocketIO should return socket instance once initialized (singleton)" name="SocketService getSocketIO should return socket instance once initialized (singleton)" time="0">
+    </testcase>
+    <testcase classname="SocketService getSocketIO should return same instance on subsequent calls" name="SocketService getSocketIO should return same instance on subsequent calls" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrackDrawingManager Undo Feature" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.071" tests="13">
+    <testcase classname="TrackDrawingManager Undo Feature should initialize segmentsDrawnThisTurn as an empty array" name="TrackDrawingManager Undo Feature should initialize segmentsDrawnThisTurn as an empty array" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should accumulate segmentsDrawnThisTurn across multiple drawing sessions in a turn" name="TrackDrawingManager Undo Feature should accumulate segmentsDrawnThisTurn across multiple drawing sessions in a turn" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should not accumulate segments if drawing mode is toggled without drawing" name="TrackDrawingManager Undo Feature should not accumulate segments if drawing mode is toggled without drawing" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should accumulate only actual segments across mixed drawing sessions" name="TrackDrawingManager Undo Feature should accumulate only actual segments across mixed drawing sessions" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should reset segmentsDrawnThisTurn and build cost on endTurnCleanup" name="TrackDrawingManager Undo Feature should reset segmentsDrawnThisTurn and build cost on endTurnCleanup" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should undo the last segment built this turn" name="TrackDrawingManager Undo Feature should undo the last segment built this turn" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should do nothing if undoLastSegment is called with no segments" name="TrackDrawingManager Undo Feature should do nothing if undoLastSegment is called with no segments" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should support multiple undos in LIFO order" name="TrackDrawingManager Undo Feature should support multiple undos in LIFO order" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should not affect this.turnBuildCost when undoing a saved segment" name="TrackDrawingManager Undo Feature should not affect this.turnBuildCost when undoing a saved segment" time="0.001">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should clear networkNodesCache after undo" name="TrackDrawingManager Undo Feature should clear networkNodesCache after undo" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should not allow undoing segments from previous turns after turn change" name="TrackDrawingManager Undo Feature should not allow undoing segments from previous turns after turn change" time="0">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should handle backend failure gracefully when undoing" name="TrackDrawingManager Undo Feature should handle backend failure gracefully when undoing" time="0.004">
+    </testcase>
+    <testcase classname="TrackDrawingManager Undo Feature should persist undo state and restore correctly after reload" name="TrackDrawingManager Undo Feature should persist undo state and restore correctly after reload" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="authenticateToken middleware" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.036" tests="11">
+    <testcase classname="authenticateToken middleware should authenticate valid token and call next" name="authenticateToken middleware should authenticate valid token and call next" time="0.001">
+    </testcase>
+    <testcase classname="authenticateToken middleware should return 401 for missing authorization header" name="authenticateToken middleware should return 401 for missing authorization header" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should return 401 for malformed authorization header" name="authenticateToken middleware should return 401 for malformed authorization header" time="0.001">
+    </testcase>
+    <testcase classname="authenticateToken middleware should return 401 for missing Bearer prefix" name="authenticateToken middleware should return 401 for missing Bearer prefix" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should return 401 for invalid token" name="authenticateToken middleware should return 401 for invalid token" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should return 401 for expired token" name="authenticateToken middleware should return 401 for expired token" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should handle case-insensitive authorization header" name="authenticateToken middleware should handle case-insensitive authorization header" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should handle mixed case authorization header" name="authenticateToken middleware should handle mixed case authorization header" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should handle extra whitespace in authorization header" name="authenticateToken middleware should handle extra whitespace in authorization header" time="0.001">
+    </testcase>
+    <testcase classname="authenticateToken middleware should handle empty token after Bearer" name="authenticateToken middleware should handle empty token after Bearer" time="0">
+    </testcase>
+    <testcase classname="authenticateToken middleware should handle multiple spaces between Bearer and token" name="authenticateToken middleware should handle multiple spaces between Bearer and token" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="SetupScene Unit Tests" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.019" tests="8">
+    <testcase classname="SetupScene Unit Tests Scene Initialization should initialize with empty game state" name="SetupScene Unit Tests Scene Initialization should initialize with empty game state" time="0.001">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Scene Initialization should update game state when initialized" name="SetupScene Unit Tests Scene Initialization should update game state when initialized" time="0.001">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Player Management should validate player name" name="SetupScene Unit Tests Player Management should validate player name" time="0.001">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Player Management should validate color selection" name="SetupScene Unit Tests Player Management should validate color selection" time="0">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Player Management should prevent duplicate names" name="SetupScene Unit Tests Player Management should prevent duplicate names" time="0.001">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Player Management should prevent duplicate colors" name="SetupScene Unit Tests Player Management should prevent duplicate colors" time="0">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Game Start should require minimum players" name="SetupScene Unit Tests Game Start should require minimum players" time="0">
+    </testcase>
+    <testcase classname="SetupScene Unit Tests Game Start should update game status when starting" name="SetupScene Unit Tests Game Start should update game status when starting" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="DemandDeckService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.025" tests="7">
+    <testcase classname="DemandDeckService should load cards from API" name="DemandDeckService should load cards from API" time="0.001">
+    </testcase>
+    <testcase classname="DemandDeckService should draw cards correctly" name="DemandDeckService should draw cards correctly" time="0.001">
+    </testcase>
+    <testcase classname="DemandDeckService should handle discard and reshuffle" name="DemandDeckService should handle discard and reshuffle" time="0.002">
+    </testcase>
+    <testcase classname="DemandDeckService should return null when no cards are available" name="DemandDeckService should return null when no cards are available" time="0">
+    </testcase>
+    <testcase classname="DemandDeckService should get card by ID" name="DemandDeckService should get card by ID" time="0.001">
+    </testcase>
+    <testcase classname="DemandDeckService should throw error when discarding invalid card ID" name="DemandDeckService should throw error when discarding invalid card ID" time="0.007">
+    </testcase>
+    <testcase classname="DemandDeckService should validate that cards have exactly 3 demands" name="DemandDeckService should validate that cards have exactly 3 demands" time="0.001">
+    </testcase>
+  </testsuite>
+  <testsuite name="MovementCostCalculator" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.021" tests="12">
+    <testcase classname="MovementCostCalculator City identification should identify nodes in major cities" name="MovementCostCalculator City identification should identify nodes in major cities" time="0.001">
+    </testcase>
+    <testcase classname="MovementCostCalculator City identification should identify city names correctly" name="MovementCostCalculator City identification should identify city names correctly" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator City identification should identify nodes in same city" name="MovementCostCalculator City identification should identify nodes in same city" time="0.001">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should return 0 cost for same position" name="MovementCostCalculator Movement cost calculation should return 0 cost for same position" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should handle major city center to perimeter movement" name="MovementCostCalculator Movement cost calculation should handle major city center to perimeter movement" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should calculate normal track movement" name="MovementCostCalculator Movement cost calculation should calculate normal track movement" time="0.001">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should fail when no valid path exists" name="MovementCostCalculator Movement cost calculation should fail when no valid path exists" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should handle major city internal transit with fixed cost" name="MovementCostCalculator Movement cost calculation should handle major city internal transit with fixed cost" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should reject movement when no track data and not major city case" name="MovementCostCalculator Movement cost calculation should reject movement when no track data and not major city case" time="0.001">
+    </testcase>
+    <testcase classname="MovementCostCalculator Movement cost calculation should handle starting from unconnected city perimeter node (Madrid scenario)" name="MovementCostCalculator Movement cost calculation should handle starting from unconnected city perimeter node (Madrid scenario)" time="0.003">
+    </testcase>
+    <testcase classname="MovementCostCalculator Path analysis and segment classification should classify city entry movement" name="MovementCostCalculator Path analysis and segment classification should classify city entry movement" time="0">
+    </testcase>
+    <testcase classname="MovementCostCalculator Path analysis and segment classification should classify city exit movement" name="MovementCostCalculator Path analysis and segment classification should classify city exit movement" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="PlayerHand" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.023" tests="8">
+    <testcase classname="PlayerHand should start empty" name="PlayerHand should start empty" time="0.001">
+    </testcase>
+    <testcase classname="PlayerHand should add cards correctly" name="PlayerHand should add cards correctly" time="0">
+    </testcase>
+    <testcase classname="PlayerHand should throw error when adding to a full hand" name="PlayerHand should throw error when adding to a full hand" time="0.008">
+    </testcase>
+    <testcase classname="PlayerHand should remove cards correctly" name="PlayerHand should remove cards correctly" time="0">
+    </testcase>
+    <testcase classname="PlayerHand should throw error when removing non-existent card" name="PlayerHand should throw error when removing non-existent card" time="0.001">
+    </testcase>
+    <testcase classname="PlayerHand should correctly report full status" name="PlayerHand should correctly report full status" time="0.001">
+    </testcase>
+    <testcase classname="PlayerHand should return immutable card list" name="PlayerHand should return immutable card list" time="0">
+    </testcase>
+    <testcase classname="PlayerHand should verify each card has exactly three demands" name="PlayerHand should verify each card has exactly three demands" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="mapConfig" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.023" tests="3">
+    <testcase classname="mapConfig ferry connections should load ferry connections with correct structure" name="mapConfig ferry connections should load ferry connections with correct structure" time="0.002">
+    </testcase>
+    <testcase classname="mapConfig ferry connections should have valid costs for ferry connections" name="mapConfig ferry connections should have valid costs for ferry connections" time="0.001">
+    </testcase>
+    <testcase classname="mapConfig ferry connections should have unique names for ferry connections" name="mapConfig ferry connections should have unique names for ferry connections" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrackService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.018" tests="3">
+    <testcase classname="TrackService loadAllTracks returns data when fetch is successful" name="TrackService loadAllTracks returns data when fetch is successful" time="0">
+    </testcase>
+    <testcase classname="TrackService loadAllTracks throws on HTTP error" name="TrackService loadAllTracks throws on HTTP error" time="0.006">
+    </testcase>
+    <testcase classname="TrackService loadAllTracks throws on network error" name="TrackService loadAllTracks throws on network error" time="0">
+    </testcase>
+  </testsuite>
+  <testsuite name="TrackNetworkService" errors="0" failures="0" skipped="0" timestamp="2025-10-29T01:52:48" time="0.014" tests="13">
+    <testcase classname="TrackNetworkService createEmptyNetwork should create an empty network" name="TrackNetworkService createEmptyNetwork should create an empty network" time="0.002">
+    </testcase>
+    <testcase classname="TrackNetworkService addTrackSegment should add a track segment between two points" name="TrackNetworkService addTrackSegment should add a track segment between two points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService addTrackSegment should maintain existing connections when adding new segments" name="TrackNetworkService addTrackSegment should maintain existing connections when adding new segments" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService isConnected should return true for directly connected points" name="TrackNetworkService isConnected should return true for directly connected points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService isConnected should return true for indirectly connected points" name="TrackNetworkService isConnected should return true for indirectly connected points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService isConnected should return false for unconnected points" name="TrackNetworkService isConnected should return false for unconnected points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService findPath should find direct path between connected points" name="TrackNetworkService findPath should find direct path between connected points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService findPath should find indirect path through multiple segments" name="TrackNetworkService findPath should find indirect path through multiple segments" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService findPath should return null for unconnected points" name="TrackNetworkService findPath should return null for unconnected points" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService canAddSegment should allow starting from a major city in empty network" name="TrackNetworkService canAddSegment should allow starting from a major city in empty network" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService canAddSegment should not allow starting between non-city points in empty network" name="TrackNetworkService canAddSegment should not allow starting between non-city points in empty network" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService canAddSegment should allow adding to existing network" name="TrackNetworkService canAddSegment should allow adding to existing network" time="0">
+    </testcase>
+    <testcase classname="TrackNetworkService serializeNetwork and deserializeNetwork should correctly serialize and deserialize a network" name="TrackNetworkService serializeNetwork and deserializeNetwork should correctly serialize and deserialize a network" time="0">
+    </testcase>
+  </testsuite>
+</testsuites>
