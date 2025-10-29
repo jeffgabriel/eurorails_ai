@@ -162,7 +162,7 @@ export function LobbyPage() {
   const canStartGame = currentGame && 
     currentGame.createdBy === user?.id && 
     currentGame.status === 'IN_SETUP' &&
-    players.length >= 2; // Minimum players needed
+    players && players.length >= 2; // Minimum players needed
 
   // Show loading state when recovering game state
   if (isLoading && !currentGame) {
@@ -366,11 +366,11 @@ export function LobbyPage() {
                 <div>
                   <h3 className="font-semibold mb-4 flex items-center gap-2">
                     <Users className="size-4" />
-                    Players ({players.length}/{currentGame.maxPlayers})
+                    Players ({(players?.length || 0)}/{currentGame.maxPlayers})
                   </h3>
                   
                   <div className="space-y-2">
-                    {players.length === 0 ? (
+                    {!players || players.length === 0 ? (
                       <p className="text-muted-foreground text-center py-4">
                         No players yet. Share the join code to invite others!
                       </p>
@@ -406,7 +406,7 @@ export function LobbyPage() {
                   <p className="text-sm text-muted-foreground text-center">
                     {currentGame.createdBy !== user?.id 
                       ? 'Waiting for the game creator to start the game...'
-                      : players.length < 2
+                      : !players || players.length < 2
                       ? 'Need at least 2 players to start the game'
                       : 'Ready to start!'
                     }
