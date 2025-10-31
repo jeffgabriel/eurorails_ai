@@ -66,11 +66,6 @@ export class GameScene extends Phaser.Scene {
         this.cameras.main.scrollY = this.gameState.cameraState.scrollY;
       }
       
-      // Initialize GameStateService if it exists and update game state to identify local player
-      if (this.gameStateService) {
-        this.gameStateService.updateGameState(this.gameState);
-      }
-      
       return;
     }
 

@@ -10,6 +10,7 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '../../components/ui/form';
 import { useAuthStore } from '../../store/auth.store';
+import { getErrorMessage } from '../../shared/api';
 import type { LoginForm } from '../../shared/types';
 
 const loginSchema = z.object({
@@ -44,10 +45,11 @@ export function LoginPage() {
     console.log('[LoginPage] isLoading:', isLoading, 'isAuthenticated:', isAuthenticated, 'error:', error);
   }, [isLoading, isAuthenticated, error]);
 
-  // Save only email to sessionStorage on change (never save password)
+  // Save email to sessionStorage on change (never save password)
+  // Save even empty strings so clearing the field persists
   useEffect(() => {
     const subscription = form.watch((values) => {
-      if (values.email) {
+      if (values.email !== undefined) {
         try {
           sessionStorage.setItem('loginEmail', values.email);
         } catch {
@@ -152,7 +154,7 @@ export function LoginPage() {
 
                 {error && (
                   <div className="text-sm font-medium" style={{ color: '#dc2626' }}>
-                    Username or password are incorrect
+                    {getErrorMessage(error)}
                   </div>
                 )}
 
