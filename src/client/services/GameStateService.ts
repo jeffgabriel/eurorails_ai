@@ -58,9 +58,6 @@ export class GameStateService {
             const gameState = await gameResponse.json();
             this.gameState = gameState;
             
-            // Identify local player after loading game state
-            this.initializeLocalPlayer();
-            
             return gameState;
         } catch (error) {
             console.error('Error loading game state:', error);
