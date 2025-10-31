@@ -5,6 +5,7 @@ import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { UIManager } from "../components/UIManager";
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 
@@ -29,6 +30,7 @@ export class GameScene extends Phaser.Scene {
   private trackManager!: TrackDrawingManager;
   private uiManager!: UIManager;
   private gameStateService!: GameStateService;
+  private playerStateService!: PlayerStateService;
   private loadService: LoadService;
 
   // Game state
@@ -124,6 +126,15 @@ export class GameScene extends Phaser.Scene {
     this.children.removeAll(true);
     // Initialize services and load initial state
     this.gameStateService = new GameStateService(this.gameState);
+    this.playerStateService = new PlayerStateService();
+    
+    // Identify local player after services are created
+    const identified = this.playerStateService.initializeLocalPlayer(this.gameState.players);
+    if (!identified) {
+      console.warn('Warning: Could not identify local player. Some features may not work correctly.');
+      // Could show user a warning or handle spectator mode
+    }
+    
     await this.loadService.loadInitialState();
 
     // Create containers in the right order
@@ -348,10 +359,12 @@ export class GameScene extends Phaser.Scene {
 
       try {
         // Update player money in local state and database
-        await this.gameStateService.updatePlayerMoney(
-          currentPlayer.id,
-          newMoney
-        );
+        if (this.playerStateService.getLocalPlayerId() === currentPlayer.id) {
+          await this.playerStateService.updatePlayerMoney(newMoney, this.gameState.id);
+        } else {
+          // Non-local player - update in shared state for display purposes
+          currentPlayer.money = newMoney;
+        }
       } catch (error) {
         console.error("Error updating player money:", error);
       }

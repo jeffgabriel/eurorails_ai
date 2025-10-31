@@ -289,6 +289,7 @@ export class PlayerService {
       const query = `
                 SELECT 
                     players.id, 
+                    user_id,
                     name, 
                     color, 
                     money, 
@@ -352,6 +353,7 @@ export class PlayerService {
 
         return {
           ...row,
+          userId: row.user_id || undefined,  // Map user_id to userId (optional for backward compatibility)
           trainType,
           trainState: {
             position:
