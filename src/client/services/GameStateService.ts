@@ -2,6 +2,11 @@ import { GameState } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 
 /**
+ * Event listener type for turn changes
+ */
+type TurnChangeListener = (currentPlayerIndex: number) => void;
+
+/**
  * Manages shared game state that applies to all players
  * For per-player operations, use PlayerStateService instead
  */
@@ -9,6 +14,8 @@ export class GameStateService {
     private gameState: GameState;
     private localPlayerId: string | null = null;
     private playerStateService: PlayerStateService | null = null; // Reference to PlayerStateService for local player checks
+    private turnChangeListeners: TurnChangeListener[] = [];
+    private pollingInterval: number | null = null;
     
     constructor(gameState: GameState) {
         this.gameState = gameState;
@@ -74,9 +81,93 @@ export class GameStateService {
             if (!response.ok) {
                 const errorData = await response.json();
                 console.error('Failed to update current player:', errorData);
+            } else {
+                // Update local state with response
+                const updatedState = await response.json();
+                if (updatedState.currentPlayerIndex !== undefined) {
+                    this.gameState.currentPlayerIndex = updatedState.currentPlayerIndex;
+                    // Notify listeners of turn change
+                    this.notifyTurnChange(this.gameState.currentPlayerIndex);
+                }
             }
         } catch (error) {
             console.error('Error updating current player:', error);
+        }
+    }
+    
+    /**
+     * Start polling for turn changes from the server
+     * This is a fallback if Socket.IO is not available
+     */
+    public startPollingForTurnChanges(intervalMs: number = 2000): void {
+        if (this.pollingInterval) {
+            this.stopPollingForTurnChanges();
+        }
+        
+        this.pollingInterval = window.setInterval(async () => {
+            try {
+                const response = await fetch(`/api/game/${this.gameState.id}`);
+                if (!response.ok) {
+                    return;
+                }
+                
+                const gameState = await response.json();
+                if (gameState.currentPlayerIndex !== undefined && 
+                    gameState.currentPlayerIndex !== this.gameState.currentPlayerIndex) {
+                    // Turn has changed
+                    this.gameState.currentPlayerIndex = gameState.currentPlayerIndex;
+                    this.notifyTurnChange(gameState.currentPlayerIndex);
+                }
+            } catch (error) {
+                console.error('Error polling for turn changes:', error);
+            }
+        }, intervalMs);
+    }
+    
+    /**
+     * Stop polling for turn changes
+     */
+    public stopPollingForTurnChanges(): void {
+        if (this.pollingInterval) {
+            clearInterval(this.pollingInterval);
+            this.pollingInterval = null;
+        }
+    }
+    
+    /**
+     * Add a listener for turn changes
+     */
+    public onTurnChange(listener: TurnChangeListener): void {
+        this.turnChangeListeners.push(listener);
+    }
+    
+    /**
+     * Remove a turn change listener
+     */
+    public offTurnChange(listener: TurnChangeListener): void {
+        this.turnChangeListeners = this.turnChangeListeners.filter(l => l !== listener);
+    }
+    
+    /**
+     * Notify all listeners of a turn change
+     */
+    private notifyTurnChange(currentPlayerIndex: number): void {
+        this.turnChangeListeners.forEach(listener => {
+            try {
+                listener(currentPlayerIndex);
+            } catch (error) {
+                console.error('Error in turn change listener:', error);
+            }
+        });
+    }
+    
+    /**
+     * Update current player index (called when receiving turn change event)
+     */
+    public updateCurrentPlayerIndex(newIndex: number): void {
+        if (newIndex !== this.gameState.currentPlayerIndex) {
+            this.gameState.currentPlayerIndex = newIndex;
+            this.notifyTurnChange(newIndex);
         }
     }
     

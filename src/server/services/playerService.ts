@@ -481,6 +481,17 @@ export class PlayerService {
             WHERE id = $2
         `;
     await db.query(query, [currentPlayerIndex, gameId]);
+    
+    // Emit turn change event to all clients in the game room
+    const { getSocketIO } = await import('./socketService');
+    const io = getSocketIO();
+    if (io) {
+      // Get the player ID for the current player
+      const players = await this.getPlayers(gameId);
+      const currentPlayer = players[currentPlayerIndex];
+      const { emitTurnChange } = await import('./socketService');
+      emitTurnChange(gameId, currentPlayerIndex, currentPlayer?.id);
+    }
   }
 
   static async getGameState(

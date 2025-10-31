@@ -139,6 +139,15 @@ export class GameScene extends Phaser.Scene {
     // Connect GameStateService with PlayerStateService for local player checks
     this.gameStateService.setPlayerStateService(this.playerStateService);
     
+    // Set up turn change listener to refresh UI when turn changes
+    this.gameStateService.onTurnChange((currentPlayerIndex) => {
+      console.log(`Turn changed to player index: ${currentPlayerIndex}`);
+      this.handleTurnChange(currentPlayerIndex);
+    });
+    
+    // Start polling for turn changes (fallback if Socket.IO not available)
+    this.gameStateService.startPollingForTurnChanges(2000);
+    
     await this.loadService.loadInitialState();
 
     // Create containers in the right order
@@ -467,8 +476,57 @@ export class GameScene extends Phaser.Scene {
     this.scene.launch("SettingsScene", { gameState: this.gameState });
   }
 
+  /**
+   * Handle turn change - refresh UI and update game state
+   */
+  private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    // Update game state
+    this.gameState.currentPlayerIndex = currentPlayerIndex;
+    
+    // Update the current player's turn number
+    const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
+    if (newCurrentPlayer) {
+      // Refresh UI overlay (leaderboard, etc.)
+      this.uiManager.setupUIOverlay();
+      
+      // Refresh player hand display (only show costs for local player)
+      const localPlayerId = this.playerStateService.getLocalPlayerId();
+      const localPlayer = localPlayerId 
+        ? this.gameState.players.find(p => p.id === localPlayerId)
+        : null;
+      
+      let totalCost = 0;
+      if (localPlayer && this.trackManager.isInDrawingMode) {
+        const previousSessionsCost = this.trackManager.getPlayerTrackState(localPlayer.id)?.turnBuildCost || 0;
+        const currentSessionCost = this.trackManager.getCurrentTurnBuildCost();
+        totalCost = previousSessionsCost + currentSessionCost;
+      }
+      
+      await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode, totalCost);
+      
+      // Pan camera to new player's train if they have a position
+      if (newCurrentPlayer.trainState?.position) {
+        const { x, y } = newCurrentPlayer.trainState.position;
+        this.cameras.main.pan(x, y, 1000, "Linear", true);
+      }
+      
+      // Check if new player needs to select a city
+      if (!newCurrentPlayer.trainState?.position) {
+        // Only show city selection if it's the local player
+        if (this.playerStateService.getLocalPlayerId() === newCurrentPlayer.id) {
+          this.uiManager.showCitySelectionForPlayer(newCurrentPlayer.id);
+        }
+      }
+    }
+  }
+
   // Clean up resources when scene is destroyed
   destroy(fromScene?: boolean): void {
+    // Stop polling for turn changes
+    if (this.gameStateService) {
+      this.gameStateService.stopPollingForTurnChanges();
+    }
+    
     // Clean up TrackDrawingManager
     if (this.trackManager) {
       this.trackManager.destroy();
