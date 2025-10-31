@@ -3,6 +3,7 @@ import { GameState } from "../../shared/types/GameTypes";
 import { TrainCard } from "./TrainCard";
 import { DemandCard } from './DemandCard';
 import { PlayerHand } from '../../shared/types/PlayerHand';
+import { GameStateService } from "../services/GameStateService";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -11,6 +12,7 @@ export class PlayerHandDisplay {
   private toggleDrawingCallback: () => void;
   private onUndo: () => void;
   private canUndo: () => boolean;
+  private gameStateService: GameStateService | null = null;
   public trainCard: TrainCard | null = null;
   private readonly CARD_SPACING = 180;
   private readonly START_X = 110;
@@ -24,13 +26,15 @@ export class PlayerHandDisplay {
     gameState: GameState,
     toggleDrawingCallback: () => void,
     onUndo: () => void,
-    canUndo: () => boolean
+    canUndo: () => boolean,
+    gameStateService?: GameStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.toggleDrawingCallback = toggleDrawingCallback;
     this.onUndo = onUndo;
     this.canUndo = canUndo;
+    this.gameStateService = gameStateService || null;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -80,7 +84,16 @@ export class PlayerHandDisplay {
   }
 
   private async createDemandCardSection(targetContainer: Phaser.GameObjects.Container): Promise<void> {
-    const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    // Show only local player's cards
+    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const currentPlayer = localPlayerId 
+      ? this.gameState.players.find(p => p.id === localPlayerId)
+      : this.gameState.players[this.gameState.currentPlayerIndex];
+    
+    // If no local player found, don't show cards
+    if (!currentPlayer) {
+      return;
+    }
 
     // Clear existing cards
     this.cards.forEach(card => card.destroy());
@@ -142,11 +155,15 @@ export class PlayerHandDisplay {
   }
 
   private createTrainSection(targetContainer: Phaser.GameObjects.Container): void {
-    const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    // Show local player's train card
+    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const currentPlayer = localPlayerId 
+      ? this.gameState.players.find(p => p.id === localPlayerId)
+      : this.gameState.players[this.gameState.currentPlayerIndex];
 
     // Validate current player exists
     if (!currentPlayer) {
-      console.error('PlayerHandDisplay.createTrainSection: No current player found');
+      console.error('PlayerHandDisplay.createTrainSection: No local player found');
       return;
     }
 
@@ -176,7 +193,16 @@ export class PlayerHandDisplay {
   }
 
   private createPlayerInfoSection(isDrawingMode: boolean, currentTrackCost: number, targetContainer: Phaser.GameObjects.Container): void {
-    const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    // Show local player's info
+    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const currentPlayer = localPlayerId 
+      ? this.gameState.players.find(p => p.id === localPlayerId)
+      : this.gameState.players[this.gameState.currentPlayerIndex];
+    
+    if (!currentPlayer) {
+      return; // Don't show player info if no local player
+    }
+    
     const MAX_TURN_BUILD_COST = 20; // ECU 20M per turn limit
 
     // Add crayon button for track drawing
@@ -237,6 +263,9 @@ export class PlayerHandDisplay {
     const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
     const crayonTexture = `crayon_${crayonColor}`;
     
+    // Check if local player is active
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive() ?? false;
+    
     const crayonButton = this.scene.add
       .image(
         crayonX,
@@ -244,25 +273,31 @@ export class PlayerHandDisplay {
         crayonTexture
       )
       .setScale(0.15)
-      .setInteractive({ useHandCursor: true });
+      .setAlpha(isLocalPlayerActive ? 1.0 : 0.4) // Gray out when not active
+      .setInteractive({ useHandCursor: isLocalPlayerActive });
 
-    crayonButton
-      .on("pointerover", () => {
-        if (!isDrawingMode) {
-          crayonButton.setScale(0.17);
-        }
-      })
-      .on("pointerout", () => {
-        if (!isDrawingMode) {
-          crayonButton.setScale(0.15);
-        }
-      })
-      .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-        if (pointer.event) {
-          pointer.event.stopPropagation(); // Prevent click from propagating
-        }
-        this.toggleDrawingCallback();
-      });
+    if (isLocalPlayerActive) {
+      crayonButton
+        .on("pointerover", () => {
+          if (!isDrawingMode) {
+            crayonButton.setScale(0.17);
+          }
+        })
+        .on("pointerout", () => {
+          if (!isDrawingMode) {
+            crayonButton.setScale(0.15);
+          }
+        })
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation(); // Prevent click from propagating
+          }
+          this.toggleDrawingCallback();
+        });
+    } else {
+      // Disabled state - no interaction
+      crayonButton.setInteractive({ useHandCursor: false });
+    }
 
     // Add player info texts to the hand area container first so they render behind
     targetContainer.add(nameAndMoney);
@@ -304,7 +339,9 @@ export class PlayerHandDisplay {
     }
 
     // --- Undo button below crayon ---
-    if (this.canUndo()) {
+    // Only show undo button if local player is active AND can undo
+    // (isLocalPlayerActive already declared above for crayon button)
+    if (isLocalPlayerActive && this.canUndo()) {
       const undoButton = this.scene.add
         .text(
           crayonButton.x,

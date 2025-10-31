@@ -1,20 +1,25 @@
 import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 
+import { GameStateService } from "../services/GameStateService";
+
 export class LeaderboardManager {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
   private gameState: GameState;
   private nextPlayerCallback: () => void;
+  private gameStateService: GameStateService | null = null;
   
   constructor(
     scene: Phaser.Scene, 
     gameState: GameState,
-    nextPlayerCallback: () => void
+    nextPlayerCallback: () => void,
+    gameStateService?: GameStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.nextPlayerCallback = nextPlayerCallback;
+    this.gameStateService = gameStateService || null;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -133,6 +138,9 @@ export class LeaderboardManager {
     const buttonContainer = this.scene.add.container(0, 0);
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
+    
+    // Check if local player is active
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive() ?? false;
 
     // Add next player button
     const nextPlayerButton = this.scene.add
@@ -141,8 +149,8 @@ export class LeaderboardManager {
         LEADERBOARD_PADDING + 40 + this.gameState.players.length * 20,
         LEADERBOARD_WIDTH,
         40,
-        0x00aa00,
-        0.9
+        isLocalPlayerActive ? 0x00aa00 : 0x666666,
+        isLocalPlayerActive ? 0.9 : 0.5
       )
       .setOrigin(0, 0);
 
@@ -150,7 +158,7 @@ export class LeaderboardManager {
       .text(
         this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
         LEADERBOARD_PADDING + 60 + this.gameState.players.length * 20,
-        "Next Player",
+        isLocalPlayerActive ? "Next Player" : "Wait Your Turn",
         {
           color: "#ffffff",
           fontSize: "16px",
@@ -159,12 +167,17 @@ export class LeaderboardManager {
       )
       .setOrigin(0.5, 0.5);
 
-    // Make the button interactive
-    nextPlayerButton
-      .setInteractive({ useHandCursor: true })
-      .on("pointerdown", () => this.nextPlayerCallback())
-      .on("pointerover", () => nextPlayerButton.setFillStyle(0x008800))
-      .on("pointerout", () => nextPlayerButton.setFillStyle(0x00aa00));
+    // Make the button interactive only if local player is active
+    if (isLocalPlayerActive) {
+      nextPlayerButton
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => this.nextPlayerCallback())
+        .on("pointerover", () => nextPlayerButton.setFillStyle(0x008800))
+        .on("pointerout", () => nextPlayerButton.setFillStyle(0x00aa00));
+    } else {
+      // Disabled state - grayed out, no interaction
+      nextPlayerButton.setInteractive({ useHandCursor: false });
+    }
 
     buttonContainer.add([nextPlayerButton, nextPlayerText]);
     return buttonContainer;

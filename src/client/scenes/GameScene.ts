@@ -136,6 +136,9 @@ export class GameScene extends Phaser.Scene {
       // Could show user a warning or handle spectator mode
     }
     
+    // Connect GameStateService with PlayerStateService for local player checks
+    this.gameStateService.setPlayerStateService(this.playerStateService);
+    
     await this.loadService.loadInitialState();
 
     // Create containers in the right order
