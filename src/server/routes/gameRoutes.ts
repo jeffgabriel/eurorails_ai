@@ -1,13 +1,15 @@
 import express from 'express';
 import { GameService } from '../services/gameService';
+import { optionalAuth } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
 // Get game state
-router.get('/:gameId', async (req, res) => {
+router.get('/:gameId', optionalAuth, async (req, res) => {
     try {
         const { gameId } = req.params;
-        const gameState = await GameService.getGame(gameId);
+        const userId = req.user?.id;
+        const gameState = await GameService.getGame(gameId, userId);
         
         if (!gameState) {
             return res.status(404).json({ 

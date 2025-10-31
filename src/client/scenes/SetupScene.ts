@@ -688,7 +688,7 @@ export class SetupScene extends Phaser.Scene {
                             movementHistory: [],
                             remainingMovement: 9
                         },
-                        hand: await this.getPlayerHand()
+                        hand: []  // Server will draw cards - don't send client-drawn cards
                     }
                 })
             });

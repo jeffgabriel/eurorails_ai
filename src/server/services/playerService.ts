@@ -54,16 +54,19 @@ export class PlayerService {
     await db.query(query, [gameId]);
   }
 
-  static async createPlayer(gameId: string, player: Player): Promise<void> {
+  static async createPlayer(gameId: string, player: Player, client?: any): Promise<void> {
     // Validate and normalize color
     const normalizedColor = this.validateColor(player.color);
+
+    // Use provided client if available (for transactions), otherwise get a new connection
+    const useClient = client || db;
 
     // First check if another player already has this color
     const colorCheckQuery = `
             SELECT id FROM players 
             WHERE game_id = $1 AND color = $2
         `;
-    const colorCheckResult = await db.query(colorCheckQuery, [
+    const colorCheckResult = await useClient.query(colorCheckQuery, [
       gameId,
       normalizedColor,
     ]);
@@ -71,6 +74,20 @@ export class PlayerService {
     if (colorCheckResult.rows.length > 0) {
       throw new Error("Color already taken by another player");
     }
+
+    // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
+    // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
+    console.log(`Drawing initial 3 cards server-side for new player ${player.id} (${player.name})`);
+    const handCardIds: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const card = demandDeckService.drawCard();
+      if (!card) {
+        throw new Error(`Failed to draw initial card ${i + 1} for player ${player.id}`);
+      }
+      handCardIds.push(card.id);
+      console.log(`Drew card ${card.id} for player ${player.id}`);
+    }
+    console.log(`Successfully drew ${handCardIds.length} initial cards for player ${player.id}`);
 
     const query = `
             INSERT INTO players (
@@ -93,11 +110,11 @@ export class PlayerService {
       player.trainState.position?.row || null,
       player.trainState.position?.col || null,
       player.turnNumber || 1,
-      player.hand.map(card => card.id),
+      handCardIds,  // Use the drawn card IDs
       player.trainState.loads || []
     ];
     try {
-      await db.query(query, values);
+      await useClient.query(query, values);
     } catch (err: any) {
       if (
         err.code === "23505" &&
@@ -202,7 +219,8 @@ export class PlayerService {
         gameId,
         player.id,
         player.turnNumber,
-        player.hand.map(card => card.id),
+        // Ensure hand is an array and extract card IDs
+        Array.isArray(player.hand) ? player.hand.map((card: any) => typeof card === 'object' && card.id ? card.id : card) : [],
         player.trainState.loads || [],
       ];
       console.log("Executing update query");
@@ -286,7 +304,13 @@ export class PlayerService {
     }
   }
 
-  static async getPlayers(gameId: string): Promise<Player[]> {
+  /**
+   * Get all players for a game, with optional filtering of hand data for security
+   * @param gameId - The game ID
+   * @param requestingUserId - Optional user ID of the requesting user. If provided, only that user's hand will be included.
+   * @returns Array of players, with hands filtered based on requestingUserId
+   */
+  static async getPlayers(gameId: string, requestingUserId?: string): Promise<Player[]> {
     console.log("Starting database query for players:", { gameId });
     const client = await db.connect();
     try {
@@ -332,25 +356,69 @@ export class PlayerService {
       //     : null,
       // });
 
-      // // Log the raw hand data before processing
-      // console.log("Raw hand data from database:", result.rows.map(row => ({
-      //   playerId: row.id,
-      //   handIds: row.hand
-      // })));
+      // Log the raw hand data before processing for debugging
+      console.log("Raw hand data from database:", result.rows.map(row => ({
+        playerId: row.id,
+        playerName: row.name,
+        handIds: row.hand,
+        handType: typeof row.hand,
+        handLength: Array.isArray(row.hand) ? row.hand.length : 'not array',
+        user_id: row.user_id
+      })));
 
       const players = result.rows.map((row) => {
-        // Convert hand IDs to actual cards, with better error handling
-        const handCards = row.hand ? row.hand.map((cardId: number) => {
-          const card = demandDeckService.getCard(cardId);
-          if (!card) {
-            console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
-            return null;
+        // Security: Only include hand data for the requesting user's own player
+        // If requestingUserId is provided, only show that player's hand
+        // Otherwise, hide all hands (for backward compatibility, but not secure)
+        let handCards: any[] = [];
+        
+        if (requestingUserId && row.user_id === requestingUserId) {
+          // This is the requesting user's player - show their hand
+          // Handle both null and empty array cases
+          const handArray = row.hand || [];
+          if (!Array.isArray(handArray)) {
+            console.error(`Invalid hand data for player ${row.id}:`, handArray);
+            handCards = [];
+          } else {
+            handCards = handArray.map((cardId: number) => {
+              const card = demandDeckService.getCard(cardId);
+              if (!card) {
+                console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
+                return null;
+              }
+              return card;
+            }).filter(Boolean); // Remove any null entries
           }
-          return card;
-        }).filter(Boolean) : []; // Remove any null entries
-
-        // Log the processed hand data
-        console.log(`Processed hand for player ${row.id}:`, handCards);
+          
+          console.log(`Processed hand for requesting player ${row.id}:`, {
+            playerName: row.name,
+            handIds: handArray,
+            cardCount: handCards.length,
+            cards: handCards.map(c => c.id)
+          });
+        } else if (requestingUserId) {
+          // This is another player's data - hide their hand for security
+          handCards = [];
+          console.log(`Hidden hand for player ${row.id} (not requesting user)`);
+        } else {
+          // No user ID provided - for backward compatibility, but this is insecure
+          // Should be deprecated in favor of authenticated requests
+          console.warn(`No requestingUserId provided - returning all hands (insecure mode)`);
+          const handArray = row.hand || [];
+          if (!Array.isArray(handArray)) {
+            console.error(`Invalid hand data for player ${row.id}:`, handArray);
+            handCards = [];
+          } else {
+            handCards = handArray.map((cardId: number) => {
+              const card = demandDeckService.getCard(cardId);
+              if (!card) {
+                console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
+                return null;
+              }
+              return card;
+            }).filter(Boolean);
+          }
+        }
 
         // Cast trainType from database string to TrainType enum
         const trainType = row.trainType as TrainType;

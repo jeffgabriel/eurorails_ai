@@ -1,6 +1,9 @@
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
+import { PlayerService } from './playerService';
+import { TrainType } from '../../shared/types/GameTypes';
+import type { Player as GamePlayer } from '../../shared/types/GameTypes';
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -123,15 +126,27 @@ export class LobbyService {
       
       const username = userResult.rows[0].username;
       
-      // Create the first player (game creator)
-      const playerResult = await client.query(
-        `INSERT INTO players (game_id, user_id, name, color) 
-         VALUES ($1, $2, $3, $4) 
-         RETURNING id`,
-        [game.id, data.createdByUserId, username, data.creatorColor || '#ff0000']
-      );
+      // Create the first player (game creator) using PlayerService to ensure cards are drawn
+      const creatorPlayer: GamePlayer = {
+        id: uuidv4(),
+        userId: data.createdByUserId,
+        name: username,
+        color: data.creatorColor || '#ff0000',
+        money: 50,
+        trainType: TrainType.Freight,
+        turnNumber: 1,
+        trainState: {
+          position: null,
+          movementHistory: [],
+          remainingMovement: 9,
+          loads: []
+        },
+        hand: []  // Empty - PlayerService will draw cards server-side
+      };
       
-      const player = playerResult.rows[0];
+      // Use PlayerService.createPlayer() to ensure cards are drawn properly
+      // Pass the transaction client so the player is created in the same transaction
+      await PlayerService.createPlayer(game.id, creatorPlayer, client);
       
       // Update the game with the creator reference (user ID, not player ID)
       await client.query(
@@ -268,11 +283,27 @@ export class LobbyService {
         playerColor = availableColors[0] || colors[playerCount];
       }
       
-      await client.query(
-        `INSERT INTO players (game_id, user_id, name, color) 
-         VALUES ($1, $2, $3, $4)`,
-        [game.id, joinData.userId, username, playerColor]
-      );
+      // Create player using PlayerService to ensure cards are drawn
+      const joinedPlayer: GamePlayer = {
+        id: uuidv4(),
+        userId: joinData.userId,
+        name: username,
+        color: playerColor,
+        money: 50,
+        trainType: TrainType.Freight,
+        turnNumber: 1,
+        trainState: {
+          position: null,
+          movementHistory: [],
+          remainingMovement: 9,
+          loads: []
+        },
+        hand: []  // Empty - PlayerService will draw cards server-side
+      };
+      
+      // Use PlayerService.createPlayer() to ensure cards are drawn properly
+      // Pass the transaction client so the player is created in the same transaction
+      await PlayerService.createPlayer(game.id, joinedPlayer, client);
       
       await client.query('COMMIT');
       
@@ -337,9 +368,9 @@ export class LobbyService {
   }
 
   /**
-   * Get players in a game
+   * Get players in a game (for lobby - includes isOnline status)
    */
-  static async getGamePlayers(gameId: string): Promise<Player[]> {
+  static async getGamePlayers(gameId: string): Promise<(GamePlayer & { isOnline: boolean })[]> {
     // Input validation
     if (!gameId || gameId.trim().length === 0) {
       throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
@@ -358,8 +389,17 @@ export class LobbyService {
       userId: row.user_id,
       name: row.name,
       color: row.color,
-      isOnline: row.is_online,
-      gameId: row.game_id,
+      money: 50, // Default for lobby view
+      trainType: TrainType.Freight, // Default for lobby view
+      turnNumber: 1, // Default for lobby view
+      trainState: {
+        position: null,
+        movementHistory: [],
+        remainingMovement: 9,
+        loads: []
+      },
+      hand: [], // Lobby doesn't show hands - this will be loaded when game starts
+      isOnline: row.is_online || false, // Include isOnline for lobby
     }));
   }
 

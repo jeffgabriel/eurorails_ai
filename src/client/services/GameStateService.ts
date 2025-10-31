@@ -106,7 +106,18 @@ export class GameStateService {
         
         this.pollingInterval = window.setInterval(async () => {
             try {
-                const response = await fetch(`/api/game/${this.gameState.id}`);
+                // Include auth headers in polling requests
+                const token = localStorage.getItem('eurorails.jwt');
+                const headers: Record<string, string> = {
+                    'Content-Type': 'application/json',
+                };
+                if (token) {
+                    headers.Authorization = `Bearer ${token}`;
+                }
+                
+                const response = await fetch(`/api/game/${this.gameState.id}`, {
+                    headers
+                });
                 if (!response.ok) {
                     return;
                 }
@@ -173,8 +184,20 @@ export class GameStateService {
     
     public async loadInitialGameState(gameId: string): Promise<GameState | null> {
         try {
-            // First fetch the game state
-            const gameResponse = await fetch(`/api/game/${gameId}`);
+            // Get auth token from localStorage to include in request
+            const token = localStorage.getItem('eurorails.jwt');
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+            };
+            
+            if (token) {
+                headers.Authorization = `Bearer ${token}`;
+            }
+            
+            // First fetch the game state with auth headers
+            const gameResponse = await fetch(`/api/game/${gameId}`, {
+                headers
+            });
             if (!gameResponse.ok) {
                 console.error('Failed to load game state:', await gameResponse.text());
                 return null;
@@ -182,6 +205,15 @@ export class GameStateService {
             
             const gameState = await gameResponse.json();
             this.gameState = gameState;
+            
+            console.log('Loaded game state with players:', {
+                playerCount: gameState.players?.length,
+                hands: gameState.players?.map((p: any) => ({
+                    playerId: p.id,
+                    playerName: p.name,
+                    handSize: p.hand?.length || 0
+                }))
+            });
             
             return gameState;
         } catch (error) {

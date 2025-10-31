@@ -10,7 +10,7 @@ export class GameService {
         );
     }
 
-    static async getGame(gameId: string): Promise<GameState | null> {
+    static async getGame(gameId: string, userId?: string): Promise<GameState | null> {
         const result = await db.query(
             'SELECT * FROM games WHERE id = $1',
             [gameId]
@@ -22,8 +22,8 @@ export class GameService {
 
         const row = result.rows[0];
 
-        // Fetch players from the players table
-        const players = await PlayerService.getPlayers(gameId);
+        // Fetch players from the players table, passing userId for hand filtering
+        const players = await PlayerService.getPlayers(gameId, userId);
 
         return {
             id: row.id,

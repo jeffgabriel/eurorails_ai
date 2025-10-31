@@ -99,41 +99,19 @@ export class PlayerHandDisplay {
     this.cards.forEach(card => card.destroy());
     this.cards = [];
 
-    // If player has no cards (lobby players), try to draw some
+    // Cards should be loaded from the database
+    // Only draw if hand is truly empty AND we're sure the database has been checked
+    // The hand should be populated from the game state which comes from the database
     if (currentPlayer.hand.length === 0) {
-      console.log(`Player ${currentPlayer.name} has no cards, drawing demand cards...`);
-      try {
-        // Import DemandDeckService dynamically to avoid circular dependencies
-        const { DemandDeckService } = await import('../../shared/services/DemandDeckService');
-        const deckService = new DemandDeckService();
-        console.log('Loading demand cards from server...');
-        await deckService.loadCards();
-        console.log('Demand cards loaded successfully');
-        
-        // Draw 3 cards for the player
-        for (let i = 0; i < 3; i++) {
-          const card = await deckService.drawCard();
-          if (card) {
-            currentPlayer.hand.push(card);
-            console.log(`Drew card ${i + 1}:`, card);
-          } else {
-            console.warn(`Failed to draw card ${i + 1}`);
-          }
-        }
-        console.log(`Successfully drew ${currentPlayer.hand.length} cards for player ${currentPlayer.name}`);
-      } catch (error) {
-        console.error('Failed to draw demand cards for player:', error);
-        // Create placeholder cards so the UI doesn't break
-        console.log('Creating placeholder cards for UI display');
-        for (let i = 0; i < 3; i++) {
-          currentPlayer.hand.push({
-            id: `placeholder_${i}`,
-            demands: [
-              { city: 'PLACEHOLDER', resource: 'PLACEHOLDER', payment: 0 }
-            ]
-          } as any);
-        }
-      }
+      console.warn(`Player ${currentPlayer.name} has no cards in hand. This should only happen if:`, {
+        message: '1) Player was just created and cards need to be drawn server-side, OR',
+        message2: '2) Cards were not loaded from database properly',
+        playerId: currentPlayer.id,
+        playerName: currentPlayer.name,
+        gameId: this.gameState.id
+      });
+      // DO NOT draw cards here - cards must be drawn server-side and saved to DB
+      // The hand should persist in the database and be loaded via game state
     }
 
     // Create new cards
