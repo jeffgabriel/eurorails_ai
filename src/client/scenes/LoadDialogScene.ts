@@ -53,6 +53,16 @@ export class LoadDialogScene extends Scene {
         // Initialize player state service for local player
         this.playerStateService.initializeLocalPlayer(this.gameState.players);
         
+        // Assert that the passed player is the local player (for security)
+        const localPlayer = this.playerStateService.getLocalPlayer();
+        if (!localPlayer) {
+            console.error('Cannot initialize LoadDialogScene: no local player identified');
+            return;
+        }
+        if (localPlayer.id !== data.player.id) {
+            console.error(`Player mismatch: LoadDialogScene was passed player ${data.player.name} (${data.player.id}) but local player is ${localPlayer.name} (${localPlayer.id})`);
+        }
+        
         this.onClose = data.onClose;
         this.onUpdateTrainCard = data.onUpdateTrainCard;
         this.onUpdateHandDisplay = data.onUpdateHandDisplay;
