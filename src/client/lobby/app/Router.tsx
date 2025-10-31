@@ -36,11 +36,18 @@ interface PublicRouteProps {
 
 function PublicRoute({ children }: PublicRouteProps) {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
-  
+
+  console.log('[PublicRoute] Rendering, isAuthenticated:', isAuthenticated);
+
+  useEffect(() => {
+    console.log('[PublicRoute] useEffect - isAuthenticated:', isAuthenticated);
+  }, [isAuthenticated]);
+
   if (isAuthenticated) {
+    console.log('[PublicRoute] Redirecting to /lobby');
     return <Navigate to="/lobby" replace />;
   }
-  
+
   return <>{children}</>;
 }
 
@@ -55,6 +62,7 @@ function LocationLogger() {
 }
 
 export function Router() {
+  console.log('[Router] Rendering');
   return (
     <BrowserRouter>
       <LocationLogger />

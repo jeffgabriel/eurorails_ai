@@ -57,8 +57,8 @@ export function errorHandler(error: any, req: Request, res: Response, next: Next
     // Custom lobby errors
     statusCode = error.statusCode;
     errorCode = error.code;
-    message = error.message;
-    details = error.message;
+    message = error.message || 'Lobby operation failed';
+    details = error.message || 'An error occurred in the lobby service';
   } else if (error.name === 'ValidationError') {
     // Joi or other validation errors
     statusCode = 400;

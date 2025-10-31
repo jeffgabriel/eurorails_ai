@@ -20,37 +20,80 @@ const loginSchema = z.object({
 
 export function LoginPage() {
   const navigate = useNavigate();
-  const { login, isLoading, error, clearError, isAuthenticated } = useAuthStore();
+  const { login, isLoading, isAuthenticated, error, clearError } = useAuthStore();
+
+  // Preserve only email in sessionStorage (never store password)
+  const getStoredEmail = (): string => {
+    try {
+      return sessionStorage.getItem('loginEmail') || '';
+    } catch {
+      return '';
+    }
+  };
 
   const form = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
-    defaultValues: {
-      email: '',
-      password: '',
-    },
+    defaultValues: { email: getStoredEmail(), password: '' },
   });
 
   useEffect(() => {
+    console.log('[LoginPage] Mounted');
+    return () => console.log('[LoginPage] Unmounted');
+  }, []);
+
+  useEffect(() => {
+    console.log('[LoginPage] isLoading:', isLoading, 'isAuthenticated:', isAuthenticated, 'error:', error);
+  }, [isLoading, isAuthenticated, error]);
+
+  // Save email to sessionStorage on change (never save password)
+  // Save even empty strings so clearing the field persists
+  useEffect(() => {
+    const subscription = form.watch((values) => {
+      if (values.email !== undefined) {
+        try {
+          sessionStorage.setItem('loginEmail', values.email);
+        } catch {
+          // Ignore storage errors
+        }
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form]);
+
+  // Clear stored email on successful auth
+  useEffect(() => {
     if (isAuthenticated) {
+      sessionStorage.removeItem('loginEmail');
       navigate('/lobby', { replace: true });
     }
   }, [isAuthenticated, navigate]);
 
+  // Clear error when user starts typing
   useEffect(() => {
-    if (error) {
-      toast.error(getErrorMessage(error));
-      clearError();
-    }
-  }, [error, clearError]);
+    const subscription = form.watch(() => {
+      if (error) {
+        clearError();
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form, error, clearError]);
 
   const onSubmit = async (data: LoginForm) => {
+    clearError();
+
     try {
       await login(data);
       toast.success('Welcome back!');
-      navigate('/lobby', { replace: true });
-    } catch {
-      // Error handling is done via the error state and useEffect
+      // Navigation will happen via useEffect when isAuthenticated becomes true
+    } catch (error) {
+      // Error will be in the auth store
+      // Keep form values - they should persist
     }
+  };
+
+  const handleFormSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    form.handleSubmit(onSubmit)(e);
   };
 
   return (
@@ -70,7 +113,7 @@ export function LoginPage() {
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <form onSubmit={handleFormSubmit} className="space-y-4">
                 <FormField
                   control={form.control}
                   name="email"
@@ -97,8 +140,8 @@ export function LoginPage() {
                     <FormItem>
                       <FormLabel>Password</FormLabel>
                       <FormControl>
-                        <Input 
-                          type="password" 
+                        <Input
+                          type="password"
                           placeholder="Enter your password"
                           {...field}
                           disabled={isLoading}
@@ -109,9 +152,15 @@ export function LoginPage() {
                   )}
                 />
 
-                <Button 
-                  type="submit" 
-                  className="w-full" 
+                {error && (
+                  <div className="text-sm font-medium" style={{ color: '#dc2626' }}>
+                    {getErrorMessage(error)}
+                  </div>
+                )}
+
+                <Button
+                  type="submit"
+                  className="w-full"
                   disabled={isLoading}
                 >
                   {isLoading ? 'Signing In...' : 'Sign In'}
