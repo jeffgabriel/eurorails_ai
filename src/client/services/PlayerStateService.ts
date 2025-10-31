@@ -18,34 +18,39 @@ export class PlayerStateService {
         try {
             // Get user from localStorage (same pattern as SetupScene.ts)
             const userJson = localStorage.getItem('eurorails.user');
-            if (!userJson) {
-                console.warn('No user found in localStorage - cannot identify local player');
-                return false;
+            const userId = userJson ? (JSON.parse(userJson)?.id) : null;
+
+            let matchingPlayer: Player | undefined;
+
+            // First try: Match by userId if we have one
+            if (userId) {
+                matchingPlayer = players.find(player => player.userId === userId);
+                
+                if (matchingPlayer) {
+                    this.localPlayerId = matchingPlayer.id;
+                    this.localPlayer = matchingPlayer;
+                    console.log(`Local player identified by userId: ${matchingPlayer.name} (${this.localPlayerId})`);
+                    return true;
+                }
             }
 
-            const user = JSON.parse(userJson);
-            const userId = user.id;
-
-            if (!userId) {
-                console.warn('User object missing id field');
-                return false;
+            // Second try: Fallback for single-player or legacy games without userId
+            // Use the first player as local player
+            if (players.length === 1) {
+                matchingPlayer = players[0];
+                this.localPlayerId = matchingPlayer.id;
+                this.localPlayer = matchingPlayer;
+                console.log(`Local player identified as single player: ${matchingPlayer.name} (${this.localPlayerId})`);
+                return true;
             }
 
-            // Find matching player in gameState by userId
-            const matchingPlayer = players.find(
-                player => player.userId === userId
-            );
-
-            if (!matchingPlayer) {
-                console.warn(`No player found for userId: ${userId}. Player may not be in this game.`);
-                // Could be spectator mode - handle gracefully
-                return false;
+            // Could not identify local player
+            if (userId) {
+                console.warn(`No player found for userId: ${userId}. Multiple players in game.`);
+            } else {
+                console.warn('No userId found and multiple players in game. Cannot identify local player.');
             }
-
-            this.localPlayerId = matchingPlayer.id;
-            this.localPlayer = matchingPlayer;
-            console.log(`Local player identified: ${matchingPlayer.name} (${this.localPlayerId})`);
-            return true;
+            return false;
         } catch (error) {
             console.error('Error identifying local player:', error);
             return false;
