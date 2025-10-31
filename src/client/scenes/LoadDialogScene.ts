@@ -3,6 +3,7 @@ import { Scene } from 'phaser';
 import { CityData, Player, GameState, TRAIN_PROPERTIES } from '../../shared/types/GameTypes';
 import { LoadService } from '../services/LoadService';
 import { GameStateService } from '../services/GameStateService';
+import { PlayerStateService } from '../services/PlayerStateService';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { UIManager } from '../components/UIManager';
 
@@ -33,13 +34,13 @@ export class LoadDialogScene extends Scene {
     private uiManager!: UIManager;
     private loadService: LoadService;
     private gameStateService: GameStateService;
+    private playerStateService: PlayerStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
     private loadOperations: LoadOperation[] = []; // Track operations this turn
 
     constructor() {
         super({ key: 'LoadDialogScene' });
         this.loadService = LoadService.getInstance();
-        this.gameStateService = null!;
     }
 
     init(data: LoadDialogConfig) {
@@ -47,6 +48,21 @@ export class LoadDialogScene extends Scene {
         this.player = data.player;
         this.gameState = data.gameState;
         this.gameStateService = new GameStateService(this.gameState);
+        this.playerStateService = new PlayerStateService();
+        
+        // Initialize player state service for local player
+        this.playerStateService.initializeLocalPlayer(this.gameState.players);
+        
+        // Assert that the passed player is the local player (for security)
+        const localPlayer = this.playerStateService.getLocalPlayer();
+        if (!localPlayer) {
+            console.error('Cannot initialize LoadDialogScene: no local player identified');
+            return;
+        }
+        if (localPlayer.id !== data.player.id) {
+            console.error(`Player mismatch: LoadDialogScene was passed player ${data.player.name} (${data.player.id}) but local player is ${localPlayer.name} (${localPlayer.id})`);
+        }
+        
         this.onClose = data.onClose;
         this.onUpdateTrainCard = data.onUpdateTrainCard;
         this.onUpdateHandDisplay = data.onUpdateHandDisplay;
@@ -317,9 +333,9 @@ export class LoadDialogScene extends Scene {
             });
             
             // Update game state
-            const success = await this.gameStateService.updatePlayerLoads(
-                this.player.id,
-                this.player.trainState.loads
+            const success = await this.playerStateService.updatePlayerLoads(
+                this.player.trainState.loads,
+                this.gameState.id
             );
 
             if (success) {
@@ -376,19 +392,19 @@ export class LoadDialogScene extends Scene {
 
                 // Update all game state in parallel
                 const [loadsUpdated, moneyUpdated, cardFulfilled] = await Promise.all([
-                    this.gameStateService.updatePlayerLoads(
-                        this.player.id,
-                        this.player.trainState.loads
+                    this.playerStateService.updatePlayerLoads(
+                        this.player.trainState.loads,
+                        this.gameState.id
                     ),
-                    this.gameStateService.updatePlayerMoney(
-                        this.player.id,
-                        newMoney
+                    this.playerStateService.updatePlayerMoney(
+                        newMoney,
+                        this.gameState.id
                     ),
-                    this.gameStateService.fulfillDemandCard(
-                        this.player.id,
+                    this.playerStateService.fulfillDemandCard(
                         this.city.name,
                         load.type,
-                        load.cardId
+                        load.cardId,
+                        this.gameState.id
                     )
                 ]);
 
@@ -469,9 +485,9 @@ export class LoadDialogScene extends Scene {
                 }
 
                 // Update game state with new train loads
-                await this.gameStateService.updatePlayerLoads(
-                    this.player.id,
-                    this.player.trainState.loads
+                await this.playerStateService.updatePlayerLoads(
+                    this.player.trainState.loads,
+                    this.gameState.id
                 );
                 
                 // Track this operation with unique ID
@@ -526,9 +542,9 @@ export class LoadDialogScene extends Scene {
                 );
 
                 // Update game state
-                await this.gameStateService.updatePlayerLoads(
-                    this.player.id,
-                    this.player.trainState.loads
+                await this.playerStateService.updatePlayerLoads(
+                    this.player.trainState.loads,
+                    this.gameState.id
                 );
 
                 // Update the train card display
@@ -551,9 +567,9 @@ export class LoadDialogScene extends Scene {
                     );
 
                     // Update game state
-                    await this.gameStateService.updatePlayerLoads(
-                        this.player.id,
-                        this.player.trainState.loads
+                    await this.playerStateService.updatePlayerLoads(
+                        this.player.trainState.loads,
+                        this.gameState.id
                     );
 
                     // Update displays

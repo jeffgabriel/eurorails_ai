@@ -10,6 +10,7 @@ import {
   TRAIN_PROPERTIES,
 } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
 import { LoadService } from "../services/LoadService";
@@ -24,6 +25,7 @@ export class TrainInteractionManager {
   private trainMovementManager: TrainMovementManager;
   private mapRenderer: MapRenderer;
   private gameStateService: GameStateService;
+  private playerStateService: PlayerStateService;
   private trainContainer: Phaser.GameObjects.Container;
   private isTrainMovementMode: boolean = false;
   private justEnteredMovementMode: boolean = false;
@@ -46,6 +48,8 @@ export class TrainInteractionManager {
     this.trainMovementManager = trainMovementManager;
     this.mapRenderer = mapRenderer;
     this.gameStateService = gameStateService;
+    this.playerStateService = new PlayerStateService();
+    this.playerStateService.initializeLocalPlayer(this.gameState.players);
     this.trainContainer = trainContainer;
     this.trackDrawingManager = trackDrawingManager;
     // Initialize trainSprites map in gameState if not exists
@@ -430,7 +434,12 @@ export class TrainInteractionManager {
     }
 
     // Update player position in database
-    await this.gameStateService.updatePlayerPosition(playerId, x, y, row, col);
+    if (this.playerStateService.getLocalPlayerId() === playerId) {
+      await this.playerStateService.updatePlayerPosition(x, y, row, col, this.gameState.id);
+    } else {
+      // Update local state for display
+      player.trainState.position = { x, y, row, col };
+    }
 
     // Find all trains at this location
     const trainsAtLocation = this.gameState.players
