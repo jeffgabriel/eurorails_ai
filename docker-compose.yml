@@ -19,7 +19,7 @@ services:
       - $DB_DOCKER_PORT:$DB_PORT
     volumes:
       - db:/var/lib/postgresql
-      - ./db/scripts/init_db.sh:/docker-entrypoint-initdb.d/init_db.sh
+      - ${INIT_DB_SCRIPT_PATH:-./db/scripts/init_db.sh}:/docker-entrypoint-initdb.d/init_db.sh:ro
       - ./db/migrations:/migrations
   app:
     depends_on:

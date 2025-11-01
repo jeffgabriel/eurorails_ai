@@ -58,14 +58,17 @@ jobs:
       - run:
           name: Start services
           command: |
-            # Ensure we're in the project root
-            pwd
-            # Double-check file exists right before docker compose runs
-            test -f db/scripts/init_db.sh || { echo "ERROR: File disappeared!"; exit 1; }
-            # Touch the file to ensure Docker can see it (refresh timestamp)
-            touch db/scripts/init_db.sh
+            # Ensure we're in the project root (should already be absolute)
+            PROJECT_ROOT=$(pwd)
+            INIT_SCRIPT_ABS="$PROJECT_ROOT/db/scripts/init_db.sh"
+            echo "Project root: $PROJECT_ROOT"
+            echo "Absolute path to init script: $INIT_SCRIPT_ABS"
+            # Verify file exists
+            test -f "$INIT_SCRIPT_ABS" || { echo "ERROR: Cannot find init script at $INIT_SCRIPT_ABS!"; exit 1; }
+            # Export absolute path for docker-compose to use
+            export INIT_DB_SCRIPT_PATH="$INIT_SCRIPT_ABS"
             # Run docker compose from explicit directory context
-            docker compose --project-directory "$(pwd)" up -d || {
+            docker compose --project-directory "$PROJECT_ROOT" up -d || {
               echo "=== Docker Compose failed to start, showing logs ==="
               docker compose logs
               docker compose ps -a
