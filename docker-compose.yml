@@ -1,7 +1,7 @@
 services:
   postgresdb:
     image: postgres
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10s
     environment:
       - POSTGRES_USER=$DB_USER

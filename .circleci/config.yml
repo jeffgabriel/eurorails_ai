@@ -26,6 +26,34 @@ jobs:
             # Clean up any leftover containers/volumes from previous runs
             docker compose down -v || true
             docker volume prune -f || true
+            # Verify volumes are removed
+            docker volume ls | grep -q "project_db" && echo "WARNING: project_db volume still exists" || echo "✓ All volumes cleaned up"
+
+      - run:
+          name: Verify init script exists and is valid
+          command: |
+            echo "Checking init_db.sh file..."
+            pwd
+            ls -la db/scripts/ || exit 1
+            ls -la db/scripts/init_db.sh || exit 1
+            if [ ! -f db/scripts/init_db.sh ]; then
+              echo "ERROR: init_db.sh is not a regular file!"
+              exit 1
+            fi
+            if [ -d db/scripts/init_db.sh ]; then
+              echo "ERROR: init_db.sh exists as a directory instead of a file!"
+              exit 1
+            fi
+            file db/scripts/init_db.sh
+            # Ensure file has Unix line endings and proper permissions
+            sed -i 's/\r$//' db/scripts/init_db.sh || true
+            chmod +x db/scripts/init_db.sh
+            # Verify it's still a file after processing
+            if [ ! -f db/scripts/init_db.sh ]; then
+              echo "ERROR: init_db.sh became invalid after processing!"
+              exit 1
+            fi
+            echo "✓ init_db.sh verified"
 
       - run:
           name: Pull and build images
@@ -41,6 +69,12 @@ jobs:
               echo "=== Docker Compose failed to start, showing logs ==="
               docker compose logs
               docker compose ps -a
+              # Check if init script was mounted correctly
+              if docker compose ps postgresdb | grep -q "Up"; then
+                echo "=== Checking mounted init script ==="
+                docker compose exec -T postgresdb ls -la /docker-entrypoint-initdb.d/ || true
+                docker compose exec -T postgresdb file /docker-entrypoint-initdb.d/init_db.sh || true
+              fi
               exit 1
             }
 
