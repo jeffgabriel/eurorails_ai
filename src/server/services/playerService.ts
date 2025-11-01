@@ -352,7 +352,8 @@ export class PlayerService {
                     current_turn_number as "turnNumber",
                     mh.movement_path as "movementHistory",
                     hand,
-                    loads
+                    loads,
+                    camera_state
                 FROM players 
                 LEFT JOIN LATERAL (
                     SELECT movement_path 
@@ -454,6 +455,7 @@ export class PlayerService {
             loads: row.loads || [],
           },
           hand: handCards,
+          cameraState: row.camera_state || undefined,  // Per-player camera state
         };
       });
 

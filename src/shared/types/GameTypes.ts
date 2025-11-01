@@ -39,6 +39,11 @@ export interface Player {
     turnNumber: number;
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
+    cameraState?: {  // Per-player camera state (zoom, pan position)
+        zoom: number;
+        scrollX: number;
+        scrollY: number;
+    };
 }
 
 export interface TrainState {
@@ -82,6 +87,7 @@ export interface GameState {
     currentPlayerIndex: number;
     status: GameStatus;
     maxPlayers: number;
+    /** @deprecated Camera state is now stored per-player in Player.cameraState. This field is kept for backwards compatibility during migration. */
     cameraState?: {
         zoom: number;
         scrollX: number;

@@ -18,6 +18,7 @@ export class CameraController {
     private isMouseDown: boolean = false;
     private gameState: GameState;
     private pendingRender: boolean = false;
+    private localPlayerId: string | null = null;
     
     constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
         this.scene = scene;
@@ -25,6 +26,23 @@ export class CameraController {
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
         this.gameState = gameState;
+    }
+
+    /**
+     * Set the local player ID for per-player camera state management
+     */
+    public setLocalPlayerId(playerId: string | null): void {
+        this.localPlayerId = playerId;
+    }
+
+    /**
+     * Get the local player from gameState
+     */
+    private getLocalPlayer() {
+        if (!this.localPlayerId || !this.gameState.players) {
+            return null;
+        }
+        return this.gameState.players.find(p => p.id === this.localPlayerId) || null;
     }
 
     public setupCamera(): void {
@@ -39,8 +57,15 @@ export class CameraController {
             mapHeight + (GRID_MARGIN * 2)
         );
         
-        // If we have a saved camera state, apply it
-        if (this.gameState.cameraState) {
+        // Try to load camera state from local player first
+        const localPlayer = this.getLocalPlayer();
+        if (localPlayer?.cameraState) {
+            // Use local player's saved camera state
+            this.camera.setZoom(localPlayer.cameraState.zoom);
+            this.camera.scrollX = localPlayer.cameraState.scrollX;
+            this.camera.scrollY = localPlayer.cameraState.scrollY;
+        } else if (this.gameState.cameraState) {
+            // Fallback to deprecated global camera state (for backwards compatibility)
             this.camera.setZoom(this.gameState.cameraState.zoom);
             this.camera.scrollX = this.gameState.cameraState.scrollX;
             this.camera.scrollY = this.gameState.cameraState.scrollY;
@@ -159,30 +184,48 @@ export class CameraController {
     }
 
     public async saveCameraState(): Promise<void> {
+        if (!this.localPlayerId) {
+            console.warn('Cannot save camera state: no local player ID set');
+            return;
+        }
+
         const currentState: CameraState = {
             zoom: this.camera.zoom,
             scrollX: this.camera.scrollX,
             scrollY: this.camera.scrollY
         };
         
-        // Update local state
-        this.gameState.cameraState = currentState;
+        // Update local player's camera state in gameState
+        const localPlayer = this.getLocalPlayer();
+        if (localPlayer) {
+            localPlayer.cameraState = currentState;
+        }
 
         try {
-            // Save to database
+            // Get auth token from localStorage to include in request
+            const token = localStorage.getItem('eurorails.jwt');
+            const headers: Record<string, string> = {
+                'Content-Type': 'application/json',
+            };
+            
+            if (token) {
+                headers.Authorization = `Bearer ${token}`;
+            }
+
+            // Save to database with playerId
             const response = await fetch('/api/game/updateCameraState', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
+                headers,
                 body: JSON.stringify({
                     gameId: this.gameState.id,
+                    playerId: this.localPlayerId,
                     cameraState: currentState
                 })
             });
 
             if (!response.ok) {
-                console.error('Failed to save camera state:', await response.text());
+                const errorText = await response.text();
+                console.error('Failed to save camera state:', errorText);
             }
         } catch (error) {
             console.error('Error saving camera state:', error);
