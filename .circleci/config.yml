@@ -44,7 +44,8 @@ jobs:
               echo "ERROR: init_db.sh exists as a directory instead of a file!"
               exit 1
             fi
-            file db/scripts/init_db.sh
+            # Show file details
+            ls -lh db/scripts/init_db.sh
             # Ensure file has Unix line endings and proper permissions
             sed -i 's/\r$//' db/scripts/init_db.sh || true
             chmod +x db/scripts/init_db.sh
