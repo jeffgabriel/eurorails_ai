@@ -140,7 +140,18 @@ export class SetupScene extends Phaser.Scene {
             // If game is in initialBuild or active status, transition to game scene
             if (game.gameStatus === 'initialBuild' || game.gameStatus === 'active') {
                 try {
-                    const response = await fetch(`/api/game/${game.id}`);
+                    // Include auth headers for authenticated requests
+                    const token = localStorage.getItem('eurorails.jwt');
+                    const headers: Record<string, string> = {
+                        'Content-Type': 'application/json',
+                    };
+                    if (token) {
+                        headers.Authorization = `Bearer ${token}`;
+                    }
+                    
+                    const response = await fetch(`/api/game/${game.id}`, {
+                        headers
+                    });
                     if (!response.ok) {
                         throw new Error('Failed to fetch active game state');
                     }

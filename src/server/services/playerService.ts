@@ -59,9 +59,32 @@ export class PlayerService {
     const normalizedColor = this.validateColor(player.color);
 
     // Use provided client if available (for transactions), otherwise get a new connection
-    const useClient = client || db;
+    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
+    // Check if client is truthy and has a query method (it's a proper database client)
+    let useClient: any;
+    if (client && typeof client.query === 'function') {
+      // Transaction client provided - use it
+      useClient = client;
+    } else {
+      // No transaction client - use pool (but warn if client was expected)
+      if (client !== undefined) {
+        console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
+      } else {
+        console.warn(`PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`);
+      }
+      useClient = db;
+    }
 
     // First check if another player already has this color
+    // Also verify the game exists (sanity check - helps debug transaction issues)
+    if (client && typeof client.query === 'function') {
+      const gameCheckResult = await client.query('SELECT id FROM games WHERE id = $1', [gameId]);
+      if (gameCheckResult.rows.length === 0) {
+        console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
+        throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
+      }
+    }
+    
     const colorCheckQuery = `
             SELECT id FROM players 
             WHERE game_id = $1 AND color = $2
@@ -542,9 +565,14 @@ export class PlayerService {
         'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at LIMIT 1 OFFSET $2',
         [gameId, currentPlayerIndex]
       );
-      const currentPlayerId = playerQuery.rows[0]?.id;
-      const { emitTurnChange } = await import('./socketService');
-      emitTurnChange(gameId, currentPlayerIndex, currentPlayerId);
+      // Validate that we have a valid player at this index
+      if (playerQuery.rows && playerQuery.rows.length > 0 && currentPlayerIndex >= 0) {
+        const currentPlayerId = playerQuery.rows[0]?.id;
+        const { emitTurnChange } = await import('./socketService');
+        emitTurnChange(gameId, currentPlayerIndex, currentPlayerId);
+      } else {
+        console.warn(`No player found at index ${currentPlayerIndex} for game ${gameId}`);
+      }
     }
   }
 
@@ -577,12 +605,12 @@ export class PlayerService {
     if (result.rows.length === 0) {
         return null;
     }
-    // If there are other active games, set them to 'interrupted'
+    // If there are other active games, set them to 'completed' (only one active game at a time)
     if (result.rows.length > 0) {
         const keepActiveId = result.rows[0].id;
         await db.query(
             `UPDATE games 
-             SET status = 'interrupted' 
+             SET status = 'completed' 
              WHERE status = 'active' 
              AND id != $1`,
             [keepActiveId]
@@ -600,8 +628,22 @@ export class PlayerService {
     gameId: string,
     status: GameStatus
   ): Promise<void> {
+    // Validate status is lowercase and matches database constraint
+    // Database constraint allows: 'setup', 'initialBuild', 'active', 'completed'
+    const allowedStatuses = ['setup', 'initialBuild', 'active', 'completed'];
+    const normalizedStatus = status.toLowerCase();
+    
+    let finalStatus: string;
+    if (!allowedStatuses.includes(normalizedStatus)) {
+      // If status is not in the allowed list, default to 'completed' for safety
+      console.warn(`PlayerService.updateGameStatus: Status '${status}' not allowed. Valid values: ${allowedStatuses.join(', ')}. Using 'completed'.`);
+      finalStatus = 'completed';
+    } else {
+      finalStatus = normalizedStatus;
+    }
+    
     // If setting a game to active, complete any other active games first
-    if (status === "active") {
+    if (finalStatus === "active") {
       await this.endAllActiveGames();
     }
 
@@ -610,7 +652,7 @@ export class PlayerService {
             SET status = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
-    await db.query(query, [status, gameId]);
+    await db.query(query, [finalStatus, gameId]);
   }
 
   static async endAllActiveGames(): Promise<void> {

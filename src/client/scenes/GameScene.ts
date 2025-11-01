@@ -32,6 +32,7 @@ export class GameScene extends Phaser.Scene {
   private gameStateService!: GameStateService;
   private playerStateService!: PlayerStateService;
   private loadService: LoadService;
+  private turnChangeListener?: (currentPlayerIndex: number) => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -140,15 +141,16 @@ export class GameScene extends Phaser.Scene {
     this.gameStateService.setPlayerStateService(this.playerStateService);
     
     // Set up turn change listener to refresh UI when turn changes
-    this.gameStateService.onTurnChange((currentPlayerIndex) => {
+    this.turnChangeListener = (currentPlayerIndex: number) => {
       console.log(`Turn changed to player index: ${currentPlayerIndex}`);
       this.handleTurnChange(currentPlayerIndex);
-    });
-    
-    // Start polling for turn changes (fallback if Socket.IO not available)
-    this.gameStateService.startPollingForTurnChanges(2000);
+    };
+    this.gameStateService.onTurnChange(this.turnChangeListener);
     
     await this.loadService.loadInitialState();
+    
+    // Start polling for turn changes after initial state is loaded (fallback if Socket.IO not available)
+    this.gameStateService.startPollingForTurnChanges(2000);
 
     // Create containers in the right order
     this.mapContainer = this.add.container(0, 0);
@@ -525,6 +527,11 @@ export class GameScene extends Phaser.Scene {
     // Stop polling for turn changes
     if (this.gameStateService) {
       this.gameStateService.stopPollingForTurnChanges();
+      // Remove turn change listener to prevent memory leaks
+      if (this.turnChangeListener) {
+        this.gameStateService.offTurnChange(this.turnChangeListener);
+        this.turnChangeListener = undefined;
+      }
     }
     
     // Clean up TrackDrawingManager

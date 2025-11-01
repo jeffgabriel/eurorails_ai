@@ -70,8 +70,8 @@ app.use(async (req, res, next) => {
                         });
                     });
                 } else {
-                    // No valid players, mark game as interrupted
-                    await PlayerService.updateGameStatus(activeGame.id, 'interrupted');
+                    // No valid players, mark game as completed (no longer active)
+                    await PlayerService.updateGameStatus(activeGame.id, 'completed');
                 }
             }
         } catch (error) {

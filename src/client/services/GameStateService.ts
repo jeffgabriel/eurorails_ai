@@ -35,7 +35,7 @@ export class GameStateService {
         if (this.playerStateService) {
             return this.playerStateService.getLocalPlayerId();
         }
-        return this.localPlayerId;
+        return null; // Don't fallback to unused localPlayerId field - delegate to PlayerStateService
     }
     
     /**
@@ -106,6 +106,11 @@ export class GameStateService {
         
         this.pollingInterval = window.setInterval(async () => {
             try {
+                // Check if gameState exists before polling
+                if (!this.gameState || !this.gameState.id) {
+                    return;
+                }
+                
                 // Include auth headers in polling requests
                 const token = localStorage.getItem('eurorails.jwt');
                 const headers: Record<string, string> = {
@@ -119,6 +124,10 @@ export class GameStateService {
                     headers
                 });
                 if (!response.ok) {
+                    // Stop polling on authentication errors
+                    if (response.status === 401 || response.status === 403) {
+                        this.stopPollingForTurnChanges();
+                    }
                     return;
                 }
                 
@@ -206,14 +215,8 @@ export class GameStateService {
             const gameState = await gameResponse.json();
             this.gameState = gameState;
             
-            console.log('Loaded game state with players:', {
-                playerCount: gameState.players?.length,
-                hands: gameState.players?.map((p: any) => ({
-                    playerId: p.id,
-                    playerName: p.name,
-                    handSize: p.hand?.length || 0
-                }))
-            });
+            // Sanitize logging to avoid exposing sensitive player information
+            console.log('Loaded game state with', gameState.players?.length || 0, 'players');
             
             return gameState;
         } catch (error) {

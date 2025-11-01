@@ -115,6 +115,7 @@ export class DemandDeckService {
    * Returns all dealt cards back to the draw pile and resets state
    */
   public reset(): void {
+    this.loadCards(); // Reload cards from JSON configuration to ensure fresh state
     this.dealtCards.clear();
     this.discardPile = [];
     // Reinitialize draw pile with all card IDs

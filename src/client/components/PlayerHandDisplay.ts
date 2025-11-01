@@ -84,11 +84,17 @@ export class PlayerHandDisplay {
   }
 
   private async createDemandCardSection(targetContainer: Phaser.GameObjects.Container): Promise<void> {
+    // Guard against race condition when gameStateService is null
+    if (!this.gameStateService) {
+      console.error('PlayerHandDisplay.createDemandCardSection: gameStateService is null, cannot determine local player');
+      return;
+    }
+    
     // Show only local player's cards
-    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId 
       ? this.gameState.players.find(p => p.id === localPlayerId)
-      : this.gameState.players[this.gameState.currentPlayerIndex];
+      : null;
     
     // If no local player found, don't show cards
     if (!currentPlayer) {
@@ -133,13 +139,18 @@ export class PlayerHandDisplay {
   }
 
   private createTrainSection(targetContainer: Phaser.GameObjects.Container): void {
+    // Guard against race condition when gameStateService is null
+    if (!this.gameStateService) {
+      console.warn('PlayerHandDisplay.createTrainSection: gameStateService not available');
+      return;
+    }
+
     // Show local player's train card
-    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId 
       ? this.gameState.players.find(p => p.id === localPlayerId)
-      : this.gameState.players[this.gameState.currentPlayerIndex];
-
-    // Validate current player exists
+      : null;
+    
     if (!currentPlayer) {
       console.error('PlayerHandDisplay.createTrainSection: No local player found');
       return;
@@ -171,11 +182,16 @@ export class PlayerHandDisplay {
   }
 
   private createPlayerInfoSection(isDrawingMode: boolean, currentTrackCost: number, targetContainer: Phaser.GameObjects.Container): void {
+    // Guard against race condition when gameStateService is null
+    if (!this.gameStateService) {
+      return; // Don't show player info if gameStateService is not available
+    }
+    
     // Show local player's info
-    const localPlayerId = this.gameStateService?.getLocalPlayerId();
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId 
       ? this.gameState.players.find(p => p.id === localPlayerId)
-      : this.gameState.players[this.gameState.currentPlayerIndex];
+      : null;
     
     if (!currentPlayer) {
       return; // Don't show player info if no local player

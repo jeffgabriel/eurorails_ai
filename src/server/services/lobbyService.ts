@@ -601,7 +601,12 @@ export class LobbyService {
         [gameId]
       );
       
-      if (isCreator.rows[0].created_by === userId) {
+      if (isCreator.rows.length === 0) {
+        throw new LobbyError('Game not found', 'GAME_NOT_FOUND', 404);
+      }
+      
+      const createdBy = isCreator.rows[0].created_by;
+      if (createdBy && createdBy === userId) {
         // If this is the creator, we need to transfer ownership or abandon the game
         const remainingPlayers = await client.query(
           'SELECT user_id FROM players WHERE game_id = $1 AND user_id != $2 ORDER BY created_at LIMIT 1',
