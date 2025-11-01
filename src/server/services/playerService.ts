@@ -16,6 +16,7 @@ interface PlayerRow {
   position_row: number | null;
   position_col: number | null;
   loads: string[];
+  camera_state: any;
 }
 
 export class PlayerService {
@@ -116,9 +117,9 @@ export class PlayerService {
             INSERT INTO players (
                 id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
-                current_turn_number, hand, loads
+                current_turn_number, hand, loads, camera_state
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
         `;
     const values = [
       player.id,
@@ -134,7 +135,8 @@ export class PlayerService {
       player.trainState.position?.col || null,
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
-      player.trainState.loads || []
+      player.trainState.loads || [],
+      player.cameraState ? JSON.stringify(player.cameraState) : null
     ];
     try {
       await useClient.query(query, values);
@@ -214,7 +216,8 @@ export class PlayerService {
                     position_col = $9,
                     current_turn_number = $12,
                     hand = $13,
-                    loads = $14
+                    loads = $14,
+                    camera_state = $15
                 WHERE game_id = $10 AND id = $11
                 RETURNING *
             `;
@@ -245,6 +248,7 @@ export class PlayerService {
         // Ensure hand is an array and extract card IDs
         Array.isArray(player.hand) ? player.hand.map((card: any) => typeof card === 'object' && card.id ? card.id : card) : [],
         player.trainState.loads || [],
+        player.cameraState ? JSON.stringify(player.cameraState) : null,
       ];
       console.log("Executing update query");
 

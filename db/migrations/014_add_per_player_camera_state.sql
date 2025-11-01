@@ -1,6 +1,9 @@
 -- Add camera_state column to players table for per-player camera state
 ALTER TABLE players ADD COLUMN IF NOT EXISTS camera_state JSONB;
 
+-- Add index to improve migration performance
+CREATE INDEX IF NOT EXISTS idx_players_game_id_created_at ON players(game_id, created_at);
+
 -- Migrate existing global camera state from games table to first player
 -- This ensures backward compatibility for existing games
 DO $$
@@ -28,6 +31,8 @@ BEGIN
             AND camera_state IS NULL;
             
             RAISE NOTICE 'Migrated camera state from game % to player %', game_record.id, first_player_id;
+        ELSE
+            RAISE WARNING 'No players found for game % - camera state migration skipped', game_record.id;
         END IF;
     END LOOP;
 END $$;
