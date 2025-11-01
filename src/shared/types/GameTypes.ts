@@ -29,6 +29,16 @@ export const TRAIN_PROPERTIES: Record<TrainType, TrainProperties> = {
     [TrainType.Superfreight]: { speed: 12, capacity: 3, spritePrefix: 'train_12' }
 };
 
+/**
+ * Camera state interface for player viewport settings
+ * Stores zoom level and scroll position for independent per-player camera control
+ */
+export interface CameraState {
+    zoom: number;
+    scrollX: number;
+    scrollY: number;
+}
+
 export interface Player {
     id: string;  // Add unique identifier for database
     userId?: string;  // Optional user ID for authentication (matches players.user_id in database)
@@ -39,6 +49,7 @@ export interface Player {
     turnNumber: number;
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
+    cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
 }
 
 export interface TrainState {
@@ -82,11 +93,8 @@ export interface GameState {
     currentPlayerIndex: number;
     status: GameStatus;
     maxPlayers: number;
-    cameraState?: {
-        zoom: number;
-        scrollX: number;
-        scrollY: number;
-    };
+    /** @deprecated Camera state is now stored per-player in Player.cameraState. This field is kept for backwards compatibility during migration. */
+    cameraState?: CameraState;
     trainSprites?: Map<string, any>; // Map of player ID to train sprite (client-side only)
 }
 

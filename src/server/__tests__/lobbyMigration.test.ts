@@ -140,12 +140,19 @@ describe('Lobby Migration (Phase 1)', () => {
         ORDER BY indexname
       `);
       
-      const expectedIndexes = [
+      // Expected indexes from lobby migration (migration 011)
+      const expectedLobbyIndexes = [
         'idx_players_is_online',
         'idx_players_user_id'
       ];
       
-      expect(result.rows.map(row => row.indexname)).toEqual(expectedIndexes);
+      const actualIndexes = result.rows.map(row => row.indexname);
+      
+      // Verify that all expected lobby migration indexes exist
+      // (additional indexes from later migrations like idx_players_game_id_created_at may also exist)
+      expectedLobbyIndexes.forEach(expectedIndex => {
+        expect(actualIndexes).toContain(expectedIndex);
+      });
     });
   });
 

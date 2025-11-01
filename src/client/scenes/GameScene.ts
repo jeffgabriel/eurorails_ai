@@ -191,6 +191,10 @@ export class GameScene extends Phaser.Scene {
       this.gameState
     );
 
+    // Set local player ID for per-player camera state
+    const localPlayerId = this.playerStateService.getLocalPlayerId();
+    this.cameraController.setLocalPlayerId(localPlayerId);
+
     // Load existing tracks before creating UI
     await this.trackManager.loadExistingTracks();
 
