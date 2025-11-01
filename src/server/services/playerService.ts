@@ -54,16 +54,42 @@ export class PlayerService {
     await db.query(query, [gameId]);
   }
 
-  static async createPlayer(gameId: string, player: Player): Promise<void> {
+  static async createPlayer(gameId: string, player: Player, client?: any): Promise<void> {
     // Validate and normalize color
     const normalizedColor = this.validateColor(player.color);
 
+    // Use provided client if available (for transactions), otherwise get a new connection
+    // IMPORTANT: If client is provided, it MUST be used for transaction consistency
+    // Check if client is truthy and has a query method (it's a proper database client)
+    let useClient: any;
+    if (client && typeof client.query === 'function') {
+      // Transaction client provided - use it
+      useClient = client;
+    } else {
+      // No transaction client - use pool (but warn if client was expected)
+      if (client !== undefined) {
+        console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
+      } else {
+        console.warn(`PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`);
+      }
+      useClient = db;
+    }
+
     // First check if another player already has this color
+    // Also verify the game exists (sanity check - helps debug transaction issues)
+    if (client && typeof client.query === 'function') {
+      const gameCheckResult = await client.query('SELECT id FROM games WHERE id = $1', [gameId]);
+      if (gameCheckResult.rows.length === 0) {
+        console.error(`PlayerService.createPlayer: Game ${gameId} not found in transaction. This indicates a transaction isolation issue.`);
+        throw new Error(`Game ${gameId} not found - transaction may not be properly isolated`);
+      }
+    }
+    
     const colorCheckQuery = `
             SELECT id FROM players 
             WHERE game_id = $1 AND color = $2
         `;
-    const colorCheckResult = await db.query(colorCheckQuery, [
+    const colorCheckResult = await useClient.query(colorCheckQuery, [
       gameId,
       normalizedColor,
     ]);
@@ -71,6 +97,20 @@ export class PlayerService {
     if (colorCheckResult.rows.length > 0) {
       throw new Error("Color already taken by another player");
     }
+
+    // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
+    // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
+    console.log(`Drawing initial 3 cards server-side for new player ${player.id} (${player.name})`);
+    const handCardIds: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const card = demandDeckService.drawCard();
+      if (!card) {
+        throw new Error(`Failed to draw initial card ${i + 1} for player ${player.id}`);
+      }
+      handCardIds.push(card.id);
+      console.log(`Drew card ${card.id} for player ${player.id}`);
+    }
+    console.log(`Successfully drew ${handCardIds.length} initial cards for player ${player.id}`);
 
     const query = `
             INSERT INTO players (
@@ -93,11 +133,11 @@ export class PlayerService {
       player.trainState.position?.row || null,
       player.trainState.position?.col || null,
       player.turnNumber || 1,
-      player.hand.map(card => card.id),
+      handCardIds,  // Use the drawn card IDs
       player.trainState.loads || []
     ];
     try {
-      await db.query(query, values);
+      await useClient.query(query, values);
     } catch (err: any) {
       if (
         err.code === "23505" &&
@@ -202,7 +242,8 @@ export class PlayerService {
         gameId,
         player.id,
         player.turnNumber,
-        player.hand.map(card => card.id),
+        // Ensure hand is an array and extract card IDs
+        Array.isArray(player.hand) ? player.hand.map((card: any) => typeof card === 'object' && card.id ? card.id : card) : [],
         player.trainState.loads || [],
       ];
       console.log("Executing update query");
@@ -286,7 +327,13 @@ export class PlayerService {
     }
   }
 
-  static async getPlayers(gameId: string): Promise<Player[]> {
+  /**
+   * Get all players for a game, with optional filtering of hand data for security
+   * @param gameId - The game ID
+   * @param requestingUserId - Optional user ID of the requesting user. If provided, only that user's hand will be included.
+   * @returns Array of players, with hands filtered based on requestingUserId
+   */
+  static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
     console.log("Starting database query for players:", { gameId });
     const client = await db.connect();
     try {
@@ -332,25 +379,51 @@ export class PlayerService {
       //     : null,
       // });
 
-      // // Log the raw hand data before processing
-      // console.log("Raw hand data from database:", result.rows.map(row => ({
-      //   playerId: row.id,
-      //   handIds: row.hand
-      // })));
+      // Log the raw hand data before processing for debugging
+      console.log("Raw hand data from database:", result.rows.map(row => ({
+        playerId: row.id,
+        playerName: row.name,
+        handIds: row.hand,
+        handType: typeof row.hand,
+        handLength: Array.isArray(row.hand) ? row.hand.length : 'not array',
+        user_id: row.user_id
+      })));
 
       const players = result.rows.map((row) => {
-        // Convert hand IDs to actual cards, with better error handling
-        const handCards = row.hand ? row.hand.map((cardId: number) => {
-          const card = demandDeckService.getCard(cardId);
-          if (!card) {
-            console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
-            return null;
+        // Security: Only include hand data for the requesting user's own player
+        // If requestingUserId is provided, only show that player's hand
+        // Otherwise, hide all hands (for backward compatibility, but not secure)
+        let handCards: any[] = [];
+        
+        if (requestingUserId && row.user_id === requestingUserId) {
+          // This is the requesting user's player - show their hand
+          // Handle both null and empty array cases
+          const handArray = row.hand || [];
+          if (!Array.isArray(handArray)) {
+            console.error(`Invalid hand data for player ${row.id}:`, handArray);
+            handCards = [];
+          } else {
+            handCards = handArray.map((cardId: number) => {
+              const card = demandDeckService.getCard(cardId);
+              if (!card) {
+                console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
+                return null;
+              }
+              return card;
+            }).filter(Boolean); // Remove any null entries
           }
-          return card;
-        }).filter(Boolean) : []; // Remove any null entries
-
-        // Log the processed hand data
-        console.log(`Processed hand for player ${row.id}:`, handCards);
+          
+          console.log(`Processed hand for requesting player ${row.id}:`, {
+            playerName: row.name,
+            handIds: handArray,
+            cardCount: handCards.length,
+            cards: handCards.map(c => c.id)
+          });
+        } else {
+          // This is another player's data - hide their hand for security
+          handCards = [];
+          console.log(`Hidden hand for player ${row.id} (not requesting user)`);
+        }
 
         // Cast trainType from database string to TrainType enum
         const trainType = row.trainType as TrainType;
@@ -481,6 +554,26 @@ export class PlayerService {
             WHERE id = $2
         `;
     await db.query(query, [currentPlayerIndex, gameId]);
+    
+    // Emit turn change event to all clients in the game room
+    const { getSocketIO } = await import('./socketService');
+    const io = getSocketIO();
+    if (io) {
+      // Get the player ID for the current player (internal query - doesn't need hand data)
+      // Query players in same order as getPlayers (no explicit ORDER BY, but we'll use created_at for consistency)
+      const playerQuery = await db.query(
+        'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at LIMIT 1 OFFSET $2',
+        [gameId, currentPlayerIndex]
+      );
+      // Validate that we have a valid player at this index
+      if (playerQuery.rows && playerQuery.rows.length > 0 && currentPlayerIndex >= 0) {
+        const currentPlayerId = playerQuery.rows[0]?.id;
+        const { emitTurnChange } = await import('./socketService');
+        emitTurnChange(gameId, currentPlayerIndex, currentPlayerId);
+      } else {
+        console.warn(`No player found at index ${currentPlayerIndex} for game ${gameId}`);
+      }
+    }
   }
 
   static async getGameState(
@@ -512,12 +605,12 @@ export class PlayerService {
     if (result.rows.length === 0) {
         return null;
     }
-    // If there are other active games, set them to 'interrupted'
+    // If there are other active games, set them to 'completed' (only one active game at a time)
     if (result.rows.length > 0) {
         const keepActiveId = result.rows[0].id;
         await db.query(
             `UPDATE games 
-             SET status = 'interrupted' 
+             SET status = 'completed' 
              WHERE status = 'active' 
              AND id != $1`,
             [keepActiveId]
@@ -535,8 +628,22 @@ export class PlayerService {
     gameId: string,
     status: GameStatus
   ): Promise<void> {
+    // Validate status is lowercase and matches database constraint
+    // Database constraint allows: 'setup', 'initialBuild', 'active', 'completed'
+    const allowedStatuses = ['setup', 'initialBuild', 'active', 'completed'];
+    const normalizedStatus = status.toLowerCase();
+    
+    let finalStatus: string;
+    if (!allowedStatuses.includes(normalizedStatus)) {
+      // If status is not in the allowed list, default to 'completed' for safety
+      console.warn(`PlayerService.updateGameStatus: Status '${status}' not allowed. Valid values: ${allowedStatuses.join(', ')}. Using 'completed'.`);
+      finalStatus = 'completed';
+    } else {
+      finalStatus = normalizedStatus;
+    }
+    
     // If setting a game to active, complete any other active games first
-    if (status === "active") {
+    if (finalStatus === "active") {
       await this.endAllActiveGames();
     }
 
@@ -545,7 +652,7 @@ export class PlayerService {
             SET status = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
-    await db.query(query, [status, gameId]);
+    await db.query(query, [finalStatus, gameId]);
   }
 
   static async endAllActiveGames(): Promise<void> {

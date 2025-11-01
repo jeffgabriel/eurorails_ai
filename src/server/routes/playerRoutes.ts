@@ -2,6 +2,7 @@ import express from 'express';
 import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
+import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 
 const router = express.Router();
 
@@ -250,13 +251,15 @@ router.post('/delete', async (req, res) => {
 });
 
 // Get players for a game
-router.get('/:gameId', async (req, res) => {
+// Require authentication to enforce per-player hand visibility
+router.get('/:gameId', authenticateToken, async (req, res) => {
     console.log('Received get players request at /api/players/:gameId');
     console.log('Request params:', req.params);
     console.log('Request headers:', req.headers);
 
     try {
         const gameId = req.params.gameId;
+        const userId = req.user?.id; // Authentication required, so userId should always be present
 
         // Validate request
         if (!gameId) {
@@ -264,9 +267,17 @@ router.get('/:gameId', async (req, res) => {
             return res.status(400).json({ error: 'Game ID is required' });
         }
 
+        if (!userId) {
+            console.error('Invalid request - missing userId from authentication');
+            return res.status(401).json({ 
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required to view player data' 
+            });
+        }
+
         console.log('Fetching players from database for game:', gameId);
-        const players = await PlayerService.getPlayers(gameId);
-        console.log('Successfully retrieved players:', players);
+        const players = await PlayerService.getPlayers(gameId, userId);
+        console.log('Successfully retrieved players:', players.length, 'players');
 
         return res.status(200).json(players);
     } catch (error) {
@@ -318,8 +329,17 @@ router.post('/updateCurrentPlayer', async (req, res) => {
 });
 
 // Get active game
-router.get('/game/active', async (req, res) => {
+router.get('/game/active', authenticateToken, async (req, res) => {
     try {
+        const userId = req.user?.id;
+        
+        if (!userId) {
+            return res.status(401).json({ 
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required to view active game' 
+            });
+        }
+        
         const activeGame = await PlayerService.getActiveGame();
         if (!activeGame) {
             return res.status(404).json({ 
@@ -328,8 +348,8 @@ router.get('/game/active', async (req, res) => {
             });
         }
 
-        // Get all players for this game
-        const players = await PlayerService.getPlayers(activeGame.id);
+        // Get all players for this game (with hand filtering for authenticated user)
+        const players = await PlayerService.getPlayers(activeGame.id, userId);
         
         // Set the game ID in the session
         req.session.gameId = activeGame.id;
@@ -393,12 +413,13 @@ router.post('/game/:gameId/status', async (req, res) => {
 });
 
 // Fulfill demand card
-router.post('/fulfill-demand', async (req, res) => {
+router.post('/fulfill-demand', authenticateToken, async (req, res) => {
     console.debug('Received fulfill demand request at /api/players/fulfill-demand');
     console.debug('Request body:', req.body);
 
     try {
         const { gameId, playerId, city, loadType, cardId } = req.body;
+        const userId = req.user?.id;
 
         // Validate request
         if (!gameId || !playerId || !city || !loadType || !cardId) {
@@ -406,6 +427,32 @@ router.post('/fulfill-demand', async (req, res) => {
             return res.status(400).json({ 
                 error: 'Validation error',
                 details: 'Game ID, player ID, city, load type, and card ID are required'
+            });
+        }
+
+        // Security: Authentication is required, so userId must be present
+        if (!userId) {
+            return res.status(401).json({ 
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required to fulfill demand cards' 
+            });
+        }
+
+        // Verify that the requesting user owns this player
+        const players = await PlayerService.getPlayers(gameId, userId);
+        const player = players.find(p => p.id === playerId);
+        
+        if (!player) {
+            return res.status(404).json({ 
+                error: 'Not found',
+                details: 'Player not found in game'
+            });
+        }
+        
+        if (player.userId !== userId) {
+            return res.status(403).json({ 
+                error: 'Forbidden',
+                details: 'You can only fulfill demand cards for your own player'
             });
         }
 

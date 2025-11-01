@@ -1,6 +1,7 @@
 import { db } from "../db";
 import dotenv from "dotenv";
 import "@jest/globals";
+import { demandDeckService } from "../services/demandDeckService";
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +20,11 @@ beforeAll(async () => {
     throw err;
   }
 }, 30000);
+
+// Reset deck service before each test to ensure fresh state
+beforeEach(() => {
+  demandDeckService.reset();
+});
 
 // Commented out to prevent database wipes during development
 describe("Setup", () => {

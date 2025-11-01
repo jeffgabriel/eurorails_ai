@@ -1,6 +1,9 @@
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
+import { PlayerService } from './playerService';
+import { TrainType } from '../../shared/types/GameTypes';
+import type { Player as GamePlayer } from '../../shared/types/GameTypes';
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -123,15 +126,27 @@ export class LobbyService {
       
       const username = userResult.rows[0].username;
       
-      // Create the first player (game creator)
-      const playerResult = await client.query(
-        `INSERT INTO players (game_id, user_id, name, color) 
-         VALUES ($1, $2, $3, $4) 
-         RETURNING id`,
-        [game.id, data.createdByUserId, username, data.creatorColor || '#ff0000']
-      );
+      // Create the first player (game creator) using PlayerService to ensure cards are drawn
+      const creatorPlayer: GamePlayer = {
+        id: uuidv4(),
+        userId: data.createdByUserId,
+        name: username,
+        color: data.creatorColor || '#ff0000',
+        money: 50,
+        trainType: TrainType.Freight,
+        turnNumber: 1,
+        trainState: {
+          position: null,
+          movementHistory: [],
+          remainingMovement: 9,
+          loads: []
+        },
+        hand: []  // Empty - PlayerService will draw cards server-side
+      };
       
-      const player = playerResult.rows[0];
+      // Use PlayerService.createPlayer() to ensure cards are drawn properly
+      // Pass the transaction client so the player is created in the same transaction
+      await PlayerService.createPlayer(game.id, creatorPlayer, client);
       
       // Update the game with the creator reference (user ID, not player ID)
       await client.query(
@@ -239,40 +254,79 @@ export class LobbyService {
       
       const username = userResult.rows[0].username;
       
-      // Handle color selection
-      let playerColor;
-      if (joinData.selectedColor) {
-        // Check if the selected color is available
-        const colorCheck = await client.query(
-          'SELECT id FROM players WHERE game_id = $1 AND color = $2',
-          [game.id, joinData.selectedColor]
-        );
-        
-        if (colorCheck.rows.length > 0) {
-          throw new LobbyError('Color already taken', 'COLOR_TAKEN', 400);
+      // Handle color selection and player creation
+      // Retry logic to handle concurrent joins picking the same color
+      const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+      let attempts = 0;
+      let playerCreated = false;
+      let playerColor: string | undefined;
+      
+      while (!playerCreated && attempts < colors.length) {
+        // Determine color for this attempt
+        if (joinData.selectedColor && attempts === 0) {
+          // User selected a color - check if available
+          const colorCheck = await client.query(
+            'SELECT id FROM players WHERE game_id = $1 AND color = $2',
+            [game.id, joinData.selectedColor]
+          );
+          
+          if (colorCheck.rows.length > 0) {
+            throw new LobbyError('Color already taken', 'COLOR_TAKEN', 400);
+          }
+          
+          playerColor = joinData.selectedColor;
+        } else {
+          // Auto-assign color - check which colors are currently available
+          const usedColors = await client.query(
+            'SELECT color FROM players WHERE game_id = $1',
+            [game.id]
+          );
+          
+          const availableColors = colors.filter(color => 
+            !usedColors.rows.some(row => row.color === color)
+          );
+          
+          // Pick from available colors, or use index-based fallback
+          playerColor = availableColors[attempts] || colors[attempts] || colors[0];
         }
         
-        playerColor = joinData.selectedColor;
-      } else {
-        // Auto-assign color if none selected
-        const colors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
-        const usedColors = await client.query(
-          'SELECT color FROM players WHERE game_id = $1',
-          [game.id]
-        );
+        // Create player using PlayerService to ensure cards are drawn
+        const joinedPlayer: GamePlayer = {
+          id: uuidv4(),
+          userId: joinData.userId,
+          name: username,
+          color: playerColor!,
+          money: 50,
+          trainType: TrainType.Freight,
+          turnNumber: 1,
+          trainState: {
+            position: null,
+            movementHistory: [],
+            remainingMovement: 9,
+            loads: []
+          },
+          hand: []  // Empty - PlayerService will draw cards server-side
+        };
         
-        const availableColors = colors.filter(color => 
-          !usedColors.rows.some(row => row.color === color)
-        );
-        
-        playerColor = availableColors[0] || colors[playerCount];
+        try {
+          // Use PlayerService.createPlayer() to ensure cards are drawn properly
+          // Pass the transaction client so the player is created in the same transaction
+          await PlayerService.createPlayer(game.id, joinedPlayer, client);
+          playerCreated = true;
+        } catch (error: any) {
+          // If color conflict and we haven't exhausted all colors, retry with next color
+          if (error.message && error.message.includes('Color already taken')) {
+            attempts++;
+            if (attempts >= colors.length) {
+              throw new LobbyError('No available colors', 'NO_COLORS_AVAILABLE', 400);
+            }
+            // Continue to retry with next color
+          } else {
+            // Re-throw non-color-conflict errors
+            throw error;
+          }
+        }
       }
-      
-      await client.query(
-        `INSERT INTO players (game_id, user_id, name, color) 
-         VALUES ($1, $2, $3, $4)`,
-        [game.id, joinData.userId, username, playerColor]
-      );
       
       await client.query('COMMIT');
       
@@ -337,9 +391,9 @@ export class LobbyService {
   }
 
   /**
-   * Get players in a game
+   * Get players in a game (for lobby - includes isOnline status)
    */
-  static async getGamePlayers(gameId: string): Promise<Player[]> {
+  static async getGamePlayers(gameId: string): Promise<(GamePlayer & { isOnline: boolean })[]> {
     // Input validation
     if (!gameId || gameId.trim().length === 0) {
       throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
@@ -358,8 +412,17 @@ export class LobbyService {
       userId: row.user_id,
       name: row.name,
       color: row.color,
-      isOnline: row.is_online,
-      gameId: row.game_id,
+      money: 50, // Default for lobby view
+      trainType: TrainType.Freight, // Default for lobby view
+      turnNumber: 1, // Default for lobby view
+      trainState: {
+        position: null,
+        movementHistory: [],
+        remainingMovement: 9,
+        loads: []
+      },
+      hand: [], // Lobby doesn't show hands - this will be loaded when game starts
+      isOnline: row.is_online || false, // Include isOnline for lobby
     }));
   }
 
@@ -538,7 +601,12 @@ export class LobbyService {
         [gameId]
       );
       
-      if (isCreator.rows[0].created_by === userId) {
+      if (isCreator.rows.length === 0) {
+        throw new LobbyError('Game not found', 'GAME_NOT_FOUND', 404);
+      }
+      
+      const createdBy = isCreator.rows[0].created_by;
+      if (createdBy && createdBy === userId) {
         // If this is the creator, we need to transfer ownership or abandon the game
         const remainingPlayers = await client.query(
           'SELECT user_id FROM players WHERE game_id = $1 AND user_id != $2 ORDER BY created_at LIMIT 1',

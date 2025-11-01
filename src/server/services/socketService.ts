@@ -125,3 +125,21 @@ export async function emitLobbyUpdated(
   });
 }
 
+/**
+ * Emit turn change event to all clients in a game room
+ */
+export function emitTurnChange(gameId: string, currentPlayerIndex: number, currentPlayerId?: string): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit turn change');
+    return;
+  }
+
+  console.log(`Emitting turn:change to game ${gameId} - currentPlayerIndex: ${currentPlayerIndex}`);
+  io.to(gameId).emit('turn:change', {
+    currentPlayerIndex,
+    currentPlayerId,
+    gameId,
+    timestamp: Date.now(),
+  });
+}
+

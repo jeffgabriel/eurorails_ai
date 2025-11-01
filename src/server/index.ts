@@ -54,9 +54,14 @@ app.use(async (req, res, next) => {
             const PlayerService = require('./services/playerService').PlayerService;
             const activeGame = await PlayerService.getActiveGame();
             if (activeGame) {
-                // Verify game has valid players
-                const players = await PlayerService.getPlayers(activeGame.id);
-                if (players && players.length > 0) {
+                // Verify game has valid players (internal check - doesn't need hand data)
+                // Use a simple count query instead of getPlayers to avoid authentication requirement
+                const db = require('./db').db;
+                const playerCount = await db.query(
+                    'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
+                    [activeGame.id]
+                );
+                if (playerCount.rows[0].count > 0) {
                     req.session.gameId = activeGame.id;
                     await new Promise<void>((resolve, reject) => {
                         req.session.save((err) => {
@@ -65,8 +70,8 @@ app.use(async (req, res, next) => {
                         });
                     });
                 } else {
-                    // No valid players, mark game as interrupted
-                    await PlayerService.updateGameStatus(activeGame.id, 'interrupted');
+                    // No valid players, mark game as completed (no longer active)
+                    await PlayerService.updateGameStatus(activeGame.id, 'completed');
                 }
             }
         } catch (error) {

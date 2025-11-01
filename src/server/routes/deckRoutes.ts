@@ -46,4 +46,34 @@ router.get('/demand/:cardId', (req, res) => {
   }
 });
 
+// Test-only endpoint to reset the deck
+// Allows reset in test environment or when called with test secret header
+router.post('/reset', (req, res) => {
+  try {
+    const testSecret = req.headers['x-test-secret'] as string;
+    const isTestEnvironment = process.env.NODE_ENV === 'test';
+    const isValidTestRequest = isTestEnvironment || testSecret === 'test-reset-secret';
+    
+    // Only allow in test environment or with test secret
+    if (!isValidTestRequest) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        details: 'This endpoint is only available in test mode'
+      });
+    }
+
+    demandDeckService.reset();
+    return res.status(200).json({
+      message: 'Deck reset successfully',
+      deckState: demandDeckService.getDeckState()
+    });
+  } catch (error: any) {
+    console.error('Error resetting deck:', error);
+    return res.status(500).json({ 
+      error: 'Server error',
+      details: error.message || 'An unexpected error occurred'
+    });
+  }
+});
+
 export default router;

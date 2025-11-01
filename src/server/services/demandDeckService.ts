@@ -109,6 +109,19 @@ export class DemandDeckService {
       dealtCardsCount: this.dealtCards.size
     };
   }
+
+  /**
+   * Reset the deck state (for testing)
+   * Returns all dealt cards back to the draw pile and resets state
+   */
+  public reset(): void {
+    this.loadCards(); // Reload cards from JSON configuration to ensure fresh state
+    this.dealtCards.clear();
+    this.discardPile = [];
+    // Reinitialize draw pile with all card IDs
+    this.drawPile = this.cards.map(card => card.id);
+    this.shuffleDrawPile();
+  }
 }
 
 // Export a singleton instance

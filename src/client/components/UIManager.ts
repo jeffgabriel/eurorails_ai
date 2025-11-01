@@ -96,7 +96,8 @@ export class UIManager {
     this.leaderboardManager = new LeaderboardManager(
       this.scene,
       this.gameState,
-      UIManagedNextPlayerCallback
+      UIManagedNextPlayerCallback,
+      this.gameStateService
     );
 
     // Initialize the player hand display
@@ -113,7 +114,8 @@ export class UIManager {
         const totalCost = previousSessionsCost + currentSessionCost;
         this.setupPlayerHand(this.isDrawingMode, totalCost).catch(console.error);
       },
-      () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0
+      () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0,
+      this.gameStateService
     );
 
     // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
