@@ -3,6 +3,7 @@
 import Phaser from 'phaser';
 import { GameScene } from '../scenes/GameScene';
 import { SetupScene } from '../scenes/SetupScene';
+import { LoadDialogScene } from '../scenes/LoadDialogScene';
 
 // Get game ID from URL parameters or path
 function getGameIdFromUrl(): string | null {
@@ -32,7 +33,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [SetupScene, GameScene],
+  scene: [SetupScene, GameScene, LoadDialogScene],
 };
 
 // Initialize the game

@@ -200,14 +200,11 @@ export class TrainInteractionManager {
 
     if (nearestMilepost) {
       if (this.isTrainMovementMode) {
-        this.handleMovement(currentPlayer, nearestMilepost, pointer);
-      }
-      // Check if arrived at any city
-      if (
-        this.isCity(nearestMilepost) &&
-        this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)
-      ) {
-        this.handleCityArrival(currentPlayer, nearestMilepost);
+        await this.handleMovement(currentPlayer, nearestMilepost, pointer);
+        // Check if arrived at any city - must be in movement mode and destination is a city
+        if (this.isCity(nearestMilepost)) {
+          await this.handleCityArrival(currentPlayer, nearestMilepost);
+        }
       }
     }
   }
@@ -320,6 +317,12 @@ export class TrainInteractionManager {
     currentPlayer: Player,
     nearestMilepost: any
   ): Promise<void> {
+    // Only show dialog if this is the local player
+    const localPlayerId = this.playerStateService.getLocalPlayerId();
+    if (!localPlayerId || currentPlayer.id !== localPlayerId) {
+      return;
+    }
+
     // Always use the city property on the grid point
     const cityData = nearestMilepost.city;
     if (!cityData) return;
