@@ -6,6 +6,7 @@
 // Use Node.js built-in fetch (Node 18+)
 import { useLobbyStore } from '../../lobby/store/lobby.store';
 import { api } from '../../lobby/shared/api';
+import { config } from '../../lobby/shared/config';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
 import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
@@ -50,6 +51,9 @@ const mockLocalStorage = {
   clear: jest.fn(),
 } as unknown as Storage;
 
+// Track server availability - will be set in beforeAll
+let serverAvailable = false;
+
 // Skip integration tests if SKIP_INTEGRATION_TESTS is set (e.g., in CI without server)
 const SKIP_INTEGRATION = process.env.SKIP_INTEGRATION_TESTS === 'true';
 
@@ -90,6 +94,8 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  if (!serverAvailable) return;
+  
   jest.clearAllMocks();
   // Reset store state
   useLobbyStore.setState({
@@ -110,24 +116,25 @@ beforeEach(async () => {
     return null;
   });
   
-  // Reset deck service on server (for integration tests)
+  // Reset deck service on server
   try {
-    await fetch('http://localhost:8080/api/deck/reset', {
+    const response = await fetch(`${config.apiBaseUrl}/api/deck/reset`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'x-test-secret': 'test-reset-secret'
       }
-    }).catch(() => {
-      // Silently fail if server isn't available - it's handled in beforeAll
     });
+    if (!response.ok) {
+      throw new Error(`Deck reset failed with status ${response.status}`);
+    }
   } catch (error) {
-    // Ignore errors - server might not be running in all test scenarios
+    // If reset fails and server was available, this is a problem
+    if (serverAvailable) {
+      throw new Error(`Failed to reset deck: ${error}`);
+    }
   }
 });
-
-// Track server availability - will be set in beforeAll
-let serverAvailable = false;
 
 describe('Integration Tests - Real Server Communication', () => {
   // Test timeout for real server calls
