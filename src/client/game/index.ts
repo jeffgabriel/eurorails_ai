@@ -33,7 +33,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [SetupScene, GameScene, LoadDialogScene],
+  scene: [SetupScene, LoadDialogScene, GameScene],
 };
 
 // Initialize the game

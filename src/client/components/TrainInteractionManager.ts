@@ -202,7 +202,11 @@ export class TrainInteractionManager {
       if (this.isTrainMovementMode) {
         await this.handleMovement(currentPlayer, nearestMilepost, pointer);
         // Check if arrived at any city - must be in movement mode and destination is a city
-        if (this.isCity(nearestMilepost)) {
+        // Verify train position matches the city milepost to ensure arrival
+        if (
+          this.isCity(nearestMilepost) &&
+          this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)
+        ) {
           await this.handleCityArrival(currentPlayer, nearestMilepost);
         }
       }
