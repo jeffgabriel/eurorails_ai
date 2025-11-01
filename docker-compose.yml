@@ -2,6 +2,7 @@ services:
   postgresdb:
     image: postgres
     restart: unless-stopped
+    stop_grace_period: 10s
     environment:
       - POSTGRES_USER=$DB_USER
       - POSTGRES_PASSWORD=$DB_PASSWORD

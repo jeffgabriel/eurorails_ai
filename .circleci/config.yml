@@ -21,6 +21,13 @@ jobs:
 
 
       - run:
+          name: Clean up any leftover volumes and containers
+          command: |
+            # Clean up any leftover containers/volumes from previous runs
+            docker compose down -v || true
+            docker volume prune -f || true
+
+      - run:
           name: Pull and build images
           command: |
             docker compose pull postgresdb
@@ -112,7 +119,10 @@ jobs:
           name: Teardown
           when: always
           command: |
-            docker compose down
+            # Stop containers gracefully and remove volumes to prevent database corruption
+            docker compose stop || true
+            sleep 2  # Give PostgreSQL time to shut down cleanly
+            docker compose down -v || true
             
 
 workflows:
