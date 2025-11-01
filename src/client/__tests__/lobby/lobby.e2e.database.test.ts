@@ -46,6 +46,10 @@ beforeAll(() => {
   global.window = {
     localStorage: mockLocalStorage,
   } as any;
+  
+  // NOTE: For e2e database tests to work correctly, the server must be started with NODE_ENV=test
+  // so it connects to the test database (eurorails_test) instead of the development database.
+  // This ensures that users created by the tests are visible to the server's API endpoints.
 });
 
 beforeEach(async () => {
@@ -131,8 +135,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
         [testUserId, testUserId2, testUserId3, testUserId4]);
     });
     
-    // Close database connection pool
-    await db.end();
+    // Note: Database pool is closed by global teardown in setup.ts
   });
 
   describe('Game Creation Outcomes', () => {

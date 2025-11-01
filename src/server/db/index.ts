@@ -11,11 +11,16 @@ const DEV_MODE = process.env.NODE_ENV === 'development';
 const TEST_MODE = process.env.NODE_ENV === 'test';
 const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'true';
 
+// Use test database when in test mode, otherwise use configured database
+const databaseName = TEST_MODE 
+    ? (process.env.DB_NAME_TEST || 'eurorails_test')
+    : process.env.DB_NAME;
+
 // Create a connection pool
 const pool = new Pool({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
-    database: process.env.DB_NAME,
+    database: databaseName,
     password: process.env.DB_PASSWORD,
     port: parseInt(process.env.DB_PORT || '5432'),
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
