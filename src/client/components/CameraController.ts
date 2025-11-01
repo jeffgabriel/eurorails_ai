@@ -1,11 +1,5 @@
 import 'phaser';
-import { GameState } from '../../shared/types/GameTypes';
-
-export interface CameraState {
-    zoom: number;
-    scrollX: number;
-    scrollY: number;
-}
+import { GameState, CameraState } from '../../shared/types/GameTypes';
 
 export class CameraController {
     private scene: Phaser.Scene;

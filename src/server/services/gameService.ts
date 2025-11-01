@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, CameraState } from '../../shared/types/GameTypes';
 import { PlayerService } from './playerService';
 
 export class GameService {
@@ -13,7 +13,7 @@ export class GameService {
     static async updatePlayerCameraState(
         gameId: string, 
         playerId: string, 
-        cameraState: { zoom: number; scrollX: number; scrollY: number }
+        cameraState: CameraState
     ): Promise<void> {
         // Validate player belongs to game
         const playerCheck = await db.query(

@@ -136,7 +136,7 @@ export class PlayerService {
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
       player.trainState.loads || [],
-      player.cameraState ? JSON.stringify(player.cameraState) : null
+      player.cameraState || null
     ];
     try {
       await useClient.query(query, values);
@@ -248,7 +248,7 @@ export class PlayerService {
         // Ensure hand is an array and extract card IDs
         Array.isArray(player.hand) ? player.hand.map((card: any) => typeof card === 'object' && card.id ? card.id : card) : [],
         player.trainState.loads || [],
-        player.cameraState ? JSON.stringify(player.cameraState) : null,
+        player.cameraState || null,
       ];
       console.log("Executing update query");
 
