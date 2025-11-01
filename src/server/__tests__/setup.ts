@@ -21,6 +21,7 @@ async function ensureTestDatabase() {
     database: "postgres", // Connect to default database
     password: process.env.DB_PASSWORD,
     port: parseInt(process.env.DB_PORT || "5432"),
+    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
   });
 
   try {

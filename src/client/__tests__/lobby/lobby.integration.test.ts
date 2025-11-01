@@ -62,29 +62,26 @@ beforeAll(async () => {
   
   // Skip if flag is set
   if (SKIP_INTEGRATION) {
+    serverAvailable = false;
     return;
   }
   
   // Verify server is running before tests
-  if (!SKIP_INTEGRATION) {
-    try {
-      await api.healthCheck();
-      serverAvailable = true;
-    } catch (err) {
-      // In CI or when server isn't available, we'll skip the tests gracefully
-      if (process.env.CI) {
-        console.warn('Integration tests will be skipped: Server not available in CI');
-        serverAvailable = false;
-        return;
-      }
-      throw new Error(
-        'Server is not available for integration tests. ' +
-        'Please ensure the server is running with NODE_ENV=test to use the test database. ' +
-        'To skip these tests, set SKIP_INTEGRATION_TESTS=true'
-      );
+  try {
+    await api.healthCheck();
+    serverAvailable = true;
+  } catch (err) {
+    // In CI or when server isn't available, we'll skip the tests gracefully
+    if (process.env.CI) {
+      console.warn('Integration tests will be skipped: Server not available in CI');
+      serverAvailable = false;
+      return;
     }
-  } else {
-    serverAvailable = false;
+    throw new Error(
+      'Server is not available for integration tests. ' +
+      'Please ensure the server is running with NODE_ENV=test to use the test database. ' +
+      'To skip these tests, set SKIP_INTEGRATION_TESTS=true'
+    );
   }
   
   // NOTE: For integration tests to work correctly, the server must be started with NODE_ENV=test
