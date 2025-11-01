@@ -1,5 +1,5 @@
 import { db } from "../db/index";
-import { Player, Game, GameStatus, TrainType } from "../../shared/types/GameTypes";
+import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -428,6 +428,12 @@ export class PlayerService {
         // Cast trainType from database string to TrainType enum
         const trainType = row.trainType as TrainType;
 
+        // Calculate remainingMovement based on train type
+        // Note: This is a default value; actual remainingMovement should be managed client-side
+        // or stored in the database if we want to persist it across server refreshes
+        const trainProps = TRAIN_PROPERTIES[trainType];
+        const defaultMovement = trainProps ? trainProps.speed : 9; // Fallback to 9 if train type is invalid
+
         return {
           ...row,
           userId: row.user_id || undefined,  // Map user_id to userId (optional for backward compatibility)
@@ -444,7 +450,7 @@ export class PlayerService {
                 : undefined,
             turnNumber: row.turnNumber || 1,
             movementHistory: row.movementHistory ? row.movementHistory : [],
-            remainingMovement: 9, // Default to 9 for Freight trains
+            remainingMovement: defaultMovement, // Calculate based on train type instead of hardcoding
             loads: row.loads || [],
           },
           hand: handCards,

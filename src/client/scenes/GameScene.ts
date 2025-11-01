@@ -488,6 +488,30 @@ export class GameScene extends Phaser.Scene {
     // Update the current player's turn number
     const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
     if (newCurrentPlayer) {
+      // Reset movement points for the new player using TRAIN_PROPERTIES
+      // This ensures movement is reset when turn changes come from server (polling/socket)
+      const trainProps = TRAIN_PROPERTIES[newCurrentPlayer.trainType];
+      if (trainProps) {
+        const maxMovement = trainProps.speed;
+
+        // Set movement based on ferry crossing
+        if (newCurrentPlayer.trainState.justCrossedFerry) {
+          newCurrentPlayer.trainState.remainingMovement = Math.ceil(maxMovement / 2);
+          newCurrentPlayer.trainState.justCrossedFerry = false;
+        } else {
+          // Normal movement - reset to full movement for new turn
+          newCurrentPlayer.trainState.remainingMovement = maxMovement;
+        }
+      } else {
+        console.error(`Invalid train type: ${newCurrentPlayer.trainType}`);
+      }
+
+      // Increment turn number for the new current player
+      newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
+
+      // Handle ferry state transitions and teleportation at turn start
+      await this.handleFerryTurnTransition(newCurrentPlayer);
+
       // Refresh UI overlay (leaderboard, etc.)
       this.uiManager.setupUIOverlay();
       
