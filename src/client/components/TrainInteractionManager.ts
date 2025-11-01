@@ -200,12 +200,29 @@ export class TrainInteractionManager {
 
     if (nearestMilepost) {
       if (this.isTrainMovementMode) {
+        // Store position before movement to verify movement actually succeeded
+        const positionBeforeMovement = currentPlayer.trainState.position
+          ? { ...currentPlayer.trainState.position }
+          : null;
+        
         await this.handleMovement(currentPlayer, nearestMilepost, pointer);
-        // Check if arrived at any city - must be in movement mode and destination is a city
-        // Verify train position matches the city milepost to ensure arrival
+        
+        // Check if arrived at any city - only if movement actually succeeded
+        // Verify: (1) destination is a city, (2) train position matches destination, 
+        // and (3) position actually changed (movement was successful, preventing dialog 
+        // from opening on failed moves)
+        const positionAfterMovement = currentPlayer.trainState.position;
+        // Movement succeeded if: train now has a position AND either:
+        // - train didn't have a position before (first placement), OR
+        // - position changed (train moved to a new location)
+        const movementSucceeded = positionAfterMovement && 
+          (!positionBeforeMovement || 
+           !this.isSamePoint(positionBeforeMovement, positionAfterMovement));
+        
         if (
           this.isCity(nearestMilepost) &&
-          this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)
+          this.isSamePoint(nearestMilepost, positionAfterMovement) &&
+          movementSucceeded
         ) {
           await this.handleCityArrival(currentPlayer, nearestMilepost);
         }
