@@ -310,7 +310,7 @@ export class PlayerService {
    * @param requestingUserId - Optional user ID of the requesting user. If provided, only that user's hand will be included.
    * @returns Array of players, with hands filtered based on requestingUserId
    */
-  static async getPlayers(gameId: string, requestingUserId?: string): Promise<Player[]> {
+  static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
     console.log("Starting database query for players:", { gameId });
     const client = await db.connect();
     try {
@@ -396,28 +396,10 @@ export class PlayerService {
             cardCount: handCards.length,
             cards: handCards.map(c => c.id)
           });
-        } else if (requestingUserId) {
+        } else {
           // This is another player's data - hide their hand for security
           handCards = [];
           console.log(`Hidden hand for player ${row.id} (not requesting user)`);
-        } else {
-          // No user ID provided - for backward compatibility, but this is insecure
-          // Should be deprecated in favor of authenticated requests
-          console.warn(`No requestingUserId provided - returning all hands (insecure mode)`);
-          const handArray = row.hand || [];
-          if (!Array.isArray(handArray)) {
-            console.error(`Invalid hand data for player ${row.id}:`, handArray);
-            handCards = [];
-          } else {
-            handCards = handArray.map((cardId: number) => {
-              const card = demandDeckService.getCard(cardId);
-              if (!card) {
-                console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
-                return null;
-              }
-              return card;
-            }).filter(Boolean);
-          }
         }
 
         // Cast trainType from database string to TrainType enum
@@ -554,11 +536,15 @@ export class PlayerService {
     const { getSocketIO } = await import('./socketService');
     const io = getSocketIO();
     if (io) {
-      // Get the player ID for the current player
-      const players = await this.getPlayers(gameId);
-      const currentPlayer = players[currentPlayerIndex];
+      // Get the player ID for the current player (internal query - doesn't need hand data)
+      // Query players in same order as getPlayers (no explicit ORDER BY, but we'll use created_at for consistency)
+      const playerQuery = await db.query(
+        'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at LIMIT 1 OFFSET $2',
+        [gameId, currentPlayerIndex]
+      );
+      const currentPlayerId = playerQuery.rows[0]?.id;
       const { emitTurnChange } = await import('./socketService');
-      emitTurnChange(gameId, currentPlayerIndex, currentPlayer?.id);
+      emitTurnChange(gameId, currentPlayerIndex, currentPlayerId);
     }
   }
 

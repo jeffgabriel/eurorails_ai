@@ -48,7 +48,7 @@ beforeAll(() => {
   } as any;
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
   // Mock user and JWT token in localStorage
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -60,6 +60,21 @@ beforeEach(() => {
     }
     return null;
   });
+  
+  // Reset deck service on server (for integration tests)
+  try {
+    await fetch('http://localhost:8080/api/deck/reset', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-test-secret': 'test-reset-secret'
+      }
+    }).catch(() => {
+      // Silently fail if server isn't available
+    });
+  } catch (error) {
+    // Ignore errors - server might not be running in all test scenarios
+  }
 });
 
 describe('True End-to-End Tests - Database Outcomes', () => {

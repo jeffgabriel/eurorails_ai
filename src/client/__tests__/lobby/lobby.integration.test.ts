@@ -57,7 +57,7 @@ beforeAll(async () => {
   }
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
   // Reset store state
   useLobbyStore.setState({
@@ -77,6 +77,21 @@ beforeEach(() => {
     }
     return null;
   });
+  
+  // Reset deck service on server (for integration tests)
+  try {
+    await fetch('http://localhost:8080/api/deck/reset', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'x-test-secret': 'test-reset-secret'
+      }
+    }).catch(() => {
+      // Silently fail if server isn't available - it's handled in beforeAll
+    });
+  } catch (error) {
+    // Ignore errors - server might not be running in all test scenarios
+  }
 });
 
 describe('Integration Tests - Real Server Communication', () => {

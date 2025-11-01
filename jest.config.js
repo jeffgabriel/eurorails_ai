@@ -74,6 +74,7 @@ module.exports = {
         '<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts',
         '<rootDir>/src/client/__tests__/lobby/lobby.e2e.database.test.ts'
       ],
+      setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
       transform: {
         '^.+\\.(ts|tsx)$': [
           'ts-jest',
