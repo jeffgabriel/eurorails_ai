@@ -21,6 +21,15 @@ jobs:
 
 
       - run:
+          name: Clean up any leftover volumes and containers
+          command: |
+            # Clean up any leftover containers/volumes from previous runs
+            docker compose down -v || true
+            docker volume prune -f || true
+            # Verify volumes are removed
+            docker volume ls | grep -q "project_db" && echo "WARNING: project_db volume still exists" || echo "✓ All volumes cleaned up"
+
+      - run:
           name: Pull and build images
           command: |
             docker compose pull postgresdb
@@ -28,12 +37,49 @@ jobs:
           no_output_timeout: 10m
 
       - run:
+          name: Verify init script before mount
+          command: |
+            # Critical: File must exist and be a regular file before Docker tries to mount it
+            # If it doesn't exist, Docker will create a directory instead
+            if [ ! -f db/scripts/init_db.sh ]; then
+              echo "ERROR: init_db.sh does not exist!"
+              exit 1
+            fi
+            if [ -d db/scripts/init_db.sh ]; then
+              echo "ERROR: init_db.sh is a directory, not a file!"
+              exit 1
+            fi
+            # Ensure it's executable
+            chmod +x db/scripts/init_db.sh
+            # Verify one more time
+            test -f db/scripts/init_db.sh || exit 1
+            ls -la db/scripts/init_db.sh
+
+      - run:
           name: Start services
           command: |
-            docker compose up -d || {
+            # Ensure we're in the project root
+            PROJECT_ROOT=$(pwd)
+            INIT_SCRIPTS_DIR_ABS="$PROJECT_ROOT/db/scripts"
+            echo "Project root: $PROJECT_ROOT"
+            echo "Absolute path to scripts directory: $INIT_SCRIPTS_DIR_ABS"
+            # Verify directory and file exist
+            test -d "$INIT_SCRIPTS_DIR_ABS" || { echo "ERROR: Scripts directory does not exist!"; exit 1; }
+            test -f "$INIT_SCRIPTS_DIR_ABS/init_db.sh" || { echo "ERROR: init_db.sh does not exist!"; exit 1; }
+            # Export absolute path to directory for docker-compose to use
+            export INIT_SCRIPTS_DIR="$INIT_SCRIPTS_DIR_ABS"
+            echo "Exported INIT_SCRIPTS_DIR=$INIT_SCRIPTS_DIR"
+            # Run docker compose from explicit directory context
+            docker compose --project-directory "$PROJECT_ROOT" up -d || {
               echo "=== Docker Compose failed to start, showing logs ==="
               docker compose logs
               docker compose ps -a
+              # If container started, check what was actually mounted
+              if docker compose ps postgresdb 2>/dev/null | grep -q "Up"; then
+                echo "=== Checking what was mounted in container ==="
+                docker compose exec -T postgresdb ls -la /docker-entrypoint-initdb.d/ || true
+                docker compose exec -T postgresdb test -d /docker-entrypoint-initdb.d/init_db.sh && echo "ERROR: Mounted as directory!" || echo "OK: Mounted as file"
+              fi
               exit 1
             }
 
@@ -112,7 +158,10 @@ jobs:
           name: Teardown
           when: always
           command: |
-            docker compose down
+            # Stop containers gracefully and remove volumes to prevent database corruption
+            docker compose stop || true
+            sleep 2  # Give PostgreSQL time to shut down cleanly
+            docker compose down -v || true
             
 
 workflows:
