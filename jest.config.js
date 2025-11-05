@@ -50,6 +50,7 @@ module.exports = {
       displayName: 'server',
       testEnvironment: 'node',
       testMatch: ['<rootDir>/src/server/__tests__/**/*.test.ts'],
+      setupFiles: ['<rootDir>/src/server/__tests__/setupFiles.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
       maxWorkers: 1,
 
@@ -74,6 +75,7 @@ module.exports = {
         '<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts',
         '<rootDir>/src/client/__tests__/lobby/lobby.e2e.database.test.ts'
       ],
+      setupFiles: ['<rootDir>/src/server/__tests__/setupFiles.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
       transform: {
         '^.+\\.(ts|tsx)$': [

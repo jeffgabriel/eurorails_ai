@@ -5,6 +5,7 @@
 
 import { api } from '../../lobby/shared/api';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
+import { config } from '../../lobby/shared/config';
 import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -22,12 +23,20 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
 async function cleanupTestData(gameIds: string[], playerIds: string[]) {
   await runQuery(async (client) => {
     // Delete in dependency order to avoid constraint errors
-    // First delete players (to satisfy foreign key constraints), then any remaining games
+    // First delete related data, then players, then games
+    if (gameIds.length > 0) {
+      // Delete related data first
+      await client.query('DELETE FROM movement_history WHERE game_id = ANY($1)', [gameIds]);
+      await client.query('DELETE FROM player_tracks WHERE game_id = ANY($1)', [gameIds]);
+      await client.query('DELETE FROM load_chips WHERE game_id = ANY($1)', [gameIds]);
+      // Delete players associated with these games
+      await client.query('DELETE FROM players WHERE game_id = ANY($1)', [gameIds]);
+      // Finally delete the games
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
+    }
+    // Also clean up players by ID if provided (for cases where we have player IDs but not game IDs)
     if (playerIds.length > 0) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
-    }
-    if (gameIds.length > 0) {
-      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
   });
 }
@@ -40,15 +49,41 @@ const mockLocalStorage = {
   clear: jest.fn(),
 } as unknown as Storage;
 
-beforeAll(() => {
+let serverAvailable = false;
+
+beforeAll(async () => {
   // Mock global objects for Node environment
   global.localStorage = mockLocalStorage;
   global.window = {
     localStorage: mockLocalStorage,
   } as any;
+  
+  // Verify server is running before tests
+  try {
+    await api.healthCheck();
+    serverAvailable = true;
+  } catch (err) {
+    // In CI or when server isn't available, we'll skip the tests gracefully
+    if (process.env.CI) {
+      console.warn('E2E database tests will be skipped: Server not available in CI');
+      serverAvailable = false;
+      return;
+    }
+    throw new Error(
+      'Server is not available for e2e database tests. ' +
+      'Please ensure the server is running with NODE_ENV=test to use the test database. ' +
+      'To skip these tests, set SKIP_INTEGRATION_TESTS=true'
+    );
+  }
+  
+  // NOTE: For e2e database tests to work correctly, the server must be started with NODE_ENV=test
+  // so it connects to the test database (eurorails_test) instead of the development database.
+  // This ensures that users created by the tests are visible to the server's API endpoints.
 });
 
 beforeEach(async () => {
+  if (!serverAvailable) return;
+  
   jest.clearAllMocks();
   // Mock user and JWT token in localStorage
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
@@ -61,19 +96,23 @@ beforeEach(async () => {
     return null;
   });
   
-  // Reset deck service on server (for integration tests)
+  // Reset deck service on server
   try {
-    await fetch('http://localhost:8080/api/deck/reset', {
+    const response = await fetch(`${config.apiBaseUrl}/api/deck/reset`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'x-test-secret': 'test-reset-secret'
       }
-    }).catch(() => {
-      // Silently fail if server isn't available
     });
+    if (!response.ok) {
+      throw new Error(`Deck reset failed with status ${response.status}`);
+    }
   } catch (error) {
-    // Ignore errors - server might not be running in all test scenarios
+    // If reset fails and server was available, this is a problem
+    if (serverAvailable) {
+      throw new Error(`Failed to reset deck: ${error}`);
+    }
   }
 });
 
@@ -131,8 +170,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
         [testUserId, testUserId2, testUserId3, testUserId4]);
     });
     
-    // Close database connection pool
-    await db.end();
+    // Note: Database pool is closed by global teardown in setup.ts
   });
 
   describe('Game Creation Outcomes', () => {

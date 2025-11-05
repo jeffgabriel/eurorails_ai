@@ -6,6 +6,7 @@
 // Use Node.js built-in fetch (Node 18+)
 import { useLobbyStore } from '../../lobby/store/lobby.store';
 import { api } from '../../lobby/shared/api';
+import { config } from '../../lobby/shared/config';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
 import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,12 +25,20 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
 async function cleanupTestData(gameIds: string[], playerIds: string[]) {
   await runQuery(async (client) => {
     // Delete in dependency order to avoid constraint errors
-    // First delete players (to satisfy foreign key constraints), then any remaining games
+    // First delete related data, then players, then games
+    if (gameIds.length > 0) {
+      // Delete related data first
+      await client.query('DELETE FROM movement_history WHERE game_id = ANY($1)', [gameIds]);
+      await client.query('DELETE FROM player_tracks WHERE game_id = ANY($1)', [gameIds]);
+      await client.query('DELETE FROM load_chips WHERE game_id = ANY($1)', [gameIds]);
+      // Delete players associated with these games
+      await client.query('DELETE FROM players WHERE game_id = ANY($1)', [gameIds]);
+      // Finally delete the games
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
+    }
+    // Also clean up players by ID if provided (for cases where we have player IDs but not game IDs)
     if (playerIds.length > 0) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
-    }
-    if (gameIds.length > 0) {
-      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
   });
 }
@@ -42,6 +51,12 @@ const mockLocalStorage = {
   clear: jest.fn(),
 } as unknown as Storage;
 
+// Track server availability - will be set in beforeAll
+let serverAvailable = false;
+
+// Skip integration tests if SKIP_INTEGRATION_TESTS is set (e.g., in CI without server)
+const SKIP_INTEGRATION = process.env.SKIP_INTEGRATION_TESTS === 'true';
+
 beforeAll(async () => {
   // Mock global objects for Node environment
   global.localStorage = mockLocalStorage;
@@ -49,15 +64,38 @@ beforeAll(async () => {
     localStorage: mockLocalStorage,
   } as any;
   
+  // Skip if flag is set
+  if (SKIP_INTEGRATION) {
+    serverAvailable = false;
+    return;
+  }
+  
   // Verify server is running before tests
   try {
     await api.healthCheck();
+    serverAvailable = true;
   } catch (err) {
-    throw new Error('Server is not available for integration tests');
+    // In CI or when server isn't available, we'll skip the tests gracefully
+    if (process.env.CI) {
+      console.warn('Integration tests will be skipped: Server not available in CI');
+      serverAvailable = false;
+      return;
+    }
+    throw new Error(
+      'Server is not available for integration tests. ' +
+      'Please ensure the server is running with NODE_ENV=test to use the test database. ' +
+      'To skip these tests, set SKIP_INTEGRATION_TESTS=true'
+    );
   }
+  
+  // NOTE: For integration tests to work correctly, the server must be started with NODE_ENV=test
+  // so it connects to the test database (eurorails_test) instead of the development database.
+  // This ensures that users created by the tests are visible to the server's API endpoints.
 });
 
 beforeEach(async () => {
+  if (!serverAvailable) return;
+  
   jest.clearAllMocks();
   // Reset store state
   useLobbyStore.setState({
@@ -78,19 +116,23 @@ beforeEach(async () => {
     return null;
   });
   
-  // Reset deck service on server (for integration tests)
+  // Reset deck service on server
   try {
-    await fetch('http://localhost:8080/api/deck/reset', {
+    const response = await fetch(`${config.apiBaseUrl}/api/deck/reset`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'x-test-secret': 'test-reset-secret'
       }
-    }).catch(() => {
-      // Silently fail if server isn't available - it's handled in beforeAll
     });
+    if (!response.ok) {
+      throw new Error(`Deck reset failed with status ${response.status}`);
+    }
   } catch (error) {
-    // Ignore errors - server might not be running in all test scenarios
+    // If reset fails and server was available, this is a problem
+    if (serverAvailable) {
+      throw new Error(`Failed to reset deck: ${error}`);
+    }
   }
 });
 
@@ -106,6 +148,12 @@ describe('Integration Tests - Real Server Communication', () => {
     // Generate test user IDs
     testUserId = '123e4567-e89b-12d3-a456-426614174000';
     testUserId2 = '123e4567-e89b-12d3-a456-426614174001';
+    
+    // Skip if server is not available
+    if (!serverAvailable) {
+      console.log('Skipping test setup - server not available');
+      return;
+    }
     
     // Create test users in the database
     await runQuery(async (client) => {
@@ -136,12 +184,15 @@ describe('Integration Tests - Real Server Communication', () => {
       await client.query('DELETE FROM users WHERE id = $1 OR id = $2', [testUserId, testUserId2]);
     });
     
-    // Close database connection pool
-    await db.end();
+    // Note: Database pool is closed by global teardown in setup.ts
   });
 
   describe('API Client Integration', () => {
     it('should call real server health endpoint', async () => {
+      if (!serverAvailable) {
+        console.log('Skipping test - server not available');
+        return;
+      }
       const result = await api.healthCheck();
       
       expect(result).toEqual({
@@ -150,6 +201,10 @@ describe('Integration Tests - Real Server Communication', () => {
     }, TEST_TIMEOUT);
 
     it('should create game with real server', async () => {
+      if (!serverAvailable) {
+        console.log('Skipping test - server not available');
+        return;
+      }
       const gameData: CreateGameForm = {
         isPublic: true,
       };
@@ -166,6 +221,10 @@ describe('Integration Tests - Real Server Communication', () => {
     }, TEST_TIMEOUT);
 
     it('should join game with real server', async () => {
+      if (!serverAvailable) {
+        console.log('Skipping test - server not available');
+        return;
+      }
       // First create a game
       const createResult = await api.createGame({ isPublic: true });
       const gameId = createResult.game.id;
@@ -187,6 +246,10 @@ describe('Integration Tests - Real Server Communication', () => {
 
   describe('Lobby Store Integration', () => {
     it('should create game through store with real server', async () => {
+      if (!serverAvailable) {
+        console.log('Skipping test - server not available');
+        return;
+      }
       const gameData: CreateGameForm = {
         isPublic: true,
       };
