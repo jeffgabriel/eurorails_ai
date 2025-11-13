@@ -712,6 +712,8 @@ export class GameScene extends Phaser.Scene {
       }
 
       const players = await response.json();
+      const localPlayerId = this.playerStateService.getLocalPlayerId();
+      const trainsToUpdate: Array<{ playerId: string; x: number; y: number; row: number; col: number }> = [];
       
       // Update player data in gameState, preserving local references
       players.forEach((serverPlayer: Player) => {
@@ -720,21 +722,70 @@ export class GameScene extends Phaser.Scene {
           // Update money and other server-managed properties
           localPlayer.money = serverPlayer.money;
           localPlayer.turnNumber = serverPlayer.turnNumber;
-          // Preserve local-only state like trainState.position if it exists
-          if (localPlayer.trainState && serverPlayer.trainState) {
-            // Merge train state, keeping local position if it exists
+          
+          // Handle train state based on whether this is the local player
+          const isLocalPlayer = localPlayerId === serverPlayer.id;
+          
+          if (serverPlayer.trainState) {
+            if (isLocalPlayer) {
+              // For local player: preserve local position if it exists (for smooth movement),
+              // otherwise use server position
+              if (localPlayer.trainState) {
+                localPlayer.trainState = {
+                  ...serverPlayer.trainState,
+                  position: localPlayer.trainState.position || serverPlayer.trainState.position
+                };
+              } else {
+                localPlayer.trainState = serverPlayer.trainState;
+              }
+            } else {
+              // For other players: ALWAYS use server position (authoritative)
+              localPlayer.trainState = serverPlayer.trainState;
+              
+              // Always update train sprite for other players if position exists
+              // This ensures the sprite is created/updated and visible
+              if (serverPlayer.trainState.position) {
+                const { x, y, row, col } = serverPlayer.trainState.position;
+                trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
+              }
+            }
+          } else if (localPlayer.trainState && !isLocalPlayer && !serverPlayer.trainState) {
+            // If server doesn't have trainState but local does for other players, remove it
+            // Set to empty trainState instead of null to maintain type safety
             localPlayer.trainState = {
-              ...serverPlayer.trainState,
-              position: localPlayer.trainState.position || serverPlayer.trainState.position
+              position: null,
+              remainingMovement: 0,
+              movementHistory: [],
+              loads: []
             };
-          } else if (serverPlayer.trainState) {
-            localPlayer.trainState = serverPlayer.trainState;
           }
         } else {
           // New player - add to gameState
           this.gameState.players.push(serverPlayer);
+          
+          // Queue train sprite update for new player if position exists
+          if (serverPlayer.trainState?.position) {
+            const { x, y, row, col } = serverPlayer.trainState.position;
+            trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
+          }
         }
       });
+
+      // Ensure trainSprites map exists before updating
+      if (!this.gameState.trainSprites) {
+        this.gameState.trainSprites = new Map();
+      }
+
+      // Update all train sprites after state is updated
+      for (const train of trainsToUpdate) {
+        try {
+          console.log(`Refreshing train position for player ${train.playerId} at (${train.row}, ${train.col})`);
+          await this.uiManager.updateTrainPosition(train.playerId, train.x, train.y, train.row, train.col);
+          console.log(`Train sprite updated for player ${train.playerId}`);
+        } catch (error) {
+          console.error(`Error updating train position for player ${train.playerId}:`, error);
+        }
+      }
 
       // Refresh UI to show updated money
       this.uiManager.setupUIOverlay();
