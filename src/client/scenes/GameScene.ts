@@ -149,8 +149,65 @@ export class GameScene extends Phaser.Scene {
     
     await this.loadService.loadInitialState();
     
-    // Start polling for turn changes after initial state is loaded (fallback if Socket.IO not available)
-    this.gameStateService.startPollingForTurnChanges(2000);
+    // Only start polling for turn changes if Socket.IO is not available/connected
+    // This is a fallback mechanism - Socket.IO should be the primary method for real-time updates
+    // Check if Socket.IO is available by trying to import and check connection status
+    let shouldPoll = true;
+    try {
+      // Dynamic import to avoid breaking if socket service isn't available
+      const { socketService } = await import('../lobby/shared/socket');
+      if (!socketService) {
+        console.error('❌ Socket.IO service not found - socketService is undefined.');
+        console.warn('⚠️ Will use polling fallback.');
+        shouldPoll = true;
+      } else if (socketService.isConnected()) {
+        console.log('✅ Socket.IO is connected, skipping polling fallback');
+        shouldPoll = false;
+      } else {
+        // Try to connect if we have a token
+        const token = localStorage.getItem('eurorails.jwt');
+        if (token) {
+          console.warn('⚠️ Socket.IO service found but not connected. Attempting to connect...');
+          try {
+            socketService.connect(token);
+            // Give it a moment to connect
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (socketService.isConnected()) {
+              console.log('✅ Socket.IO connected successfully, skipping polling fallback');
+              shouldPoll = false;
+            } else {
+              console.warn('⚠️ Socket.IO connection attempt failed or still connecting. Will use polling fallback.');
+              shouldPoll = true;
+            }
+          } catch (connectError) {
+            console.error('❌ Error connecting Socket.IO:', connectError);
+            console.warn('⚠️ Will use polling fallback.');
+            shouldPoll = true;
+          }
+        } else {
+          console.warn('⚠️ Socket.IO service found but not connected, and no auth token available.');
+          console.warn('   Cannot connect Socket.IO without token. Will use polling fallback.');
+          shouldPoll = true;
+        }
+      }
+    } catch (error) {
+      // Socket service not available, use polling as fallback
+      console.error('❌ Error importing Socket.IO service:', error);
+      console.error('   Error details:', error instanceof Error ? error.message : String(error));
+      console.warn('⚠️ Socket.IO service not available, will use polling fallback');
+      shouldPoll = true;
+    }
+    
+    // Only start polling if Socket.IO is not connected
+    if (shouldPoll) {
+      console.warn('🔄 Starting polling fallback for turn changes (5 second interval)');
+      console.warn('   This will make API calls every 5 seconds. Consider connecting Socket.IO to reduce server load.');
+      // Use a longer interval (5 seconds) since this is just a fallback
+      // This reduces server load compared to the previous 2-second interval
+      this.gameStateService.startPollingForTurnChanges(5000);
+    } else {
+      console.log('✅ Polling disabled - using Socket.IO for real-time updates');
+    }
 
     // Create containers in the right order
     this.mapContainer = this.add.container(0, 0);

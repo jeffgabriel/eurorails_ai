@@ -367,6 +367,7 @@ export class PlayerService {
                     LIMIT 1
                 ) mh ON true
                 WHERE players.game_id = $1
+                ORDER BY players.created_at ASC
             `;
       const values = [gameId];
       console.log("Executing select query:", { query, values });
@@ -572,9 +573,9 @@ export class PlayerService {
     const io = getSocketIO();
     if (io) {
       // Get the player ID for the current player (internal query - doesn't need hand data)
-      // Query players in same order as getPlayers (no explicit ORDER BY, but we'll use created_at for consistency)
+      // Query players in same order as getPlayers (ORDER BY created_at ASC for consistency)
       const playerQuery = await db.query(
-        'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at LIMIT 1 OFFSET $2',
+        'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
         [gameId, currentPlayerIndex]
       );
       // Validate that we have a valid player at this index
