@@ -111,8 +111,7 @@ class SocketService {
 
   onTurnChange(callback: (data: { currentTurnUserId: ID; serverSeq: number }) => void): void {
     if (!this.socket) return;
-    // Remove old listener before adding new one to prevent duplicates
-    this.socket.off('turn:change');
+    // Allow multiple listeners - both GameScene and game.store need to receive turn changes
     this.socket.on('turn:change', (data) => {
       this.serverSeq = data.serverSeq;
       callback(data);
