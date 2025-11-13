@@ -207,6 +207,26 @@ export class GameScene extends Phaser.Scene {
       this.gameStateService.startPollingForTurnChanges(5000);
     } else {
       console.log('✅ Polling disabled - using Socket.IO for real-time updates');
+      
+      // Register socket listener for turn changes
+      try {
+        const { socketService } = await import('../lobby/shared/socket');
+        if (socketService && socketService.isConnected()) {
+          // Join the game room so we receive events
+          socketService.join(this.gameState.id);
+          
+          socketService.onTurnChange((data: any) => {
+            // Server sends: { currentPlayerIndex, currentPlayerId, gameId, timestamp }
+            // Handle the actual server payload
+            const playerIndex = data.currentPlayerIndex;
+            if (playerIndex !== undefined && playerIndex !== this.gameState.currentPlayerIndex) {
+              this.gameStateService.updateCurrentPlayerIndex(playerIndex);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Failed to register turn change socket listener:', error);
+      }
     }
 
     // Create containers in the right order
@@ -254,6 +274,9 @@ export class GameScene extends Phaser.Scene {
 
     // Load existing tracks before creating UI
     await this.trackManager.loadExistingTracks();
+
+    // Setup track update listener on existing socket connection
+    this.setupTrackUpdateListener();
 
     // Create UI manager with callbacks after tracks are loaded
     this.uiManager = new UIManager(
@@ -624,6 +647,38 @@ export class GameScene extends Phaser.Scene {
     // Clean up TrackDrawingManager
     if (this.trackManager) {
       this.trackManager.destroy();
+    }
+  }
+
+  /**
+   * Setup track update listener on existing socket connection
+   */
+  private async setupTrackUpdateListener(): Promise<void> {
+    if (!this.gameState || !this.gameState.id) {
+      console.warn('Cannot setup track update listener: gameState.id is missing');
+      return;
+    }
+
+    try {
+      const { socketService } = await import('../lobby/shared/socket');
+      if (socketService && socketService.isConnected()) {
+        // Join the game room so we receive track update events
+        socketService.join(this.gameState.id);
+        
+        // Use existing socket service to listen for track updates
+        socketService.onTrackUpdated(async (data: { gameId: string; playerId: string; timestamp: number }) => {
+          if (data.gameId === this.gameState.id && this.trackManager) {
+            try {
+              await this.trackManager.loadExistingTracks();
+              this.trackManager.drawAllTracks();
+            } catch (error) {
+              console.error('Error reloading tracks after update:', error);
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.warn('Could not setup track update listener:', error);
     }
   }
 }
