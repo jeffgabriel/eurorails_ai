@@ -566,6 +566,9 @@ export class GameScene extends Phaser.Scene {
    * Handle turn change - refresh UI and update game state
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    // Refresh player data from server to get updated money amounts
+    await this.refreshPlayerData();
+    
     // Update game state
     this.gameState.currentPlayerIndex = currentPlayerIndex;
     
@@ -679,6 +682,64 @@ export class GameScene extends Phaser.Scene {
       }
     } catch (error) {
       console.warn('Could not setup track update listener:', error);
+    }
+  }
+
+  /**
+   * Refresh player data from server to get updated money and other state
+   */
+  private async refreshPlayerData(): Promise<void> {
+    if (!this.gameState || !this.gameState.id) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('eurorails.jwt');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`/api/players/${this.gameState.id}`, {
+        headers
+      });
+
+      if (!response.ok) {
+        console.error('Failed to refresh player data:', response.status);
+        return;
+      }
+
+      const players = await response.json();
+      
+      // Update player data in gameState, preserving local references
+      players.forEach((serverPlayer: Player) => {
+        const localPlayer = this.gameState.players.find(p => p.id === serverPlayer.id);
+        if (localPlayer) {
+          // Update money and other server-managed properties
+          localPlayer.money = serverPlayer.money;
+          localPlayer.turnNumber = serverPlayer.turnNumber;
+          // Preserve local-only state like trainState.position if it exists
+          if (localPlayer.trainState && serverPlayer.trainState) {
+            // Merge train state, keeping local position if it exists
+            localPlayer.trainState = {
+              ...serverPlayer.trainState,
+              position: localPlayer.trainState.position || serverPlayer.trainState.position
+            };
+          } else if (serverPlayer.trainState) {
+            localPlayer.trainState = serverPlayer.trainState;
+          }
+        } else {
+          // New player - add to gameState
+          this.gameState.players.push(serverPlayer);
+        }
+      });
+
+      // Refresh UI to show updated money
+      this.uiManager.setupUIOverlay();
+    } catch (error) {
+      console.error('Error refreshing player data:', error);
     }
   }
 }
