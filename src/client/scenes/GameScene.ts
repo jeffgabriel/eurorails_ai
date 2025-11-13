@@ -149,8 +149,85 @@ export class GameScene extends Phaser.Scene {
     
     await this.loadService.loadInitialState();
     
-    // Start polling for turn changes after initial state is loaded (fallback if Socket.IO not available)
-    this.gameStateService.startPollingForTurnChanges(2000);
+    // Only start polling for turn changes if Socket.IO is not available/connected
+    // This is a fallback mechanism - Socket.IO should be the primary method for real-time updates
+    // Check if Socket.IO is available by trying to import and check connection status
+    let shouldPoll = true;
+    try {
+      // Dynamic import to avoid breaking if socket service isn't available
+      const { socketService } = await import('../lobby/shared/socket');
+      if (!socketService) {
+        console.error('❌ Socket.IO service not found - socketService is undefined.');
+        console.warn('⚠️ Will use polling fallback.');
+        shouldPoll = true;
+      } else if (socketService.isConnected()) {
+        console.log('✅ Socket.IO is connected, skipping polling fallback');
+        shouldPoll = false;
+      } else {
+        // Try to connect if we have a token
+        const token = localStorage.getItem('eurorails.jwt');
+        if (token) {
+          console.warn('⚠️ Socket.IO service found but not connected. Attempting to connect...');
+          try {
+            socketService.connect(token);
+            // Give it a moment to connect
+            await new Promise(resolve => setTimeout(resolve, 500));
+            if (socketService.isConnected()) {
+              console.log('✅ Socket.IO connected successfully, skipping polling fallback');
+              shouldPoll = false;
+            } else {
+              console.warn('⚠️ Socket.IO connection attempt failed or still connecting. Will use polling fallback.');
+              shouldPoll = true;
+            }
+          } catch (connectError) {
+            console.error('❌ Error connecting Socket.IO:', connectError);
+            console.warn('⚠️ Will use polling fallback.');
+            shouldPoll = true;
+          }
+        } else {
+          console.warn('⚠️ Socket.IO service found but not connected, and no auth token available.');
+          console.warn('   Cannot connect Socket.IO without token. Will use polling fallback.');
+          shouldPoll = true;
+        }
+      }
+    } catch (error) {
+      // Socket service not available, use polling as fallback
+      console.error('❌ Error importing Socket.IO service:', error);
+      console.error('   Error details:', error instanceof Error ? error.message : String(error));
+      console.warn('⚠️ Socket.IO service not available, will use polling fallback');
+      shouldPoll = true;
+    }
+    
+    // Only start polling if Socket.IO is not connected
+    if (shouldPoll) {
+      console.warn('🔄 Starting polling fallback for turn changes (5 second interval)');
+      console.warn('   This will make API calls every 5 seconds. Consider connecting Socket.IO to reduce server load.');
+      // Use a longer interval (5 seconds) since this is just a fallback
+      // This reduces server load compared to the previous 2-second interval
+      this.gameStateService.startPollingForTurnChanges(5000);
+    } else {
+      console.log('✅ Polling disabled - using Socket.IO for real-time updates');
+      
+      // Register socket listener for turn changes
+      try {
+        const { socketService } = await import('../lobby/shared/socket');
+        if (socketService && socketService.isConnected()) {
+          // Join the game room so we receive events
+          socketService.join(this.gameState.id);
+          
+          socketService.onTurnChange((data: any) => {
+            // Server sends: { currentPlayerIndex, currentPlayerId, gameId, timestamp }
+            // Handle the actual server payload
+            const playerIndex = data.currentPlayerIndex;
+            if (playerIndex !== undefined && playerIndex !== this.gameState.currentPlayerIndex) {
+              this.gameStateService.updateCurrentPlayerIndex(playerIndex);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('Failed to register turn change socket listener:', error);
+      }
+    }
 
     // Create containers in the right order
     this.mapContainer = this.add.container(0, 0);
@@ -197,6 +274,9 @@ export class GameScene extends Phaser.Scene {
 
     // Load existing tracks before creating UI
     await this.trackManager.loadExistingTracks();
+
+    // Setup track update listener on existing socket connection
+    this.setupTrackUpdateListener();
 
     // Create UI manager with callbacks after tracks are loaded
     this.uiManager = new UIManager(
@@ -486,6 +566,9 @@ export class GameScene extends Phaser.Scene {
    * Handle turn change - refresh UI and update game state
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    // Refresh player data from server to get updated money amounts
+    await this.refreshPlayerData();
+    
     // Update game state
     this.gameState.currentPlayerIndex = currentPlayerIndex;
     
@@ -567,6 +650,147 @@ export class GameScene extends Phaser.Scene {
     // Clean up TrackDrawingManager
     if (this.trackManager) {
       this.trackManager.destroy();
+    }
+  }
+
+  /**
+   * Setup track update listener on existing socket connection
+   */
+  private async setupTrackUpdateListener(): Promise<void> {
+    if (!this.gameState || !this.gameState.id) {
+      console.warn('Cannot setup track update listener: gameState.id is missing');
+      return;
+    }
+
+    try {
+      const { socketService } = await import('../lobby/shared/socket');
+      if (socketService && socketService.isConnected()) {
+        // Join the game room so we receive track update events
+        socketService.join(this.gameState.id);
+        
+        // Use existing socket service to listen for track updates
+        socketService.onTrackUpdated(async (data: { gameId: string; playerId: string; timestamp: number }) => {
+          if (data.gameId === this.gameState.id && this.trackManager) {
+            try {
+              await this.trackManager.loadExistingTracks();
+              this.trackManager.drawAllTracks();
+            } catch (error) {
+              console.error('Error reloading tracks after update:', error);
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.warn('Could not setup track update listener:', error);
+    }
+  }
+
+  /**
+   * Refresh player data from server to get updated money and other state
+   */
+  private async refreshPlayerData(): Promise<void> {
+    if (!this.gameState || !this.gameState.id) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('eurorails.jwt');
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`/api/players/${this.gameState.id}`, {
+        headers
+      });
+
+      if (!response.ok) {
+        console.error('Failed to refresh player data:', response.status);
+        return;
+      }
+
+      const players = await response.json();
+      const localPlayerId = this.playerStateService.getLocalPlayerId();
+      const trainsToUpdate: Array<{ playerId: string; x: number; y: number; row: number; col: number }> = [];
+      
+      // Update player data in gameState, preserving local references
+      players.forEach((serverPlayer: Player) => {
+        const localPlayer = this.gameState.players.find(p => p.id === serverPlayer.id);
+        if (localPlayer) {
+          // Update money and other server-managed properties
+          localPlayer.money = serverPlayer.money;
+          localPlayer.turnNumber = serverPlayer.turnNumber;
+          
+          // Handle train state based on whether this is the local player
+          const isLocalPlayer = localPlayerId === serverPlayer.id;
+          
+          if (serverPlayer.trainState) {
+            if (isLocalPlayer) {
+              // For local player: preserve local position if it exists (for smooth movement),
+              // otherwise use server position
+              if (localPlayer.trainState) {
+                localPlayer.trainState = {
+                  ...serverPlayer.trainState,
+                  position: localPlayer.trainState.position || serverPlayer.trainState.position
+                };
+              } else {
+                localPlayer.trainState = serverPlayer.trainState;
+              }
+            } else {
+              // For other players: ALWAYS use server position (authoritative)
+              localPlayer.trainState = serverPlayer.trainState;
+              
+              // Always update train sprite for other players if position exists
+              // This ensures the sprite is created/updated and visible
+              if (serverPlayer.trainState.position) {
+                const { x, y, row, col } = serverPlayer.trainState.position;
+                trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
+              }
+            }
+          } else if (localPlayer.trainState && !isLocalPlayer && !serverPlayer.trainState) {
+            // If server doesn't have trainState but local does for other players, remove it
+            // Set to empty trainState instead of null to maintain type safety
+            localPlayer.trainState = {
+              position: null,
+              remainingMovement: 0,
+              movementHistory: [],
+              loads: []
+            };
+          }
+        } else {
+          // New player - add to gameState
+          this.gameState.players.push(serverPlayer);
+          
+          // Queue train sprite update for new player if position exists
+          if (serverPlayer.trainState?.position) {
+            const { x, y, row, col } = serverPlayer.trainState.position;
+            trainsToUpdate.push({ playerId: serverPlayer.id, x, y, row, col });
+          }
+        }
+      });
+
+      // Ensure trainSprites map exists before updating
+      if (!this.gameState.trainSprites) {
+        this.gameState.trainSprites = new Map();
+      }
+
+      // Update all train sprites after state is updated
+      for (const train of trainsToUpdate) {
+        try {
+          console.log(`Refreshing train position for player ${train.playerId} at (${train.row}, ${train.col})`);
+          await this.uiManager.updateTrainPosition(train.playerId, train.x, train.y, train.row, train.col);
+          console.log(`Train sprite updated for player ${train.playerId}`);
+        } catch (error) {
+          console.error(`Error updating train position for player ${train.playerId}:`, error);
+        }
+      }
+
+      // Refresh UI to show updated money
+      this.uiManager.setupUIOverlay();
+    } catch (error) {
+      console.error('Error refreshing player data:', error);
     }
   }
 }

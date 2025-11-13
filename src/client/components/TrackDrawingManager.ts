@@ -1461,6 +1461,9 @@ export class TrackDrawingManager {
                 // Do not throw, just log and continue
             }
         }
+        // Clear caches since track state has changed
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
         // Redraw
         this.drawAllTracks();
         // Update cost display
@@ -1469,7 +1472,5 @@ export class TrackDrawingManager {
             const totalCost = previousSessionsCost + this.turnBuildCost;
             this.onCostUpdateCallback(totalCost);
         }
-        // Clear network cache to avoid stale pathfinding (move to end for test correctness)
-        this.networkNodesCache.clear();
     }
 }

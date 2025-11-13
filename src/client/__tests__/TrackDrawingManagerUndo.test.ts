@@ -30,6 +30,9 @@ const mockGameState: GameState = {
   currentPlayerIndex: 0
 } as any;
 const mockGridPoints: GridPoint[][] = [[{ x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear, id: '0,0' }]];
+const mockGameStateService = {
+  isLocalPlayerActive: () => true
+} as any;
 
 describe('TrackDrawingManager Undo Feature', () => {
   it('should initialize segmentsDrawnThisTurn as an empty array', () => {
@@ -133,7 +136,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     // Simulate drawing and committing two segments
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -145,7 +149,7 @@ describe('TrackDrawingManager Undo Feature', () => {
     (manager as any)["turnBuildCost"] = 2;
     await (manager as any)["saveCurrentTracks"]();
     // Undo last segment
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     // Only segment1 should remain
     expect(manager.segmentsDrawnThisTurn).toEqual([segment1]);
     const playerId = mockGameState.players[0].id;
@@ -174,7 +178,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     // Simulate drawing and committing three segments
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -191,17 +196,17 @@ describe('TrackDrawingManager Undo Feature', () => {
     await (manager as any)["saveCurrentTracks"]();
     const playerId = mockGameState.players[0].id;
     // Undo last (segment3)
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     expect(manager.segmentsDrawnThisTurn).toEqual([segment1, segment2]);
     expect((manager as any).playerTracks.get(playerId).segments).toEqual([segment1, segment2]);
     expect(manager.getLastBuildCost(playerId)).toBe(3);
     // Undo again (segment2)
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     expect(manager.segmentsDrawnThisTurn).toEqual([segment1]);
     expect((manager as any).playerTracks.get(playerId).segments).toEqual([segment1]);
     expect(manager.getLastBuildCost(playerId)).toBe(1);
     // Undo again (segment1)
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     expect(manager.segmentsDrawnThisTurn).toEqual([]);
     expect((manager as any).playerTracks.get(playerId).segments).toEqual([]);
     expect(manager.getLastBuildCost(playerId)).toBe(0);
@@ -212,7 +217,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     // Simulate drawing and committing a segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -222,7 +228,7 @@ describe('TrackDrawingManager Undo Feature', () => {
     // Start a new drawing session (simulate unsaved cost)
     (manager as any)["turnBuildCost"] = 5;
     // Undo last segment
-    manager.undoLastSegment();
+    await manager.undoLastSegment();
     // The unsaved session cost should remain unchanged
     expect((manager as any)["turnBuildCost"]).toBe(5);
     // The player's build cost should be 0
@@ -235,7 +241,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     // Simulate drawing and committing a segment
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
@@ -301,7 +308,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     const segment1 = { from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, cost: 1 };
     const segment2 = { from: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear }, to: { x: 2, y: 2, row: 0, col: 2, terrain: TerrainType.Clear }, cost: 2 };
@@ -316,7 +324,8 @@ describe('TrackDrawingManager Undo Feature', () => {
       mockScene,
       mockMapContainer,
       mockGameState,
-      mockGridPoints
+      mockGridPoints,
+      mockGameStateService
     );
     // Mock TrackService to return the same segments
     (manager2 as any).playerTracks.set(

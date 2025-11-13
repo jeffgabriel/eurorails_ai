@@ -111,7 +111,7 @@ class SocketService {
 
   onTurnChange(callback: (data: { currentTurnUserId: ID; serverSeq: number }) => void): void {
     if (!this.socket) return;
-    
+    // Allow multiple listeners - both GameScene and game.store need to receive turn changes
     this.socket.on('turn:change', (data) => {
       this.serverSeq = data.serverSeq;
       callback(data);
@@ -152,6 +152,13 @@ class SocketService {
     // Remove old listener before adding new one to prevent duplicates
     this.socket.off('game-started');
     this.socket.on('game-started', callback);
+  }
+
+  onTrackUpdated(callback: (data: { gameId: ID; playerId: ID; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    // Remove old listener before adding new one to prevent duplicates
+    this.socket.off('track:updated');
+    this.socket.on('track:updated', callback);
   }
 
   getServerSeq(): number {

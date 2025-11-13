@@ -71,6 +71,7 @@ export interface ServerToClientEvents {
   'error': (data: { code: string; message: string }) => void;
   'lobby-updated': (data: { gameId: ID; players: Player[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void;
   'game-started': (data: { gameId: ID; timestamp: number }) => void;
+  'track:updated': (data: { gameId: ID; playerId: ID; timestamp: number }) => void;
 }
 
 // Form validation types
