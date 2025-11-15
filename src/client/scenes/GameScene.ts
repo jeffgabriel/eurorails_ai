@@ -4,6 +4,7 @@ import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { UIManager } from "../components/UIManager";
+import { TurnNotification } from "../components/TurnNotification";
 import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
@@ -29,10 +30,12 @@ export class GameScene extends Phaser.Scene {
   private cameraController!: CameraController;
   private trackManager!: TrackDrawingManager;
   private uiManager!: UIManager;
+  private turnNotification!: TurnNotification;
   private gameStateService!: GameStateService;
   private playerStateService!: PlayerStateService;
   private loadService: LoadService;
   private turnChangeListener?: (currentPlayerIndex: number) => void;
+  private previousActivePlayerId: string | null = null;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -271,6 +274,13 @@ export class GameScene extends Phaser.Scene {
     // Set local player ID for per-player camera state
     const localPlayerId = this.playerStateService.getLocalPlayerId();
     this.cameraController.setLocalPlayerId(localPlayerId);
+
+    // Initialize turn notification component
+    this.turnNotification = new TurnNotification(this);
+    
+    // Initialize previous active player ID to current player to avoid showing notification on first load
+    const initialCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    this.previousActivePlayerId = initialCurrentPlayer?.id || null;
 
     // Load existing tracks before creating UI
     await this.trackManager.loadExistingTracks();
@@ -569,11 +579,23 @@ export class GameScene extends Phaser.Scene {
     // Refresh player data from server to get updated money amounts
     await this.refreshPlayerData();
     
+    // Get the new current player after the turn change
+    const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
+    const newActivePlayerId = newCurrentPlayer?.id || null;
+    
+    // Check if local player is now active and show notification
+    const localPlayerId = this.playerStateService.getLocalPlayerId();
+    if (localPlayerId && newActivePlayerId === localPlayerId && this.previousActivePlayerId !== localPlayerId) {
+      // Local player just became active - show notification
+      this.turnNotification.show("It's your turn!", 4000);
+    }
+    
+    // Update previous active player ID
+    this.previousActivePlayerId = newActivePlayerId;
+    
     // Update game state
     this.gameState.currentPlayerIndex = currentPlayerIndex;
     
-    // Get the new current player after the turn change
-    const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
     if (newCurrentPlayer) {
       // Increment turn number for the new current player
       newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
@@ -645,6 +667,11 @@ export class GameScene extends Phaser.Scene {
         this.gameStateService.offTurnChange(this.turnChangeListener);
         this.turnChangeListener = undefined;
       }
+    }
+    
+    // Clean up TurnNotification
+    if (this.turnNotification) {
+      this.turnNotification.destroy();
     }
     
     // Clean up TrackDrawingManager
