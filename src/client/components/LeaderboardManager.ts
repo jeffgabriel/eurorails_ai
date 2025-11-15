@@ -68,57 +68,85 @@ export class LeaderboardManager {
     const playerEntries = this.gameState.players
       .map((player, index) => {
         const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
+        const entryY = LEADERBOARD_PADDING + 30 + index * 20;
+        const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
 
-        // Create background highlight for current player
-        let entryBg;
+        const elements: Phaser.GameObjects.GameObject[] = [];
+
+        // Create subtle background highlight for current player
         if (isCurrentPlayer) {
-          entryBg = this.scene.add
+          // Subtle background highlight - light gray with low opacity
+          const entryBg = this.scene.add
             .rectangle(
-              this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
-              LEADERBOARD_PADDING + 30 + index * 20,
-              LEADERBOARD_WIDTH,
-              20,
-              0x666666,
-              0.5
+              entryX + 2, // Small inset to keep within bounds
+              entryY + 1, // Small inset to keep within bounds
+              LEADERBOARD_WIDTH - 4, // Reduced width to account for insets
+              18, // Reduced height to account for insets
+              0x888888,
+              0.3 // Lower opacity for subtlety
             )
             .setOrigin(0, 0);
+          elements.push(entryBg);
+
+          // Add smooth transition animation
+          entryBg.setAlpha(0);
+          this.scene.tweens.add({
+            targets: entryBg,
+            alpha: { from: 0, to: 1 },
+            duration: 300,
+            ease: 'Power2'
+          });
         }
 
-        // Create player text
+        // Create icon for current player (slightly larger but subtle)
+        let iconText;
+        if (isCurrentPlayer) {
+          iconText = this.scene.add
+            .text(
+              entryX + 5,
+              entryY + 2,
+              "►",
+              {
+                color: "#ffffff", // Keep white for subtlety
+                fontSize: "16px", // Slightly larger but not too prominent
+                fontStyle: "bold",
+              }
+            )
+            .setOrigin(0, 0);
+          elements.push(iconText);
+        }
+
+        // Create player text - keep mostly the same, just bold for active player
         const playerText = this.scene.add
           .text(
-            this.scene.scale.width -
-              LEADERBOARD_WIDTH -
-              LEADERBOARD_PADDING +
-              5,
-            LEADERBOARD_PADDING + 30 + index * 20,
-            `${isCurrentPlayer ? "►" : " "} ${player.name}`,
+            entryX + (isCurrentPlayer ? 25 : 5),
+            entryY + 2,
+            player.name,
             {
-              color: "#ffffff",
-              fontSize: "14px",
+              color: "#ffffff", // Keep white for all players
+              fontSize: "14px", // Same size for all
               fontStyle: isCurrentPlayer ? "bold" : "normal",
             }
           )
           .setOrigin(0, 0);
+        elements.push(playerText);
 
-        // Create money text (right-aligned)
+        // Create money text (right-aligned) - keep mostly the same
         const moneyText = this.scene.add
           .text(
             this.scene.scale.width - LEADERBOARD_PADDING - 5,
-            LEADERBOARD_PADDING + 30 + index * 20,
+            entryY + 2,
             `${player.money}M`,
             {
-              color: "#ffffff",
-              fontSize: "14px",
+              color: "#ffffff", // Keep white for all players
+              fontSize: "14px", // Same size for all
               fontStyle: isCurrentPlayer ? "bold" : "normal",
             }
           )
           .setOrigin(1, 0); // Right-align
+        elements.push(moneyText);
 
-        // Return all elements for this player
-        return entryBg
-          ? [entryBg, playerText, moneyText]
-          : [playerText, moneyText];
+        return elements;
       })
       .flat(); // Flatten the array of arrays
 
