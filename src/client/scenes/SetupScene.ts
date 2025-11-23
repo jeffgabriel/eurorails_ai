@@ -3,6 +3,7 @@ import { Player, PlayerColor, GameState, INITIAL_PLAYER_MONEY, TrainType } from 
 import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
 import { DemandCard } from '../../shared/types/DemandCard';
+import { config } from '../config/apiConfig';
 export class SetupScene extends Phaser.Scene {
     private gameState: GameState;
     private nameInput?: HTMLInputElement;
@@ -44,7 +45,7 @@ export class SetupScene extends Phaser.Scene {
     private async loadSpecificGame(gameId: string) {
         try {
             // First, fetch the game data
-            const gameResponse = await fetch(`/api/lobby/games/${gameId}`);
+            const gameResponse = await fetch(`${config.apiBaseUrl}/api/lobby/games/${gameId}`);
             if (!gameResponse.ok) {
                 throw new Error(`Failed to fetch game: ${gameResponse.status}`);
             }
@@ -68,7 +69,7 @@ export class SetupScene extends Phaser.Scene {
             }
 
             // Then, fetch the players for this game
-            const playersResponse = await fetch(`/api/lobby/games/${gameId}/players`);
+            const playersResponse = await fetch(`${config.apiBaseUrl}/api/lobby/games/${gameId}/players`);
             if (!playersResponse.ok) {
                 throw new Error(`Failed to fetch players: ${playersResponse.status}`);
             }
@@ -149,7 +150,7 @@ export class SetupScene extends Phaser.Scene {
                         headers.Authorization = `Bearer ${token}`;
                     }
                     
-                    const response = await fetch(`/api/game/${game.id}`, {
+                    const response = await fetch(`${config.apiBaseUrl}/api/game/${game.id}`, {
                         headers
                     });
                     if (!response.ok) {
@@ -457,7 +458,7 @@ export class SetupScene extends Phaser.Scene {
                 }
             }
             
-            const response = await fetch(`/api/lobby/games/${this.gameState.id}/start`, {
+            const response = await fetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}/start`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -510,7 +511,7 @@ export class SetupScene extends Phaser.Scene {
     private async setupStandaloneGame() {
         // Check for active game first
         try {
-            const response = await fetch('/api/players/game/active');
+            const response = await fetch(`${config.apiBaseUrl}/api/players/game/active`);
             if (response.ok) {
                 const activeGame = await response.json();
                 // Start game scene with active game
@@ -526,7 +527,7 @@ export class SetupScene extends Phaser.Scene {
         this.gameState.id = gameId;
         
         try {
-            const response = await fetch('/api/players/game/create', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/game/create`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -681,7 +682,7 @@ export class SetupScene extends Phaser.Scene {
 
         try {
             // Create new player on the server
-            const response = await fetch('/api/players/create', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/create`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',

@@ -18,6 +18,46 @@ import { initializeSocketIO } from './services/socketService';
 const app = express();
 const port = process.env.PORT || 3001;
 const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
+
+// Configure CORS origins
+function getCorsOrigins(): string | string[] {
+    // If ALLOWED_ORIGINS is set, use it (comma-separated list)
+    if (process.env.ALLOWED_ORIGINS) {
+        const origins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean);
+        console.log('CORS: Using ALLOWED_ORIGINS:', origins);
+        return origins;
+    }
+    
+    // If CLIENT_URL is set, use it
+    if (process.env.CLIENT_URL) {
+        console.log('CORS: Using CLIENT_URL:', process.env.CLIENT_URL);
+        return process.env.CLIENT_URL;
+    }
+    
+    // In development, default to localhost on the configured server port
+    if (process.env.NODE_ENV === 'development') {
+        const defaultOrigin = `http://localhost:${serverPort}`;
+        console.log('CORS: Using default development origin:', defaultOrigin);
+        return defaultOrigin;
+    }
+    
+    // In production, require explicit configuration - fail fast for security
+    if (process.env.NODE_ENV === 'production') {
+        console.error('========================================');
+        console.error('SECURITY ERROR: CORS not configured for production!');
+        console.error('Production deployments MUST set CLIENT_URL or ALLOWED_ORIGINS');
+        console.error('Falling back to localhost is INSECURE and will block legitimate requests.');
+        console.error('========================================');
+        // Still return localhost as fallback for backwards compatibility,
+        // but log a clear error that this must be fixed
+        return `http://localhost:${serverPort}`;
+    }
+    
+    // For test environment or other cases, default to localhost
+    console.warn('CORS: No CLIENT_URL or ALLOWED_ORIGINS set. Defaulting to localhost');
+    return `http://localhost:${serverPort}`;
+}
+
 // Debug logging middleware - add more detail
 app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
@@ -26,7 +66,7 @@ app.use((req, res, next) => {
 
 // Middleware for parsing JSON and serving static files
 app.use(cors({
-    origin: `http://localhost:${serverPort}`,
+    origin: getCorsOrigins(),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id']

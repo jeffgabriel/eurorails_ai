@@ -1,5 +1,6 @@
 import 'phaser';
 import { GameState, CameraState } from '../../shared/types/GameTypes';
+import { config } from '../config/apiConfig';
 
 export class CameraController {
     private scene: Phaser.Scene;
@@ -207,7 +208,7 @@ export class CameraController {
             }
 
             // Save to database with playerId
-            const response = await fetch('/api/game/updateCameraState', {
+            const response = await fetch(`${config.apiBaseUrl}/api/game/updateCameraState`, {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({

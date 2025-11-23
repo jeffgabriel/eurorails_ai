@@ -1,5 +1,6 @@
 import { Player, TrainState } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
+import { config } from '../config/apiConfig';
 
 /**
  * Manages per-player state and operations for the local player
@@ -115,7 +116,7 @@ export class PlayerStateService {
         }
 
         try {
-            const response = await fetch('/api/players/update', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -172,7 +173,7 @@ export class PlayerStateService {
         this.localPlayer.trainState.position = { x, y, row, col };
 
         try {
-            const response = await fetch('/api/players/update', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -218,7 +219,7 @@ export class PlayerStateService {
         this.localPlayer.trainState.loads = loads;
 
         try {
-            const response = await fetch('/api/players/update', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -257,7 +258,7 @@ export class PlayerStateService {
         }
 
         try {
-            const response = await fetch('/api/players/fulfill-demand', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/fulfill-demand`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
