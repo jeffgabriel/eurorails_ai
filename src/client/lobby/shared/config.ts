@@ -55,8 +55,10 @@ function normalizeBaseUrl(url: string): string {
 export const config: Config = {
   apiBaseUrl: normalizeBaseUrl(getEnvVar('VITE_API_BASE_URL', 'http://localhost:3001')),
   socketUrl: normalizeBaseUrl(getEnvVar('VITE_SOCKET_URL', 'http://localhost:3001')),
-  isDevelopment: (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') || 
-                 (typeof window === 'undefined' || !window.__APP_CONFIG__),
+  // isDevelopment: Check NODE_ENV injected by webpack at build time
+  // In production builds, this will be 'production', otherwise 'development' or undefined
+  // Default to false (production) if not explicitly set to 'development' for safety
+  isDevelopment: typeof process !== 'undefined' && process.env?.NODE_ENV === 'development',
   debugEnabled: getEnvVar('VITE_DEBUG', 'false') === 'true',
 };
 
