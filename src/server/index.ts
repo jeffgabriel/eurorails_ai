@@ -41,8 +41,20 @@ function getCorsOrigins(): string | string[] {
         return defaultOrigin;
     }
     
-    // In production, require explicit configuration
-    console.warn('CORS: No CLIENT_URL or ALLOWED_ORIGINS set in production. Defaulting to localhost (NOT RECOMMENDED FOR PRODUCTION)');
+    // In production, require explicit configuration - fail fast for security
+    if (process.env.NODE_ENV === 'production') {
+        console.error('========================================');
+        console.error('SECURITY ERROR: CORS not configured for production!');
+        console.error('Production deployments MUST set CLIENT_URL or ALLOWED_ORIGINS');
+        console.error('Falling back to localhost is INSECURE and will block legitimate requests.');
+        console.error('========================================');
+        // Still return localhost as fallback for backwards compatibility,
+        // but log a clear error that this must be fixed
+        return `http://localhost:${serverPort}`;
+    }
+    
+    // For test environment or other cases, default to localhost
+    console.warn('CORS: No CLIENT_URL or ALLOWED_ORIGINS set. Defaulting to localhost');
     return `http://localhost:${serverPort}`;
 }
 
