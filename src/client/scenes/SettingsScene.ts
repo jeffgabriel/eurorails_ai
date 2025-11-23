@@ -1,6 +1,7 @@
 import 'phaser';
 import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
+import { config } from '../config/apiConfig';
 
 export class SettingsScene extends Phaser.Scene {
     private gameState: GameState;
@@ -409,7 +410,7 @@ export class SettingsScene extends Phaser.Scene {
             });
 
             // Save to database
-            const response = await fetch('/api/players/update', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -462,7 +463,7 @@ export class SettingsScene extends Phaser.Scene {
 
     private async deletePlayer(player: Player) {
         try {
-            const response = await fetch('/api/players/delete', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/delete`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -532,7 +533,7 @@ export class SettingsScene extends Phaser.Scene {
             console.log('Creating new player with data:', playerData);
 
             // Save to database using the create endpoint
-            const response = await fetch('/api/players/create', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/create`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -643,7 +644,7 @@ export class SettingsScene extends Phaser.Scene {
 
     private async endGame() {
         try {
-            const response = await fetch(`/api/players/game/${this.gameState.id}/end`, {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/game/${this.gameState.id}/end`, {
                 method: 'POST'
             });
 

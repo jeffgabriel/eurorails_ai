@@ -1,4 +1,5 @@
 import { LoadState, LoadType } from '../../shared/types/LoadTypes';
+import { config } from '../config/apiConfig';
 
 export class LoadService {
   private static instance: LoadService;
@@ -22,8 +23,8 @@ export class LoadService {
 
     try {
       const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
-        fetch('/api/loads/state'),
-        fetch('/api/loads/dropped')
+        fetch(`${config.apiBaseUrl}/api/loads/state`),
+        fetch(`${config.apiBaseUrl}/api/loads/dropped`)
       ]);
 
       if (!loadStateResponse.ok || !droppedLoadsResponse.ok) {
@@ -112,7 +113,7 @@ export class LoadService {
 
       if (isDroppedLoad) {
         // Handle picking up a dropped load
-        const response = await fetch('/api/loads/pickup', {
+        const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ loadType, city, isDropped: true }),
@@ -130,7 +131,7 @@ export class LoadService {
         }
       } else {
         // Handle picking up a configured load
-        const response = await fetch('/api/loads/pickup', {
+        const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ loadType, city, isDropped: false }),
@@ -154,7 +155,7 @@ export class LoadService {
 
   public async returnLoad(loadType: LoadType): Promise<boolean> {
     try {
-      const response = await fetch('/api/loads/return', {
+      const response = await fetch(`${config.apiBaseUrl}/api/loads/return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ loadType }),
@@ -177,7 +178,7 @@ export class LoadService {
 
   public async setLoadInCity(city: string, loadType: LoadType): Promise<boolean> {
     try {
-      const response = await fetch('/api/loads/setInCity', {
+      const response = await fetch(`${config.apiBaseUrl}/api/loads/setInCity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ city, loadType }),

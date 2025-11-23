@@ -1,5 +1,6 @@
 import { GameState } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
+import { config } from '../config/apiConfig';
 
 /**
  * Event listener type for turn changes
@@ -67,7 +68,7 @@ export class GameStateService {
         
         try {
             // Update the current player in the database
-            const response = await fetch('/api/players/updateCurrentPlayer', {
+            const response = await fetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -120,7 +121,7 @@ export class GameStateService {
                     headers.Authorization = `Bearer ${token}`;
                 }
                 
-                const response = await fetch(`/api/game/${this.gameState.id}`, {
+                const response = await fetch(`${config.apiBaseUrl}/api/game/${this.gameState.id}`, {
                     headers
                 });
                 if (!response.ok) {
@@ -204,7 +205,7 @@ export class GameStateService {
             }
             
             // First fetch the game state with auth headers
-            const gameResponse = await fetch(`/api/game/${gameId}`, {
+            const gameResponse = await fetch(`${config.apiBaseUrl}/api/game/${gameId}`, {
                 headers
             });
             if (!gameResponse.ok) {

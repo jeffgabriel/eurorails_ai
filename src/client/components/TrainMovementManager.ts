@@ -9,6 +9,7 @@ import {
 } from "../../shared/types/GameTypes";
 import { MovementCostCalculator } from "./MovementCostCalculator";
 import { mapConfig } from "../config/mapConfig";
+import { config } from "../config/apiConfig";
 
 export class TrainMovementManager {
   private gameState: GameState;
@@ -22,7 +23,7 @@ export class TrainMovementManager {
 
   public async loadTrackData(): Promise<void> {
     try {
-      const response = await fetch(`/api/tracks/${this.gameState.id}`);
+      const response = await fetch(`${config.apiBaseUrl}/api/tracks/${this.gameState.id}`);
       if (!response.ok) {
         const errorText = await response.text();
         console.error("[TrainMovementManager] Track data fetch failed:", errorText);

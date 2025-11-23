@@ -65,6 +65,10 @@ module.exports = {
     new webpack.DefinePlugin({
       'process.env.REACT_APP_MOCK_MODE': JSON.stringify(process.env.REACT_APP_MOCK_MODE || 'false'),
       'process.env.REACT_APP_DEV_AUTH': JSON.stringify(process.env.REACT_APP_DEV_AUTH || 'false'),
+      'process.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL || 'http://localhost:3001'),
+      'process.env.VITE_SOCKET_URL': JSON.stringify(process.env.VITE_SOCKET_URL || 'http://localhost:3001'),
+      'process.env.VITE_DEBUG': JSON.stringify(process.env.VITE_DEBUG || 'false'),
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
     }),
   ],
   devServer: {

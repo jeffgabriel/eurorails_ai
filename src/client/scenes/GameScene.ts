@@ -9,6 +9,7 @@ import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
+import { config } from "../config/apiConfig";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -729,7 +730,7 @@ export class GameScene extends Phaser.Scene {
         headers.Authorization = `Bearer ${token}`;
       }
 
-      const response = await fetch(`/api/players/${this.gameState.id}`, {
+      const response = await fetch(`${config.apiBaseUrl}/api/players/${this.gameState.id}`, {
         headers
       });
 
