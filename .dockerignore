@@ -51,5 +51,5 @@ dockerfile
 
 # Development configs
 nodemon.json
-jest.config.js
+# jest.config.js is needed for running tests in Docker
 
