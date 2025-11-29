@@ -16,14 +16,70 @@ const databaseName = TEST_MODE
     ? (process.env.DB_NAME_TEST || 'eurorails_test')
     : process.env.DB_NAME;
 
+// Parse DATABASE_URL if provided (Railway, Heroku, etc.)
+// Format: postgresql://user:password@host:port/database
+function parseDatabaseUrl(): Partial<{
+    user: string;
+    host: string;
+    database: string;
+    password: string;
+    port: number;
+    ssl: boolean | { rejectUnauthorized: boolean };
+}> {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+        return {};
+    }
+
+    try {
+        const url = new URL(databaseUrl);
+        // Check for explicit sslmode parameter
+        const sslMode = url.searchParams.get('sslmode');
+        
+        // Determine SSL configuration
+        let sslConfig: boolean | { rejectUnauthorized: boolean };
+        if (sslMode === 'disable') {
+            sslConfig = false;
+        } else {
+            // For Railway/Heroku and other cloud providers, use SSL but allow self-signed certs
+            // Railway uses self-signed certificates for internal connections
+            // rejectUnauthorized: false is safe because Railway manages the certificates
+            sslConfig = { rejectUnauthorized: false };
+        }
+        
+        return {
+            user: url.username,
+            password: url.password,
+            host: url.hostname,
+            port: parseInt(url.port || '5432'),
+            database: url.pathname.slice(1), // Remove leading '/'
+            ssl: sslConfig
+        };
+    } catch (error) {
+        console.error('Error parsing DATABASE_URL:', error);
+        return {};
+    }
+}
+
+// Get database configuration from DATABASE_URL or individual env vars
+const dbConfigFromUrl = parseDatabaseUrl();
+// Check if DATABASE_URL was provided (indicated by presence of host property)
+// If DATABASE_URL was provided, its values are authoritative even if empty strings
+const usingDatabaseUrl = dbConfigFromUrl.host !== undefined;
+
 // Create a connection pool
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: databaseName,
-    password: process.env.DB_PASSWORD,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' } : false,
+    // If DATABASE_URL was provided, use its values (even if empty strings)
+    // Otherwise fall back to individual environment variables
+    // SECURITY: In test mode, always use test database name, never DATABASE_URL's database
+    user: usingDatabaseUrl ? dbConfigFromUrl.user : process.env.DB_USER,
+    host: usingDatabaseUrl ? dbConfigFromUrl.host : process.env.DB_HOST,
+    database: databaseName, // Always use databaseName (handles test mode correctly)
+    password: usingDatabaseUrl ? dbConfigFromUrl.password : process.env.DB_PASSWORD,
+    port: usingDatabaseUrl ? dbConfigFromUrl.port : parseInt(process.env.DB_PORT || '5432'),
+    ssl: dbConfigFromUrl.ssl !== undefined 
+        ? dbConfigFromUrl.ssl 
+        : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' } : false),
     max: parseInt(process.env.DB_MAX_CONNECTIONS || '10'),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
 });

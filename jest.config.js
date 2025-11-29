@@ -28,6 +28,7 @@ module.exports = {
       testEnvironmentOptions: { url: 'http://localhost' },
 
       // IMPORTANT: put ts transform INSIDE the project
+      // Explicitly use ts-jest for TypeScript, prevent babel-jest fallback
       transform: {
         '^.+\\.(ts|tsx)$': [
           'ts-jest',
@@ -38,6 +39,8 @@ module.exports = {
             useESM: false,
           },
         ],
+        // Explicitly handle JS files with babel-jest (only for .js/.jsx, not .ts/.tsx)
+        '^.+\\.(js|jsx)$': 'babel-jest',
       },
       transformIgnorePatterns: ['/node_modules/(?!(phaser)/)'],
       moduleNameMapper: {

@@ -8,7 +8,8 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install all dependencies, including devDependencies for the dev server.
-RUN npm install
+# Use npm ci for reproducible builds that match package-lock.json exactly
+RUN npm ci
 
 # Copy local code to the container image.
 COPY . .
