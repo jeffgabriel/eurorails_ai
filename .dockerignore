@@ -1,0 +1,55 @@
+# Docker ignore file for production builds
+# Exclude unnecessary files from Docker context
+
+# Dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+
+# Build outputs (will be built in container)
+dist
+
+# Development files
+.env
+.env.local
+.env.*.local
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Testing
+coverage
+.nyc_output
+test-results
+__tests__
+
+# Documentation (optional - include if needed)
+# *.md
+# !README.md
+
+# CI/CD
+.github
+.circleci
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+
+# Docker files (don't need dev dockerfile in production)
+docker-compose.yml
+dockerfile
+
+# Development configs
+nodemon.json
+jest.config.js
+

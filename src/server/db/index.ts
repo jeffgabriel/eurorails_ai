@@ -16,14 +16,52 @@ const databaseName = TEST_MODE
     ? (process.env.DB_NAME_TEST || 'eurorails_test')
     : process.env.DB_NAME;
 
+// Parse DATABASE_URL if provided (Railway, Heroku, etc.)
+// Format: postgresql://user:password@host:port/database
+function parseDatabaseUrl(): Partial<{
+    user: string;
+    host: string;
+    database: string;
+    password: string;
+    port: number;
+    ssl: boolean | { rejectUnauthorized: boolean };
+}> {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) {
+        return {};
+    }
+
+    try {
+        const url = new URL(databaseUrl);
+        return {
+            user: url.username,
+            password: url.password,
+            host: url.hostname,
+            port: parseInt(url.port || '5432'),
+            database: url.pathname.slice(1), // Remove leading '/'
+            ssl: url.searchParams.get('sslmode') !== 'disable' 
+                ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' }
+                : false
+        };
+    } catch (error) {
+        console.error('Error parsing DATABASE_URL:', error);
+        return {};
+    }
+}
+
+// Get database configuration from DATABASE_URL or individual env vars
+const dbConfigFromUrl = parseDatabaseUrl();
+
 // Create a connection pool
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: databaseName,
-    password: process.env.DB_PASSWORD,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' } : false,
+    user: dbConfigFromUrl.user || process.env.DB_USER,
+    host: dbConfigFromUrl.host || process.env.DB_HOST,
+    database: dbConfigFromUrl.database || databaseName,
+    password: dbConfigFromUrl.password || process.env.DB_PASSWORD,
+    port: dbConfigFromUrl.port || parseInt(process.env.DB_PORT || '5432'),
+    ssl: dbConfigFromUrl.ssl !== undefined 
+        ? dbConfigFromUrl.ssl 
+        : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' } : false),
     max: parseInt(process.env.DB_MAX_CONNECTIONS || '10'),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
 });
