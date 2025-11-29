@@ -16,8 +16,8 @@ import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
 
 const app = express();
-// Railway provides PORT env var, fallback to 3001 for local development
-const port = process.env.PORT || 3001;
+// Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
+const port = process.env.PORT || 3000;
 const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
 
 // Configure CORS origins
