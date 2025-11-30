@@ -130,16 +130,47 @@ if (process.env.NODE_ENV === 'production') {
             createTableIfMissing: true // Automatically create session table if it doesn't exist
         };
         
-        // Prefer DATABASE_URL if available (more reliable in cloud environments like Railway)
-        if (process.env.DATABASE_URL) {
-            sessionStoreConfig.conString = process.env.DATABASE_URL;
-            console.log('Using DATABASE_URL for session store connection');
-        } else {
+        // Try using the pool first (we know it works since other DB queries work)
+        // If that fails, fall back to DATABASE_URL
+        console.log('Attempting to create PgSession instance with pool...');
+        try {
             sessionStoreConfig.pool = db;
             console.log('Using database pool for session store connection');
+            sessionStore = new PgSession(sessionStoreConfig);
+            console.log('✓ PgSession instance created successfully with pool');
+        } catch (poolError: any) {
+            console.warn('⚠ Failed to create PgSession with pool, trying DATABASE_URL...');
+            console.warn(`  Pool error: ${poolError.message}`);
+            
+            // Fall back to DATABASE_URL if pool fails
+            if (process.env.DATABASE_URL) {
+                try {
+                    // connect-pg-simple expects 'postgres://' but Railway uses 'postgresql://'
+                    // Both should work, but let's normalize it just in case
+                    let dbUrl = process.env.DATABASE_URL;
+                    if (dbUrl.startsWith('postgresql://')) {
+                        // connect-pg-simple may prefer postgres:// format
+                        dbUrl = dbUrl.replace('postgresql://', 'postgres://');
+                    }
+                    sessionStoreConfig.conString = dbUrl;
+                    delete sessionStoreConfig.pool; // Remove pool config
+                    console.log('Using DATABASE_URL for session store connection');
+                    console.log(`  DATABASE_URL format: ${dbUrl.substring(0, 20)}... (hidden)`);
+                    sessionStore = new PgSession(sessionStoreConfig);
+                    console.log('✓ PgSession instance created successfully with DATABASE_URL');
+                } catch (conStringError: any) {
+                    console.error('✗ Failed to create PgSession with DATABASE_URL:');
+                    console.error(`  Error: ${conStringError.message}`);
+                    console.error(`  Code: ${conStringError.code || 'unknown'}`);
+                    console.error(`  Stack: ${conStringError.stack}`);
+                    throw conStringError; // Re-throw to be caught by outer try-catch
+                }
+            } else {
+                // No DATABASE_URL available, re-throw pool error
+                console.error('✗ Failed to create PgSession with pool and no DATABASE_URL available');
+                throw poolError;
+            }
         }
-        
-        sessionStore = new PgSession(sessionStoreConfig);
         
         // Log session store configuration
         console.log('Session Store Type: PostgreSQL');
@@ -277,7 +308,11 @@ if (process.env.NODE_ENV === 'production') {
         console.error('=================================');
         console.error('CRITICAL: Failed to initialize PostgreSQL session store');
         console.error('Error:', error.message);
+        console.error('Error Code:', error.code || 'unknown');
+        console.error('Error Name:', error.name || 'unknown');
         console.error('Stack:', error.stack);
+        console.error('DATABASE_URL present:', !!process.env.DATABASE_URL);
+        console.error('NODE_ENV:', process.env.NODE_ENV);
         console.error('=================================');
         console.error('Falling back to MemoryStore (sessions will not persist across restarts)');
         console.error('=================================');
