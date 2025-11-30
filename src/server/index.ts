@@ -384,29 +384,48 @@ app.get('*', async (req, res, next) => {
         }
         
         // Determine API base URL from environment or request origin
+        // In production, use the same origin as the request (same domain)
+        // This ensures the client uses the correct API URL without CORS issues
+        const requestOrigin = req.protocol + '://' + req.get('host');
         const apiBaseUrl = process.env.VITE_API_BASE_URL || 
                           process.env.CLIENT_URL || 
-                          (req.protocol + '://' + req.get('host'));
+                          requestOrigin;
         const socketUrl = process.env.VITE_SOCKET_URL || apiBaseUrl;
         
-        // Inject runtime config script before closing </head> tag
-        const configScript = `
-    <script>
-        // Runtime configuration injection
+        // Log the API URL being injected for debugging
+        console.log('[Config Injection] API Base URL:', apiBaseUrl);
+        console.log('[Config Injection] Request origin:', requestOrigin);
+        console.log('[Config Injection] VITE_API_BASE_URL env:', process.env.VITE_API_BASE_URL || '(not set)');
+        console.log('[Config Injection] CLIENT_URL env:', process.env.CLIENT_URL || '(not set)');
+        
+        // Inject runtime config script as the FIRST script in <head>
+        // This ensures it executes before any other scripts that might need the config
+        const configScript = `<script type="text/javascript">
+        // Runtime configuration injection - must execute before other scripts
         window.__APP_CONFIG__ = {
             apiBaseUrl: ${JSON.stringify(apiBaseUrl)},
             socketUrl: ${JSON.stringify(socketUrl)},
             debugEnabled: ${process.env.VITE_DEBUG === 'true' ? 'true' : 'false'}
         };
+        console.log('[Runtime Config] Injected API base URL:', window.__APP_CONFIG__.apiBaseUrl);
     </script>`;
         
-        // Insert config script before </head> or before </body> if no </head>
-        // Use conditional checks since replace() always returns a string (truthy)
-        const modifiedHtml = htmlContent.includes('</head>') 
-            ? htmlContent.replace('</head>', configScript + '\n</head>')
-            : htmlContent.includes('</body>')
-            ? htmlContent.replace('</body>', configScript + '\n</body>')
-            : configScript + '\n' + htmlContent;
+        // Insert config script as early as possible in <head>
+        // Try to insert right after <head> tag, or before </head> if no opening tag found
+        let modifiedHtml: string;
+        if (htmlContent.includes('<head>')) {
+            // Insert right after <head> tag to ensure it executes first
+            modifiedHtml = htmlContent.replace('<head>', '<head>' + configScript);
+        } else if (htmlContent.includes('</head>')) {
+            // Fallback: insert before </head>
+            modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>');
+        } else if (htmlContent.includes('</body>')) {
+            // Last resort: insert before </body>
+            modifiedHtml = htmlContent.replace('</body>', configScript + '\n</body>');
+        } else {
+            // No standard tags found, prepend to content
+            modifiedHtml = configScript + '\n' + htmlContent;
+        }
         
         res.send(modifiedHtml);
     } catch (err: any) {
