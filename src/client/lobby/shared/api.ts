@@ -49,6 +49,7 @@ class ApiClient {
     
     const response = await fetch(url, {
       ...options,
+      credentials: 'include', // Include cookies (session cookie) with requests
       headers: {
         ...this.getAuthHeaders(),
         ...options.headers,

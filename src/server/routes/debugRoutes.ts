@@ -172,14 +172,16 @@ CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");`
  */
 router.get('/sessions', asyncHandler(async (req: Request, res: Response) => {
     try {
-        // Get all sessions with metadata
+        // Get all sessions with metadata and full session data
         const sessionsQuery = `
             SELECT 
                 sid,
                 expire,
                 LENGTH(sess::text) as sess_size,
                 sess->>'gameId' as game_id,
-                sess->>'cookie' as cookie_data
+                sess->>'userId' as user_id,
+                sess->>'cookie' as cookie_data,
+                sess as full_session_data
             FROM session
             ORDER BY expire DESC
             LIMIT 100;
@@ -209,10 +211,12 @@ router.get('/sessions', asyncHandler(async (req: Request, res: Response) => {
                     expiresAt: row.expire,
                     sessionSize: parseInt(row.sess_size, 10),
                     gameId: row.game_id || null,
-                    hasCookie: !!row.cookie_data
+                    userId: row.user_id || null,
+                    hasCookie: !!row.cookie_data,
+                    sessionData: row.full_session_data // Full session object for inspection
                 })),
                 timestamp: new Date().toISOString(),
-                warning: 'This endpoint exposes session metadata. Use with caution in production.'
+                warning: 'This endpoint exposes session data. Use with caution in production.'
             }
         });
     } catch (error: any) {

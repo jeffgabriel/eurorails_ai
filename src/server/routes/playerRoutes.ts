@@ -32,8 +32,11 @@ router.post('/game/create', async (req, res) => {
         await PlayerService.createGame(gameId);
         console.log('Successfully created game:', gameId);
 
-        // Set the game ID in the session
+        // Set the game ID and user ID in the session
         req.session.gameId = gameId;
+        if (req.user?.id) {
+            (req.session as any).userId = req.user.id;
+        }
         await new Promise<void>((resolve, reject) => {
             req.session.save((err) => {
                 if (err) reject(err);
@@ -351,8 +354,11 @@ router.get('/game/active', authenticateToken, async (req, res) => {
         // Get all players for this game (with hand filtering for authenticated user)
         const players = await PlayerService.getPlayers(activeGame.id, userId);
         
-        // Set the game ID in the session
+        // Set the game ID and user ID in the session
         req.session.gameId = activeGame.id;
+        if (req.user?.id) {
+            (req.session as any).userId = req.user.id;
+        }
         await new Promise<void>((resolve, reject) => {
             req.session.save((err) => {
                 if (err) reject(err);

@@ -337,7 +337,7 @@ app.use(session({
     store: sessionStore,
     secret: sessionSecret,
     resave: false,
-    saveUninitialized: false,
+    saveUninitialized: true, // Save sessions immediately so cookie is set (needed for session persistence)
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
@@ -449,6 +449,8 @@ app.use(async (req, res, next) => {
                     // User has a player in this game - safe to restore gameId
                     const playerId = playerCheck.rows[0].id;
                     req.session.gameId = activeGame.id;
+                    // Also store userId in session for tracking
+                    (req.session as any).userId = userId;
                     
                     console.log(`[Session Restore] Restored gameId for authenticated user (User ID: ${userId}, Player ID: ${playerId}, Game ID: ${activeGame.id}, Request ID: ${requestId})`);
                     
