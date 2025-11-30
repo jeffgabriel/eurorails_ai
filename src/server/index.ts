@@ -135,28 +135,99 @@ if (process.env.NODE_ENV === 'production') {
         console.log('Create Table If Missing: true');
         console.log('Database Pool: configured');
         
-        // Verify session table exists after initialization
-        // Note: connect-pg-simple creates the table asynchronously, so we check after a delay
-        setTimeout(async () => {
-            try {
-                const tableCheck = await db.query(`
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables 
-                        WHERE table_schema = 'public' 
-                        AND table_name = 'session'
-                    );
-                `);
-                const tableExists = tableCheck.rows[0].exists;
-                if (tableExists) {
-                    console.log('✓ Session table verified in database');
-                } else {
-                    console.error('✗ WARNING: Session table was not created automatically');
-                    console.error('  This may indicate a database permissions issue or connection problem');
+        // Proactively attempt to create session table if it doesn't exist
+        // connect-pg-simple creates tables lazily (on first use), which can cause issues
+        // We'll try to create it immediately with retry logic
+        const ensureSessionTable = async (retries = 3, delay = 2000): Promise<void> => {
+            for (let attempt = 1; attempt <= retries; attempt++) {
+                try {
+                    // Check if table exists
+                    const tableCheck = await db.query(`
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' 
+                            AND table_name = 'session'
+                        );
+                    `);
+                    const tableExists = tableCheck.rows[0].exists;
+                    
+                    if (tableExists) {
+                        console.log(`✓ Session table verified in database (attempt ${attempt}/${retries})`);
+                        return;
+                    }
+                    
+                    // Table doesn't exist - try to create it
+                    console.log(`Attempting to create session table (attempt ${attempt}/${retries})...`);
+                    await db.query(`
+                        CREATE TABLE IF NOT EXISTS "session" (
+                          "sid" varchar NOT NULL COLLATE "default",
+                          "sess" json NOT NULL,
+                          "expire" timestamp(6) NOT NULL
+                        )
+                        WITH (OIDS=FALSE);
+                    `);
+                    
+                    // Add primary key if it doesn't exist
+                    await db.query(`
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM pg_constraint 
+                                WHERE conname = 'session_pkey' 
+                                AND conrelid = 'session'::regclass
+                            ) THEN
+                                ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
+                            END IF;
+                        END $$;
+                    `);
+                    
+                    // Create index if it doesn't exist
+                    await db.query(`
+                        CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+                    `);
+                    
+                    // Verify it was created
+                    const verifyCheck = await db.query(`
+                        SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' 
+                            AND table_name = 'session'
+                        );
+                    `);
+                    
+                    if (verifyCheck.rows[0].exists) {
+                        console.log(`✓ Session table created successfully (attempt ${attempt}/${retries})`);
+                        return;
+                    } else {
+                        throw new Error('Table creation completed but table still does not exist');
+                    }
+                } catch (error: any) {
+                    const isLastAttempt = attempt === retries;
+                    if (isLastAttempt) {
+                        console.error(`✗ Failed to create session table after ${retries} attempts`);
+                        console.error(`  Error: ${error.message}`);
+                        console.error(`  Code: ${error.code || 'unknown'}`);
+                        if (error.code === '42501') {
+                            console.error('  This appears to be a database permissions issue (CREATE TABLE permission denied)');
+                            console.error('  The database user needs CREATE TABLE privileges on the public schema');
+                        }
+                        console.error('  Sessions may not persist across server restarts');
+                    } else {
+                        console.warn(`⚠ Session table creation failed (attempt ${attempt}/${retries}), retrying in ${delay}ms...`);
+                        console.warn(`  Error: ${error.message}`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; // Exponential backoff
+                    }
                 }
-            } catch (error: any) {
-                console.error('✗ Error verifying session table:', error.message);
             }
-        }, 2000); // Check after 2 seconds
+        };
+        
+        // Start table creation check after a short delay to ensure DB connection is ready
+        setTimeout(() => {
+            ensureSessionTable().catch((error) => {
+                console.error('Unhandled error in ensureSessionTable:', error);
+            });
+        }, 1000);
         
         // Add error handlers to session store
         if (sessionStore && typeof sessionStore.on === 'function') {
@@ -346,10 +417,12 @@ if (process.env.ENABLE_DEBUG_ROUTES === 'true') {
     console.log('Debug routes ENABLED');
     console.log('Available endpoints:');
     console.log('  GET  /api/debug/session - Current session info');
-    console.log('  GET  /api/debug/session-table - Session table schema');
+    console.log('  GET  /api/debug/session-table - Session table schema & permissions');
     console.log('  GET  /api/debug/sessions - List all sessions');
     console.log('  POST /api/debug/session/test - Test session write/read');
     console.log('  GET  /api/debug/session-store-info - Session store config');
+    console.log('  GET  /api/debug/db-permissions - Check database permissions');
+    console.log('  POST /api/debug/create-session-table - Manually create session table');
     console.log('=================================');
     app.use('/api/debug', debugRoutes);
 } else {

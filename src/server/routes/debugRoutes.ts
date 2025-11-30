@@ -75,13 +75,42 @@ router.get('/session-table', asyncHandler(async (req: Request, res: Response) =>
         const tableExistsResult = await db.query(tableExistsQuery);
         const tableExists = tableExistsResult.rows[0].exists;
         
+        // Check database permissions
+        let hasCreateTablePermission = false;
+        let permissionError: string | null = null;
+        try {
+            // Try to create a test table to check permissions
+            await db.query('CREATE TABLE IF NOT EXISTS _test_permissions_check (id INTEGER)');
+            await db.query('DROP TABLE IF EXISTS _test_permissions_check');
+            hasCreateTablePermission = true;
+        } catch (error: any) {
+            permissionError = error.message || 'Unknown error';
+            if (error.code === '42501') {
+                permissionError = 'CREATE TABLE permission denied (error code 42501)';
+            }
+        }
+        
         if (!tableExists) {
             return res.status(200).json({
                 success: true,
                 data: {
                     tableExists: false,
+                    hasCreateTablePermission,
+                    permissionError,
                     message: 'Session table does not exist in database',
-                    recommendation: 'The session table should be created automatically by connect-pg-simple. Check server logs for initialization errors.'
+                    recommendation: hasCreateTablePermission 
+                        ? 'The session table should be created automatically by connect-pg-simple. You can manually create it using POST /api/debug/create-session-table'
+                        : 'Database user lacks CREATE TABLE permissions. Grant CREATE privilege on the public schema or run the migration manually.',
+                    sqlCommand: `CREATE TABLE IF NOT EXISTS "session" (
+  "sid" varchar NOT NULL COLLATE "default",
+  "sess" json NOT NULL,
+  "expire" timestamp(6) NOT NULL
+)
+WITH (OIDS=FALSE);
+
+ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
+
+CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");`
                 }
             });
         }
@@ -265,6 +294,175 @@ router.post('/session/test', asyncHandler(async (req: Request, res: Response) =>
             message: 'Session test failed',
             details: error.message || 'Unknown error during session test',
             stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+}));
+
+/**
+ * GET /api/debug/db-permissions
+ * Check database permissions for the current user
+ */
+router.get('/db-permissions', asyncHandler(async (req: Request, res: Response) => {
+    try {
+        const permissions: Record<string, { granted: boolean; error?: string; code?: string }> = {};
+        
+        // Check CREATE TABLE permission
+        try {
+            await db.query('CREATE TABLE IF NOT EXISTS _test_create_table (id INTEGER)');
+            await db.query('DROP TABLE IF EXISTS _test_create_table');
+            permissions.createTable = { granted: true };
+        } catch (error: any) {
+            permissions.createTable = { 
+                granted: false, 
+                error: error.message || 'Unknown error',
+                code: error.code
+            };
+        }
+        
+        // Check SELECT permission (should always work, but check anyway)
+        try {
+            await db.query('SELECT 1');
+            permissions.select = { granted: true };
+        } catch (error: any) {
+            permissions.select = { 
+                granted: false, 
+                error: error.message || 'Unknown error',
+                code: error.code
+            };
+        }
+        
+        // Check INSERT permission
+        try {
+            await db.query('CREATE TABLE IF NOT EXISTS _test_insert (id INTEGER)');
+            await db.query('INSERT INTO _test_insert (id) VALUES (1)');
+            await db.query('DROP TABLE IF EXISTS _test_insert');
+            permissions.insert = { granted: true };
+        } catch (error: any) {
+            permissions.insert = { 
+                granted: false, 
+                error: error.message || 'Unknown error',
+                code: error.code
+            };
+            // Clean up test table if it exists
+            try {
+                await db.query('DROP TABLE IF EXISTS _test_insert');
+            } catch {}
+        }
+        
+        // Get current database user
+        const userQuery = await db.query('SELECT current_user, current_database()');
+        const currentUser = userQuery.rows[0].current_user;
+        const currentDatabase = userQuery.rows[0].current_database;
+        
+        res.status(200).json({
+            success: true,
+            data: {
+                currentUser,
+                currentDatabase,
+                permissions,
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error: any) {
+        console.error('Error checking database permissions:', error);
+        res.status(500).json({
+            error: 'DATABASE_ERROR',
+            message: 'Failed to check database permissions',
+            details: error.message || 'Unknown database error'
+        });
+    }
+}));
+
+/**
+ * POST /api/debug/create-session-table
+ * Manually create the session table
+ */
+router.post('/create-session-table', asyncHandler(async (req: Request, res: Response) => {
+    try {
+        // Check if table already exists
+        const tableCheck = await db.query(`
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'session'
+            );
+        `);
+        const tableExists = tableCheck.rows[0].exists;
+        
+        if (tableExists) {
+            return res.status(200).json({
+                success: true,
+                data: {
+                    message: 'Session table already exists',
+                    tableExists: true
+                }
+            });
+        }
+        
+        // Create the table
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS "session" (
+              "sid" varchar NOT NULL COLLATE "default",
+              "sess" json NOT NULL,
+              "expire" timestamp(6) NOT NULL
+            )
+            WITH (OIDS=FALSE);
+        `);
+        
+        // Add primary key
+        await db.query(`
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint 
+                    WHERE conname = 'session_pkey' 
+                    AND conrelid = 'session'::regclass
+                ) THEN
+                    ALTER TABLE "session" ADD CONSTRAINT "session_pkey" PRIMARY KEY ("sid") NOT DEFERRABLE INITIALLY IMMEDIATE;
+                END IF;
+            END $$;
+        `);
+        
+        // Create index
+        await db.query(`
+            CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
+        `);
+        
+        // Verify it was created
+        const verifyCheck = await db.query(`
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables 
+                WHERE table_schema = 'public' 
+                AND table_name = 'session'
+            );
+        `);
+        
+        if (verifyCheck.rows[0].exists) {
+            res.status(200).json({
+                success: true,
+                data: {
+                    message: 'Session table created successfully',
+                    tableExists: true,
+                    timestamp: new Date().toISOString()
+                }
+            });
+        } else {
+            res.status(500).json({
+                error: 'TABLE_CREATION_FAILED',
+                message: 'Table creation command completed but table was not found',
+                details: 'This may indicate a permissions issue or database connection problem'
+            });
+        }
+    } catch (error: any) {
+        console.error('Error creating session table:', error);
+        res.status(500).json({
+            error: 'TABLE_CREATION_ERROR',
+            message: 'Failed to create session table',
+            details: error.message || 'Unknown error during table creation',
+            code: error.code || 'unknown',
+            hint: error.code === '42501' 
+                ? 'Database user lacks CREATE TABLE permissions. Grant CREATE privilege on the public schema.'
+                : undefined
         });
     }
 }));
