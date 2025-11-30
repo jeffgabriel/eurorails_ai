@@ -228,49 +228,88 @@ app.get('/health', async (req, res) => {
     const rootPathTest = await testInternalEndpoint(`${serverUrl}/`, 2000);
     const apiTestTest = await testInternalEndpoint(`${serverUrl}/api/test`, 2000);
     
+    // Build diagnostics object
+    const diagnostics = {
+        indexHtml: {
+            exists: fileExists,
+            path: indexPath,
+            resolvedPath: path.resolve(indexPath),
+            error: fileError
+        },
+        clientDist: {
+            exists: dirExists,
+            path: clientDistPath,
+            resolvedPath: path.resolve(clientDistPath),
+            error: dirError
+        },
+        serverInfo: {
+            __dirname: __dirname,
+            cwd: process.cwd(),
+            nodeEnv: process.env.NODE_ENV,
+            port: port,
+            serverAddress: httpServer?.address() || null,
+            envVars: {
+                CLIENT_URL: process.env.CLIENT_URL || '(not set)',
+                VITE_API_BASE_URL: process.env.VITE_API_BASE_URL || '(not set)',
+                VITE_SOCKET_URL: process.env.VITE_SOCKET_URL || '(not set)',
+                PORT: process.env.PORT || '(not set)',
+                NODE_ENV: process.env.NODE_ENV || '(not set)'
+            }
+        },
+        endpointTests: {
+            rootPath: {
+                url: `${serverUrl}/`,
+                ...rootPathTest
+            },
+            apiTest: {
+                url: `${serverUrl}/api/test`,
+                ...apiTestTest
+            }
+        }
+    };
+    
+    // Log diagnostics to stdout for Railway logs
+    console.log('=================================');
+    console.log('HEALTH CHECK DIAGNOSTICS:');
+    console.log('=================================');
+    console.log('File System Checks:');
+    console.log(`  index.html exists: ${fileExists}`);
+    console.log(`  index.html path: ${path.resolve(indexPath)}`);
+    if (fileError) console.log(`  index.html error: ${fileError}`);
+    console.log(`  dist/client exists: ${dirExists}`);
+    console.log(`  dist/client path: ${path.resolve(clientDistPath)}`);
+    if (dirError) console.log(`  dist/client error: ${dirError}`);
+    console.log('');
+    console.log('Server Info:');
+    console.log(`  __dirname: ${__dirname}`);
+    console.log(`  cwd: ${process.cwd()}`);
+    console.log(`  port: ${port}`);
+    console.log(`  server address: ${JSON.stringify(httpServer?.address())}`);
+    console.log('');
+    console.log('Environment Variables:');
+    console.log(`  CLIENT_URL: ${process.env.CLIENT_URL || '(not set)'}`);
+    console.log(`  VITE_API_BASE_URL: ${process.env.VITE_API_BASE_URL || '(not set)'}`);
+    console.log(`  VITE_SOCKET_URL: ${process.env.VITE_SOCKET_URL || '(not set)'}`);
+    console.log(`  PORT: ${process.env.PORT || '(not set)'}`);
+    console.log(`  NODE_ENV: ${process.env.NODE_ENV || '(not set)'}`);
+    console.log('');
+    console.log('Endpoint Tests:');
+    console.log(`  Root path (${serverUrl}/): ${rootPathTest.success ? 'SUCCESS' : 'FAILED'}`);
+    if (rootPathTest.statusCode) console.log(`    Status: ${rootPathTest.statusCode}`);
+    if (rootPathTest.error) console.log(`    Error: ${rootPathTest.error}`);
+    if (rootPathTest.duration) console.log(`    Duration: ${rootPathTest.duration}ms`);
+    console.log(`  API test (${serverUrl}/api/test): ${apiTestTest.success ? 'SUCCESS' : 'FAILED'}`);
+    if (apiTestTest.statusCode) console.log(`    Status: ${apiTestTest.statusCode}`);
+    if (apiTestTest.error) console.log(`    Error: ${apiTestTest.error}`);
+    if (apiTestTest.duration) console.log(`    Duration: ${apiTestTest.duration}ms`);
+    console.log('=================================');
+    
     // Always return 200 so Railway doesn't restart, but include diagnostics
     res.status(200).json({ 
         status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        diagnostics: {
-            indexHtml: {
-                exists: fileExists,
-                path: indexPath,
-                resolvedPath: path.resolve(indexPath),
-                error: fileError
-            },
-            clientDist: {
-                exists: dirExists,
-                path: clientDistPath,
-                resolvedPath: path.resolve(clientDistPath),
-                error: dirError
-            },
-            serverInfo: {
-                __dirname: __dirname,
-                cwd: process.cwd(),
-                nodeEnv: process.env.NODE_ENV,
-                port: port,
-                serverAddress: httpServer?.address() || null,
-                envVars: {
-                    CLIENT_URL: process.env.CLIENT_URL || '(not set)',
-                    VITE_API_BASE_URL: process.env.VITE_API_BASE_URL || '(not set)',
-                    VITE_SOCKET_URL: process.env.VITE_SOCKET_URL || '(not set)',
-                    PORT: process.env.PORT || '(not set)',
-                    NODE_ENV: process.env.NODE_ENV || '(not set)'
-                }
-            },
-            endpointTests: {
-                rootPath: {
-                    url: `${serverUrl}/`,
-                    ...rootPathTest
-                },
-                apiTest: {
-                    url: `${serverUrl}/api/test`,
-                    ...apiTestTest
-                }
-            }
-        }
+        diagnostics: diagnostics
     });
 });
 
