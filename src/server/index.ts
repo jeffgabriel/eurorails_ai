@@ -16,6 +16,7 @@ import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
 
 const app = express();
+// Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
 const port = process.env.PORT || 3001;
 const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
 
@@ -148,6 +149,15 @@ app.use('/assets', express.static(path.join(__dirname, '../../public/assets')));
 // Debug endpoint
 app.get('/api/test', (req, res) => {
     res.json({ message: 'API is working' });
+});
+
+// Health check endpoint for Railway and monitoring
+app.get('/health', (req, res) => {
+    res.status(200).json({ 
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
 });
 
 // SPA fallback - this should come after all other routes
