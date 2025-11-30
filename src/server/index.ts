@@ -287,9 +287,13 @@ if (process.env.NODE_ENV === 'production') {
         // Verify session store is actually a PostgreSQL store (not MemoryStore)
         const storeType = sessionStore?.constructor?.name || 'Unknown';
         console.log(`Session Store Instance Type: ${storeType}`);
-        if (!storeType.includes('Pg') && !storeType.includes('Postgres')) {
+        // PGStore, PgStore, and PostgresStore are all valid PostgreSQL store types
+        const isPostgreSQLStore = storeType.includes('Pg') || storeType.includes('Postgres') || storeType === 'PGStore';
+        if (!isPostgreSQLStore) {
             console.error('⚠ WARNING: Session store does not appear to be PostgreSQL store!');
-            console.error(`  Expected: PgStore or similar, Got: ${storeType}`);
+            console.error(`  Expected: PgStore, PGStore, or PostgresStore, Got: ${storeType}`);
+        } else {
+            console.log(`✓ Session store is PostgreSQL type: ${storeType}`);
         }
         
         // Test session store by attempting to query the session table

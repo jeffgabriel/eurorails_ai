@@ -500,9 +500,13 @@ router.post('/create-session-table', asyncHandler(async (req: Request, res: Resp
  */
 router.get('/session-store-info', asyncHandler(async (req: Request, res: Response) => {
     // Get the actual session store instance from the request
-    const actualStore = (req.session as any).store;
+    // The store might be on req.session.store or req.sessionStore
+    const actualStore = (req.session as any).store || (req as any).sessionStore;
     const storeType = actualStore ? (actualStore.constructor?.name || 'Unknown') : 'MemoryStore';
-    const isPostgreSQL = storeType.includes('PgStore') || storeType.includes('PostgreSQL');
+    // PGStore, PgStore, and PostgresStore are all PostgreSQL stores
+    // Also check NODE_ENV as a fallback indicator
+    const isPostgreSQL = storeType.includes('Pg') || storeType.includes('Postgres') || storeType === 'PGStore' || 
+                         (process.env.NODE_ENV === 'production' && storeType !== 'MemoryStore');
     
     // Check if session is actually being saved to database
     let sessionInDatabase = false;
