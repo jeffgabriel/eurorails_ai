@@ -53,8 +53,9 @@ RUN chown -R nodejs:nodejs /app
 # Switch to non-root user
 USER nodejs
 
-# Expose port (Railway will provide PORT env var)
-EXPOSE 3000
+# Expose port (Railway sets PORT env var dynamically, typically 8080)
+# EXPOSE is metadata - Railway connects to whatever port the app listens on via PORT env var
+EXPOSE 8080
 
 # Health check (Railway also uses healthcheckPath from railway.json)
 # Railway will monitor /health endpoint automatically
