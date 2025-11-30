@@ -70,8 +70,34 @@ app.use((req, res, next) => {
 });
 
 // Middleware for parsing JSON and serving static files
+// CORS configuration - use function to evaluate at request time for dynamic origins
 app.use(cors({
-    origin: getCorsOrigins(),
+    origin: (origin, callback) => {
+        const allowedOrigins = getCorsOrigins();
+        
+        // Log CORS check for debugging
+        if (process.env.NODE_ENV === 'production') {
+            console.log(`CORS check - Origin: ${origin}, Allowed: ${JSON.stringify(allowedOrigins)}`);
+        }
+        
+        // If no origin (e.g., same-origin request, Postman), allow it
+        if (!origin) {
+            return callback(null, true);
+        }
+        
+        // Check if origin is in allowed list
+        if (Array.isArray(allowedOrigins)) {
+            if (allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+        } else if (allowedOrigins === origin || allowedOrigins === '*') {
+            return callback(null, true);
+        }
+        
+        // Origin not allowed
+        console.warn(`CORS blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id']
@@ -314,7 +340,7 @@ app.get('/health', async (req, res) => {
 });
 
 // SPA fallback - this should come after all other routes
-app.get('*', (req, res, next) => {
+app.get('*', async (req, res, next) => {
     // Skip if this is an API route
     if (req.path.startsWith('/api/')) {
         return next();
@@ -332,28 +358,58 @@ app.get('*', (req, res, next) => {
     
     const indexPath = path.join(__dirname, '../../dist/client/index.html');
     
-    // Add error handling for sendFile - critical for Railway
-    res.sendFile(indexPath, (err) => {
-        if (err) {
-            console.error('Error serving index.html:', err);
-            console.error('Request path:', req.path);
-            console.error('Resolved index.html path:', path.resolve(indexPath));
-            
-            // If headers were already sent, we can't send an error response
-            if (res.headersSent) {
-                console.error('Headers already sent, closing connection');
-                return res.end();
+    // Inject runtime configuration for API URLs
+    // This allows the client to use the correct API URL even if build-time vars weren't set
+    try {
+        const htmlContent = await fs.promises.readFile(indexPath, 'utf-8');
+        
+        // Determine API base URL from environment or request origin
+        const apiBaseUrl = process.env.VITE_API_BASE_URL || 
+                          process.env.CLIENT_URL || 
+                          (req.protocol + '://' + req.get('host'));
+        const socketUrl = process.env.VITE_SOCKET_URL || apiBaseUrl;
+        
+        // Inject runtime config script before closing </head> tag
+        const configScript = `
+    <script>
+        // Runtime configuration injection
+        window.__APP_CONFIG__ = {
+            apiBaseUrl: ${JSON.stringify(apiBaseUrl)},
+            socketUrl: ${JSON.stringify(socketUrl)},
+            debugEnabled: ${process.env.VITE_DEBUG === 'true' ? 'true' : 'false'}
+        };
+    </script>`;
+        
+        // Insert config script before </head> or before </body> if no </head>
+        const modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>') ||
+                             htmlContent.replace('</body>', configScript + '\n</body>') ||
+                             configScript + '\n' + htmlContent;
+        
+        res.send(modifiedHtml);
+    } catch (err: any) {
+        console.error('Error reading/injecting index.html:', err);
+        
+        // Fallback to sendFile if injection fails
+        res.sendFile(indexPath, (sendFileErr) => {
+            if (sendFileErr) {
+                console.error('Error serving index.html:', sendFileErr);
+                console.error('Request path:', req.path);
+                console.error('Resolved index.html path:', path.resolve(indexPath));
+                
+                if (res.headersSent) {
+                    console.error('Headers already sent, closing connection');
+                    return res.end();
+                }
+                
+                const statusCode = (sendFileErr as any).status || 500;
+                res.status(statusCode).json({
+                    error: 'Failed to serve application',
+                    message: sendFileErr.message || 'Internal server error',
+                    path: req.path
+                });
             }
-            
-            // Send error response
-            const statusCode = (err as any).status || 500;
-            res.status(statusCode).json({
-                error: 'Failed to serve application',
-                message: err.message || 'Internal server error',
-                path: req.path
-            });
-        }
-    });
+        });
+    }
 });
 
 // Initialize database and start server
