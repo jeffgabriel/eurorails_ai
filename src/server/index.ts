@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
 import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
@@ -11,7 +12,7 @@ import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
-import { checkDatabase } from './db';
+import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
@@ -107,7 +108,18 @@ app.use(express.urlencoded({ extended: true }));
 app.use(addRequestId);
 
 // Session configuration
+// Use PostgreSQL store in production, MemoryStore in development
+const PgSession = connectPgSimple(session);
+const sessionStore = process.env.NODE_ENV === 'production' 
+    ? new PgSession({
+        pool: db,
+        tableName: 'session', // Table name for sessions
+        createTableIfMissing: true // Automatically create session table if it doesn't exist
+    })
+    : undefined; // Use default MemoryStore in development
+
 app.use(session({
+    store: sessionStore,
     secret: process.env.SESSION_SECRET || 'your-secret-key',
     resave: false,
     saveUninitialized: false,
@@ -248,11 +260,11 @@ app.get('/health', async (req, res) => {
     
     // Test internal endpoints to see if routes are working
     // Use 127.0.0.1 for internal requests (more reliable than localhost)
-    // Also try localhost as fallback
+    // Use shorter timeout (1s each) to stay within Docker HEALTHCHECK timeout (3s)
     const internalHost = '127.0.0.1';
     const serverUrl = `http://${internalHost}:${port}`;
-    const rootPathTest = await testInternalEndpoint(`${serverUrl}/`, 2000);
-    const apiTestTest = await testInternalEndpoint(`${serverUrl}/api/test`, 2000);
+    const rootPathTest = await testInternalEndpoint(`${serverUrl}/`, 1000);
+    const apiTestTest = await testInternalEndpoint(`${serverUrl}/api/test`, 1000);
     
     // Build diagnostics object
     const diagnostics = {
@@ -381,9 +393,16 @@ app.get('*', async (req, res, next) => {
     </script>`;
         
         // Insert config script before </head> or before </body> if no </head>
-        const modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>') ||
-                             htmlContent.replace('</body>', configScript + '\n</body>') ||
-                             configScript + '\n' + htmlContent;
+        // String.replace() always returns a string, so check if replacement actually occurred
+        let modifiedHtml: string;
+        if (htmlContent.includes('</head>')) {
+            modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>');
+        } else if (htmlContent.includes('</body>')) {
+            modifiedHtml = htmlContent.replace('</body>', configScript + '\n</body>');
+        } else {
+            // No closing tags found, prepend to content
+            modifiedHtml = configScript + '\n' + htmlContent;
+        }
         
         res.send(modifiedHtml);
     } catch (err: any) {
