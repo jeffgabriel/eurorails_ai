@@ -330,7 +330,30 @@ app.get('*', (req, res, next) => {
         return next();
     }
     
-    res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
+    const indexPath = path.join(__dirname, '../../dist/client/index.html');
+    
+    // Add error handling for sendFile - critical for Railway
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            console.error('Error serving index.html:', err);
+            console.error('Request path:', req.path);
+            console.error('Resolved index.html path:', path.resolve(indexPath));
+            
+            // If headers were already sent, we can't send an error response
+            if (res.headersSent) {
+                console.error('Headers already sent, closing connection');
+                return res.end();
+            }
+            
+            // Send error response
+            const statusCode = (err as any).status || 500;
+            res.status(statusCode).json({
+                error: 'Failed to serve application',
+                message: err.message || 'Internal server error',
+                path: req.path
+            });
+        }
+    });
 });
 
 // Initialize database and start server
