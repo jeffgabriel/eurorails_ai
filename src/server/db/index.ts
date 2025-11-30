@@ -11,11 +11,6 @@ const DEV_MODE = process.env.NODE_ENV === 'development';
 const TEST_MODE = process.env.NODE_ENV === 'test';
 const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'true';
 
-// Use test database when in test mode, otherwise use configured database
-const databaseName = TEST_MODE 
-    ? (process.env.DB_NAME_TEST || 'eurorails_test')
-    : process.env.DB_NAME;
-
 // Parse DATABASE_URL if provided (Railway, Heroku, etc.)
 // Format: postgresql://user:password@host:port/database
 function parseDatabaseUrl(): Partial<{
@@ -47,7 +42,7 @@ function parseDatabaseUrl(): Partial<{
             sslConfig = { rejectUnauthorized: false };
         }
         
-        return {
+        const parsed = {
             user: url.username,
             password: url.password,
             host: url.hostname,
@@ -55,6 +50,17 @@ function parseDatabaseUrl(): Partial<{
             database: url.pathname.slice(1), // Remove leading '/'
             ssl: sslConfig
         };
+        
+        // Log database connection info (without sensitive data)
+        console.log('DATABASE_URL detected. Connecting to:', {
+            host: parsed.host,
+            port: parsed.port,
+            database: parsed.database,
+            user: parsed.user,
+            ssl: parsed.ssl !== false
+        });
+        
+        return parsed;
     } catch (error) {
         console.error('Error parsing DATABASE_URL:', error);
         return {};
@@ -66,6 +72,20 @@ const dbConfigFromUrl = parseDatabaseUrl();
 // Check if DATABASE_URL was provided (indicated by presence of host property)
 // If DATABASE_URL was provided, its values are authoritative even if empty strings
 const usingDatabaseUrl = dbConfigFromUrl.host !== undefined;
+
+// Use test database when in test mode, otherwise use configured database
+// IMPORTANT: If DATABASE_URL is provided, use its database name (Railway/Heroku)
+// Otherwise fall back to DB_NAME env var
+const databaseName = TEST_MODE 
+    ? (process.env.DB_NAME_TEST || 'eurorails_test')
+    : (usingDatabaseUrl && dbConfigFromUrl.database ? dbConfigFromUrl.database : process.env.DB_NAME);
+
+// Log which database we're using
+if (usingDatabaseUrl) {
+    console.log(`Using database from DATABASE_URL: ${databaseName}`);
+} else {
+    console.log(`Using database from DB_NAME: ${databaseName || '(not set)'}`);
+}
 
 // Create a connection pool
 const pool = new Pool({

@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import cors from 'cors';
 import session from 'express-session';
 import playerRoutes from './routes/playerRoutes';
@@ -17,8 +18,14 @@ import { initializeSocketIO } from './services/socketService';
 
 const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
-const port = process.env.PORT || 3001;
-const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
+const port = parseInt(process.env.PORT || '3001', 10);
+const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
+
+// Store server instance for health check diagnostics
+let httpServer: http.Server | null = null;
+
+// Cache the base HTML template to avoid reading on every request
+let cachedHtmlTemplate: string | null = null;
 
 // Configure CORS origins
 function getCorsOrigins(): string | string[] {
@@ -66,8 +73,34 @@ app.use((req, res, next) => {
 });
 
 // Middleware for parsing JSON and serving static files
+// CORS configuration - use function to evaluate at request time for dynamic origins
 app.use(cors({
-    origin: getCorsOrigins(),
+    origin: (origin, callback) => {
+        const allowedOrigins = getCorsOrigins();
+        
+        // Log CORS check for debugging
+        if (process.env.NODE_ENV === 'production') {
+            console.log(`CORS check - Origin: ${origin}, Allowed: ${JSON.stringify(allowedOrigins)}`);
+        }
+        
+        // If no origin (e.g., same-origin request, Postman), allow it
+        if (!origin) {
+            return callback(null, true);
+        }
+        
+        // Check if origin is in allowed list
+        if (Array.isArray(allowedOrigins)) {
+            if (allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+        } else if (allowedOrigins === origin || allowedOrigins === '*') {
+            return callback(null, true);
+        }
+        
+        // Origin not allowed
+        console.warn(`CORS blocked origin: ${origin}`);
+        callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id']
@@ -151,17 +184,166 @@ app.get('/api/test', (req, res) => {
     res.json({ message: 'API is working' });
 });
 
+// Helper function to make internal HTTP request
+async function testInternalEndpoint(url: string, timeout: number = 2000): Promise<{ success: boolean; statusCode?: number; error?: string; duration?: number }> {
+    const startTime = Date.now();
+    return new Promise((resolve) => {
+        const request = http.get(url, { timeout }, (response) => {
+            const duration = Date.now() - startTime;
+            let data = '';
+            response.on('data', (chunk) => { data += chunk; });
+            response.on('end', () => {
+                resolve({
+                    success: response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300,
+                    statusCode: response.statusCode,
+                    duration
+                });
+            });
+        });
+        
+        request.on('error', (err: any) => {
+            const duration = Date.now() - startTime;
+            resolve({
+                success: false,
+                error: err.message || 'Unknown error',
+                duration
+            });
+        });
+        
+        request.on('timeout', () => {
+            request.destroy();
+            const duration = Date.now() - startTime;
+            resolve({
+                success: false,
+                error: 'Request timeout',
+                duration
+            });
+        });
+    });
+}
+
 // Health check endpoint for Railway and monitoring
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    // Diagnostic information to help debug 502 errors on root path
+    const indexPath = path.join(__dirname, '../../dist/client/index.html');
+    const clientDistPath = path.join(__dirname, '../../dist/client');
+    
+    let fileExists = false;
+    let fileError: string | null = null;
+    let dirExists = false;
+    let dirError: string | null = null;
+    
+    // Check if index.html exists
+    try {
+        await fs.promises.access(indexPath, fs.constants.F_OK);
+        fileExists = true;
+    } catch (err: any) {
+        fileError = err.message || 'Unknown error';
+    }
+    
+    // Check if dist/client directory exists
+    try {
+        await fs.promises.access(clientDistPath, fs.constants.F_OK);
+        dirExists = true;
+    } catch (err: any) {
+        dirError = err.message || 'Unknown error';
+    }
+    
+    // Test internal endpoints to see if routes are working
+    // Use 127.0.0.1 for internal requests (more reliable than localhost)
+    // Also try localhost as fallback
+    const internalHost = '127.0.0.1';
+    const serverUrl = `http://${internalHost}:${port}`;
+    const rootPathTest = await testInternalEndpoint(`${serverUrl}/`, 2000);
+    const apiTestTest = await testInternalEndpoint(`${serverUrl}/api/test`, 2000);
+    
+    // Build diagnostics object
+    const diagnostics = {
+        indexHtml: {
+            exists: fileExists,
+            path: indexPath,
+            resolvedPath: path.resolve(indexPath),
+            error: fileError
+        },
+        clientDist: {
+            exists: dirExists,
+            path: clientDistPath,
+            resolvedPath: path.resolve(clientDistPath),
+            error: dirError
+        },
+        serverInfo: {
+            __dirname: __dirname,
+            cwd: process.cwd(),
+            nodeEnv: process.env.NODE_ENV,
+            port: port,
+            serverAddress: httpServer?.address() || null,
+            envVars: {
+                CLIENT_URL: process.env.CLIENT_URL || '(not set)',
+                VITE_API_BASE_URL: process.env.VITE_API_BASE_URL || '(not set)',
+                VITE_SOCKET_URL: process.env.VITE_SOCKET_URL || '(not set)',
+                PORT: process.env.PORT || '(not set)',
+                NODE_ENV: process.env.NODE_ENV || '(not set)'
+            }
+        },
+        endpointTests: {
+            rootPath: {
+                url: `${serverUrl}/`,
+                ...rootPathTest
+            },
+            apiTest: {
+                url: `${serverUrl}/api/test`,
+                ...apiTestTest
+            }
+        }
+    };
+    
+    // Log diagnostics to stdout for Railway logs
+    console.log('=================================');
+    console.log('HEALTH CHECK DIAGNOSTICS:');
+    console.log('=================================');
+    console.log('File System Checks:');
+    console.log(`  index.html exists: ${fileExists}`);
+    console.log(`  index.html path: ${path.resolve(indexPath)}`);
+    if (fileError) console.log(`  index.html error: ${fileError}`);
+    console.log(`  dist/client exists: ${dirExists}`);
+    console.log(`  dist/client path: ${path.resolve(clientDistPath)}`);
+    if (dirError) console.log(`  dist/client error: ${dirError}`);
+    console.log('');
+    console.log('Server Info:');
+    console.log(`  __dirname: ${__dirname}`);
+    console.log(`  cwd: ${process.cwd()}`);
+    console.log(`  port: ${port}`);
+    console.log(`  server address: ${JSON.stringify(httpServer?.address())}`);
+    console.log('');
+    console.log('Environment Variables:');
+    console.log(`  CLIENT_URL: ${process.env.CLIENT_URL || '(not set)'}`);
+    console.log(`  VITE_API_BASE_URL: ${process.env.VITE_API_BASE_URL || '(not set)'}`);
+    console.log(`  VITE_SOCKET_URL: ${process.env.VITE_SOCKET_URL || '(not set)'}`);
+    console.log(`  PORT: ${process.env.PORT || '(not set)'}`);
+    console.log(`  NODE_ENV: ${process.env.NODE_ENV || '(not set)'}`);
+    console.log('');
+    console.log('Endpoint Tests:');
+    console.log(`  Root path (${serverUrl}/): ${rootPathTest.success ? 'SUCCESS' : 'FAILED'}`);
+    if (rootPathTest.statusCode) console.log(`    Status: ${rootPathTest.statusCode}`);
+    if (rootPathTest.error) console.log(`    Error: ${rootPathTest.error}`);
+    if (rootPathTest.duration) console.log(`    Duration: ${rootPathTest.duration}ms`);
+    console.log(`  API test (${serverUrl}/api/test): ${apiTestTest.success ? 'SUCCESS' : 'FAILED'}`);
+    if (apiTestTest.statusCode) console.log(`    Status: ${apiTestTest.statusCode}`);
+    if (apiTestTest.error) console.log(`    Error: ${apiTestTest.error}`);
+    if (apiTestTest.duration) console.log(`    Duration: ${apiTestTest.duration}ms`);
+    console.log('=================================');
+    
+    // Always return 200 so Railway doesn't restart, but include diagnostics
     res.status(200).json({ 
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        diagnostics: diagnostics
     });
 });
 
 // SPA fallback - this should come after all other routes
-app.get('*', (req, res, next) => {
+app.get('*', async (req, res, next) => {
     // Skip if this is an API route
     if (req.path.startsWith('/api/')) {
         return next();
@@ -177,7 +359,68 @@ app.get('*', (req, res, next) => {
         return next();
     }
     
-    res.sendFile(path.join(__dirname, '../../dist/client/index.html'));
+    const indexPath = path.join(__dirname, '../../dist/client/index.html');
+    
+    // Inject runtime configuration for API URLs
+    // This allows the client to use the correct API URL even if build-time vars weren't set
+    try {
+        // Use cached template if available, otherwise read from disk
+        let htmlContent = cachedHtmlTemplate;
+        if (!htmlContent) {
+            htmlContent = await fs.promises.readFile(indexPath, 'utf-8');
+            cachedHtmlTemplate = htmlContent; // Cache for future requests
+        }
+        
+        // Determine API base URL from environment or request origin
+        const apiBaseUrl = process.env.VITE_API_BASE_URL || 
+                          process.env.CLIENT_URL || 
+                          (req.protocol + '://' + req.get('host'));
+        const socketUrl = process.env.VITE_SOCKET_URL || apiBaseUrl;
+        
+        // Inject runtime config script before closing </head> tag
+        const configScript = `
+    <script>
+        // Runtime configuration injection
+        window.__APP_CONFIG__ = {
+            apiBaseUrl: ${JSON.stringify(apiBaseUrl)},
+            socketUrl: ${JSON.stringify(socketUrl)},
+            debugEnabled: ${process.env.VITE_DEBUG === 'true' ? 'true' : 'false'}
+        };
+    </script>`;
+        
+        // Insert config script before </head> or before </body> if no </head>
+        // Use conditional checks since replace() always returns a string (truthy)
+        const modifiedHtml = htmlContent.includes('</head>') 
+            ? htmlContent.replace('</head>', configScript + '\n</head>')
+            : htmlContent.includes('</body>')
+            ? htmlContent.replace('</body>', configScript + '\n</body>')
+            : configScript + '\n' + htmlContent;
+        
+        res.send(modifiedHtml);
+    } catch (err: any) {
+        console.error('Error reading/injecting index.html:', err);
+        
+        // Fallback to sendFile if injection fails
+        res.sendFile(indexPath, (sendFileErr) => {
+            if (sendFileErr) {
+                console.error('Error serving index.html:', sendFileErr);
+                console.error('Request path:', req.path);
+                console.error('Resolved index.html path:', path.resolve(indexPath));
+                
+                if (res.headersSent) {
+                    console.error('Headers already sent, closing connection');
+                    return res.end();
+                }
+                
+                const statusCode = (sendFileErr as any).status || 500;
+                res.status(statusCode).json({
+                    error: 'Failed to serve application',
+                    message: sendFileErr.message || 'Internal server error',
+                    path: req.path
+                });
+            }
+        });
+    }
 });
 
 // Initialize database and start server
@@ -201,6 +444,7 @@ async function startServer() {
 
         // Create HTTP server
         const server = http.createServer(app);
+        httpServer = server; // Store for health check diagnostics
 
         // Initialize Socket.IO with error handling
         try {
@@ -211,11 +455,11 @@ async function startServer() {
             // This allows the app to run without real-time features
         }
 
-        // Start server
-        server.listen(port, () => {
+        // Start server - explicitly bind to 0.0.0.0 to accept connections from Railway
+        server.listen(port, '0.0.0.0', () => {
             console.log('=================================');
             console.log(`Server running in ${process.env.NODE_ENV} mode`);
-            console.log(`API server listening on port ${port}`);
+            console.log(`API server listening on port ${port} (bound to 0.0.0.0)`);
             console.log(`Socket.IO initialized and ready`);
             console.log(`API routes available at http://localhost:${port}/api`);
             console.log('In development mode:');
