@@ -18,8 +18,8 @@ import { initializeSocketIO } from './services/socketService';
 
 const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
-const port = process.env.PORT || 3001;
-const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
+const port = parseInt(process.env.PORT || '3001', 10);
+const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
 
 // Store server instance for health check diagnostics
 let httpServer: http.Server | null = null;
@@ -388,11 +388,11 @@ async function startServer() {
             // This allows the app to run without real-time features
         }
 
-        // Start server
-        server.listen(port, () => {
+        // Start server - explicitly bind to 0.0.0.0 to accept connections from Railway
+        server.listen(port, '0.0.0.0', () => {
             console.log('=================================');
             console.log(`Server running in ${process.env.NODE_ENV} mode`);
-            console.log(`API server listening on port ${port}`);
+            console.log(`API server listening on port ${port} (bound to 0.0.0.0)`);
             console.log(`Socket.IO initialized and ready`);
             console.log(`API routes available at http://localhost:${port}/api`);
             console.log('In development mode:');
