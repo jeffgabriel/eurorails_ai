@@ -123,11 +123,23 @@ if (process.env.NODE_ENV === 'production') {
     console.log('=================================');
     
     try {
-        sessionStore = new PgSession({
-            pool: db,
+        // connect-pg-simple can use either 'pool' or 'conString'
+        // In production (Railway), using DATABASE_URL directly may be more reliable
+        const sessionStoreConfig: any = {
             tableName: 'session', // Table name for sessions
             createTableIfMissing: true // Automatically create session table if it doesn't exist
-        });
+        };
+        
+        // Prefer DATABASE_URL if available (more reliable in cloud environments like Railway)
+        if (process.env.DATABASE_URL) {
+            sessionStoreConfig.conString = process.env.DATABASE_URL;
+            console.log('Using DATABASE_URL for session store connection');
+        } else {
+            sessionStoreConfig.pool = db;
+            console.log('Using database pool for session store connection');
+        }
+        
+        sessionStore = new PgSession(sessionStoreConfig);
         
         // Log session store configuration
         console.log('Session Store Type: PostgreSQL');
@@ -241,6 +253,25 @@ if (process.env.NODE_ENV === 'production') {
             });
         }
         
+        // Verify session store is actually a PostgreSQL store (not MemoryStore)
+        const storeType = sessionStore?.constructor?.name || 'Unknown';
+        console.log(`Session Store Instance Type: ${storeType}`);
+        if (!storeType.includes('Pg') && !storeType.includes('Postgres')) {
+            console.error('⚠ WARNING: Session store does not appear to be PostgreSQL store!');
+            console.error(`  Expected: PgStore or similar, Got: ${storeType}`);
+        }
+        
+        // Test session store by attempting to query the session table
+        setTimeout(async () => {
+            try {
+                const testQuery = await db.query('SELECT COUNT(*) as count FROM session LIMIT 1');
+                console.log(`✓ Session store database connection verified (${testQuery.rows[0].count} existing sessions)`);
+            } catch (error: any) {
+                console.error('✗ WARNING: Cannot query session table:', error.message);
+                console.error('  This may indicate the session store is not properly connected');
+            }
+        }, 3000); // Check after table creation completes
+        
         console.log('=================================');
     } catch (error: any) {
         console.error('=================================');
@@ -287,16 +318,38 @@ console.log(`  Name: eurorails.sid`);
 
 // Add session error handling middleware
 app.use((req, res, next) => {
-    // Wrap session.save to catch errors
+    // Wrap session.save to catch errors and verify database writes
     const originalSave = req.session.save.bind(req.session);
     (req.session as any).save = function(callback?: (err?: any) => void) {
-        originalSave((err?: any) => {
+        const sessionId = req.sessionID;
+        const storeType = (req.session as any).store?.constructor?.name || 'Unknown';
+        
+        originalSave(async (err?: any) => {
             if (err) {
                 console.error('Session save error:', err);
-                console.error('  Session ID:', req.sessionID);
+                console.error('  Session ID:', sessionId);
                 console.error('  Request ID:', req.requestId);
                 console.error('  User ID:', (req as any).user?.id || 'not authenticated');
+                console.error('  Store Type:', storeType);
                 console.error('  Stack:', err.stack);
+            } else {
+                // Verify session was saved to database (only in production with PostgreSQL store)
+                if (process.env.NODE_ENV === 'production' && storeType.includes('Pg')) {
+                    try {
+                        const verifyQuery = await db.query('SELECT sid FROM session WHERE sid = $1 LIMIT 1', [sessionId]);
+                        if (verifyQuery.rows.length === 0) {
+                            console.error('⚠ WARNING: Session save succeeded but session not found in database!');
+                            console.error('  Session ID:', sessionId);
+                            console.error('  Store Type:', storeType);
+                            console.error('  This indicates the session store may not be working correctly');
+                        }
+                    } catch (verifyError: any) {
+                        // Don't log verify errors in production unless debug is enabled
+                        if (process.env.ENABLE_DEBUG_ROUTES === 'true') {
+                            console.warn('Could not verify session in database:', verifyError.message);
+                        }
+                    }
+                }
             }
             if (callback) callback(err);
         });

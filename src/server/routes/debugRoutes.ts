@@ -231,21 +231,40 @@ router.get('/sessions', asyncHandler(async (req: Request, res: Response) => {
  */
 router.post('/session/test', asyncHandler(async (req: Request, res: Response) => {
     try {
+        // Check what store is actually being used
+        const storeType = (req.session as any).store?.constructor?.name || 'Unknown';
+        const isPostgreSQL = storeType.includes('Pg') || storeType.includes('Postgres');
+        
         // Set a test value in the session
         const testValue = `test-${Date.now()}`;
         (req.session as any).testValue = testValue;
         (req.session as any).testTimestamp = new Date().toISOString();
         
         // Save the session
+        let saveError: any = null;
         await new Promise<void>((resolve, reject) => {
             req.session.save((err) => {
                 if (err) {
+                    saveError = err;
                     reject(err);
                 } else {
                     resolve();
                 }
             });
         });
+        
+        if (saveError) {
+            return res.status(500).json({
+                error: 'SESSION_SAVE_ERROR',
+                message: 'Session save failed',
+                details: saveError.message || 'Unknown error during session save',
+                storeType,
+                isPostgreSQL
+            });
+        }
+        
+        // Wait a moment for async database write
+        await new Promise(resolve => setTimeout(resolve, 100));
         
         // Verify the session was saved by checking the database
         const verifyQuery = `
@@ -259,7 +278,13 @@ router.post('/session/test', asyncHandler(async (req: Request, res: Response) =>
             return res.status(500).json({
                 error: 'SESSION_SAVE_FAILED',
                 message: 'Session was not saved to database',
-                details: 'The session save operation completed but the session was not found in the database'
+                details: 'The session save operation completed but the session was not found in the database',
+                storeType,
+                isPostgreSQL,
+                sessionId: req.sessionID,
+                recommendation: isPostgreSQL 
+                    ? 'Session store appears to be PostgreSQL but sessions are not being written. Check session store initialization logs.'
+                    : 'Session store is not PostgreSQL - sessions will not persist. Check NODE_ENV and session store configuration.'
             });
         }
         
@@ -284,6 +309,8 @@ router.post('/session/test', asyncHandler(async (req: Request, res: Response) =>
                 testTimestamp: savedTimestamp,
                 writeOperation: 'SUCCESS',
                 readOperation: 'SUCCESS',
+                storeType,
+                isPostgreSQL,
                 message: 'Session write and read operations verified successfully'
             }
         });
@@ -472,24 +499,50 @@ router.post('/create-session-table', asyncHandler(async (req: Request, res: Resp
  * Returns information about the session store configuration
  */
 router.get('/session-store-info', asyncHandler(async (req: Request, res: Response) => {
-    const storeType = process.env.NODE_ENV === 'production' ? 'PostgreSQL' : 'MemoryStore';
+    // Get the actual session store instance from the request
+    const actualStore = (req.session as any).store;
+    const storeType = actualStore ? (actualStore.constructor?.name || 'Unknown') : 'MemoryStore';
+    const isPostgreSQL = storeType.includes('PgStore') || storeType.includes('PostgreSQL');
+    
+    // Check if session is actually being saved to database
+    let sessionInDatabase = false;
+    let databaseCheckError: string | null = null;
+    try {
+        const checkQuery = await db.query('SELECT sid FROM session WHERE sid = $1 LIMIT 1', [req.sessionID]);
+        sessionInDatabase = checkQuery.rows.length > 0;
+    } catch (error: any) {
+        databaseCheckError = error.message || 'Unknown error';
+    }
+    
     const sessionSecretSet = !!process.env.SESSION_SECRET;
     const sessionSecretLength = process.env.SESSION_SECRET?.length || 0;
+    
+    // Get database connection info
+    const dbConfig = {
+        databaseUrl: process.env.DATABASE_URL ? 'SET (hidden)' : 'NOT SET',
+        databaseHost: process.env.DB_HOST || 'NOT SET',
+        databaseName: process.env.DB_NAME || 'NOT SET',
+        databaseUser: process.env.DB_USER || 'NOT SET',
+    };
     
     res.status(200).json({
         success: true,
         data: {
             storeType,
+            isPostgreSQL,
+            actualStoreType: actualStore ? actualStore.constructor?.name : 'No store (MemoryStore)',
+            sessionInDatabase,
+            databaseCheckError,
             nodeEnv: process.env.NODE_ENV,
             sessionSecretConfigured: sessionSecretSet,
             sessionSecretLength: sessionSecretLength,
             cookieSecure: process.env.NODE_ENV === 'production',
             cookieHttpOnly: true,
             cookieMaxAge: 24 * 60 * 60 * 1000, // 24 hours
-            databaseUrl: process.env.DATABASE_URL ? 'SET (hidden)' : 'NOT SET',
-            databaseHost: process.env.DB_HOST || 'NOT SET',
-            databaseName: process.env.DB_NAME || 'NOT SET',
-            timestamp: new Date().toISOString()
+            ...dbConfig,
+            currentSessionId: req.sessionID,
+            timestamp: new Date().toISOString(),
+            warning: !isPostgreSQL ? 'Session store is NOT using PostgreSQL - sessions will not persist!' : undefined
         }
     });
 }));
