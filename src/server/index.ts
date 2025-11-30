@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import cors from 'cors';
 import session from 'express-session';
 import playerRoutes from './routes/playerRoutes';
@@ -19,6 +20,9 @@ const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
 const port = process.env.PORT || 3001;
 const serverPort = process.env.SERVER_LOCAL_PORT || 3000;
+
+// Store server instance for health check diagnostics
+let httpServer: http.Server | null = null;
 
 // Configure CORS origins
 function getCorsOrigins(): string | string[] {
@@ -151,12 +155,122 @@ app.get('/api/test', (req, res) => {
     res.json({ message: 'API is working' });
 });
 
+// Helper function to make internal HTTP request
+async function testInternalEndpoint(url: string, timeout: number = 2000): Promise<{ success: boolean; statusCode?: number; error?: string; duration?: number }> {
+    const startTime = Date.now();
+    return new Promise((resolve) => {
+        const request = http.get(url, { timeout }, (response) => {
+            const duration = Date.now() - startTime;
+            let data = '';
+            response.on('data', (chunk) => { data += chunk; });
+            response.on('end', () => {
+                resolve({
+                    success: response.statusCode !== undefined && response.statusCode < 500,
+                    statusCode: response.statusCode,
+                    duration
+                });
+            });
+        });
+        
+        request.on('error', (err: any) => {
+            const duration = Date.now() - startTime;
+            resolve({
+                success: false,
+                error: err.message || 'Unknown error',
+                duration
+            });
+        });
+        
+        request.on('timeout', () => {
+            request.destroy();
+            const duration = Date.now() - startTime;
+            resolve({
+                success: false,
+                error: 'Request timeout',
+                duration
+            });
+        });
+    });
+}
+
 // Health check endpoint for Railway and monitoring
-app.get('/health', (req, res) => {
+app.get('/health', async (req, res) => {
+    // Diagnostic information to help debug 502 errors on root path
+    const indexPath = path.join(__dirname, '../../dist/client/index.html');
+    const clientDistPath = path.join(__dirname, '../../dist/client');
+    
+    let fileExists = false;
+    let fileError: string | null = null;
+    let dirExists = false;
+    let dirError: string | null = null;
+    
+    // Check if index.html exists
+    try {
+        await fs.promises.access(indexPath, fs.constants.F_OK);
+        fileExists = true;
+    } catch (err: any) {
+        fileError = err.message || 'Unknown error';
+    }
+    
+    // Check if dist/client directory exists
+    try {
+        await fs.promises.access(clientDistPath, fs.constants.F_OK);
+        dirExists = true;
+    } catch (err: any) {
+        dirError = err.message || 'Unknown error';
+    }
+    
+    // Test internal endpoints to see if routes are working
+    // Use 127.0.0.1 for internal requests (more reliable than localhost)
+    // Also try localhost as fallback
+    const internalHost = '127.0.0.1';
+    const serverUrl = `http://${internalHost}:${port}`;
+    const rootPathTest = await testInternalEndpoint(`${serverUrl}/`, 2000);
+    const apiTestTest = await testInternalEndpoint(`${serverUrl}/api/test`, 2000);
+    
+    // Always return 200 so Railway doesn't restart, but include diagnostics
     res.status(200).json({ 
         status: 'healthy',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        diagnostics: {
+            indexHtml: {
+                exists: fileExists,
+                path: indexPath,
+                resolvedPath: path.resolve(indexPath),
+                error: fileError
+            },
+            clientDist: {
+                exists: dirExists,
+                path: clientDistPath,
+                resolvedPath: path.resolve(clientDistPath),
+                error: dirError
+            },
+            serverInfo: {
+                __dirname: __dirname,
+                cwd: process.cwd(),
+                nodeEnv: process.env.NODE_ENV,
+                port: port,
+                serverAddress: httpServer?.address() || null,
+                envVars: {
+                    CLIENT_URL: process.env.CLIENT_URL || '(not set)',
+                    VITE_API_BASE_URL: process.env.VITE_API_BASE_URL || '(not set)',
+                    VITE_SOCKET_URL: process.env.VITE_SOCKET_URL || '(not set)',
+                    PORT: process.env.PORT || '(not set)',
+                    NODE_ENV: process.env.NODE_ENV || '(not set)'
+                }
+            },
+            endpointTests: {
+                rootPath: {
+                    url: `${serverUrl}/`,
+                    ...rootPathTest
+                },
+                apiTest: {
+                    url: `${serverUrl}/api/test`,
+                    ...apiTestTest
+                }
+            }
+        }
     });
 });
 
@@ -201,6 +315,7 @@ async function startServer() {
 
         // Create HTTP server
         const server = http.createServer(app);
+        httpServer = server; // Store for health check diagnostics
 
         // Initialize Socket.IO with error handling
         try {
