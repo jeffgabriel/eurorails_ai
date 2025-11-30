@@ -12,10 +12,12 @@ import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
+import debugRoutes from './routes/debugRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
+import { AuthService } from './services/authService';
 
 const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
@@ -113,55 +115,216 @@ app.use(addRequestId);
 // Session configuration
 // Use PostgreSQL store in production, MemoryStore in development
 const PgSession = connectPgSimple(session);
-const sessionStore = process.env.NODE_ENV === 'production' 
-    ? new PgSession({
-        pool: db,
-        tableName: 'session', // Table name for sessions
-        createTableIfMissing: true // Automatically create session table if it doesn't exist
-    })
-    : undefined; // Use default MemoryStore in development
+let sessionStore: any = undefined;
+
+if (process.env.NODE_ENV === 'production') {
+    console.log('=================================');
+    console.log('Initializing PostgreSQL Session Store');
+    console.log('=================================');
+    
+    try {
+        sessionStore = new PgSession({
+            pool: db,
+            tableName: 'session', // Table name for sessions
+            createTableIfMissing: true // Automatically create session table if it doesn't exist
+        });
+        
+        // Log session store configuration
+        console.log('Session Store Type: PostgreSQL');
+        console.log('Session Table Name: session');
+        console.log('Create Table If Missing: true');
+        console.log('Database Pool: configured');
+        
+        // Verify session table exists after initialization
+        // Note: connect-pg-simple creates the table asynchronously, so we check after a delay
+        setTimeout(async () => {
+            try {
+                const tableCheck = await db.query(`
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables 
+                        WHERE table_schema = 'public' 
+                        AND table_name = 'session'
+                    );
+                `);
+                const tableExists = tableCheck.rows[0].exists;
+                if (tableExists) {
+                    console.log('✓ Session table verified in database');
+                } else {
+                    console.error('✗ WARNING: Session table was not created automatically');
+                    console.error('  This may indicate a database permissions issue or connection problem');
+                }
+            } catch (error: any) {
+                console.error('✗ Error verifying session table:', error.message);
+            }
+        }, 2000); // Check after 2 seconds
+        
+        // Add error handlers to session store
+        if (sessionStore && typeof sessionStore.on === 'function') {
+            sessionStore.on('connect', () => {
+                console.log('✓ Session store connected to database');
+            });
+            
+            sessionStore.on('error', (error: any) => {
+                console.error('✗ Session store error:', error);
+                console.error('  Stack:', error.stack);
+            });
+        }
+        
+        console.log('=================================');
+    } catch (error: any) {
+        console.error('=================================');
+        console.error('CRITICAL: Failed to initialize PostgreSQL session store');
+        console.error('Error:', error.message);
+        console.error('Stack:', error.stack);
+        console.error('=================================');
+        console.error('Falling back to MemoryStore (sessions will not persist across restarts)');
+        console.error('=================================');
+        sessionStore = undefined; // Fall back to MemoryStore
+    }
+} else {
+    console.log('Session Store Type: MemoryStore (development mode)');
+    console.log('Note: Sessions will not persist across server restarts');
+}
+
+// Session middleware configuration
+const sessionSecret = process.env.SESSION_SECRET || 'your-secret-key';
+if (!process.env.SESSION_SECRET && process.env.NODE_ENV === 'production') {
+    console.warn('⚠ WARNING: SESSION_SECRET not set in production! Using default secret (INSECURE)');
+}
 
 app.use(session({
     store: sessionStore,
-    secret: process.env.SESSION_SECRET || 'your-secret-key',
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: {
         secure: process.env.NODE_ENV === 'production',
         httpOnly: true,
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // Allow cross-site cookies in production (for Railway)
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
+    },
+    name: 'eurorails.sid' // Custom session cookie name
 }));
 
+// Log cookie configuration
+console.log('Session Cookie Configuration:');
+console.log(`  Secure: ${process.env.NODE_ENV === 'production'}`);
+console.log(`  HttpOnly: true`);
+console.log(`  SameSite: ${process.env.NODE_ENV === 'production' ? 'none' : 'lax'}`);
+console.log(`  MaxAge: 24 hours`);
+console.log(`  Name: eurorails.sid`);
+
+// Add session error handling middleware
+app.use((req, res, next) => {
+    // Wrap session.save to catch errors
+    const originalSave = req.session.save.bind(req.session);
+    (req.session as any).save = function(callback?: (err?: any) => void) {
+        originalSave((err?: any) => {
+            if (err) {
+                console.error('Session save error:', err);
+                console.error('  Session ID:', req.sessionID);
+                console.error('  Request ID:', req.requestId);
+                console.error('  User ID:', (req as any).user?.id || 'not authenticated');
+                console.error('  Stack:', err.stack);
+            }
+            if (callback) callback(err);
+        });
+    };
+    next();
+});
+
 // Add middleware to restore game ID from active game if session is lost
+// IMPORTANT: Only restore gameId if user is authenticated AND has a player in that game
+// This prevents all users from being assigned to the same game
 app.use(async (req, res, next) => {
+    const requestId = req.requestId || 'unknown';
+    const sessionId = req.sessionID;
+    
+    // Extract userId from JWT token if present (similar to optionalAuth)
+    // This works even though req.user isn't populated yet (that happens in route-specific middleware)
+    let userId: string | undefined = undefined;
+    try {
+        const authHeader = req.headers.authorization;
+        const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+        
+        if (token) {
+            const payload = AuthService.verifyToken(token);
+            if (payload) {
+                userId = payload.userId;
+            }
+        }
+    } catch (error) {
+        // Silently fail - if token extraction fails, userId remains undefined
+        // This is fine since we only restore gameId for authenticated users
+    }
+    
+    // Only restore gameId if session doesn't have one
     if (!req.session.gameId) {
         try {
-            const PlayerService = require('./services/playerService').PlayerService;
+            // Only restore gameId for authenticated users
+            if (!userId) {
+                // Log that we're skipping restoration for unauthenticated users
+                // Show logs in development OR when debug routes are explicitly enabled
+                if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+                    console.log(`[Session Restore] Skipping gameId restoration - user not authenticated (Request ID: ${requestId}, Session ID: ${sessionId})`);
+                }
+                return next();
+            }
+            
+            // Get active game using the imported PlayerService
             const activeGame = await PlayerService.getActiveGame();
+            
             if (activeGame) {
-                // Verify game has valid players (internal check - doesn't need hand data)
-                // Use a simple count query instead of getPlayers to avoid authentication requirement
-                const db = require('./db').db;
-                const playerCount = await db.query(
-                    'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
-                    [activeGame.id]
+                // CRITICAL FIX: Only assign gameId if this user has a player in the active game
+                // This prevents all users from being assigned to the same game
+                const playerCheck = await db.query(
+                    'SELECT id FROM players WHERE game_id = $1 AND user_id = $2 LIMIT 1',
+                    [activeGame.id, userId]
                 );
-                if (playerCount.rows[0].count > 0) {
+                
+                if (playerCheck.rows.length > 0) {
+                    // User has a player in this game - safe to restore gameId
+                    const playerId = playerCheck.rows[0].id;
                     req.session.gameId = activeGame.id;
+                    
+                    console.log(`[Session Restore] Restored gameId for authenticated user (User ID: ${userId}, Player ID: ${playerId}, Game ID: ${activeGame.id}, Request ID: ${requestId})`);
+                    
                     await new Promise<void>((resolve, reject) => {
                         req.session.save((err) => {
-                            if (err) reject(err);
-                            else resolve();
+                            if (err) {
+                                console.error(`[Session Restore] Failed to save session after gameId restoration (Request ID: ${requestId}):`, err);
+                                reject(err);
+                            } else {
+                                console.log(`[Session Restore] Session saved successfully (Request ID: ${requestId})`);
+                                resolve();
+                            }
                         });
                     });
                 } else {
-                    // No valid players, mark game as completed (no longer active)
-                    await PlayerService.updateGameStatus(activeGame.id, 'completed');
+                    // User does not have a player in the active game - do NOT assign gameId
+                    // This is the fix for the bug where all users were seeing the same lobby
+                    // Show logs in development OR when debug routes are explicitly enabled
+                    if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+                        console.log(`[Session Restore] Active game found but user is not a player (User ID: ${userId}, Game ID: ${activeGame.id}, Request ID: ${requestId})`);
+                    }
+                }
+            } else {
+                // No active game found
+                // Show logs in development OR when debug routes are explicitly enabled
+                if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+                    console.log(`[Session Restore] No active game found (User ID: ${userId}, Request ID: ${requestId})`);
                 }
             }
-        } catch (error) {
-            console.error('Error restoring game ID from active game:', error);
+        } catch (error: any) {
+            console.error(`[Session Restore] Error restoring game ID from active game (Request ID: ${requestId}):`, error);
+            console.error('  Stack:', error.stack);
+            // Don't block the request - continue even if restoration fails
+        }
+    } else {
+        // Session already has gameId - log for debugging if enabled
+        // Show logs in development OR when debug routes are explicitly enabled
+        if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+            console.log(`[Session Restore] Session already has gameId (Game ID: ${req.session.gameId}, User ID: ${userId || 'not authenticated'}, Request ID: ${requestId})`);
         }
     }
     next();
@@ -175,6 +338,23 @@ app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
+
+// Debug routes - only enabled when ENABLE_DEBUG_ROUTES=true
+// These routes are protected by the checkDebugEnabled middleware in debugRoutes.ts
+if (process.env.ENABLE_DEBUG_ROUTES === 'true') {
+    console.log('=================================');
+    console.log('Debug routes ENABLED');
+    console.log('Available endpoints:');
+    console.log('  GET  /api/debug/session - Current session info');
+    console.log('  GET  /api/debug/session-table - Session table schema');
+    console.log('  GET  /api/debug/sessions - List all sessions');
+    console.log('  POST /api/debug/session/test - Test session write/read');
+    console.log('  GET  /api/debug/session-store-info - Session store config');
+    console.log('=================================');
+    app.use('/api/debug', debugRoutes);
+} else {
+    console.log('Debug routes DISABLED (set ENABLE_DEBUG_ROUTES=true to enable)');
+}
 
 // Log registered routes
 console.log('Registered routes:');
