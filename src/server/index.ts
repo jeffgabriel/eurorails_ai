@@ -25,6 +25,9 @@ const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
 // Store server instance for health check diagnostics
 let httpServer: http.Server | null = null;
 
+// Cache the base HTML template to avoid reading on every request
+let cachedHtmlTemplate: string | null = null;
+
 // Configure CORS origins
 function getCorsOrigins(): string | string[] {
     // If ALLOWED_ORIGINS is set, use it (comma-separated list)
@@ -203,7 +206,7 @@ async function testInternalEndpoint(url: string, timeout: number = 2000): Promis
             response.on('data', (chunk) => { data += chunk; });
             response.on('end', () => {
                 resolve({
-                    success: response.statusCode !== undefined && response.statusCode < 500,
+                    success: response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300,
                     statusCode: response.statusCode,
                     duration
                 });
@@ -373,7 +376,12 @@ app.get('*', async (req, res, next) => {
     // Inject runtime configuration for API URLs
     // This allows the client to use the correct API URL even if build-time vars weren't set
     try {
-        const htmlContent = await fs.promises.readFile(indexPath, 'utf-8');
+        // Use cached template if available, otherwise read from disk
+        let htmlContent = cachedHtmlTemplate;
+        if (!htmlContent) {
+            htmlContent = await fs.promises.readFile(indexPath, 'utf-8');
+            cachedHtmlTemplate = htmlContent; // Cache for future requests
+        }
         
         // Determine API base URL from environment or request origin
         const apiBaseUrl = process.env.VITE_API_BASE_URL || 
@@ -393,16 +401,12 @@ app.get('*', async (req, res, next) => {
     </script>`;
         
         // Insert config script before </head> or before </body> if no </head>
-        // String.replace() always returns a string, so check if replacement actually occurred
-        let modifiedHtml: string;
-        if (htmlContent.includes('</head>')) {
-            modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>');
-        } else if (htmlContent.includes('</body>')) {
-            modifiedHtml = htmlContent.replace('</body>', configScript + '\n</body>');
-        } else {
-            // No closing tags found, prepend to content
-            modifiedHtml = configScript + '\n' + htmlContent;
-        }
+        // Use conditional checks since replace() always returns a string (truthy)
+        const modifiedHtml = htmlContent.includes('</head>') 
+            ? htmlContent.replace('</head>', configScript + '\n</head>')
+            : htmlContent.includes('</body>')
+            ? htmlContent.replace('</body>', configScript + '\n</body>')
+            : configScript + '\n' + htmlContent;
         
         res.send(modifiedHtml);
     } catch (err: any) {
