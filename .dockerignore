@@ -26,11 +26,10 @@ dist
 *.swo
 *~
 
-# Testing
+# Testing (exclude outputs, but include test source files for CI)
 coverage
 .nyc_output
 test-results
-__tests__
 
 # Documentation (optional - include if needed)
 # *.md
