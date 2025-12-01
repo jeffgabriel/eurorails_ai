@@ -11,6 +11,7 @@ import type {
   JoinGameForm,
   ID
 } from './types';
+import type { LoadState, LoadType } from '../../../shared/types/LoadTypes';
 import { config, debug } from './config';
 
 class ApiClient {
@@ -165,6 +166,62 @@ class ApiClient {
   async healthCheck(): Promise<{ message: string }> {
     const response = await this.request<{ success: boolean; message: string; timestamp: string; service: string }>('/api/lobby/health');
     return { message: response.message };
+  }
+
+  // Load endpoints
+  // Note: Load endpoints return unwrapped responses (arrays/objects directly, not { success, data })
+  async getLoadState(): Promise<LoadState[]> {
+    // This endpoint returns LoadState[] directly, not wrapped
+    return this.request<LoadState[]>('/api/loads/state');
+  }
+
+  async getDroppedLoads(gameId?: string): Promise<Array<{city_name: string, type: LoadType}>> {
+    // This endpoint returns array directly, not wrapped
+    const endpoint = gameId ? `/api/loads/dropped?gameId=${gameId}` : '/api/loads/dropped';
+    return this.request<Array<{city_name: string, type: LoadType}>>(endpoint);
+  }
+
+  async pickupLoad(data: { loadType: LoadType; city: string; gameId: string; isDropped: boolean }): Promise<{
+    loadState: LoadState;
+    droppedLoads: Array<{ city_name: string; type: LoadType }>;
+  }> {
+    // This endpoint returns { loadState, droppedLoads } directly, not wrapped
+    return this.request<{
+      loadState: LoadState;
+      droppedLoads: Array<{ city_name: string; type: LoadType }>;
+    }>('/api/loads/pickup', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async returnLoad(data: { loadType: LoadType; gameId: string; city?: string }): Promise<{
+    loadState: LoadState;
+    droppedLoads: Array<{ city_name: string; type: LoadType }>;
+  }> {
+    // This endpoint returns { loadState, droppedLoads } directly, not wrapped
+    // Note: city is optional for backward compatibility
+    return this.request<{
+      loadState: LoadState;
+      droppedLoads: Array<{ city_name: string; type: LoadType }>;
+    }>('/api/loads/return', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async setLoadInCity(data: { city: string; loadType: LoadType; gameId: string }): Promise<{
+    loadState: LoadState;
+    droppedLoads: Array<{ city_name: string; type: LoadType }>;
+  }> {
+    // This endpoint returns { loadState, droppedLoads } directly, not wrapped
+    return this.request<{
+      loadState: LoadState;
+      droppedLoads: Array<{ city_name: string; type: LoadType }>;
+    }>('/api/loads/setInCity', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 }
 
