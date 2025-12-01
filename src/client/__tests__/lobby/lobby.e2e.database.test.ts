@@ -8,6 +8,7 @@ import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
 import { config } from '../../lobby/shared/config';
 import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
+import jwt from 'jsonwebtoken';
 
 // Helper function to run database queries with proper connection handling
 async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
@@ -39,6 +40,19 @@ async function cleanupTestData(gameIds: string[], playerIds: string[]) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
     }
   });
+}
+
+// Helper function to generate JWT token for testing
+function generateTestToken(userId: string, username: string, email: string): string {
+  const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+  const payload = {
+    userId,
+    email,
+    username,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (15 * 60), // 15 minutes
+  };
+  return jwt.sign(payload, JWT_SECRET);
 }
 
 // Mock localStorage for user identification
@@ -85,13 +99,15 @@ beforeEach(async () => {
   if (!serverAvailable) return;
   
   jest.clearAllMocks();
-  // Mock user and JWT token in localStorage
+  // Mock user and JWT token in localStorage (default to first test user)
+  // Generate token for default test user (tokens for other users are set in individual tests)
+  const defaultToken = generateTestToken('123e4567-e89b-12d3-a456-426614174000', 'testuser1', 'test1@example.com');
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
     if (key === 'eurorails.user') {
       return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Test User' });
     }
     if (key === 'eurorails.jwt') {
-      return 'test-jwt-token';
+      return defaultToken;
     }
     return null;
   });
@@ -124,6 +140,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
   let testUserId2: string;
   let testUserId3: string;
   let testUserId4: string;
+  let testUserToken: string;
+  let testUserToken2: string;
+  let testUserToken3: string;
+  let testUserToken4: string;
 
   beforeAll(async () => {
     // Generate test user IDs
@@ -151,6 +171,12 @@ describe('True End-to-End Tests - Database Outcomes', () => {
         [testUserId4, 'testuser4', 'test4@example.com', 'hashedpassword4']
       );
     });
+    
+    // Generate JWT tokens for test users
+    testUserToken = generateTestToken(testUserId, 'testuser1', 'test1@example.com');
+    testUserToken2 = generateTestToken(testUserId2, 'testuser2', 'test2@example.com');
+    testUserToken3 = generateTestToken(testUserId3, 'testuser3', 'test3@example.com');
+    testUserToken4 = generateTestToken(testUserId4, 'testuser4', 'test4@example.com');
   });
 
   afterEach(async () => {
@@ -227,7 +253,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 2. Join game with different user
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174001', name: 'Player 2' });
+          return JSON.stringify({ id: testUserId2, name: 'Player 2' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken2;
         }
         return null;
       });
@@ -256,7 +285,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 2. Join with player 2
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174002', name: 'Player 2' });
+          return JSON.stringify({ id: testUserId2, name: 'Player 2' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken2;
         }
         return null;
       });
@@ -265,7 +297,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 3. Join with player 3
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174003', name: 'Player 3' });
+          return JSON.stringify({ id: testUserId3, name: 'Player 3' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken3;
         }
         return null;
       });
@@ -291,7 +326,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 2. Add second player (required to start game)
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174002', name: 'Player 2' });
+          return JSON.stringify({ id: testUserId2, name: 'Player 2' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken2;
         }
         return null;
       });
@@ -300,7 +338,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 3. Switch back to creator and call startGame API
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Creator' });
+          return JSON.stringify({ id: testUserId, name: 'Creator' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken;
         }
         return null;
       });
@@ -324,7 +365,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       testGameIds.push(gameId);
 
       // 2. Update presence to offline
-      await api.updatePlayerPresence('123e4567-e89b-12d3-a456-426614174000', false);
+      await api.updatePlayerPresence(testUserId, false);
 
       // 3. Verify presence change in database
       const playersResult = await api.getGamePlayers(gameId);
@@ -353,12 +394,15 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 2. Perform multiple operations
       (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
         if (key === 'eurorails.user') {
-          return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174001', name: 'Player 2' });
+          return JSON.stringify({ id: testUserId2, name: 'Player 2' });
+        }
+        if (key === 'eurorails.jwt') {
+          return testUserToken2;
         }
         return null;
       });
       await api.joinGame({ joinCode: originalJoinCode });
-      await api.updatePlayerPresence('123e4567-e89b-12d3-a456-426614174001', false);
+      await api.updatePlayerPresence(testUserId2, false);
 
       // 3. Verify data integrity
       const finalGame = await api.getGame(gameId);
@@ -368,7 +412,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       expect(finalGame.game.joinCode).toBe(originalJoinCode);
       expect(finalPlayers.players).toHaveLength(2);
       
-      const player2 = finalPlayers.players.find(p => p.userId === '123e4567-e89b-12d3-a456-426614174001');
+      const player2 = finalPlayers.players.find(p => p.userId === testUserId2);
       expect(player2?.isOnline).toBe(false);
     }, TEST_TIMEOUT);
 
@@ -382,19 +426,19 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 2. Perform sequential joins (more realistic than true concurrency in tests)
       // This tests the same scenario but avoids mock timing issues
       const userContexts = [
-        { id: '123e4567-e89b-12d3-a456-426614174001', name: 'Player 1' },
-        { id: '123e4567-e89b-12d3-a456-426614174002', name: 'Player 2' },
-        { id: '123e4567-e89b-12d3-a456-426614174003', name: 'Player 3' },
+        { id: testUserId2, name: 'Player 1', token: testUserToken2 },
+        { id: testUserId3, name: 'Player 2', token: testUserToken3 },
+        { id: testUserId4, name: 'Player 3', token: testUserToken4 },
       ];
       
       // Join each player sequentially
       for (const ctx of userContexts) {
         (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
           if (key === 'eurorails.user') {
-            return JSON.stringify(ctx);
+            return JSON.stringify({ id: ctx.id, name: ctx.name });
           }
           if (key === 'eurorails.jwt') {
-            return 'mock-jwt-token';
+            return ctx.token;
           }
           return null;
         });
@@ -410,10 +454,10 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       
       // Verify all expected user IDs are present
       const expectedUserIds = [
-        '123e4567-e89b-12d3-a456-426614174000', // Creator
-        '123e4567-e89b-12d3-a456-426614174001', // Player 1
-        '123e4567-e89b-12d3-a456-426614174002', // Player 2
-        '123e4567-e89b-12d3-a456-426614174003', // Player 3
+        testUserId, // Creator
+        testUserId2, // Player 1
+        testUserId3, // Player 2
+        testUserId4, // Player 3
       ];
       
       expectedUserIds.forEach(expectedId => {
