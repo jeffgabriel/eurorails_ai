@@ -46,6 +46,18 @@ export class PlayerService {
     return result.rows.length > 0;
   }
 
+  /**
+   * Verify that a user is a player in the specified game
+   * @param gameId - The game ID
+   * @param userId - The user ID
+   * @returns true if the user is a player in the game, false otherwise
+   */
+  static async isUserPlayerInGame(gameId: string, userId: string): Promise<boolean> {
+    const query = "SELECT id FROM players WHERE game_id = $1 AND user_id = $2";
+    const result = await db.query(query, [gameId, userId]);
+    return result.rows.length > 0;
+  }
+
   static async createGame(gameId: string): Promise<void> {
     const query = `
             INSERT INTO games (id, status)
