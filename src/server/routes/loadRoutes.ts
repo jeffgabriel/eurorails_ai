@@ -1,13 +1,6 @@
 import express, { Request, Response, RequestHandler } from 'express';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { loadService } from '../services/loadService';
-import { Session } from 'express-session';
-
-declare module 'express-session' {
-  interface SessionData {
-    gameId: string;
-  }
-}
 
 const router = express.Router();
 
@@ -26,11 +19,11 @@ const getLoadState: RequestHandler = async (_req: Request, res: Response) => {
 
 // Get all dropped loads
 const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
-  const gameId = req.session.gameId;
+  const gameId = req.query.gameId as string;
   
   try {
     if (!gameId) {
-      // Return empty array when no game session exists (initial load)
+      // Return empty array when no gameId provided (initial load)
       return res.json([]);
     }
     
@@ -44,12 +37,11 @@ const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
 
 // Handle load pickup
 const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => {
-  const { loadType, city } = req.body;
-  const gameId = req.session.gameId;
+  const { loadType, city, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
     }
 
     const result = await loadService.pickupDroppedLoad(city, loadType, gameId);
@@ -62,12 +54,11 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
 
 // Handle load return to tray
 const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => {
-  const { loadType, city } = req.body;
-  const gameId = req.session.gameId;
+  const { loadType, city, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
     }
     
     const result = await loadService.returnLoad(city, loadType, gameId);
@@ -80,12 +71,11 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
 
 // Handle setting a load in a city (dropping)
 const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) => {
-  const { city, loadType } = req.body;
-  const gameId = req.session.gameId;
+  const { city, loadType, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
     }
 
     const result = await loadService.setLoadInCity(city, loadType, gameId);
@@ -98,7 +88,7 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
 
 // Register routes
 router.get('/state', getLoadState);
-router.get('/dropped', getDroppedLoads);
+router.get('/dropped', getDroppedLoads); // GET with gameId query parameter
 router.post('/pickup', handleLoadPickup);
 router.post('/return', handleLoadReturn);
 router.post('/setInCity', handleSetLoadInCity);

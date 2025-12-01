@@ -3,8 +3,6 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import cors from 'cors';
-import session from 'express-session';
-import connectPgSimple from 'connect-pg-simple';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import gameRoutes from './routes/gameRoutes';
@@ -109,63 +107,6 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(addRequestId);
-
-// Session configuration
-// Use PostgreSQL store in production, MemoryStore in development
-const PgSession = connectPgSimple(session);
-const sessionStore = process.env.NODE_ENV === 'production' 
-    ? new PgSession({
-        pool: db,
-        tableName: 'session', // Table name for sessions
-        createTableIfMissing: true // Automatically create session table if it doesn't exist
-    })
-    : undefined; // Use default MemoryStore in development
-
-app.use(session({
-    store: sessionStore,
-    secret: process.env.SESSION_SECRET || 'your-secret-key',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-        secure: process.env.NODE_ENV === 'production',
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
-    }
-}));
-
-// Add middleware to restore game ID from active game if session is lost
-app.use(async (req, res, next) => {
-    if (!req.session.gameId) {
-        try {
-            const PlayerService = require('./services/playerService').PlayerService;
-            const activeGame = await PlayerService.getActiveGame();
-            if (activeGame) {
-                // Verify game has valid players (internal check - doesn't need hand data)
-                // Use a simple count query instead of getPlayers to avoid authentication requirement
-                const db = require('./db').db;
-                const playerCount = await db.query(
-                    'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
-                    [activeGame.id]
-                );
-                if (playerCount.rows[0].count > 0) {
-                    req.session.gameId = activeGame.id;
-                    await new Promise<void>((resolve, reject) => {
-                        req.session.save((err) => {
-                            if (err) reject(err);
-                            else resolve();
-                        });
-                    });
-                } else {
-                    // No valid players, mark game as completed (no longer active)
-                    await PlayerService.updateGameStatus(activeGame.id, 'completed');
-                }
-            }
-        } catch (error) {
-            console.error('Error restoring game ID from active game:', error);
-        }
-    }
-    next();
-});
 
 // API Routes - make sure this comes before static file serving
 app.use('/api/auth', authRoutes);
