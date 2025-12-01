@@ -475,6 +475,13 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
         }
         
         // If auth failed, we can't proceed - auth should be handled at a higher level
+        // Don't use stale localStorage data when authentication has failed
+        if (apiError.error === 'HTTP_401' || apiError.error === 'HTTP_403' || apiError.error === 'UNAUTHORIZED') {
+          console.warn('Authentication failed, clearing game state');
+          get().clearGameState();
+          return false;
+        }
+        
         // For other errors (network issues, etc.), use localStorage data as fallback
         console.warn('Failed to fetch fresh game state from server, using localStorage:', error);
         const validPlayers = Array.isArray(stored.players) ? stored.players : [];
