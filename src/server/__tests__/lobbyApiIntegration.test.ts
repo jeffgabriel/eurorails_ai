@@ -5,6 +5,7 @@ import request from 'supertest';
 import app from '../app';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
+import jwt from 'jsonwebtoken';
 
 // Helper function to run database queries with proper connection handling
 async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
@@ -30,11 +31,26 @@ async function cleanupTestData(gameIds: string[], playerIds: string[]) {
   });
 }
 
+// Helper function to generate JWT token for testing
+function generateTestToken(userId: string, username: string, email: string): string {
+  const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+  const payload = {
+    userId,
+    email,
+    username,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (15 * 60), // 15 minutes
+  };
+  return jwt.sign(payload, JWT_SECRET);
+}
+
 describe('Lobby API HTTP Integration Tests', () => {
   let testGameIds: string[] = [];
   let testPlayerIds: string[] = [];
   let testUserId: string;
   let testUserId2: string;
+  let testUserToken: string;
+  let testUserToken2: string;
 
   beforeAll(async () => {
     // Generate test user IDs
@@ -52,6 +68,10 @@ describe('Lobby API HTTP Integration Tests', () => {
         [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
       );
     });
+    
+    // Generate JWT tokens for test users
+    testUserToken = generateTestToken(testUserId, 'testuser1', 'test1@example.com');
+    testUserToken2 = generateTestToken(testUserId2, 'testuser2', 'test2@example.com');
   });
 
   afterEach(async () => {
@@ -163,12 +183,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
     it('should join a game successfully', async () => {
       const joinData = {
-        joinCode: testGame.joinCode,
-        userId: testUserId2
+        joinCode: testGame.joinCode
       };
 
       const response = await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(200);
 
@@ -181,12 +201,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
     it('should handle invalid join code', async () => {
       const joinData = {
-        joinCode: 'INVALID',
-        userId: testUserId2
+        joinCode: 'INVALID'
       };
 
       const response = await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(400);
 
@@ -195,12 +215,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
     it('should handle non-existent game', async () => {
       const joinData = {
-        joinCode: 'ABCD1234',
-        userId: testUserId2
+        joinCode: 'ABCD1234'
       };
 
       const response = await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(400);
 
@@ -210,10 +230,24 @@ describe('Lobby API HTTP Integration Tests', () => {
     it('should validate required fields', async () => {
       const response = await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send({})
         .expect(400);
 
       expect(response.body.error).toBe('VALIDATION_ERROR');
+    });
+    
+    it('should require authentication', async () => {
+      const joinData = {
+        joinCode: testGame.joinCode
+      };
+
+      const response = await request(app)
+        .post('/api/lobby/games/join')
+        .send(joinData)
+        .expect(401);
+
+      expect(response.body.error).toBe('UNAUTHORIZED');
     });
   });
 
@@ -287,12 +321,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
       // Add a player
       const joinData = {
-        joinCode: testGame.joinCode,
-        userId: testUserId2
+        joinCode: testGame.joinCode
       };
 
       await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(200);
 
@@ -342,12 +376,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
       // Add a player
       const joinData = {
-        joinCode: testGame.joinCode,
-        userId: testUserId2
+        joinCode: testGame.joinCode
       };
 
       await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(200);
 
@@ -438,12 +472,12 @@ describe('Lobby API HTTP Integration Tests', () => {
 
       // Add a player
       const joinData = {
-        joinCode: testGame.joinCode,
-        userId: testUserId2
+        joinCode: testGame.joinCode
       };
 
       await request(app)
         .post('/api/lobby/games/join')
+        .set('Authorization', `Bearer ${testUserToken2}`)
         .send(joinData)
         .expect(200);
 

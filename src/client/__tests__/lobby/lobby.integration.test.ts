@@ -10,6 +10,7 @@ import { config } from '../../lobby/shared/config';
 import { CreateGameForm, JoinGameForm } from '../../lobby/shared/types';
 import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
+import jwt from 'jsonwebtoken';
 
 // Helper function to run database queries with proper connection handling
 async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
@@ -41,6 +42,19 @@ async function cleanupTestData(gameIds: string[], playerIds: string[]) {
       await client.query('DELETE FROM players WHERE id = ANY($1)', [playerIds]);
     }
   });
+}
+
+// Helper function to generate JWT token for testing
+function generateTestToken(userId: string, username: string, email: string): string {
+  const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+  const payload = {
+    userId,
+    email,
+    username,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + (15 * 60), // 15 minutes
+  };
+  return jwt.sign(payload, JWT_SECRET);
 }
 
 // Mock localStorage for user identification
@@ -105,13 +119,15 @@ beforeEach(async () => {
     error: null,
     retryCount: 0,
   });
-  // Mock user in localStorage
+  // Mock user in localStorage (default to first test user)
+  // Generate token for default test user (tokens for other users are set in individual tests)
+  const defaultToken = generateTestToken('123e4567-e89b-12d3-a456-426614174000', 'testuser1', 'test1@example.com');
   (mockLocalStorage.getItem as jest.Mock).mockImplementation((key) => {
     if (key === 'eurorails.user') {
       return JSON.stringify({ id: '123e4567-e89b-12d3-a456-426614174000', name: 'Test User' });
     }
     if (key === 'eurorails.jwt') {
-      return 'mock-jwt-token';
+      return defaultToken;
     }
     return null;
   });
@@ -143,6 +159,8 @@ describe('Integration Tests - Real Server Communication', () => {
   let testPlayerIds: string[] = [];
   let testUserId: string;
   let testUserId2: string;
+  let testUserToken: string;
+  let testUserToken2: string;
 
   beforeAll(async () => {
     // Generate test user IDs
@@ -166,6 +184,10 @@ describe('Integration Tests - Real Server Communication', () => {
         [testUserId2, 'testuser2', 'test2@example.com', 'hashedpassword2']
       );
     });
+    
+    // Generate JWT tokens for test users
+    testUserToken = generateTestToken(testUserId, 'testuser1', 'test1@example.com');
+    testUserToken2 = generateTestToken(testUserId2, 'testuser2', 'test2@example.com');
   });
 
   afterEach(async () => {

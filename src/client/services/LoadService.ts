@@ -1,5 +1,5 @@
 import { LoadState, LoadType } from '../../shared/types/LoadTypes';
-import { config } from '../config/apiConfig';
+import { api } from '../lobby/shared/api';
 
 export class LoadService {
   private static instance: LoadService;
@@ -39,17 +39,10 @@ export class LoadService {
       // Get gameId from localStorage
       const gameId = this.getGameIdFromStorage();
       
-      const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
-        fetch(`${config.apiBaseUrl}/api/loads/state`),
-        fetch(`${config.apiBaseUrl}/api/loads/dropped${gameId ? `?gameId=${gameId}` : ''}`)
+      const [states, droppedLoads] = await Promise.all([
+        api.getLoadState(),
+        api.getDroppedLoads(gameId || undefined)
       ]);
-
-      if (!loadStateResponse.ok || !droppedLoadsResponse.ok) {
-        throw new Error('Failed to load initial state');
-      }
-
-      const states: LoadState[] = await loadStateResponse.json();
-      const droppedLoads: Array<{city_name: string, type: LoadType}> = await droppedLoadsResponse.json();
       
       // Initialize the load states map
       states.forEach(state => {
@@ -130,17 +123,19 @@ export class LoadService {
 
       // Get gameId from localStorage
       const gameId = this.getGameIdFromStorage();
+      if (!gameId) {
+        return false;
+      }
       
+      const result = await api.pickupLoad({
+        loadType,
+        city,
+        gameId,
+        isDropped: isDroppedLoad,
+      });
+
+      // Update local state based on result
       if (isDroppedLoad) {
-        // Handle picking up a dropped load
-        const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ loadType, city, gameId, isDropped: true }),
-        });
-
-        if (!response.ok) return false;
-
         // Update local state for dropped loads
         const updatedDrops = droppedLoadsInCity.filter((type, index) => 
           index !== droppedLoadsInCity.indexOf(loadType));
@@ -150,15 +145,6 @@ export class LoadService {
           this.droppedLoads.set(city, updatedDrops);
         }
       } else {
-        // Handle picking up a configured load
-        const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ loadType, city, gameId, isDropped: false }),
-        });
-
-        if (!response.ok) return false;
-
         // Update the available count in load states
         const state = this.loadStates.get(loadType);
         if (state) {
@@ -166,6 +152,15 @@ export class LoadService {
           this.loadStates.set(loadType, state);
         }
       }
+
+      // Update dropped loads from server response
+      result.droppedLoads.forEach(drop => {
+        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
+        if (!cityLoads.includes(drop.type)) {
+          cityLoads.push(drop.type);
+          this.droppedLoads.set(drop.city_name, cityLoads);
+        }
+      });
 
       return true;
     } catch (error) {
@@ -177,14 +172,11 @@ export class LoadService {
     try {
       // Get gameId from localStorage
       const gameId = this.getGameIdFromStorage();
+      if (!gameId) {
+        return false;
+      }
       
-      const response = await fetch(`${config.apiBaseUrl}/api/loads/return`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loadType, gameId }),
-      });
-
-      if (!response.ok) return false;
+      const result = await api.returnLoad({ loadType, gameId });
 
       // Update the available count in load states
       const state = this.loadStates.get(loadType);
@@ -192,6 +184,15 @@ export class LoadService {
         state.availableCount++;
         this.loadStates.set(loadType, state);
       }
+
+      // Update dropped loads from server response
+      result.droppedLoads.forEach(drop => {
+        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
+        if (!cityLoads.includes(drop.type)) {
+          cityLoads.push(drop.type);
+          this.droppedLoads.set(drop.city_name, cityLoads);
+        }
+      });
 
       return true;
     } catch (error) {
@@ -203,19 +204,20 @@ export class LoadService {
     try {
       // Get gameId from localStorage
       const gameId = this.getGameIdFromStorage();
+      if (!gameId) {
+        return false;
+      }
       
-      const response = await fetch(`${config.apiBaseUrl}/api/loads/setInCity`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ city, loadType, gameId }),
+      const result = await api.setLoadInCity({ city, loadType, gameId });
+
+      // Update local state for dropped loads from server response
+      result.droppedLoads.forEach(drop => {
+        const cityLoads = this.droppedLoads.get(drop.city_name) || [];
+        if (!cityLoads.includes(drop.type)) {
+          cityLoads.push(drop.type);
+          this.droppedLoads.set(drop.city_name, cityLoads);
+        }
       });
-
-      if (!response.ok) return false;
-
-      // Update local state for dropped loads
-      const cityLoads = this.droppedLoads.get(city) || [];
-      cityLoads.push(loadType);
-      this.droppedLoads.set(city, cityLoads);
 
       return true;
     } catch (error) {

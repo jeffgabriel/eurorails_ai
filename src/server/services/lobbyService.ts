@@ -187,72 +187,76 @@ export class LobbyService {
       throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
     }
 
+    // First, do read-only checks without a transaction
+    // Find the game by join code
+    const gameResult = await db.query(
+      `SELECT g.*, g.created_by as creator_user_id 
+       FROM games g 
+       WHERE g.join_code = $1`,
+      [joinCode.toUpperCase()]
+    );
+    
+    if (gameResult.rows.length === 0) {
+      throw new InvalidJoinCodeError('Game not found with that join code');
+    }
+    
+    const game = gameResult.rows[0];
+    
+    // Check if player is already in the game FIRST
+    // This allows existing players to rejoin active games after refresh
+    const existingPlayer = await db.query(
+      'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+      [game.id, joinData.userId]  
+    );
+    
+    if (existingPlayer.rows.length > 0) {
+      // Player already in game, return game info regardless of status
+      // This allows rejoining active games
+      return {
+        id: game.id,
+        joinCode: game.join_code,
+        createdBy: game.creator_user_id,
+        status: game.lobby_status,
+        gameStatus: game.status,
+        maxPlayers: game.max_players,
+        isPublic: game.is_public,
+        createdAt: game.created_at,
+      };
+    }
+    
+    // Only enforce "game must be IN_SETUP" for NEW players joining
+    if (game.lobby_status !== 'IN_SETUP') {
+      throw new GameAlreadyStartedError();
+    }
+    
+    // Check if game is full
+    const playerCountResult = await db.query(
+      'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
+      [game.id]
+    );
+    
+    const playerCount = parseInt(playerCountResult.rows[0].count);
+    if (playerCount >= game.max_players) {
+      throw new GameFullError();
+    }
+    
+    // Get the username for the joining player
+    const userResult = await db.query(
+      'SELECT username FROM users WHERE id = $1',
+      [joinData.userId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      throw new LobbyError('User not found', 'USER_NOT_FOUND', 404);
+    }
+    
+    const username = userResult.rows[0].username;
+    
+    // Now start a transaction only when we need to create a new player
     const client = await db.connect();
     
     try {
       await client.query('BEGIN');
-      
-      // Find the game by join code
-      const gameResult = await client.query(
-        `SELECT g.*, g.created_by as creator_user_id 
-         FROM games g 
-         WHERE g.join_code = $1`,
-        [joinCode.toUpperCase()]
-      );
-      
-      if (gameResult.rows.length === 0) {
-        throw new InvalidJoinCodeError('Game not found with that join code');
-      }
-      
-      const game = gameResult.rows[0];
-      
-      if (game.lobby_status !== 'IN_SETUP') {
-        throw new GameAlreadyStartedError();
-      }
-      
-      // Check if player is already in the game
-      const existingPlayer = await client.query(
-        'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
-        [game.id, joinData.userId]  
-      );
-      
-      if (existingPlayer.rows.length > 0) {
-        // Player already in game, return game info
-        await client.query('COMMIT');
-        return {
-          id: game.id,
-          joinCode: game.join_code,
-          createdBy: game.creator_user_id,
-          status: game.lobby_status,
-          gameStatus: game.status,
-          maxPlayers: game.max_players,
-          isPublic: game.is_public,
-          createdAt: game.created_at,
-        };
-      }
-      
-      // Check if game is full
-      const playerCountResult = await client.query(
-        'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
-        [game.id]
-      );
-      
-      const playerCount = parseInt(playerCountResult.rows[0].count);
-      if (playerCount >= game.max_players) {
-        throw new GameFullError();
-      }
-      
-      // Get the username for the joining player
-      const userResult = await client.query(
-        'SELECT username FROM users WHERE id = $1',
-        [joinData.userId]
-      );
-      
-      if (userResult.rows.length === 0) {
-        throw new LobbyError('User not found', 'USER_NOT_FOUND', 404);
-      }
-      
-      const username = userResult.rows[0].username;
       
       // Handle color selection and player creation
       // Retry logic to handle concurrent joins picking the same color
