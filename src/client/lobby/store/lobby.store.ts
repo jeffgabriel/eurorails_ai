@@ -474,6 +474,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
           return false;
         }
         
+        // If auth failed, we can't proceed - auth should be handled at a higher level
         // For other errors (network issues, etc.), use localStorage data as fallback
         console.warn('Failed to fetch fresh game state from server, using localStorage:', error);
         const validPlayers = Array.isArray(stored.players) ? stored.players : [];

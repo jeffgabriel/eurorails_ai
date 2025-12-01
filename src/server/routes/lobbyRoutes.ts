@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
+import { optionalAuth } from '../middleware/authMiddleware';
 
 // Extend the Request type to include requestId (needed for this file)
 declare global {
@@ -24,8 +25,8 @@ interface CreateGameRequest {
 
 interface JoinGameRequest {
   joinCode: string;
-  userId?: string;
   selectedColor?: string;
+  // userId is no longer accepted from request body - must come from JWT token
 }
 
 interface StartGameRequest {
@@ -125,9 +126,20 @@ router.post('/games', asyncHandler(async (req: Request, res: Response) => {
 }));
 
 // POST /api/lobby/games/join - Join an existing game
-router.post('/games/join', asyncHandler(async (req: Request, res: Response) => {
-  const { joinCode, userId, selectedColor }: JoinGameRequest = req.body;
-  const user = userId || req.headers['x-user-id'] as string;
+router.post('/games/join', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { joinCode, selectedColor }: JoinGameRequest = req.body;
+  
+  // Always get userId from authenticated JWT token - never trust request body or headers
+  const user = req.user?.id;
+  
+  if (!user) {
+    res.status(401).json({
+      error: 'UNAUTHORIZED',
+      message: 'Authentication required',
+      details: 'A valid JWT token is required to join a game'
+    });
+    return;
+  }
   
   logLobbyOperation('Join game request', { joinCode, userId: user, selectedColor }, req);
   
