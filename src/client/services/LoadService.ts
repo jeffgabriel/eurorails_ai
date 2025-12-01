@@ -16,15 +16,32 @@ export class LoadService {
     return LoadService.instance;
   }
 
+  private getGameIdFromStorage(): string | null {
+    try {
+      const gameStr = localStorage.getItem('eurorails.currentGame');
+      if (!gameStr) {
+        return null;
+      }
+      const game = JSON.parse(gameStr);
+      return game?.id || null;
+    } catch (error) {
+      console.warn('Failed to parse gameId from localStorage:', error);
+      return null;
+    }
+  }
+
   public async loadInitialState(): Promise<void> {
     if (this.isLoaded) {
       return;
     }
 
     try {
+      // Get gameId from localStorage
+      const gameId = this.getGameIdFromStorage();
+      
       const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
         fetch(`${config.apiBaseUrl}/api/loads/state`),
-        fetch(`${config.apiBaseUrl}/api/loads/dropped`)
+        fetch(`${config.apiBaseUrl}/api/loads/dropped${gameId ? `?gameId=${gameId}` : ''}`)
       ]);
 
       if (!loadStateResponse.ok || !droppedLoadsResponse.ok) {
@@ -111,12 +128,15 @@ export class LoadService {
       const droppedLoadsInCity = this.droppedLoads.get(city) || [];
       const isDroppedLoad = droppedLoadsInCity.includes(loadType);
 
+      // Get gameId from localStorage
+      const gameId = this.getGameIdFromStorage();
+      
       if (isDroppedLoad) {
         // Handle picking up a dropped load
         const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ loadType, city, isDropped: true }),
+          body: JSON.stringify({ loadType, city, gameId, isDropped: true }),
         });
 
         if (!response.ok) return false;
@@ -134,7 +154,7 @@ export class LoadService {
         const response = await fetch(`${config.apiBaseUrl}/api/loads/pickup`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ loadType, city, isDropped: false }),
+          body: JSON.stringify({ loadType, city, gameId, isDropped: false }),
         });
 
         if (!response.ok) return false;
@@ -155,10 +175,13 @@ export class LoadService {
 
   public async returnLoad(loadType: LoadType): Promise<boolean> {
     try {
+      // Get gameId from localStorage
+      const gameId = this.getGameIdFromStorage();
+      
       const response = await fetch(`${config.apiBaseUrl}/api/loads/return`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ loadType }),
+        body: JSON.stringify({ loadType, gameId }),
       });
 
       if (!response.ok) return false;
@@ -178,10 +201,13 @@ export class LoadService {
 
   public async setLoadInCity(city: string, loadType: LoadType): Promise<boolean> {
     try {
+      // Get gameId from localStorage
+      const gameId = this.getGameIdFromStorage();
+      
       const response = await fetch(`${config.apiBaseUrl}/api/loads/setInCity`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ city, loadType }),
+        body: JSON.stringify({ city, loadType, gameId }),
       });
 
       if (!response.ok) return false;

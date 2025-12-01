@@ -1,13 +1,8 @@
 import express, { Request, Response, RequestHandler } from 'express';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { loadService } from '../services/loadService';
-import { Session } from 'express-session';
-
-declare module 'express-session' {
-  interface SessionData {
-    gameId: string;
-  }
-}
+import { authenticateToken } from '../middleware/authMiddleware';
+import { PlayerService } from '../services/playerService';
 
 const router = express.Router();
 
@@ -25,13 +20,25 @@ const getLoadState: RequestHandler = async (_req: Request, res: Response) => {
 };
 
 // Get all dropped loads
+// If gameId is provided, verify user is a player in that game
 const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
-  const gameId = req.session.gameId;
+  const gameId = req.query.gameId as string;
   
   try {
     if (!gameId) {
-      // Return empty array when no game session exists (initial load)
+      // Return empty array when no gameId provided (initial load)
       return res.json([]);
+    }
+    
+    // If gameId is provided, verify user is authenticated and is a player
+    if (req.user) {
+      const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
+      if (!isPlayer) {
+        return res.status(403).json({ 
+          error: 'FORBIDDEN',
+          details: 'You are not a player in this game' 
+        });
+      }
     }
     
     const droppedLoads = await loadService.getDroppedLoads(gameId);
@@ -44,12 +51,27 @@ const getDroppedLoads: RequestHandler = async (req: Request, res: Response) => {
 
 // Handle load pickup
 const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => {
-  const { loadType, city } = req.body;
-  const gameId = req.session.gameId;
+  const { loadType, city, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
+    }
+
+    // Verify user is authenticated and is a player in the game
+    if (!req.user) {
+      return res.status(401).json({ 
+        error: 'UNAUTHORIZED',
+        details: 'Authentication required' 
+      });
+    }
+
+    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
+    if (!isPlayer) {
+      return res.status(403).json({ 
+        error: 'FORBIDDEN',
+        details: 'You are not a player in this game' 
+      });
     }
 
     const result = await loadService.pickupDroppedLoad(city, loadType, gameId);
@@ -62,12 +84,27 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
 
 // Handle load return to tray
 const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => {
-  const { loadType, city } = req.body;
-  const gameId = req.session.gameId;
+  const { loadType, city, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
+    }
+
+    // Verify user is authenticated and is a player in the game
+    if (!req.user) {
+      return res.status(401).json({ 
+        error: 'UNAUTHORIZED',
+        details: 'Authentication required' 
+      });
+    }
+
+    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
+    if (!isPlayer) {
+      return res.status(403).json({ 
+        error: 'FORBIDDEN',
+        details: 'You are not a player in this game' 
+      });
     }
     
     const result = await loadService.returnLoad(city, loadType, gameId);
@@ -80,12 +117,27 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
 
 // Handle setting a load in a city (dropping)
 const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) => {
-  const { city, loadType } = req.body;
-  const gameId = req.session.gameId;
+  const { city, loadType, gameId } = req.body;
   
   try {
     if (!gameId) {
-      return res.status(400).json({ error: 'No game ID in session' });
+      return res.status(400).json({ error: 'Game ID is required' });
+    }
+
+    // Verify user is authenticated and is a player in the game
+    if (!req.user) {
+      return res.status(401).json({ 
+        error: 'UNAUTHORIZED',
+        details: 'Authentication required' 
+      });
+    }
+
+    const isPlayer = await PlayerService.isUserPlayerInGame(gameId, req.user.id);
+    if (!isPlayer) {
+      return res.status(403).json({ 
+        error: 'FORBIDDEN',
+        details: 'You are not a player in this game' 
+      });
     }
 
     const result = await loadService.setLoadInCity(city, loadType, gameId);
@@ -98,9 +150,9 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
 
 // Register routes
 router.get('/state', getLoadState);
-router.get('/dropped', getDroppedLoads);
-router.post('/pickup', handleLoadPickup);
-router.post('/return', handleLoadReturn);
-router.post('/setInCity', handleSetLoadInCity);
+router.get('/dropped', authenticateToken, getDroppedLoads); // GET with gameId query parameter - auth required if gameId provided
+router.post('/pickup', authenticateToken, handleLoadPickup); // Auth required - verify user is player in game
+router.post('/return', authenticateToken, handleLoadReturn); // Auth required - verify user is player in game
+router.post('/setInCity', authenticateToken, handleSetLoadInCity); // Auth required - verify user is player in game
 
 export default router; 
