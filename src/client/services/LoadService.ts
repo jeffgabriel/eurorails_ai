@@ -16,6 +16,20 @@ export class LoadService {
     return LoadService.instance;
   }
 
+  private getGameIdFromStorage(): string | null {
+    try {
+      const gameStr = localStorage.getItem('eurorails.currentGame');
+      if (!gameStr) {
+        return null;
+      }
+      const game = JSON.parse(gameStr);
+      return game?.id || null;
+    } catch (error) {
+      console.warn('Failed to parse gameId from localStorage:', error);
+      return null;
+    }
+  }
+
   public async loadInitialState(): Promise<void> {
     if (this.isLoaded) {
       return;
@@ -23,9 +37,7 @@ export class LoadService {
 
     try {
       // Get gameId from localStorage
-      const gameId = localStorage.getItem('eurorails.currentGame') 
-        ? JSON.parse(localStorage.getItem('eurorails.currentGame')!).id 
-        : null;
+      const gameId = this.getGameIdFromStorage();
       
       const [loadStateResponse, droppedLoadsResponse] = await Promise.all([
         fetch(`${config.apiBaseUrl}/api/loads/state`),
@@ -117,9 +129,7 @@ export class LoadService {
       const isDroppedLoad = droppedLoadsInCity.includes(loadType);
 
       // Get gameId from localStorage
-      const gameId = localStorage.getItem('eurorails.currentGame') 
-        ? JSON.parse(localStorage.getItem('eurorails.currentGame')!).id 
-        : null;
+      const gameId = this.getGameIdFromStorage();
       
       if (isDroppedLoad) {
         // Handle picking up a dropped load
@@ -166,9 +176,7 @@ export class LoadService {
   public async returnLoad(loadType: LoadType): Promise<boolean> {
     try {
       // Get gameId from localStorage
-      const gameId = localStorage.getItem('eurorails.currentGame') 
-        ? JSON.parse(localStorage.getItem('eurorails.currentGame')!).id 
-        : null;
+      const gameId = this.getGameIdFromStorage();
       
       const response = await fetch(`${config.apiBaseUrl}/api/loads/return`, {
         method: 'POST',
@@ -194,9 +202,7 @@ export class LoadService {
   public async setLoadInCity(city: string, loadType: LoadType): Promise<boolean> {
     try {
       // Get gameId from localStorage
-      const gameId = localStorage.getItem('eurorails.currentGame') 
-        ? JSON.parse(localStorage.getItem('eurorails.currentGame')!).id 
-        : null;
+      const gameId = this.getGameIdFromStorage();
       
       const response = await fetch(`${config.apiBaseUrl}/api/loads/setInCity`, {
         method: 'POST',

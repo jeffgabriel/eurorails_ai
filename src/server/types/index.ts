@@ -1,3 +1,0 @@
-export interface GameState {
-    // ... existing code ...
-} 
