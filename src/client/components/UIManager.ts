@@ -76,6 +76,8 @@ export class UIManager {
       await nextPlayerCallback();
       this.setupUIOverlay();
       this.trainInteractionManager.updateTrainZOrders();
+      // Update train interactivity when turn changes
+      this.trainInteractionManager.updateTrainInteractivity();
       try {
         await this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode);
       } catch (error) {

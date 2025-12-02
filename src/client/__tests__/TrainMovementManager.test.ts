@@ -479,7 +479,7 @@ describe('TrainMovementManager Ferry Movement', () => {
     manager = new TrainMovementManager(gameState);
     
     // Mock getGridPointAtPosition to return ferry port for ferry tests
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === ferryPort.row && col === ferryPort.col) {
         return ferryPort;
       }
@@ -490,7 +490,7 @@ describe('TrainMovementManager Ferry Movement', () => {
         return prevPoint;
       }
       return null;
-    });
+    }) as any);
   });
 
   it('allows movement at half speed when ready to cross ferry', () => {
@@ -665,11 +665,11 @@ describe('TrainMovementManager City Direction Reversal', () => {
 
   it('allows reversal at Major City', () => {
     // Ensure the mock is set up correctly for this test
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === majorCity.row && col === majorCity.col) return majorCity;
       if (row === prevPoint.row && col === prevPoint.col) return prevPoint;
       return null;
-    });
+    }) as any);
     
     // Add track data so movement is allowed
     const playerTrackState: PlayerTrackState = {
@@ -715,11 +715,11 @@ describe('TrainMovementManager City Direction Reversal', () => {
     } as GridPoint;
     
     // Set up mock for this test
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === mediumCity.row && col === mediumCity.col) return mediumCity;
       if (row === 15 && col === 14) return prevMediumPoint;
       return null;
-    });
+    }) as any);
     
     // Add track data
     const playerTrackState: PlayerTrackState = {
@@ -762,11 +762,11 @@ describe('TrainMovementManager City Direction Reversal', () => {
     } as GridPoint;
     
     // Set up mock for this test
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === smallCity.row && col === smallCity.col) return smallCity;
       if (row === 20 && col === 19) return prevSmallPoint;
       return null;
-    });
+    }) as any);
     
     // Add track data
     const playerTrackState: PlayerTrackState = {
@@ -835,11 +835,11 @@ describe('TrainMovementManager City Direction Reversal', () => {
     ];
     
     // Set up mock for this test
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === majorCity.row && col === majorCity.col) return majorCity;
       if (row === prevPoint.row && col === prevPoint.col) return prevPoint;
       return null;
-    });
+    }) as any);
     
     // Add track data so movement is allowed (bidirectional track)
     const playerTrackState: PlayerTrackState = {
@@ -886,11 +886,11 @@ describe('TrainMovementManager City Direction Reversal', () => {
       id: 'back1' 
     } as GridPoint;
     
-    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation((row: number, col: number) => {
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
       if (row === 10 && col === 10) return majorCity; // Current position is major city
       if (row === 10 && col === 9) return backPoint;
       return null;
-    });
+    }) as any);
     
     // Add track data so movement is allowed (bidirectional track)
     const playerTrackState: PlayerTrackState = {
