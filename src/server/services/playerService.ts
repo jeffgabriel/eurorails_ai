@@ -278,16 +278,37 @@ export class PlayerService {
         player.trainState.movementHistory &&
         player.trainState.movementHistory.length > 0
       ) {
-        const movement_query = `
-                    INSERT INTO movement_history (player_id, movement_path, turn_number)
-                    VALUES ($1, $2, $3)
+        // Update existing movement history for this turn, or insert if it doesn't exist
+        // This ensures we maintain cumulative movement history across the turn
+        // First, try to update existing entry for this turn
+        const update_query = `
+                    UPDATE movement_history
+                    SET movement_path = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE player_id = $1 AND turn_number = $3
                 `;
         const movement_values = [
           player.id,
           JSON.stringify(player.trainState.movementHistory),
           player.turnNumber,
         ];
-        await client.query(movement_query, movement_values);
+        
+        // Try to update first
+        const updateResult = await client.query(update_query, movement_values);
+        
+        // If no row was updated, insert a new one
+        if (updateResult.rowCount === 0) {
+          const insert_query = `
+                      INSERT INTO movement_history (player_id, movement_path, turn_number, game_id)
+                      VALUES ($1, $2, $3, $4)
+                  `;
+          const insert_values = [
+            player.id,
+            JSON.stringify(player.trainState.movementHistory),
+            player.turnNumber,
+            gameId,
+          ];
+          await client.query(insert_query, insert_values);
+        }
       }
 
       await client.query("COMMIT");
