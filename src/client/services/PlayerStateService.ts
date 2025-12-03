@@ -1,6 +1,7 @@
 import { Player, TrainState } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { config } from '../config/apiConfig';
+import { authenticatedFetch } from './authenticatedFetch';
 
 /**
  * Manages per-player state and operations for the local player
@@ -106,8 +107,10 @@ export class PlayerStateService {
         return this.localPlayerId === playerId;
     }
 
+
     /**
      * Update local player's money
+     * Server-authoritative: API call first, update local state only after success
      */
     public async updatePlayerMoney(newMoney: number, gameId: string): Promise<boolean> {
         if (!this.localPlayer) {
@@ -115,16 +118,27 @@ export class PlayerStateService {
             return false;
         }
 
+        // Server-authoritative: Make API call first
+        // IMPORTANT: Don't send position when updating money - position is managed separately
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
+            // Create player object without trainState.position to preserve current position
+            const playerWithoutPosition = {
+                ...this.localPlayer
+            };
+            if (playerWithoutPosition.trainState) {
+                const trainStateWithoutPosition = {
+                    ...playerWithoutPosition.trainState
+                };
+                delete (trainStateWithoutPosition as any).position;
+                playerWithoutPosition.trainState = trainStateWithoutPosition;
+            }
+            
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     gameId: gameId,
                     player: {
-                        ...this.localPlayer,
+                        ...playerWithoutPosition,
                         money: newMoney
                     }
                 })
@@ -136,7 +150,7 @@ export class PlayerStateService {
                 return false;
             }
 
-            // Update local state
+            // Only update local state after API succeeds
             this.localPlayer.money = newMoney;
             return true;
         } catch (error) {
@@ -147,6 +161,7 @@ export class PlayerStateService {
 
     /**
      * Update local player's position
+     * Server-authoritative: API call first, update local state only after success
      */
     public async updatePlayerPosition(
         x: number,
@@ -160,7 +175,7 @@ export class PlayerStateService {
             return false;
         }
 
-        // Ensure trainState exists
+        // Ensure trainState exists for the API call
         if (!this.localPlayer.trainState) {
             this.localPlayer.trainState = {
                 position: null,
@@ -170,17 +185,19 @@ export class PlayerStateService {
             };
         }
 
-        this.localPlayer.trainState.position = { x, y, row, col };
-
+        // Server-authoritative: Make API call first
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     gameId: gameId,
-                    player: this.localPlayer
+                    player: {
+                        ...this.localPlayer,
+                        trainState: {
+                            ...this.localPlayer.trainState,
+                            position: { x, y, row, col }
+                        }
+                    }
                 })
             });
 
@@ -190,6 +207,8 @@ export class PlayerStateService {
                 return false;
             }
 
+            // Only update local state after API succeeds
+            this.localPlayer.trainState.position = { x, y, row, col };
             return true;
         } catch (error) {
             console.error('Error updating player position:', error);
@@ -199,6 +218,7 @@ export class PlayerStateService {
 
     /**
      * Update local player's loads
+     * Server-authoritative: API call first, update local state only after success
      */
     public async updatePlayerLoads(loads: LoadType[], gameId: string): Promise<boolean> {
         if (!this.localPlayer) {
@@ -206,7 +226,7 @@ export class PlayerStateService {
             return false;
         }
 
-        // Initialize trainState if it doesn't exist
+        // Initialize trainState if it doesn't exist (for API call)
         if (!this.localPlayer.trainState) {
             this.localPlayer.trainState = {
                 position: null,
@@ -216,17 +236,28 @@ export class PlayerStateService {
             };
         }
 
-        this.localPlayer.trainState.loads = loads;
-
+        // Server-authoritative: Make API call first
+        // IMPORTANT: Don't send position when updating loads - position is managed separately
+        // Sending position here can cause the train to jump backward if the position in
+        // this.localPlayer is outdated (from server, not current local position)
+        // We create a player object without position to avoid overwriting it
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
+            // Create trainState without position to preserve current position in database
+            const trainStateWithoutPosition = {
+                ...this.localPlayer.trainState,
+                loads: loads
+            };
+            // Remove position from trainState to prevent it from being sent
+            delete (trainStateWithoutPosition as any).position;
+            
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     gameId: gameId,
-                    player: this.localPlayer
+                    player: {
+                        ...this.localPlayer,
+                        trainState: trainStateWithoutPosition
+                    }
                 })
             });
 
@@ -236,6 +267,8 @@ export class PlayerStateService {
                 return false;
             }
 
+            // Only update local state after API succeeds
+            this.localPlayer.trainState.loads = loads;
             return true;
         } catch (error) {
             console.error('Error updating player loads:', error);
@@ -258,11 +291,8 @@ export class PlayerStateService {
         }
 
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/fulfill-demand`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/fulfill-demand`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     gameId: gameId,
                     playerId: this.localPlayerId,

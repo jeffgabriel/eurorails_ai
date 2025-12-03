@@ -3,6 +3,7 @@ import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
+import { emitStatePatch, emitTurnChange } from '../services/socketService';
 
 const router = express.Router();
 
@@ -183,6 +184,18 @@ router.post('/update', async (req, res) => {
         await PlayerService.updatePlayer(gameId, player);
         console.log('Successfully updated player');
 
+        // Get updated player data for socket broadcast
+        // Use empty string to hide private hand data when broadcasting to all players
+        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
+        const updatedPlayer = updatedPlayers.find(p => p.id === player.id);
+        
+        if (updatedPlayer) {
+            // Emit socket update with updated player
+            emitStatePatch(gameId, {
+                players: [updatedPlayer]
+            });
+        }
+
         return res.status(200).json({ message: 'Player updated successfully' });
     } catch (error: any) {
         console.error('Error in /update route:', error);
@@ -308,6 +321,12 @@ router.post('/updateCurrentPlayer', async (req, res) => {
 
         // Get the updated game state
         const gameState = await PlayerService.getGameState(gameId);
+        
+        // Emit turn change and state patch
+        emitTurnChange(gameId, currentPlayerIndex);
+        emitStatePatch(gameId, {
+            currentPlayerIndex: currentPlayerIndex
+        });
         
         return res.status(200).json(gameState);
     } catch (error: any) {
@@ -441,6 +460,17 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
         // Call the service to handle the demand fulfillment
         const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
         console.log('Successfully fulfilled demand card');
+
+        // Get updated player data with new hand for socket broadcast
+        const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+        const updatedPlayer = updatedPlayers.find(p => p.id === playerId);
+        
+        if (updatedPlayer) {
+            // Emit socket update with updated player (includes new hand)
+            emitStatePatch(gameId, {
+                players: [updatedPlayer]
+            });
+        }
 
         return res.status(200).json(result);
     } catch (error: any) {

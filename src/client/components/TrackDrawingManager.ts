@@ -266,6 +266,10 @@ export class TrackDrawingManager {
         return result;
     }
 
+    /**
+     * Save current tracks to the server
+     * Server-authoritative: API call first, update local state only after success
+     */
     private async saveCurrentTracks(): Promise<void> {
         const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
         // Get or create track state for current player
@@ -283,14 +287,14 @@ export class TrackDrawingManager {
         }
         // Only proceed if there are new segments to add
         if (this.currentSegments.length > 0 && playerTrackState) {
-            // Prepare new state but do not mutate yet
+            // Prepare new state values (calculations only, no mutations yet)
             const newSegments = [...playerTrackState.segments, ...this.currentSegments];
             const newTotalCost = playerTrackState.totalCost + this.turnBuildCost;
             const newTurnBuildCost = playerTrackState.turnBuildCost + this.turnBuildCost;
             const newLastBuildTimestamp = new Date();
             const newSegmentsDrawnThisTurn = [...this.segmentsDrawnThisTurn, ...this.currentSegments];
             try {
-                // Attempt to save track state to database (simulate the new state)
+                // Server-authoritative: Make API call first
                 const ok = await this.trackService.saveTrackState(
                     this.gameState.id,
                     currentPlayer.id,
@@ -304,9 +308,10 @@ export class TrackDrawingManager {
                 );
                 if (!ok) {
                     console.error('Failed to save track state in database');
+                    // Don't update local state on failure
                     return;
                 }
-                // Only after all backend operations succeed, update local state
+                // Only update local state after API succeeds
                 playerTrackState.segments = newSegments;
                 playerTrackState.totalCost = newTotalCost;
                 playerTrackState.turnBuildCost = newTurnBuildCost;
@@ -318,6 +323,7 @@ export class TrackDrawingManager {
                 // (No player money update here)
             } catch (error) {
                 console.error('Error saving track state:', error);
+                // Don't update local state on error
                 return;
             }
         }

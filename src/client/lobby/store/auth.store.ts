@@ -6,6 +6,7 @@ import { api } from '../shared/api';
 interface AuthState {
   user: User | null;
   token: string | null;
+  refreshToken: string | null;
   isLoading: boolean;
   error: ApiError | null;
   isAuthenticated: boolean;
@@ -18,17 +19,20 @@ interface AuthActions {
   loadPersistedAuth: () => Promise<void>;
   clearError: () => void;
   setDevAuth: () => void;
+  refreshAccessToken: () => Promise<boolean>;
 }
 
 type AuthStore = AuthState & AuthActions;
 
 const JWT_STORAGE_KEY = 'eurorails.jwt';
 const USER_STORAGE_KEY = 'eurorails.user';
+const REFRESH_TOKEN_STORAGE_KEY = 'eurorails.refreshToken';
 
-export const useAuthStore = create<AuthStore>((set) => ({
+export const useAuthStore = create<AuthStore>((set, get) => ({
   // Initial state
   user: null,
   token: null,
+  refreshToken: null,
   isLoading: false,
   error: null,
   isAuthenticated: false,
@@ -40,13 +44,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
     try {
       const result: AuthResult = await api.login(credentials);
 
-      // Persist auth data
+      // Persist auth data including refresh token
       localStorage.setItem(JWT_STORAGE_KEY, result.token);
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(result.user));
+      if (result.refreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, result.refreshToken);
+      }
 
       set({
         user: result.user,
         token: result.token,
+        refreshToken: result.refreshToken || null,
         isAuthenticated: true,
         isLoading: false,
         error: null,
@@ -55,10 +63,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
       // Clear any existing auth data on login failure
       localStorage.removeItem(JWT_STORAGE_KEY);
       localStorage.removeItem(USER_STORAGE_KEY);
+      localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
 
       set({
         user: null,
         token: null,
+        refreshToken: null,
         isLoading: false,
         error: error as ApiError,
         isAuthenticated: false,
@@ -73,13 +83,17 @@ export const useAuthStore = create<AuthStore>((set) => ({
     try {
       const result: AuthResult = await api.register(userData);
       
-      // Persist auth data
+      // Persist auth data including refresh token
       localStorage.setItem(JWT_STORAGE_KEY, result.token);
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(result.user));
+      if (result.refreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, result.refreshToken);
+      }
       
       set({
         user: result.user,
         token: result.token,
+        refreshToken: result.refreshToken || null,
         isAuthenticated: true,
         isLoading: false,
         error: null,
@@ -95,21 +109,59 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   logout: () => {
-    // Clear persisted data
+    // Clear persisted data including refresh token
     localStorage.removeItem(JWT_STORAGE_KEY);
     localStorage.removeItem(USER_STORAGE_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
     
     set({
       user: null,
       token: null,
+      refreshToken: null,
       isAuthenticated: false,
       error: null,
     });
   },
 
+  refreshAccessToken: async (): Promise<boolean> => {
+    const refreshToken = get().refreshToken || localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+    
+    if (!refreshToken) {
+      console.warn('No refresh token available for refresh');
+      return false;
+    }
+
+    try {
+      console.log('Calling refresh token endpoint...');
+      const result = await api.refreshToken(refreshToken);
+      console.log('Refresh token response received');
+      
+      // Update stored tokens
+      localStorage.setItem(JWT_STORAGE_KEY, result.token);
+      if (result.refreshToken) {
+        localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, result.refreshToken);
+      }
+      
+      set({
+        token: result.token,
+        refreshToken: result.refreshToken || refreshToken,
+        isAuthenticated: true,
+      });
+      
+      console.log('Token refresh successful');
+      return true;
+    } catch (error) {
+      console.error('Failed to refresh token:', error);
+      // Clear auth on refresh failure
+      get().logout();
+      return false;
+    }
+  },
+
   loadPersistedAuth: async () => {
     const token = localStorage.getItem(JWT_STORAGE_KEY);
     const userJson = localStorage.getItem(USER_STORAGE_KEY);
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
     const devAuthEnabled = process.env.REACT_APP_DEV_AUTH === 'true';
 
     // In dev auth mode, only set authenticated state for localhost
@@ -134,6 +186,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
         set({
           user: devUser,
           token: 'dev-token',
+          refreshToken: null,
           isAuthenticated: true,
           isLoading: false,
           error: null,
@@ -154,6 +207,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
       set({
         user: currentUser,
         token,
+        refreshToken: refreshToken || null,
         isAuthenticated: true,
         isLoading: false,
         error: null,
@@ -170,35 +224,35 @@ export const useAuthStore = create<AuthStore>((set) => ({
                          apiError.message?.toLowerCase().includes('invalid') ||
                          apiError.message?.toLowerCase().includes('expired');
       
+      if (isAuthError && refreshToken) {
+        // Try to refresh the token
+        const refreshed = await get().refreshAccessToken();
+        if (refreshed) {
+          // Retry getting current user
+          try {
+            const currentUser = await api.getCurrentUser();
+            set({
+              user: currentUser,
+              isAuthenticated: true,
+              isLoading: false,
+              error: null,
+            });
+            return;
+          } catch (retryError) {
+            // Refresh worked but getCurrentUser failed - clear auth
+            get().logout();
+            return;
+          }
+        }
+      }
+      
       if (isAuthError) {
         console.warn('Invalid or expired auth token, clearing storage');
-        // Token is invalid, clear storage
-        localStorage.removeItem(JWT_STORAGE_KEY);
-        localStorage.removeItem(USER_STORAGE_KEY);
-        
-        set({
-          user: null,
-          token: null,
-          isAuthenticated: false,
-          isLoading: false,
-          error: null,
-        });
+        get().logout();
       } else {
-        // For network errors or server not available, DON'T auto-authenticate
-        // This prevents stale/invalid auth from persisting
+        // For network errors, clear auth for security
         console.warn('Server not available or network error - clearing auth state for security');
-        
-        // Clear stored auth to prevent stale state
-        localStorage.removeItem(JWT_STORAGE_KEY);
-        localStorage.removeItem(USER_STORAGE_KEY);
-        
-        set({
-          user: null,
-          token: null,
-          isAuthenticated: false,
-          isLoading: false,
-          error: null,
-        });
+        get().logout();
       }
     }
   },
@@ -230,6 +284,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
         set({
           user: devUser,
           token: 'dev-token',
+          refreshToken: null,
           isAuthenticated: true,
           isLoading: false,
           error: null,

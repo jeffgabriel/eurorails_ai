@@ -115,6 +115,10 @@ export class LoadService {
     return Array.from(this.loadStates.values());
   }
 
+  /**
+   * Pick up a load from a city
+   * Server-authoritative: API call first, update local state only after success
+   */
   public async pickupLoad(loadType: LoadType, city: string): Promise<boolean> {
     try {
       // First check if this is a dropped load
@@ -127,6 +131,7 @@ export class LoadService {
         return false;
       }
       
+      // Server-authoritative: Make API call first
       const result = await api.pickupLoad({
         loadType,
         city,
@@ -134,7 +139,7 @@ export class LoadService {
         isDropped: isDroppedLoad,
       });
 
-      // Update local state based on result
+      // Only update local state after API succeeds
       if (isDroppedLoad) {
         // Update local state for dropped loads
         const updatedDrops = droppedLoadsInCity.filter((type, index) => 
@@ -168,6 +173,10 @@ export class LoadService {
     }
   }
 
+  /**
+   * Return a load to the global availability pool
+   * Server-authoritative: API call first, update local state only after success
+   */
   public async returnLoad(loadType: LoadType): Promise<boolean> {
     try {
       // Get gameId from localStorage
@@ -176,9 +185,10 @@ export class LoadService {
         return false;
       }
       
+      // Server-authoritative: Make API call first
       const result = await api.returnLoad({ loadType, gameId });
 
-      // Update the available count in load states
+      // Only update local state after API succeeds
       const state = this.loadStates.get(loadType);
       if (state) {
         state.availableCount++;
@@ -200,6 +210,10 @@ export class LoadService {
     }
   }
 
+  /**
+   * Set a load in a city (drop a load)
+   * Server-authoritative: API call first, update local state only after success
+   */
   public async setLoadInCity(city: string, loadType: LoadType): Promise<boolean> {
     try {
       // Get gameId from localStorage
@@ -208,9 +222,10 @@ export class LoadService {
         return false;
       }
       
+      // Server-authoritative: Make API call first
       const result = await api.setLoadInCity({ city, loadType, gameId });
 
-      // Update local state for dropped loads from server response
+      // Only update local state after API succeeds
       result.droppedLoads.forEach(drop => {
         const cityLoads = this.droppedLoads.get(drop.city_name) || [];
         if (!cityLoads.includes(drop.type)) {

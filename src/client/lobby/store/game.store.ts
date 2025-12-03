@@ -140,12 +140,28 @@ export const useGameStore = create<GameStore>((set, get) => ({
       return;
     }
 
+    // Merge players array properly: if patch.players is provided, merge individual players
+    let mergedPlayers = currentState.players;
+    if (patch.players && patch.players.length > 0) {
+      // Merge updated players into existing players array
+      mergedPlayers = currentState.players.map(existingPlayer => {
+        const updatedPlayer = patch.players!.find(p => p.id === existingPlayer.id);
+        return updatedPlayer || existingPlayer;
+      });
+      // Add any new players that don't exist yet
+      patch.players.forEach(updatedPlayer => {
+        if (!mergedPlayers.find(p => p.id === updatedPlayer.id)) {
+          mergedPlayers.push(updatedPlayer);
+        }
+      });
+    }
+
     const newState: GameState = {
       ...currentState,
       ...patch,
-      // Handle arrays properly
-      players: patch.players || currentState.players,
-      tracks: patch.tracks || currentState.tracks,
+      // Use merged arrays
+      players: mergedPlayers,
+      tracks: patch.tracks !== undefined ? patch.tracks : currentState.tracks,
     };
 
     set({
