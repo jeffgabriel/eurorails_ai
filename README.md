@@ -117,9 +117,16 @@ These variables are injected at build time via webpack:
 
 **Important:** Client-side environment variables must be set **before building** the application. They cannot be changed after the build without rebuilding.
 
-#### Runtime Configuration (Optional)
+**Recommended:** Always use build-time configuration. Set `VITE_API_BASE_URL` and `VITE_SOCKET_URL` in your environment before running the build command. This ensures the configuration is available immediately on first page load.
 
-For deployments that need to change API URLs without rebuilding, you can inject runtime configuration via `window.__APP_CONFIG__`:
+#### Runtime Configuration (Not Recommended)
+
+Runtime configuration via `window.__APP_CONFIG__` is supported for edge cases but is **not recommended** because:
+- It requires HTML injection which can cause timing issues on first page load
+- It adds unnecessary complexity and server-side processing
+- Build-time configuration is more reliable and performant
+
+If you must use runtime configuration (e.g., for dynamic deployments), you can inject it:
 
 ```javascript
 // In your HTML or deployment script
@@ -130,7 +137,7 @@ window.__APP_CONFIG__ = {
 };
 ```
 
-The application checks for runtime config first, then falls back to build-time variables, then defaults.
+The application checks for runtime config first, then falls back to build-time variables, then defaults. However, **build-time configuration is the primary and recommended method**.
 
 #### Production Deployment Examples
 

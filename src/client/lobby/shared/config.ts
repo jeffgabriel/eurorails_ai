@@ -8,7 +8,8 @@ interface Config {
   debugEnabled: boolean;
 }
 
-// Runtime configuration interface (injected via window for production deployments)
+// Runtime configuration interface (optional, for edge cases)
+// Primary configuration should be set at build time via webpack DefinePlugin
 declare global {
   interface Window {
     __APP_CONFIG__?: {
@@ -21,7 +22,8 @@ declare global {
 
 function getEnvVar(key: string, defaultValue: string): string {
   // 1. Check for runtime configuration (window.__APP_CONFIG__) first
-  //    This allows deployment to inject config without rebuilding
+  //    This is optional and primarily for edge cases where build-time config isn't available
+  //    Most deployments should use build-time configuration via webpack DefinePlugin
   if (typeof window !== 'undefined' && window.__APP_CONFIG__) {
     const runtimeConfig = window.__APP_CONFIG__;
     if (key === 'VITE_API_BASE_URL' && runtimeConfig.apiBaseUrl) {
@@ -35,12 +37,10 @@ function getEnvVar(key: string, defaultValue: string): string {
     if (key === 'VITE_DEBUG' && runtimeConfig.debugEnabled !== undefined) {
       return runtimeConfig.debugEnabled.toString();
     }
-  } else if (typeof window !== 'undefined') {
-    // Log if runtime config is not available
-    console.warn('[Config] window.__APP_CONFIG__ not found, using build-time or default values');
   }
   
   // 2. Check build-time environment variables (injected by webpack DefinePlugin)
+  //    This is the primary method for configuration in production
   if (typeof process !== 'undefined' && process.env) {
     const value = process.env[key];
     if (value !== undefined) {
@@ -60,7 +60,7 @@ function normalizeBaseUrl(url: string): string {
 }
 
 // Use getters to ensure config is read dynamically, not at module load time
-// This allows window.__APP_CONFIG__ to be available when the config is accessed
+// Build-time configuration (via webpack DefinePlugin) is the primary method
 export const config: Config = {
   get apiBaseUrl(): string {
     return normalizeBaseUrl(getEnvVar('VITE_API_BASE_URL', 'http://localhost:3001'));

@@ -23,9 +23,6 @@ const serverPort = parseInt(process.env.SERVER_LOCAL_PORT || '3000', 10);
 // Store server instance for health check diagnostics
 let httpServer: http.Server | null = null;
 
-// Cache the base HTML template to avoid reading on every request
-let cachedHtmlTemplate: string | null = null;
-
 // Configure CORS origins
 function getCorsOrigins(): string | string[] {
     // If ALLOWED_ORIGINS is set, use it (comma-separated list)
@@ -296,7 +293,7 @@ app.get('/health', async (req, res) => {
 });
 
 // SPA fallback - this should come after all other routes
-app.get('*', async (req, res, next) => {
+app.get('*', (req, res, next) => {
     // Skip if this is an API route
     if (req.path.startsWith('/api/')) {
         return next();
@@ -314,85 +311,27 @@ app.get('*', async (req, res, next) => {
     
     const indexPath = path.join(__dirname, '../../dist/client/index.html');
     
-    // Inject runtime configuration for API URLs
-    // This allows the client to use the correct API URL even if build-time vars weren't set
-    try {
-        // Use cached template if available, otherwise read from disk
-        let htmlContent = cachedHtmlTemplate;
-        if (!htmlContent) {
-            htmlContent = await fs.promises.readFile(indexPath, 'utf-8');
-            cachedHtmlTemplate = htmlContent; // Cache for future requests
-        }
-        
-        // Determine API base URL from environment or request origin
-        // In production, use the same origin as the request (same domain)
-        // This ensures the client uses the correct API URL without CORS issues
-        const requestOrigin = req.protocol + '://' + req.get('host');
-        const apiBaseUrl = process.env.VITE_API_BASE_URL || 
-                          process.env.CLIENT_URL || 
-                          requestOrigin;
-        const socketUrl = process.env.VITE_SOCKET_URL || apiBaseUrl;
-        
-        // Log the API URL being injected for debugging
-        console.log('[Config Injection] API Base URL:', apiBaseUrl);
-        console.log('[Config Injection] Request origin:', requestOrigin);
-        console.log('[Config Injection] VITE_API_BASE_URL env:', process.env.VITE_API_BASE_URL || '(not set)');
-        console.log('[Config Injection] CLIENT_URL env:', process.env.CLIENT_URL || '(not set)');
-        
-        // Inject runtime config script as the FIRST script in <head>
-        // This ensures it executes before any other scripts that might need the config
-        const configScript = `<script type="text/javascript">
-        // Runtime configuration injection - must execute before other scripts
-        window.__APP_CONFIG__ = {
-            apiBaseUrl: ${JSON.stringify(apiBaseUrl)},
-            socketUrl: ${JSON.stringify(socketUrl)},
-            debugEnabled: ${process.env.VITE_DEBUG === 'true' ? 'true' : 'false'}
-        };
-        console.log('[Runtime Config] Injected API base URL:', window.__APP_CONFIG__.apiBaseUrl);
-    </script>`;
-        
-        // Insert config script as early as possible in <head>
-        // Try to insert right after <head> tag, or before </head> if no opening tag found
-        let modifiedHtml: string;
-        if (htmlContent.includes('<head>')) {
-            // Insert right after <head> tag to ensure it executes first
-            modifiedHtml = htmlContent.replace('<head>', '<head>' + configScript);
-        } else if (htmlContent.includes('</head>')) {
-            // Fallback: insert before </head>
-            modifiedHtml = htmlContent.replace('</head>', configScript + '\n</head>');
-        } else if (htmlContent.includes('</body>')) {
-            // Last resort: insert before </body>
-            modifiedHtml = htmlContent.replace('</body>', configScript + '\n</body>');
-        } else {
-            // No standard tags found, prepend to content
-            modifiedHtml = configScript + '\n' + htmlContent;
-        }
-        
-        res.send(modifiedHtml);
-    } catch (err: any) {
-        console.error('Error reading/injecting index.html:', err);
-        
-        // Fallback to sendFile if injection fails
-        res.sendFile(indexPath, (sendFileErr) => {
-            if (sendFileErr) {
-                console.error('Error serving index.html:', sendFileErr);
-                console.error('Request path:', req.path);
-                console.error('Resolved index.html path:', path.resolve(indexPath));
-                
-                if (res.headersSent) {
-                    console.error('Headers already sent, closing connection');
-                    return res.end();
-                }
-                
-                const statusCode = (sendFileErr as any).status || 500;
-                res.status(statusCode).json({
-                    error: 'Failed to serve application',
-                    message: sendFileErr.message || 'Internal server error',
-                    path: req.path
-                });
+    // Serve the static index.html file
+    // Configuration is injected at build time via webpack DefinePlugin
+    res.sendFile(indexPath, (err) => {
+        if (err) {
+            console.error('Error serving index.html:', err);
+            console.error('Request path:', req.path);
+            console.error('Resolved index.html path:', path.resolve(indexPath));
+            
+            if (res.headersSent) {
+                console.error('Headers already sent, closing connection');
+                return res.end();
             }
-        });
-    }
+            
+            const statusCode = (err as any).status || 500;
+            res.status(statusCode).json({
+                error: 'Failed to serve application',
+                message: err.message || 'Internal server error',
+                path: req.path
+            });
+        }
+    });
 });
 
 // Initialize database and start server
