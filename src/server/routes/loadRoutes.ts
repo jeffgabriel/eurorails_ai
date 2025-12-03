@@ -3,6 +3,7 @@ import { LoadType } from '../../shared/types/LoadTypes';
 import { loadService } from '../services/loadService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { PlayerService } from '../services/playerService';
+import { emitStatePatch } from '../services/socketService';
 
 const router = express.Router();
 
@@ -75,6 +76,14 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
     }
 
     const result = await loadService.pickupDroppedLoad(city, loadType, gameId);
+    
+    // Emit socket update with load state and dropped loads
+    // Note: Player loads are updated separately via /api/players/update, which will emit its own socket update
+    emitStatePatch(gameId, {
+      // Load state changes are handled client-side from the response
+      // Dropped loads are included in the response and will be synced via socket
+    });
+    
     res.json(result);
   } catch (error) {
     console.error('Error picking up load:', error);
@@ -108,6 +117,13 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
     }
     
     const result = await loadService.returnLoad(city, loadType, gameId);
+    
+    // Emit socket update with load state and dropped loads
+    emitStatePatch(gameId, {
+      // Load state changes are handled client-side from the response
+      // Dropped loads are included in the response and will be synced via socket
+    });
+    
     res.json(result);
   } catch (error) {
     console.error('Error returning load:', error);
@@ -141,6 +157,12 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
     }
 
     const result = await loadService.setLoadInCity(city, loadType, gameId);
+    
+    // Emit socket update with dropped loads
+    emitStatePatch(gameId, {
+      // Dropped loads are included in the response and will be synced via socket
+    });
+    
     res.json(result);
   } catch (error) {
     console.error('Error setting load in city:', error);

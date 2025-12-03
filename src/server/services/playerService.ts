@@ -236,24 +236,38 @@ export class PlayerService {
       // Determine money value with proper type checking
       const moneyValue = typeof player.money === "number" ? player.money : 50;
 
+      // Get current position from database to preserve it if not provided in update
+      const currentPlayerQuery = await client.query(
+        'SELECT position_x, position_y, position_row, position_col FROM players WHERE game_id = $1 AND id = $2',
+        [gameId, player.id]
+      );
+      const currentPosition = currentPlayerQuery.rows[0];
+      
+      // Only update position if it's explicitly provided (not null/undefined)
+      // This allows partial updates (e.g., updating loads without affecting position)
+      const positionX = player.trainState?.position?.x !== undefined && player.trainState.position !== null
+        ? Math.round(player.trainState.position.x)
+        : (currentPosition?.position_x ?? null);
+      const positionY = player.trainState?.position?.y !== undefined && player.trainState.position !== null
+        ? Math.round(player.trainState.position.y)
+        : (currentPosition?.position_y ?? null);
+      const positionRow = player.trainState?.position?.row !== undefined && player.trainState.position !== null
+        ? Math.round(player.trainState.position.row)
+        : (currentPosition?.position_row ?? null);
+      const positionCol = player.trainState?.position?.col !== undefined && player.trainState.position !== null
+        ? Math.round(player.trainState.position.col)
+        : (currentPosition?.position_col ?? null);
+
       const values = [
         player.name,
         player.userId || null,  // Include userId if provided
         normalizedColor,
         moneyValue,
         trainType,
-        player.trainState.position?.x
-          ? Math.round(player.trainState.position.x)
-          : null,
-        player.trainState.position?.y
-          ? Math.round(player.trainState.position.y)
-          : null,
-        player.trainState.position?.row
-          ? Math.round(player.trainState.position.row)
-          : null,
-        player.trainState.position?.col
-          ? Math.round(player.trainState.position.col)
-          : null,
+        positionX,
+        positionY,
+        positionRow,
+        positionCol,
         gameId,
         player.id,
         player.turnNumber,

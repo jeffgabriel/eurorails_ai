@@ -62,12 +62,18 @@ export class GameStateService {
         this.gameState = gameState;
     }
     
+    /**
+     * Move to the next player's turn
+     * Server-authoritative: API call first, update local state only after success
+     * Note: getCurrentPlayer() is about turn management (shared state), so it belongs in GameStateService.
+     * PlayerStateService focuses on local player operations only.
+     */
     public async nextPlayerTurn(): Promise<void> {
-        // Move to the next player
-        this.gameState.currentPlayerIndex = (this.gameState.currentPlayerIndex + 1) % this.gameState.players.length;
+        // Calculate next player index (for API call only, not for local state)
+        const nextPlayerIndex = (this.gameState.currentPlayerIndex + 1) % this.gameState.players.length;
         
+        // Server-authoritative: Make API call first
         try {
-            // Update the current player in the database
             const response = await fetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
                 method: 'POST',
                 headers: {
@@ -75,24 +81,27 @@ export class GameStateService {
                 },
                 body: JSON.stringify({
                     gameId: this.gameState.id,
-                    currentPlayerIndex: this.gameState.currentPlayerIndex
+                    currentPlayerIndex: nextPlayerIndex
                 })
             });
 
             if (!response.ok) {
                 const errorData = await response.json();
                 console.error('Failed to update current player:', errorData);
-            } else {
-                // Update local state with response
-                const updatedState = await response.json();
-                if (updatedState.currentPlayerIndex !== undefined) {
-                    this.gameState.currentPlayerIndex = updatedState.currentPlayerIndex;
-                    // Notify listeners of turn change
-                    this.notifyTurnChange(this.gameState.currentPlayerIndex);
-                }
+                // Don't update local state on failure
+                return;
+            }
+
+            // Only update local state after API succeeds
+            const updatedState = await response.json();
+            if (updatedState.currentPlayerIndex !== undefined) {
+                this.gameState.currentPlayerIndex = updatedState.currentPlayerIndex;
+                // Notify listeners of turn change
+                this.notifyTurnChange(this.gameState.currentPlayerIndex);
             }
         } catch (error) {
             console.error('Error updating current player:', error);
+            // Don't update local state on error
         }
     }
     

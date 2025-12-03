@@ -143,3 +143,39 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
   });
 }
 
+/**
+ * Emit event to all clients in a game room
+ * @param gameId - The game ID
+ * @param event - The event name
+ * @param data - The data to emit
+ */
+export function emitToGame(gameId: string, event: string, data: unknown): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit to game');
+    return;
+  }
+
+  console.log(`Emitting ${event} to game ${gameId}`);
+  io.to(gameId).emit(event, data);
+}
+
+/**
+ * Emit a state patch to all clients in a game room
+ * Uses standardized format: { patch: Partial<GameState>, serverSeq: number }
+ * @param gameId - The game ID
+ * @param patch - The state patch (only changed data, not full state)
+ */
+export function emitStatePatch(gameId: string, patch: Partial<any>): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit state patch');
+    return;
+  }
+
+  const serverSeq = Date.now(); // Can be replaced with proper sequence number later
+  console.log(`Emitting state:patch to game ${gameId} with serverSeq ${serverSeq}`);
+  io.to(gameId).emit('state:patch', {
+    patch,
+    serverSeq,
+  });
+}
+

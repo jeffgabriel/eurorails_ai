@@ -42,7 +42,8 @@ class ApiClient {
 
   private async request<T>(
     endpoint: string, 
-    options: RequestInit = {}
+    options: RequestInit = {},
+    retryOn401: boolean = true
   ): Promise<T> {
     const url = `${config.apiBaseUrl}${endpoint}`;
     
@@ -55,6 +56,26 @@ class ApiClient {
         ...options.headers,
       },
     });
+
+    // Handle 401 with automatic token refresh
+    if (response.status === 401 && retryOn401) {
+      const refreshToken = localStorage.getItem('eurorails.refreshToken');
+      if (refreshToken) {
+        try {
+          // Import auth store dynamically to avoid circular dependency
+          const { useAuthStore } = await import('../store/auth.store');
+          const refreshed = await useAuthStore.getState().refreshAccessToken();
+          
+          if (refreshed) {
+            // Retry the original request with new token (don't retry again to avoid infinite loop)
+            return this.request<T>(endpoint, options, false);
+          }
+        } catch (refreshError) {
+          console.error('Token refresh failed:', refreshError);
+          // Fall through to normal error handling
+        }
+      }
+    }
 
     if (!response.ok) {
       let errorData: ApiError;
@@ -105,6 +126,14 @@ class ApiClient {
   async getCurrentUser(): Promise<User> {
     const response = await this.request<{ success: boolean; data: { user: User }; message: string }>('/api/auth/me');
     return response.data.user;
+  }
+
+  async refreshToken(refreshToken: string): Promise<{ token: string; refreshToken: string }> {
+    const response = await this.request<{ success: boolean; data: { token: string; refreshToken: string }; message: string }>('/api/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refreshToken }),
+    });
+    return response.data;
   }
 
   // Game endpoints

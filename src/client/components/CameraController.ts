@@ -197,20 +197,12 @@ export class CameraController {
         }
 
         try {
-            // Get auth token from localStorage to include in request
-            const token = localStorage.getItem('eurorails.jwt');
-            const headers: Record<string, string> = {
-                'Content-Type': 'application/json',
-            };
+            // Use authenticated fetch with automatic token refresh
+            const { authenticatedFetch } = await import('../services/authenticatedFetch');
             
-            if (token) {
-                headers.Authorization = `Bearer ${token}`;
-            }
-
             // Save to database with playerId
-            const response = await fetch(`${config.apiBaseUrl}/api/game/updateCameraState`, {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/game/updateCameraState`, {
                 method: 'POST',
-                headers,
                 body: JSON.stringify({
                     gameId: this.gameState.id,
                     playerId: this.localPlayerId,

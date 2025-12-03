@@ -227,6 +227,68 @@ export class GameScene extends Phaser.Scene {
               this.gameStateService.updateCurrentPlayerIndex(playerIndex);
             }
           });
+
+          // Listen for state patches to sync game state across clients
+          socketService.onPatch((data: { patch: any; serverSeq: number }) => {
+            const { patch } = data;
+            
+            // Update this.gameState with the patch
+            if (patch.players && patch.players.length > 0) {
+              const localPlayerId = this.playerStateService.getLocalPlayerId();
+              
+              // Merge updated players into existing players array
+              patch.players.forEach((updatedPlayer: any) => {
+                const index = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+                if (index >= 0) {
+                  const existingPlayer = this.gameState.players[index];
+                  const isLocalPlayer = localPlayerId === updatedPlayer.id;
+                  
+                  if (isLocalPlayer) {
+                    // For local player: preserve local position and movementHistory
+                    // This prevents train from jumping backward when server sends outdated position
+                    const preservedPosition = existingPlayer.trainState?.position || null;
+                    const preservedHistory = existingPlayer.trainState?.movementHistory || [];
+                    
+                    this.gameState.players[index] = {
+                      ...existingPlayer,
+                      ...updatedPlayer,
+                      // Preserve local position if it exists (server position might be outdated)
+                      trainState: updatedPlayer.trainState ? {
+                        ...updatedPlayer.trainState,
+                        position: preservedPosition || updatedPlayer.trainState.position,
+                        // Preserve movementHistory to maintain direction
+                        movementHistory: preservedHistory.length > 0 
+                          ? preservedHistory 
+                          : (updatedPlayer.trainState.movementHistory || [])
+                      } : existingPlayer.trainState
+                    };
+                  } else {
+                    // For other players: use server data (authoritative)
+                    this.gameState.players[index] = { ...existingPlayer, ...updatedPlayer };
+                  }
+                } else {
+                  // Add new player (shouldn't happen in normal gameplay)
+                  this.gameState.players.push(updatedPlayer);
+                }
+              });
+            }
+            
+            // Update other patch fields
+            if (patch.currentPlayerIndex !== undefined) {
+              this.gameState.currentPlayerIndex = patch.currentPlayerIndex;
+            }
+            
+            if (patch.status !== undefined) {
+              this.gameState.status = patch.status;
+            }
+            
+            // Update services with new state
+            this.gameStateService.updateGameState(this.gameState);
+            this.playerStateService.updateLocalPlayer(this.gameState.players);
+            
+            // Refresh UI
+            this.uiManager.setupUIOverlay();
+          });
         }
       } catch (error) {
         console.error('Failed to register turn change socket listener:', error);
@@ -575,6 +637,9 @@ export class GameScene extends Phaser.Scene {
 
   /**
    * Handle turn change - refresh UI and update game state
+   * Note: This is called when receiving turn changes from the server (via polling or socket),
+   * so updating currentPlayerIndex from the parameter is correct (updating from server data).
+   * Turn number increment and movement reset are client-side UI state calculations.
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
     // Refresh player data from server to get updated money amounts
@@ -594,11 +659,12 @@ export class GameScene extends Phaser.Scene {
     // Update previous active player ID
     this.previousActivePlayerId = newActivePlayerId;
     
-    // Update game state
+    // Update game state from server data (currentPlayerIndex comes from server)
     this.gameState.currentPlayerIndex = currentPlayerIndex;
     
     if (newCurrentPlayer) {
       // Increment turn number for the new current player
+      // Note: This is client-side UI state. Ideally should come from server.
       newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
 
       // Handle ferry state transitions and teleportation at turn start FIRST

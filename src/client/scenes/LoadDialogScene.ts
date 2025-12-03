@@ -314,6 +314,7 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
+            // Server-authoritative: Make API calls first
             // Try to pick up the load from the city
             const pickupSuccess = await this.loadService.pickupLoad(loadType, this.city.name);
             if (!pickupSuccess) {
@@ -321,8 +322,24 @@ export class LoadDialogScene extends Scene {
                 return;
             }
 
-            // Add load to train
-            this.player.trainState.loads.push(loadType);
+            // Calculate new loads array (for API call, not for local state yet)
+            const updatedLoads = [...this.player.trainState.loads, loadType];
+            
+            // Update game state via API
+            const success = await this.playerStateService.updatePlayerLoads(
+                updatedLoads,
+                this.gameState.id
+            );
+
+            if (!success) {
+                // If update failed, revert load pickup
+                await this.loadService.returnLoad(loadType);
+                console.error('Failed to update player loads in game state');
+                return;
+            }
+
+            // Only update local state after all API calls succeed
+            this.player.trainState.loads = updatedLoads;
             
             // Track this operation with unique ID
             this.loadOperations.push({
@@ -332,111 +349,112 @@ export class LoadDialogScene extends Scene {
                 id: `${Date.now()}-${Math.random()}`
             });
             
-            // Update game state
-            const success = await this.playerStateService.updatePlayerLoads(
-                this.player.trainState.loads,
-                this.gameState.id
-            );
-
-            if (success) {
-                // Update displays
-                this.onUpdateTrainCard();
-                
-                // Update just the load sections container
-                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
-                if (sectionsContainer) {
-                    sectionsContainer.destroy();
-                }
-                this.createLoadSections();
-                
-                // Update operations UI
-                this.refreshLoadOperationsUI();
-            } else {
-                // If update failed, revert all changes
-                await this.loadService.returnLoad(loadType);
-                this.player.trainState.loads.pop();
-                this.loadOperations.pop();
-                this.refreshLoadOperationsUI();
-                console.error('Failed to update player loads in game state');
+            // Update displays
+            this.onUpdateTrainCard();
+            
+            // Update just the load sections container
+            const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+            if (sectionsContainer) {
+                sectionsContainer.destroy();
             }
+            this.createLoadSections();
+            
+            // Update operations UI
+            this.refreshLoadOperationsUI();
         } catch (error) {
             console.error('Failed to pickup load:', error);
-            // Revert changes on error
-            if (this.player.trainState.loads) {
-                this.player.trainState.loads.pop();
-                await this.loadService.returnLoad(loadType);
-            }
-            this.loadOperations.pop();
+            // Show error - no need to revert since we never updated local state
             this.refreshLoadOperationsUI();
         }
     }
 
     private async handleLoadDelivery(load: {type: LoadType, payment: number, cardId: number}) {
+        // Store original state for rollback if needed
+        const originalLoads = [...(this.player.trainState.loads || [])];
+        const originalMoney = this.player.money;
+        
         try {
             if (!this.player.trainState.loads) {
                 console.error('No loads found on train');
                 return;
             }
             
-            // Remove load from train
-            this.player.trainState.loads = this.player.trainState.loads.filter(
+            // Calculate new state values (for API calls only, not for local state)
+            const updatedLoads = this.player.trainState.loads.filter(
                 l => l !== load.type
             );
-            
-            // Add payment
             const newMoney = this.player.money + load.payment;
             
-            try {
-                // Return the load to global availability
-                await this.loadService.returnLoad(load.type);
+            // Server-authoritative pattern: Make all API calls first
+            // Return the load to global availability
+            await this.loadService.returnLoad(load.type);
 
-                // Update all game state in parallel
-                const [loadsUpdated, moneyUpdated, cardFulfilled] = await Promise.all([
-                    this.playerStateService.updatePlayerLoads(
-                        this.player.trainState.loads,
-                        this.gameState.id
-                    ),
-                    this.playerStateService.updatePlayerMoney(
-                        newMoney,
-                        this.gameState.id
-                    ),
-                    this.playerStateService.fulfillDemandCard(
-                        this.city.name,
-                        load.type,
-                        load.cardId,
-                        this.gameState.id
-                    )
-                ]);
+            // Update all game state in parallel
+            const [loadsUpdated, moneyUpdated, cardFulfilled] = await Promise.all([
+                this.playerStateService.updatePlayerLoads(
+                    updatedLoads,
+                    this.gameState.id
+                ),
+                this.playerStateService.updatePlayerMoney(
+                    newMoney,
+                    this.gameState.id
+                ),
+                this.playerStateService.fulfillDemandCard(
+                    this.city.name,
+                    load.type,
+                    load.cardId,
+                    this.gameState.id
+                )
+            ]);
 
-                if (!loadsUpdated || !moneyUpdated || !cardFulfilled) {
-                    throw new Error('Failed to update game state');
+            if (!loadsUpdated || !moneyUpdated || !cardFulfilled) {
+                // Rollback any state changes that may have occurred in PlayerStateService
+                // (PlayerStateService updates this.localPlayer which is a reference to gameState.players)
+                const localPlayer = this.playerStateService.getLocalPlayer();
+                if (localPlayer) {
+                    if (!loadsUpdated) {
+                        localPlayer.trainState.loads = originalLoads;
+                    }
+                    if (!moneyUpdated) {
+                        localPlayer.money = originalMoney;
+                    }
+                    // Note: fulfillDemandCard updates hand, but we can't easily rollback that
+                    // without storing the original hand. The card will be re-drawn on next turn.
                 }
-                
-                // Track this operation
-                this.loadOperations.push({
-                    type: 'delivery',
-                    loadType: load.type,
-                    timestamp: Date.now(),
-                    id: `${Date.now()}-${Math.random()}`
-                });
-                
-                // Update displays
-                this.onUpdateTrainCard();
-                this.onUpdateHandDisplay();
-                this.uiManager.setupUIOverlay();
-                
-                // Close dialog after successful delivery
-                this.closeDialog();
-            } catch (error) {
-                console.error('Failed to update game state:', error);
-                // Revert changes on error
-                this.player.trainState.loads.push(load.type);
-                await this.loadService.pickupLoad(load.type, this.city.name);
-                throw error;
+                throw new Error('Failed to update game state');
             }
+            
+            // All API calls succeeded - state is already updated by PlayerStateService
+            // (since it updates this.localPlayer which is a reference to this.player)
+            // Just refresh the UI
+            
+            // Track this operation
+            this.loadOperations.push({
+                type: 'delivery',
+                loadType: load.type,
+                timestamp: Date.now(),
+                id: `${Date.now()}-${Math.random()}`
+            });
+            
+            // Update displays
+            this.onUpdateTrainCard();
+            this.onUpdateHandDisplay();
+            this.uiManager.setupUIOverlay();
+            
+            // Close dialog after successful delivery
+            this.closeDialog();
         } catch (error) {
             console.error('Failed to deliver load:', error);
-            // Show error message to user using Phaser's add.text
+            
+            // Rollback state changes that may have occurred in PlayerStateService
+            const localPlayer = this.playerStateService.getLocalPlayer();
+            if (localPlayer) {
+                // Revert loads and money to original values
+                localPlayer.trainState.loads = originalLoads;
+                localPlayer.money = originalMoney;
+            }
+            
+            // Show error message to user
             const errorText = new Phaser.GameObjects.Text(
                 this,
                 0, 0,
@@ -456,6 +474,10 @@ export class LoadDialogScene extends Scene {
                     errorText.destroy();
                 }
             });
+            
+            // Refresh UI to show reverted state
+            this.onUpdateTrainCard();
+            this.onUpdateHandDisplay();
         }
     }
 
@@ -466,58 +488,61 @@ export class LoadDialogScene extends Scene {
                 return;
             }
             
-            // Remove load from train
-            this.player.trainState.loads = this.player.trainState.loads.filter(
+            // Calculate new loads array (for API call, not for local state yet)
+            const updatedLoads = this.player.trainState.loads.filter(
                 l => l !== loadType
             );
             
-            try {
-                // Return the load to the city's available loads if the city produces this load type
-                const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
-                const cityProducesLoad = availableLoads.some(l => l.loadType === loadType);
-                
-                if (cityProducesLoad) {
-                    await this.loadService.returnLoad(loadType);
-                } else {
-                    // If city doesn't produce this load, it stays in the city
-                    // and any existing load of the same type goes back to the tray
-                    await this.loadService.setLoadInCity(this.city.name, loadType);
-                }
-
-                // Update game state with new train loads
-                await this.playerStateService.updatePlayerLoads(
-                    this.player.trainState.loads,
-                    this.gameState.id
-                );
-                
-                // Track this operation with unique ID
-                this.loadOperations.push({
-                    type: 'drop',
-                    loadType,
-                    timestamp: Date.now(),
-                    id: `${Date.now()}-${Math.random()}`
-                });
-                
-                // Update displays
-                this.onUpdateTrainCard();
-                
-                // Update just the load sections container
-                const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
-                if (sectionsContainer) {
-                    sectionsContainer.destroy();
-                }
-                this.createLoadSections();
-                
-                // Update operations UI
-                this.refreshLoadOperationsUI();
-            } catch (error) {
-                // Revert changes on error
-                console.error('Failed to update game state:', error);
-                // Restore the load to the train
-                this.player.trainState.loads.push(loadType);
+            // Server-authoritative: Make API calls first
+            // Return the load to the city's available loads if the city produces this load type
+            const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
+            const cityProducesLoad = availableLoads.some(l => l.loadType === loadType);
+            
+            if (cityProducesLoad) {
+                await this.loadService.returnLoad(loadType);
+            } else {
+                // If city doesn't produce this load, it stays in the city
+                // and any existing load of the same type goes back to the tray
+                await this.loadService.setLoadInCity(this.city.name, loadType);
             }
+
+            // Update game state with new train loads
+            const success = await this.playerStateService.updatePlayerLoads(
+                updatedLoads,
+                this.gameState.id
+            );
+
+            if (!success) {
+                console.error('Failed to update game state');
+                return;
+            }
+
+            // Only update local state after all API calls succeed
+            this.player.trainState.loads = updatedLoads;
+                
+            // Track this operation with unique ID
+            this.loadOperations.push({
+                type: 'drop',
+                loadType,
+                timestamp: Date.now(),
+                id: `${Date.now()}-${Math.random()}`
+            });
+            
+            // Update displays
+            this.onUpdateTrainCard();
+            
+            // Update just the load sections container
+            const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
+            if (sectionsContainer) {
+                sectionsContainer.destroy();
+            }
+            this.createLoadSections();
+            
+            // Update operations UI
+            this.refreshLoadOperationsUI();
         } catch (error) {
             console.error('Failed to drop load:', error);
+            // Show error - no need to revert since we never updated local state
         }
     }
 
@@ -530,21 +555,31 @@ export class LoadDialogScene extends Scene {
                 const loadIndex = this.player.trainState.loads.lastIndexOf(operation.loadType);
                 if (loadIndex === -1) return;
 
-                // Remove only this specific instance of the load
-                this.player.trainState.loads.splice(loadIndex, 1);
+                // Calculate new loads array (for API call, not for local state yet)
+                const updatedLoads = [...this.player.trainState.loads];
+                updatedLoads.splice(loadIndex, 1);
 
+                // Server-authoritative: Make API calls first
                 // Return the load to the city
                 await this.loadService.returnLoad(operation.loadType);
+
+                // Update game state
+                const success = await this.playerStateService.updatePlayerLoads(
+                    updatedLoads,
+                    this.gameState.id
+                );
+
+                if (!success) {
+                    console.error('Failed to update game state');
+                    return;
+                }
+
+                // Only update local state after all API calls succeed
+                this.player.trainState.loads = updatedLoads;
 
                 // Remove only this specific operation from tracking
                 this.loadOperations = this.loadOperations.filter(
                     op => op.id !== operation.id
-                );
-
-                // Update game state
-                await this.playerStateService.updatePlayerLoads(
-                    this.player.trainState.loads,
-                    this.gameState.id
                 );
 
                 // Update the train card display
@@ -558,18 +593,35 @@ export class LoadDialogScene extends Scene {
                 const loadAvailable = availableLoads.some(l => l.loadType === operation.loadType);
                 
                 if (loadAvailable) {
-                    // Add load back to train
-                    this.player.trainState.loads.push(operation.loadType);
+                    // Calculate new loads array (for API call, not for local state yet)
+                    const updatedLoads = [...this.player.trainState.loads, operation.loadType];
+                    
+                    // Server-authoritative: Make API calls first
+                    const pickupSuccess = await this.loadService.pickupLoad(operation.loadType, this.city.name);
+                    if (!pickupSuccess) {
+                        console.error('Failed to pick up load');
+                        return;
+                    }
+
+                    // Update game state
+                    const success = await this.playerStateService.updatePlayerLoads(
+                        updatedLoads,
+                        this.gameState.id
+                    );
+
+                    if (!success) {
+                        // Revert pickup if update failed
+                        await this.loadService.returnLoad(operation.loadType);
+                        console.error('Failed to update game state');
+                        return;
+                    }
+
+                    // Only update local state after all API calls succeed
+                    this.player.trainState.loads = updatedLoads;
                     
                     // Remove only this specific operation from tracking
                     this.loadOperations = this.loadOperations.filter(
                         op => op.id !== operation.id
-                    );
-
-                    // Update game state
-                    await this.playerStateService.updatePlayerLoads(
-                        this.player.trainState.loads,
-                        this.gameState.id
                     );
 
                     // Update displays
@@ -579,6 +631,7 @@ export class LoadDialogScene extends Scene {
             }
         } catch (error) {
             console.error('Failed to undo load operation:', error);
+            // Show error - no need to revert since we never updated local state
         }
     }
 

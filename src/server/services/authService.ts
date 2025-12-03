@@ -7,7 +7,7 @@ import { User, UserRow, LoginForm, RegisterForm, AuthResult, JWTPayload } from '
 export class AuthService {
   private static readonly SALT_ROUNDS = 12;
   private static readonly JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-  private static readonly JWT_EXPIRES_IN = '15m';
+  private static readonly JWT_EXPIRES_IN = '60m';
   private static readonly REFRESH_TOKEN_EXPIRES_IN = '7d';
 
   /**
@@ -33,7 +33,7 @@ export class AuthService {
       email: user.email,
       username: user.username,
       iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (15 * 60), // 15 minutes
+      exp: Math.floor(Date.now() / 1000) + (60 * 60), // 60 minutes
     };
     return jwt.sign(payload, this.JWT_SECRET);
   }
