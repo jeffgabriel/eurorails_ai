@@ -477,6 +477,20 @@ describe('TrainMovementManager Ferry Movement', () => {
       currentPlayerIndex: 0
     } as GameState;
     manager = new TrainMovementManager(gameState);
+    
+    // Mock getGridPointAtPosition to return ferry port for ferry tests
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === ferryPort.row && col === ferryPort.col) {
+        return ferryPort;
+      }
+      if (row === nextPoint.row && col === nextPoint.col) {
+        return nextPoint;
+      }
+      if (row === prevPoint.row && col === prevPoint.col) {
+        return prevPoint;
+      }
+      return null;
+    }) as any);
   });
 
   it('allows movement at half speed when ready to cross ferry', () => {
@@ -529,5 +543,397 @@ describe('TrainMovementManager Ferry Movement', () => {
     const anotherPoint = { row: 5, col: 7, x: 0, y: 0, terrain: TerrainType.Clear, id: 'another1' } as GridPoint;
     expect(manager.canMoveTo(anotherPoint)).toMatchObject({ canMove: true });
     expect(player.trainState.remainingMovement).toBe(8);
+  });
+});
+
+describe('TrainMovementManager City Direction Reversal', () => {
+  let gameState: GameState;
+  let player: Player;
+  let manager: TrainMovementManager;
+  let majorCity: GridPoint;
+  let mediumCity: GridPoint;
+  let smallCity: GridPoint;
+  let clearPoint: GridPoint;
+  let prevPoint: GridPoint;
+  let testPointsMap: Map<string, GridPoint>;
+
+  beforeEach(() => {
+    // Create a map of test points for easy lookup
+    testPointsMap = new Map();
+    // Create test cities with proper terrain types
+    majorCity = { 
+      row: 10, 
+      col: 10, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.MajorCity, 
+      id: 'major1',
+      city: {
+        type: TerrainType.MajorCity,
+        name: 'Test Major City',
+        availableLoads: []
+      }
+    } as GridPoint;
+    
+    mediumCity = { 
+      row: 15, 
+      col: 15, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.MediumCity, 
+      id: 'medium1',
+      city: {
+        type: TerrainType.MediumCity,
+        name: 'Test Medium City',
+        availableLoads: []
+      }
+    } as GridPoint;
+    
+    smallCity = { 
+      row: 20, 
+      col: 20, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.SmallCity, 
+      id: 'small1',
+      city: {
+        type: TerrainType.SmallCity,
+        name: 'Test Small City',
+        availableLoads: []
+      }
+    } as GridPoint;
+    
+    clearPoint = { 
+      row: 25, 
+      col: 25, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'clear1' 
+    } as GridPoint;
+    
+    prevPoint = { 
+      row: 10, 
+      col: 9, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'prev1' 
+    } as GridPoint;
+
+    // Add all test points to the map
+    testPointsMap.set(`${majorCity.row},${majorCity.col}`, majorCity);
+    testPointsMap.set(`${mediumCity.row},${mediumCity.col}`, mediumCity);
+    testPointsMap.set(`${smallCity.row},${smallCity.col}`, smallCity);
+    testPointsMap.set(`${clearPoint.row},${clearPoint.col}`, clearPoint);
+    testPointsMap.set(`${prevPoint.row},${prevPoint.col}`, prevPoint);
+    testPointsMap.set('15,14', { row: 15, col: 14, x: 0, y: 0, terrain: TerrainType.Clear, id: 'prev-medium' } as GridPoint);
+    testPointsMap.set('20,19', { row: 20, col: 19, x: 0, y: 0, terrain: TerrainType.Clear, id: 'prev-small' } as GridPoint);
+    testPointsMap.set('25,24', { row: 25, col: 24, x: 0, y: 0, terrain: TerrainType.Clear, id: 'prev-clear' } as GridPoint);
+    testPointsMap.set('10,11', { row: 10, col: 11, x: 0, y: 0, terrain: TerrainType.Clear, id: 'forward1' } as GridPoint);
+
+    // Spy on getGridPointAtPosition to return our test points
+    player = {
+      id: 'p1',
+      name: 'Test',
+      color: '#000000',
+      trainType: TrainType.Freight,
+      money: 100,
+      trainState: {
+        position: { ...majorCity },
+        remainingMovement: 9,
+        movementHistory: [
+          { 
+            from: { ...prevPoint, terrain: TerrainType.Clear }, 
+            to: { ...majorCity }, 
+            cost: 0 
+          }
+        ],
+        loads: []
+      },
+      hand: [],
+      turnNumber: 1
+    } as unknown as Player;
+    
+    gameState = {
+      players: [player],
+      currentPlayerIndex: 0
+    } as GameState;
+    
+    manager = new TrainMovementManager(gameState);
+  });
+
+  it('allows reversal at Major City', () => {
+    // Ensure the mock is set up correctly for this test
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === majorCity.row && col === majorCity.col) return majorCity;
+      if (row === prevPoint.row && col === prevPoint.col) return prevPoint;
+      return null;
+    }) as any);
+    
+    // Add track data so movement is allowed
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { ...prevPoint, terrain: TerrainType.Clear }, to: { ...majorCity }, cost: 1 },
+        { from: { ...majorCity }, to: { ...prevPoint, terrain: TerrainType.Clear }, cost: 1 }
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    // Player is at major city, try to reverse direction back to prevPoint
+    const result = manager.canMoveTo(prevPoint);
+    expect(result.canMove).toBe(true);
+    expect(player.trainState.remainingMovement).toBeLessThan(9);
+  });
+
+  it('allows reversal at Medium City', () => {
+    // Move player to medium city
+    player.trainState.position = { ...mediumCity };
+    player.trainState.remainingMovement = 9;
+    player.trainState.movementHistory = [
+      { 
+        from: { row: 15, col: 14, terrain: TerrainType.Clear, x: 0, y: 0 }, 
+        to: { ...mediumCity }, 
+        cost: 0 
+      }
+    ];
+    
+    const prevMediumPoint = { 
+      row: 15, 
+      col: 14, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'prev-medium' 
+    } as GridPoint;
+    
+    // Set up mock for this test
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === mediumCity.row && col === mediumCity.col) return mediumCity;
+      if (row === 15 && col === 14) return prevMediumPoint;
+      return null;
+    }) as any);
+    
+    // Add track data
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { row: 15, col: 14, terrain: TerrainType.Clear, x: 0, y: 0 }, to: { ...mediumCity }, cost: 1 },
+        { from: { ...mediumCity }, to: { row: 15, col: 14, terrain: TerrainType.Clear, x: 0, y: 0 }, cost: 1 }
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    expect(manager.canMoveTo(prevMediumPoint)).toMatchObject({ canMove: true });
+  });
+
+  it('allows reversal at Small City', () => {
+    // Move player to small city
+    player.trainState.position = { ...smallCity };
+    player.trainState.remainingMovement = 9;
+    player.trainState.movementHistory = [
+      { 
+        from: { row: 20, col: 19, terrain: TerrainType.Clear, x: 0, y: 0 }, 
+        to: { ...smallCity }, 
+        cost: 0 
+      }
+    ];
+    
+    const prevSmallPoint = { 
+      row: 20, 
+      col: 19, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'prev-small' 
+    } as GridPoint;
+    
+    // Set up mock for this test
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === smallCity.row && col === smallCity.col) return smallCity;
+      if (row === 20 && col === 19) return prevSmallPoint;
+      return null;
+    }) as any);
+    
+    // Add track data
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { row: 20, col: 19, terrain: TerrainType.Clear, x: 0, y: 0 }, to: { ...smallCity }, cost: 1 },
+        { from: { ...smallCity }, to: { row: 20, col: 19, terrain: TerrainType.Clear, x: 0, y: 0 }, cost: 1 }
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    expect(manager.canMoveTo(prevSmallPoint)).toMatchObject({ canMove: true });
+  });
+
+  it('prevents reversal at Clear terrain', () => {
+    // Move player to clear terrain
+    player.trainState.position = { ...clearPoint };
+    player.trainState.movementHistory = [
+      { 
+        from: { row: 25, col: 24, terrain: TerrainType.Clear, x: 0, y: 0 }, 
+        to: { ...clearPoint }, 
+        cost: 0 
+      }
+    ];
+    
+    const prevClearPoint = { 
+      row: 25, 
+      col: 24, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'prev-clear' 
+    } as GridPoint;
+    
+    // Try to reverse direction - should fail
+    const result = manager.canMoveTo(prevClearPoint);
+    expect(result.canMove).toBe(false);
+    expect(result.message).toContain('can only reverse at cities or ferry ports');
+  });
+
+  it('allows reversal when movement history is empty (turn boundary scenario)', () => {
+    // Simulate the bug scenario: player ended turn in city, movement history cleared
+    player.trainState.position = { ...majorCity };
+    player.trainState.movementHistory = []; // Empty history - this is the bug scenario
+    
+    // Should still allow reversal because we look up actual GridPoint terrain
+    expect(manager.canMoveTo(prevPoint)).toMatchObject({ canMove: true });
+  });
+
+  it('allows reversal when movement history has incorrect terrain data', () => {
+    // Simulate movement history with incorrect terrain (e.g., stored as Clear instead of MajorCity)
+    player.trainState.position = { ...majorCity };
+    player.trainState.remainingMovement = 9; // Ensure enough movement
+    player.trainState.movementHistory = [
+      { 
+        from: { ...prevPoint, terrain: TerrainType.Clear }, 
+        to: { ...majorCity, terrain: TerrainType.Clear }, // Incorrectly stored as Clear
+        cost: 0 
+      }
+    ];
+    
+    // Set up mock for this test
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === majorCity.row && col === majorCity.col) return majorCity;
+      if (row === prevPoint.row && col === prevPoint.col) return prevPoint;
+      return null;
+    }) as any);
+    
+    // Add track data so movement is allowed (bidirectional track)
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { ...prevPoint, terrain: TerrainType.Clear }, to: { ...majorCity }, cost: 1 },
+        { from: { ...majorCity }, to: { ...prevPoint, terrain: TerrainType.Clear }, cost: 1 } // Reverse direction
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    // Should still allow reversal because we look up actual GridPoint terrain, not stored terrain
+    const result = manager.canMoveTo(prevPoint);
+    expect(result.canMove).toBe(true);
+  });
+
+  it('allows reversal when position coordinates dont match stored segment', () => {
+    // Simulate realistic scenario: position is correct, but stored segment has wrong end coordinates
+    // This tests that we use actual position for terrain lookup, not stored segment
+    player.trainState.position = { row: 10, col: 10, x: 0, y: 0 }; // At major city (correct)
+    player.trainState.remainingMovement = 9; // Ensure enough movement
+    // Movement history has correct from but wrong to coordinates
+    player.trainState.movementHistory = [
+      { 
+        from: { row: 10, col: 9, terrain: TerrainType.Clear, x: 0, y: 0 }, 
+        to: { row: 10, col: 10, terrain: TerrainType.Clear, x: 0, y: 0 }, // Correct coordinates, wrong terrain
+        cost: 0 
+      }
+    ];
+    
+    // Set up mock for this test
+    const backPoint = { 
+      row: 10, 
+      col: 9, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'back1' 
+    } as GridPoint;
+    
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === 10 && col === 10) return majorCity; // Current position is major city
+      if (row === 10 && col === 9) return backPoint;
+      return null;
+    }) as any);
+    
+    // Add track data so movement is allowed (bidirectional track)
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { row: 10, col: 9, terrain: TerrainType.Clear, x: 0, y: 0 }, to: { row: 10, col: 10, terrain: TerrainType.MajorCity, x: 0, y: 0 }, cost: 1 },
+        { from: { row: 10, col: 10, terrain: TerrainType.MajorCity, x: 0, y: 0 }, to: { row: 10, col: 9, terrain: TerrainType.Clear, x: 0, y: 0 }, cost: 1 } // Reverse direction
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    // Should still allow reversal because we use actual position for terrain lookup
+    const result = manager.canMoveTo(backPoint);
+    expect(result.canMove).toBe(true);
+  });
+
+  it('handles forward movement correctly (not reversing)', () => {
+    // Player moving forward should not be blocked
+    player.trainState.position = { ...majorCity };
+    player.trainState.movementHistory = [
+      { 
+        from: { ...prevPoint, terrain: TerrainType.Clear }, 
+        to: { ...majorCity }, 
+        cost: 0 
+      }
+    ];
+    
+    const forwardPoint = { 
+      row: 10, 
+      col: 11, 
+      x: 0, 
+      y: 0, 
+      terrain: TerrainType.Clear, 
+      id: 'forward1' 
+    } as GridPoint;
+    
+    // Forward movement should always be allowed
+    expect(manager.canMoveTo(forwardPoint)).toMatchObject({ canMove: true });
   });
 }); 

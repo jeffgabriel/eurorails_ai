@@ -756,12 +756,23 @@ export class GameScene extends Phaser.Scene {
           
           if (serverPlayer.trainState) {
             if (isLocalPlayer) {
-              // For local player: preserve local position if it exists (for smooth movement),
-              // otherwise use server position
+              // For local player: preserve local position and movementHistory if they exist
+              // This prevents losing direction information between turns
               if (localPlayer.trainState) {
+                // Preserve local movementHistory if it exists and has entries
+                // Movement history should persist across turn boundaries to maintain direction of travel
+                // Only use server's movementHistory if local doesn't have any
+                const shouldPreserveHistory = localPlayer.trainState.movementHistory && 
+                                             localPlayer.trainState.movementHistory.length > 0;
+                
                 localPlayer.trainState = {
                   ...serverPlayer.trainState,
-                  position: localPlayer.trainState.position || serverPlayer.trainState.position
+                  position: localPlayer.trainState.position || serverPlayer.trainState.position,
+                  // Preserve local movementHistory to maintain direction of travel
+                  // This is critical for direction reversal checks across turn boundaries
+                  movementHistory: shouldPreserveHistory
+                    ? localPlayer.trainState.movementHistory
+                    : (serverPlayer.trainState.movementHistory || [])
                 };
               } else {
                 localPlayer.trainState = serverPlayer.trainState;

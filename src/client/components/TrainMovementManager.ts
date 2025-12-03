@@ -21,6 +21,16 @@ export class TrainMovementManager {
     this.movementCalculator = new MovementCostCalculator();
   }
 
+  /**
+   * Look up a GridPoint by its row and column coordinates
+   * This is used to get the actual terrain type at a position
+   */
+  private getGridPointAtPosition(row: number, col: number): GridPoint | null {
+    return mapConfig.points.find(
+      (point) => point.row === row && point.col === col
+    ) || null;
+  }
+
   public async loadTrackData(): Promise<void> {
     try {
       const response = await fetch(`${config.apiBaseUrl}/api/tracks/${this.gameState.id}`);
@@ -76,7 +86,7 @@ export class TrainMovementManager {
   }
 
   private canReverseDirection(
-    lastSegment: TrackSegment,
+    currentPosition: Point,
     proposedDirection: { rowDiff: number; colDiff: number },
     lastDirection: { rowDiff: number; colDiff: number }
   ): boolean {
@@ -87,9 +97,23 @@ export class TrainMovementManager {
       0;
 
     // If trying to reverse, check if we're currently at a city or ferry port
-    // lastSegment.to is our current position
+    // Look up the actual GridPoint at the current position to get authoritative terrain
     if (isReversing) {
-      const currentTerrain = lastSegment.to.terrain;
+      const currentGridPoint = this.getGridPointAtPosition(
+        currentPosition.row,
+        currentPosition.col
+      );
+      
+      if (!currentGridPoint) {
+        // If we can't find the GridPoint, fall back to not allowing reversal
+        // This is defensive - shouldn't happen in normal gameplay
+        console.warn(
+          `[TrainMovementManager] Could not find GridPoint at (${currentPosition.row}, ${currentPosition.col})`
+        );
+        return false;
+      }
+      
+      const currentTerrain = currentGridPoint.terrain;
       const canReverse = this.isTerrainCityOrFerry(currentTerrain);
       if (!canReverse) {
         // console.log("Cannot reverse direction - not at a city or ferry port. Current terrain:", currentTerrain);
@@ -250,18 +274,22 @@ export class TrainMovementManager {
     // console.debug("lastTrackSegment", lastTrackSegment);
 
     // Check reversal rules
-    if (
-      lastTrackSegment &&
-      !this.canReverseDirection(
-        lastTrackSegment,
-        proposedDirection,
-        lastDirection
-      )
-    ) {
-      // console.log(
-      //   "Invalid direction change - can only reverse at cities or ferry ports"
-      // );
-      return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+    // Only check reversal if we have movement history (not first move)
+    // and the proposed direction would reverse the last direction
+    if (lastTrackSegment) {
+      // Use the actual current position to look up terrain, not the stored segment
+      if (
+        !this.canReverseDirection(
+          priorPosition,
+          proposedDirection,
+          lastDirection
+        )
+      ) {
+        // console.log(
+        //   "Invalid direction change - can only reverse at cities or ferry ports"
+        // );
+        return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+      }
     }
 
     // If we got here, the move is valid - deduct the movement points

@@ -182,6 +182,15 @@ export class TrainInteractionManager {
   private async handleTrainPlacement(
     pointer: Phaser.Input.Pointer
   ): Promise<void> {
+    // Early return guard: only allow movement if it's the local player's turn
+    const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
+      this.gameState.currentPlayerIndex,
+      this.gameState.players
+    );
+    if (!isLocalPlayerTurn) {
+      return;
+    }
+
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
 
@@ -487,13 +496,13 @@ export class TrainInteractionManager {
       trainSprite = this.createTrainSprite(player, x + offsetX, y + offsetY);
       this.gameState.trainSprites?.set(playerId, trainSprite);
 
-      // Set up interaction for new sprites
+      // Set up interaction for new sprites - interactivity will be set by updateTrainInteractivity
       this.setupTrainSpriteInteraction(trainSprite, playerId);
     } else {
       // Just update position for existing sprites
       trainSprite.setPosition(x + offsetX, y + offsetY);
 
-      // Make sure it's still interactive
+      // Make sure it's still interactive - interactivity will be set by updateTrainInteractivity
       if (!trainSprite.input) {
         trainSprite.setInteractive({ useHandCursor: true });
         this.setupTrainSpriteInteraction(trainSprite, playerId);
@@ -502,6 +511,9 @@ export class TrainInteractionManager {
 
     // Update z-ordering for all trains
     this.updateTrainZOrders();
+    
+    // Ensure interactivity is correctly set based on current turn state
+    this.updateTrainInteractivity();
   }
 
   private createTrainSprite(
@@ -543,15 +555,19 @@ export class TrainInteractionManager {
     // Add the pointer down listener
     sprite.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       // Only allow interaction if:
-      // 1. This is the current player's train
-      // 2. Not in drawing mode
-      // 3. Player has track
-      const isCurrentPlayer =
-        playerId ===
-        this.gameState.players[this.gameState.currentPlayerIndex].id;
+      // 1. This is the local player's train
+      // 2. It is the local player's turn
+      // 3. Not in drawing mode
+      // 4. Player has track
+      const localPlayerId = this.playerStateService.getLocalPlayerId();
+      const isLocalPlayerTrain = localPlayerId === playerId;
+      const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
+        this.gameState.currentPlayerIndex,
+        this.gameState.players
+      );
       const hasTrack = this.playerHasTrack(playerId);
 
-      if (isCurrentPlayer && hasTrack && !this.isDrawingMode) {
+      if (isLocalPlayerTrain && isLocalPlayerTurn && hasTrack && !this.isDrawingMode) {
         // First stop event propagation to prevent it from being handled by the scene
         if (pointer.event) {
           pointer.event.stopPropagation();
@@ -603,6 +619,42 @@ export class TrainInteractionManager {
       );
       if (currentPlayerSprite) {
         this.trainContainer.bringToTop(currentPlayerSprite);
+      }
+    });
+  }
+
+  /**
+   * Update train sprite interactivity based on whose turn it is
+   * Only the local player's train should be interactive, and only when it's their turn
+   */
+  public updateTrainInteractivity(): void {
+    const localPlayerId = this.playerStateService.getLocalPlayerId();
+    const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
+      this.gameState.currentPlayerIndex,
+      this.gameState.players
+    );
+
+    // Update interactivity for all train sprites
+    this.gameState.trainSprites?.forEach((sprite, playerId) => {
+      const isLocalPlayerTrain = localPlayerId === playerId;
+      
+      // Only enable interactivity if:
+      // 1. It's the local player's train
+      // 2. It's the local player's turn
+      // 3. Player has track
+      const shouldBeInteractive = 
+        isLocalPlayerTrain && 
+        isLocalPlayerTurn && 
+        this.playerHasTrack(playerId);
+
+      if (shouldBeInteractive) {
+        // Make sprite interactive with hand cursor and set up the click handler
+        sprite.setInteractive({ useHandCursor: true });
+        this.setupTrainSpriteInteraction(sprite, playerId);
+      } else {
+        // Disable interactivity - train should not be clickable
+        sprite.disableInteractive();
+        sprite.removeAllListeners("pointerdown");
       }
     });
   }
