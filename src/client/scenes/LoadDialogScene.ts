@@ -380,9 +380,12 @@ export class LoadDialogScene extends Scene {
             }
             
             // Calculate new state values (for API calls only, not for local state)
-            const updatedLoads = this.player.trainState.loads.filter(
-                l => l !== load.type
-            );
+            // Remove only one instance of the load type (not all instances)
+            const loadIndex = this.player.trainState.loads.indexOf(load.type);
+            const updatedLoads = [...this.player.trainState.loads];
+            if (loadIndex !== -1) {
+                updatedLoads.splice(loadIndex, 1);
+            }
             const newMoney = this.player.money + load.payment;
             
             // Server-authoritative pattern: Make all API calls first
@@ -489,9 +492,11 @@ export class LoadDialogScene extends Scene {
             }
             
             // Calculate new loads array (for API call, not for local state yet)
-            const updatedLoads = this.player.trainState.loads.filter(
-                l => l !== loadType
-            );
+            // Remove only one instance of the load type (not all instances)
+            const index = this.player.trainState.loads.indexOf(loadType);
+            if (index === -1) return;
+            const updatedLoads = [...this.player.trainState.loads];
+            updatedLoads.splice(index, 1);
             
             // Server-authoritative: Make API calls first
             // Return the load to the city's available loads if the city produces this load type

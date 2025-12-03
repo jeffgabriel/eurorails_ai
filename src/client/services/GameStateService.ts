@@ -74,11 +74,11 @@ export class GameStateService {
         
         // Server-authoritative: Make API call first
         try {
-            const response = await fetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
+            // Use authenticatedFetch for automatic token refresh
+            const { authenticatedFetch } = await import('./authenticatedFetch');
+            
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
                 body: JSON.stringify({
                     gameId: this.gameState.id,
                     currentPlayerIndex: nextPlayerIndex

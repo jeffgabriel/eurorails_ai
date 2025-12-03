@@ -1,6 +1,7 @@
 // services/socketService.ts
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import type { Server as HTTPServer } from 'http';
+import type { GameState } from '../../shared/types/GameTypes';
 
 let io: SocketIOServer | null = null;
 
@@ -165,7 +166,7 @@ export function emitToGame(gameId: string, event: string, data: unknown): void {
  * @param gameId - The game ID
  * @param patch - The state patch (only changed data, not full state)
  */
-export function emitStatePatch(gameId: string, patch: Partial<any>): void {
+export function emitStatePatch(gameId: string, patch: Partial<GameState>): void {
   if (!io) {
     console.warn('Socket.IO not initialized, cannot emit state patch');
     return;

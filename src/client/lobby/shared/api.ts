@@ -129,10 +129,11 @@ class ApiClient {
   }
 
   async refreshToken(refreshToken: string): Promise<{ token: string; refreshToken: string }> {
+    // Disable retry on 401 to prevent infinite loop if refresh token is invalid
     const response = await this.request<{ success: boolean; data: { token: string; refreshToken: string }; message: string }>('/api/auth/refresh', {
       method: 'POST',
       body: JSON.stringify({ refreshToken }),
-    });
+    }, false);
     return response.data;
   }
 

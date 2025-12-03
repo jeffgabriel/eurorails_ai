@@ -185,8 +185,8 @@ router.post('/update', async (req, res) => {
         console.log('Successfully updated player');
 
         // Get updated player data for socket broadcast
-        // Use a system user ID or null to get full player data (including hand for the player themselves)
-        const updatedPlayers = await PlayerService.getPlayers(gameId, player.userId || '');
+        // Use empty string to hide private hand data when broadcasting to all players
+        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = updatedPlayers.find(p => p.id === player.id);
         
         if (updatedPlayer) {
