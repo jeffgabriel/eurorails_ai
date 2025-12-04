@@ -32,12 +32,6 @@ COPY configuration/ ./configuration/
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_SOCKET_URL=${VITE_SOCKET_URL}
 
-# Debug: Show what env vars are set
-RUN echo "=== Build Environment Variables ===" && \
-    echo "VITE_API_BASE_URL: ${VITE_API_BASE_URL}" && \
-    echo "VITE_SOCKET_URL: ${VITE_SOCKET_URL}" && \
-    env | grep -E '(VITE|NODE_ENV|RAILWAY)' || echo "No matching env vars found"
-
 # Build the application
 RUN npm run build
 

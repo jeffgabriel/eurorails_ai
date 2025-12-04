@@ -2,13 +2,6 @@ const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const webpack = require('webpack');
 
-// Debug: Log environment variables during webpack execution
-console.log('=== Webpack Environment Variables ===');
-console.log('VITE_API_BASE_URL:', process.env.VITE_API_BASE_URL);
-console.log('VITE_SOCKET_URL:', process.env.VITE_SOCKET_URL);
-console.log('VITE_DEBUG:', process.env.VITE_DEBUG);
-console.log('NODE_ENV:', process.env.NODE_ENV);
-
 module.exports = {
   entry: './src/client/index.tsx',
   output: {
