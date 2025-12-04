@@ -8,41 +8,17 @@ FROM node:24-alpine AS builder
 WORKDIR /app
 
 # Accept build arguments for environment variables
-# Railway may pass environment variables as build args OR they may be available as ENV
+# Railway automatically passes environment variables as build args
 ARG VITE_API_BASE_URL
 ARG VITE_SOCKET_URL
 ARG VITE_DEBUG
 ARG NODE_ENV=production
 
-# Debug: Check what Railway is providing
-# Railway environment variables might be available directly as ENV during build
-RUN echo "=========================================" && \
-    echo "CHECKING RAILWAY ENVIRONMENT VARIABLES:" && \
-    echo "ARG VITE_API_BASE_URL=${VITE_API_BASE_URL:-NOT SET AS ARG}" && \
-    echo "ENV VITE_API_BASE_URL=${VITE_API_BASE_URL:-${VITE_API_BASE_URL_ENV:-NOT SET AS ENV}}" && \
-    echo "ARG VITE_SOCKET_URL=${VITE_SOCKET_URL:-NOT SET AS ARG}" && \
-    echo "ARG VITE_DEBUG=${VITE_DEBUG:-NOT SET AS ARG}" && \
-    echo "ARG NODE_ENV=${NODE_ENV:-NOT SET AS ARG}" && \
-    echo "=========================================" && \
-    echo "ALL ENV VARS STARTING WITH VITE:" && \
-    env | grep -i vite || echo "(none found)" && \
-    echo "========================================="
-
-# Use ARG value if provided, otherwise Railway env vars should be available directly
 # Set as environment variables so they're available during build
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_SOCKET_URL=${VITE_SOCKET_URL}
 ENV VITE_DEBUG=${VITE_DEBUG}
 ENV NODE_ENV=${NODE_ENV:-production}
-
-# Debug: Final check before build
-RUN echo "=========================================" && \
-    echo "FINAL ENVIRONMENT VARIABLES FOR BUILD:" && \
-    echo "VITE_API_BASE_URL=${VITE_API_BASE_URL:-NOT SET}" && \
-    echo "VITE_SOCKET_URL=${VITE_SOCKET_URL:-NOT SET}" && \
-    echo "VITE_DEBUG=${VITE_DEBUG:-NOT SET}" && \
-    echo "NODE_ENV=${NODE_ENV:-NOT SET}" && \
-    echo "========================================="
 
 # Copy package files
 COPY package*.json ./
@@ -60,8 +36,8 @@ COPY db/ ./db/
 COPY configuration/ ./configuration/
 
 # Build the application
-# Environment variables are now available for webpack DefinePlugin
-# Explicitly pass env vars to ensure they're available during build
+# Environment variables are set as ENV above and will be available to webpack DefinePlugin
+# Explicitly pass env vars to npm to ensure they're available during build
 RUN VITE_API_BASE_URL=${VITE_API_BASE_URL} \
     VITE_SOCKET_URL=${VITE_SOCKET_URL} \
     VITE_DEBUG=${VITE_DEBUG} \
