@@ -4,7 +4,7 @@
   "description": "AI-powered EuroRails game",
   "main": "dist/server/index.js",
   "scripts": {
-    "build:server": "npx -p typescript tsc -p tsconfig.json",
+    "build:server": "tsc -p tsconfig.json",
     "build:client": "webpack --mode production",
     "build": "npm run build:server && npm run build:client",
     "start": "npm run build && node dist/server/index.js",
