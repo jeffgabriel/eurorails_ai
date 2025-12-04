@@ -37,13 +37,8 @@ COPY configuration/ ./configuration/
 
 # Build the application
 # Environment variables are set as ENV above and will be available to webpack DefinePlugin
-# Use the locally installed TypeScript and explicitly pass env vars to npm
-RUN VITE_API_BASE_URL=${VITE_API_BASE_URL} \
-    VITE_SOCKET_URL=${VITE_SOCKET_URL} \
-    VITE_DEBUG=${VITE_DEBUG} \
-    NODE_ENV=${NODE_ENV} \
-    ./node_modules/.bin/tsc -p tsconfig.json && \
-    npm run build:client
+# Use npm scripts which handle paths correctly across platforms
+RUN npm run build
 
 # Stage 2: Production
 # Using latest 24-alpine to get security updates
