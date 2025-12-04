@@ -7,6 +7,20 @@ FROM node:24-alpine AS builder
 
 WORKDIR /app
 
+# Accept build arguments for environment variables
+# Railway automatically provides these as build args from environment variables
+ARG VITE_API_BASE_URL
+ARG VITE_SOCKET_URL
+ARG VITE_DEBUG
+ARG NODE_ENV=production
+
+# Set as environment variables so they're available during build
+# These will be baked into the client bundle via webpack's DefinePlugin
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_SOCKET_URL=${VITE_SOCKET_URL}
+ENV VITE_DEBUG=${VITE_DEBUG}
+ENV NODE_ENV=${NODE_ENV}
+
 # Copy package files
 COPY package*.json ./
 COPY tsconfig*.json ./
