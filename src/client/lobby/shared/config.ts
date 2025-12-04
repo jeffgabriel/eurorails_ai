@@ -19,15 +19,23 @@ declare global {
   }
 }
 
+// Direct access to build-time env vars for webpack DefinePlugin
+// DefinePlugin only works with literal property access, not dynamic access
+const BUILD_TIME_ENV = {
+  VITE_API_BASE_URL: process.env.VITE_API_BASE_URL,
+  VITE_SOCKET_URL: process.env.VITE_SOCKET_URL,
+  VITE_DEBUG: process.env.VITE_DEBUG,
+  NODE_ENV: process.env.NODE_ENV,
+};
+
 function getEnvVar(key: string, defaultValue: string): string {
   // 1. Check build-time environment variables (injected by webpack DefinePlugin)
   //    This is the primary source of configuration for production builds
-  if (typeof process !== 'undefined' && process.env) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      console.log(`[Config] Using build-time ${key}:`, value);
-      return value;
-    }
+  //    Must use literal property access for DefinePlugin to work
+  const buildValue = BUILD_TIME_ENV[key as keyof typeof BUILD_TIME_ENV];
+  if (buildValue !== undefined) {
+    console.log(`[Config] Using build-time ${key}:`, buildValue);
+    return buildValue;
   }
 
   // 2. Check for runtime configuration (window.__APP_CONFIG__) as fallback
