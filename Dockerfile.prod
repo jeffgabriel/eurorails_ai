@@ -19,12 +19,7 @@ COPY webpack.config.js ./
 COPY postcss.config.js ./
 
 # Install all dependencies (including devDependencies for build)
-# Do this BEFORE setting ENV to avoid any npm behavior changes
 RUN npm ci
-
-# Debug: Check if TypeScript was installed
-RUN ls -la node_modules/.bin/ | grep -E '(tsc|typescript)' || echo "WARNING: tsc not found in node_modules/.bin" && \
-    npm list typescript || echo "WARNING: typescript not in npm list"
 
 # Copy source code
 COPY src/ ./src/
@@ -36,6 +31,12 @@ COPY configuration/ ./configuration/
 # These will be baked into the client bundle via webpack's DefinePlugin
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_SOCKET_URL=${VITE_SOCKET_URL}
+
+# Debug: Show what env vars are set
+RUN echo "=== Build Environment Variables ===" && \
+    echo "VITE_API_BASE_URL: ${VITE_API_BASE_URL}" && \
+    echo "VITE_SOCKET_URL: ${VITE_SOCKET_URL}" && \
+    env | grep -E '(VITE|NODE_ENV|RAILWAY)' || echo "No matching env vars found"
 
 # Build the application
 RUN npm run build
