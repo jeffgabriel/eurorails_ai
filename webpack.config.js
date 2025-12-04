@@ -74,13 +74,17 @@ module.exports = {
     // Debug plugin to log what values webpack is using
     new (class {
       apply(compiler) {
-        compiler.hooks.beforeRun.tap('DebugEnvPlugin', () => {
+        compiler.hooks.beforeCompile.tap('DebugEnvPlugin', () => {
           console.log('=========================================');
           console.log('WEBPACK BUILD - ENVIRONMENT VARIABLES:');
           console.log('VITE_API_BASE_URL:', process.env.VITE_API_BASE_URL || '(not set, will use default: http://localhost:3001)');
           console.log('VITE_SOCKET_URL:', process.env.VITE_SOCKET_URL || '(not set, will use default: http://localhost:3001)');
           console.log('VITE_DEBUG:', process.env.VITE_DEBUG || '(not set, will use default: false)');
           console.log('NODE_ENV:', process.env.NODE_ENV || '(not set, will use default: development)');
+          console.log('=========================================');
+          console.log('WEBPACK DefinePlugin will inject:');
+          console.log('  process.env.VITE_API_BASE_URL =', JSON.stringify(process.env.VITE_API_BASE_URL || 'http://localhost:3001'));
+          console.log('  process.env.VITE_SOCKET_URL =', JSON.stringify(process.env.VITE_SOCKET_URL || 'http://localhost:3001'));
           console.log('=========================================');
         });
       }
