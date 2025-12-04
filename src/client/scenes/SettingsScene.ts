@@ -10,6 +10,7 @@ export class SettingsScene extends Phaser.Scene {
     private colorButtons: Phaser.GameObjects.Rectangle[] = [];
     private selectedColor?: PlayerColor;
     private errorContainer?: Phaser.GameObjects.Container;
+    private joinCode?: string;
 
     constructor() {
         super({ key: 'SettingsScene' });
@@ -26,7 +27,7 @@ export class SettingsScene extends Phaser.Scene {
         this.gameState = data.gameState;
     }
 
-    create() {
+    async create() {
         // Clear existing scene
         this.children.removeAll();
         
@@ -39,6 +40,19 @@ export class SettingsScene extends Phaser.Scene {
             0.5
         ).setOrigin(0);
         
+        // Fetch join code if we have a game ID
+        if (this.gameState.id && !this.joinCode) {
+            try {
+                const response = await fetch(`${config.apiBaseUrl}/api/lobby/games/${this.gameState.id}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    this.joinCode = data.data?.joinCode;
+                }
+            } catch (error) {
+                console.error('Failed to fetch join code:', error);
+            }
+        }
+        
         // If we're not editing a player, show the main settings menu
         if (!this.editingPlayer) {
             this.showMainSettings();
@@ -48,7 +62,8 @@ export class SettingsScene extends Phaser.Scene {
     private showMainSettings() {
         // Add white background panel for settings
         const panelWidth = 600;
-        const panelHeight = Math.max(400, 150 + (this.gameState.players.length * 60) + 200);
+        const joinCodeHeight = this.joinCode ? 80 : 0;
+        const panelHeight = Math.max(400, 150 + joinCodeHeight + (this.gameState.players.length * 60) + 200);
         const panel = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height / 2,
@@ -70,9 +85,36 @@ export class SettingsScene extends Phaser.Scene {
             }
         ).setOrigin(0.5);
 
+        // Add join code display
+        if (this.joinCode) {
+            const joinCodeY = this.scale.height / 2 - (panelHeight / 2) + 100;
+            this.add.text(
+                this.scale.width / 2,
+                joinCodeY,
+                'Join Code:',
+                {
+                    color: '#666666',
+                    fontSize: '16px'
+                }
+            ).setOrigin(0.5);
+            
+            this.add.text(
+                this.scale.width / 2,
+                joinCodeY + 25,
+                this.joinCode,
+                {
+                    color: '#000000',
+                    fontSize: '24px',
+                    fontStyle: 'bold',
+                    fontFamily: 'monospace'
+                }
+            ).setOrigin(0.5);
+        }
+
         // Add player list with edit/delete buttons
+        const playerListStartY = this.joinCode ? this.scale.height / 2 - (panelHeight / 4) + 40 : this.scale.height / 2 - (panelHeight / 4);
         this.gameState.players.forEach((player, index) => {
-            const y = this.scale.height / 2 - (panelHeight / 4) + (index * 60);
+            const y = playerListStartY + (index * 60);
             const rowCenter = this.scale.width / 2;
 
             // Player info
@@ -139,29 +181,6 @@ export class SettingsScene extends Phaser.Scene {
                 deleteButton.on('pointerdown', () => this.deletePlayer(player));
             }
         });
-
-        // Add setup button (only if less than max players)
-        if (this.gameState.players.length < this.gameState.maxPlayers) {
-            const setupButton = this.add.rectangle(
-                this.scale.width / 2,
-                this.scale.height / 2 + (panelHeight / 2) - 180,  // Move up
-                200,
-                45,
-                0x00aa00
-            ).setInteractive({ useHandCursor: true });
-
-            this.add.text(
-                this.scale.width / 2,
-                this.scale.height / 2 + (panelHeight / 2) - 180,  // Move up
-                'Add New Player',
-                {
-                    color: '#ffffff',
-                    fontSize: '20px'
-                }
-            ).setOrigin(0.5);
-
-            setupButton.on('pointerdown', () => this.showAddPlayer());
-        }
 
         // Add end game button before the back button
         const endGameButton = this.add.rectangle(
