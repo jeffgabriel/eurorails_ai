@@ -11,8 +11,6 @@ WORKDIR /app
 # Railway automatically provides these as build args from environment variables
 ARG VITE_API_BASE_URL
 ARG VITE_SOCKET_URL
-ARG VITE_DEBUG
-ARG NODE_ENV=production
 
 # Copy package files
 COPY package*.json ./
@@ -24,6 +22,10 @@ COPY postcss.config.js ./
 # Do this BEFORE setting ENV to avoid any npm behavior changes
 RUN npm ci
 
+# Debug: Check if TypeScript was installed
+RUN ls -la node_modules/.bin/ | grep -E '(tsc|typescript)' || echo "WARNING: tsc not found in node_modules/.bin" && \
+    npm list typescript || echo "WARNING: typescript not in npm list"
+
 # Copy source code
 COPY src/ ./src/
 COPY public/ ./public/
@@ -34,8 +36,6 @@ COPY configuration/ ./configuration/
 # These will be baked into the client bundle via webpack's DefinePlugin
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_SOCKET_URL=${VITE_SOCKET_URL}
-ENV VITE_DEBUG=${VITE_DEBUG}
-ENV NODE_ENV=${NODE_ENV:-production}
 
 # Build the application
 RUN npm run build
