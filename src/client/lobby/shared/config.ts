@@ -20,38 +20,67 @@ declare global {
   }
 }
 
-function getEnvVar(key: string, defaultValue: string): string {
+// Helper to get API base URL with proper webpack DefinePlugin support
+// Must use direct process.env access (not dynamic keys) so webpack can replace at build time
+function getApiBaseUrl(): string {
   // 1. Check for runtime configuration (window.__APP_CONFIG__) first
   //    This is optional and primarily for edge cases where build-time config isn't available
-  //    Most deployments should use build-time configuration via webpack DefinePlugin
-  if (typeof window !== 'undefined' && window.__APP_CONFIG__) {
-    const runtimeConfig = window.__APP_CONFIG__;
-    if (key === 'VITE_API_BASE_URL' && runtimeConfig.apiBaseUrl) {
-      console.log('[Config] Using runtime API base URL:', runtimeConfig.apiBaseUrl);
-      return runtimeConfig.apiBaseUrl;
-    }
-    if (key === 'VITE_SOCKET_URL' && runtimeConfig.socketUrl) {
-      console.log('[Config] Using runtime Socket URL:', runtimeConfig.socketUrl);
-      return runtimeConfig.socketUrl;
-    }
-    if (key === 'VITE_DEBUG' && runtimeConfig.debugEnabled !== undefined) {
-      return runtimeConfig.debugEnabled.toString();
-    }
+  if (typeof window !== 'undefined' && window.__APP_CONFIG__?.apiBaseUrl) {
+    console.log('[Config] Using runtime API base URL:', window.__APP_CONFIG__.apiBaseUrl);
+    return window.__APP_CONFIG__.apiBaseUrl;
   }
   
-  // 2. Check build-time environment variables (injected by webpack DefinePlugin)
+  // 2. Check build-time environment variable (injected by webpack DefinePlugin)
+  //    Must use direct property access so webpack can statically replace it
   //    This is the primary method for configuration in production
-  if (typeof process !== 'undefined' && process.env) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      console.log(`[Config] Using build-time ${key}:`, value);
-      return value;
-    }
+  if (typeof process !== 'undefined' && process.env?.VITE_API_BASE_URL) {
+    console.log('[Config] Using build-time VITE_API_BASE_URL:', process.env.VITE_API_BASE_URL);
+    return process.env.VITE_API_BASE_URL;
   }
   
   // 3. Fallback to default value
-  console.log(`[Config] Using default value for ${key}:`, defaultValue);
-  return defaultValue;
+  console.log('[Config] Using default value for VITE_API_BASE_URL: http://localhost:3001');
+  return 'http://localhost:3001';
+}
+
+// Helper to get Socket URL with proper webpack DefinePlugin support
+function getSocketUrl(): string {
+  // 1. Check for runtime configuration first
+  if (typeof window !== 'undefined' && window.__APP_CONFIG__?.socketUrl) {
+    console.log('[Config] Using runtime Socket URL:', window.__APP_CONFIG__.socketUrl);
+    return window.__APP_CONFIG__.socketUrl;
+  }
+  
+  // 2. Check build-time environment variable (injected by webpack DefinePlugin)
+  if (typeof process !== 'undefined' && process.env?.VITE_SOCKET_URL) {
+    console.log('[Config] Using build-time VITE_SOCKET_URL:', process.env.VITE_SOCKET_URL);
+    return process.env.VITE_SOCKET_URL;
+  }
+  
+  // 3. Fallback to API base URL or default
+  const apiBaseUrl = getApiBaseUrl();
+  if (apiBaseUrl !== 'http://localhost:3001') {
+    return apiBaseUrl;
+  }
+  
+  console.log('[Config] Using default value for VITE_SOCKET_URL: http://localhost:3001');
+  return 'http://localhost:3001';
+}
+
+// Helper to get debug flag
+function getDebugEnabled(): boolean {
+  // 1. Check for runtime configuration first
+  if (typeof window !== 'undefined' && window.__APP_CONFIG__?.debugEnabled !== undefined) {
+    return window.__APP_CONFIG__.debugEnabled;
+  }
+  
+  // 2. Check build-time environment variable (injected by webpack DefinePlugin)
+  if (typeof process !== 'undefined' && process.env?.VITE_DEBUG) {
+    return process.env.VITE_DEBUG === 'true';
+  }
+  
+  // 3. Fallback to default
+  return false;
 }
 
 // Helper function to normalize URLs (ensure no trailing slash for base URLs)
@@ -61,12 +90,13 @@ function normalizeBaseUrl(url: string): string {
 
 // Use getters to ensure config is read dynamically, not at module load time
 // Build-time configuration (via webpack DefinePlugin) is the primary method
+// Direct process.env property access is required so webpack can statically replace values
 export const config: Config = {
   get apiBaseUrl(): string {
-    return normalizeBaseUrl(getEnvVar('VITE_API_BASE_URL', 'http://localhost:3001'));
+    return normalizeBaseUrl(getApiBaseUrl());
   },
   get socketUrl(): string {
-    return normalizeBaseUrl(getEnvVar('VITE_SOCKET_URL', 'http://localhost:3001'));
+    return normalizeBaseUrl(getSocketUrl());
   },
   // isDevelopment: Check NODE_ENV injected by webpack at build time
   // In production builds, this will be 'production', otherwise 'development' or undefined
@@ -75,7 +105,7 @@ export const config: Config = {
     return typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
   },
   get debugEnabled(): boolean {
-    return getEnvVar('VITE_DEBUG', 'false') === 'true';
+    return getDebugEnabled();
   },
 };
 
