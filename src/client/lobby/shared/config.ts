@@ -19,9 +19,27 @@ declare global {
   }
 }
 
+// Direct access to build-time env vars for webpack DefinePlugin
+// DefinePlugin only works with literal property access, not dynamic access
+const BUILD_TIME_ENV = {
+  VITE_API_BASE_URL: process.env.VITE_API_BASE_URL,
+  VITE_SOCKET_URL: process.env.VITE_SOCKET_URL,
+  VITE_DEBUG: process.env.VITE_DEBUG,
+  NODE_ENV: process.env.NODE_ENV,
+};
+
 function getEnvVar(key: string, defaultValue: string): string {
-  // 1. Check for runtime configuration (window.__APP_CONFIG__) first
-  //    This allows deployment to inject config without rebuilding
+  // 1. Check build-time environment variables (injected by webpack DefinePlugin)
+  //    This is the primary source of configuration for production builds
+  //    Must use literal property access for DefinePlugin to work
+  const buildValue = BUILD_TIME_ENV[key as keyof typeof BUILD_TIME_ENV];
+  if (buildValue !== undefined) {
+    console.log(`[Config] Using build-time ${key}:`, buildValue);
+    return buildValue;
+  }
+
+  // 2. Check for runtime configuration (window.__APP_CONFIG__) as fallback
+  //    This is optional and only used for special deployment scenarios
   if (typeof window !== 'undefined' && window.__APP_CONFIG__) {
     const runtimeConfig = window.__APP_CONFIG__;
     if (key === 'VITE_API_BASE_URL' && runtimeConfig.apiBaseUrl) {
@@ -35,20 +53,8 @@ function getEnvVar(key: string, defaultValue: string): string {
     if (key === 'VITE_DEBUG' && runtimeConfig.debugEnabled !== undefined) {
       return runtimeConfig.debugEnabled.toString();
     }
-  } else if (typeof window !== 'undefined') {
-    // Log if runtime config is not available
-    console.warn('[Config] window.__APP_CONFIG__ not found, using build-time or default values');
   }
-  
-  // 2. Check build-time environment variables (injected by webpack DefinePlugin)
-  if (typeof process !== 'undefined' && process.env) {
-    const value = process.env[key];
-    if (value !== undefined) {
-      console.log(`[Config] Using build-time ${key}:`, value);
-      return value;
-    }
-  }
-  
+
   // 3. Fallback to default value
   console.log(`[Config] Using default value for ${key}:`, defaultValue);
   return defaultValue;
