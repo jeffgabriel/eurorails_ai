@@ -8,21 +8,29 @@ export class CitySelectionManager {
   private mapRenderer: MapRenderer;
   private onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>;
   private dropdownDomElement: Phaser.GameObjects.DOMElement | null = null;
+  private isHandCollapsed: () => boolean;
   
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
     mapRenderer: MapRenderer,
-    onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>
+    onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>,
+    isHandCollapsed?: () => boolean
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.mapRenderer = mapRenderer;
     this.onCitySelected = onCitySelected;
+    this.isHandCollapsed = isHandCollapsed || (() => false);
   }
   
   public showCitySelectionForPlayer(playerId: string): void {
     // Only show selection for current player
+    
+    // Don't show dropdown if hand is collapsed
+    if (this.isHandCollapsed()) {
+      return;
+    }
     
     // Find the player
     const player = this.gameState.players.find((p) => p.id === playerId);
@@ -119,10 +127,29 @@ export class CitySelectionManager {
       );
     };
 
-    // Position the dropdown in the player hand area (above player name)
-    // Use responsive positioning based on screen width
-    const handY = this.scene.scale.height - 280 + 20; // 20px from top of hand area
-    const dropdownLeft = Math.min(820, this.scene.scale.width - 200); // Keep 200px margin from right
+    // Position the dropdown in the info panel area (above player name)
+    // Info panel is typically on the right when side-by-side, or below cards when stacked
+    // Calculate position based on screen width to determine layout
+    const screenWidth = this.scene.scale.width;
+    const cardsContainerMaxWidth = 570; // Cards container max width
+    const containerSpacing = 20;
+    const infoPanelMaxWidth = 400;
+    const padding = 20;
+    const totalRequiredWidth = cardsContainerMaxWidth + containerSpacing + infoPanelMaxWidth + (padding * 2);
+    
+    const containersSideBySide = screenWidth >= totalRequiredWidth;
+    const estimatedHandHeight = 280; // Base height
+    const handY = this.scene.scale.height - estimatedHandHeight + 20; // 20px from top of hand area
+    
+    let dropdownLeft: number;
+    if (containersSideBySide) {
+      // Info panel is on the right
+      dropdownLeft = padding + cardsContainerMaxWidth + containerSpacing + (infoPanelMaxWidth / 2) - 90; // Center in info panel, minus half dropdown width
+    } else {
+      // Info panel is below cards, center it
+      dropdownLeft = (screenWidth / 2) - 90; // Center on screen, minus half dropdown width
+    }
+    
     dropdown.style.position = 'fixed';
     dropdown.style.left = `${dropdownLeft}px`;
     dropdown.style.top = `${handY}px`;

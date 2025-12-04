@@ -125,12 +125,13 @@ export class UIManager {
     this.trainInteractionManager.setHandContainer(this.playerHandContainer);
     this.trainInteractionManager.setUIManager(this);
 
-    // Initialize the city selection manager
+    // Initialize the city selection manager (after playerHandDisplay is created)
     this.citySelectionManager = new CitySelectionManager(
       this.scene,
       this.gameState,
       this.mapRenderer,
-      (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col)
+      (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col),
+      () => this.playerHandDisplay.isHandCollapsed()
     );
   }
 
