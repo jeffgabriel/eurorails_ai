@@ -387,8 +387,8 @@ export class TrainInteractionManager {
       },
       onUpdateTrainCard: () => {
         // Update the train card display through PlayerHandDisplay
-        if (this.playerHandDisplay?.trainCard) {
-          this.playerHandDisplay.trainCard.updateLoads();
+        if (this.playerHandDisplay) {
+          this.playerHandDisplay.updateTrainCardLoads();
         }
       },
       onUpdateHandDisplay: () => {

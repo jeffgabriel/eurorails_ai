@@ -690,6 +690,9 @@ export class GameScene extends Phaser.Scene {
         console.error(`Invalid train type: ${newCurrentPlayer.trainType}`);
       }
 
+      // Update gameState in UIManager
+      this.uiManager.updateGameState(this.gameState);
+      
       // Refresh UI overlay (leaderboard, etc.)
       this.uiManager.setupUIOverlay();
       

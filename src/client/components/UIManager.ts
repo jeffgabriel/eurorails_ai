@@ -55,6 +55,12 @@ export class UIManager {
     this.initializeComponentManagers(nextPlayerCallback);
   }
 
+  public updateGameState(gameState: GameState): void {
+    this.gameState = gameState;
+    // Update component managers that need fresh gameState
+    this.playerHandDisplay.updateGameState(gameState);
+  }
+
   private initializeComponentManagers(nextPlayerCallback: () => void): void {
     // Create the train movement manager
     const trainMovementManager = new TrainMovementManager(this.gameState);
@@ -203,12 +209,17 @@ export class UIManager {
     
     // Update leaderboard directly on UI container
     this.leaderboardManager.update(this.uiContainer);
+    
+    // Update gameState in playerHandDisplay
+    this.playerHandDisplay.updateGameState(this.gameState);
   }
 
   public async setupPlayerHand(
     isDrawingMode: boolean = false,
     currentTrackCost: number = 0
   ): Promise<void> {
+    // Update gameState first
+    this.playerHandDisplay.updateGameState(this.gameState);
     // Update the player hand display with the current container
     await this.playerHandDisplay.update(isDrawingMode, currentTrackCost, this.playerHandContainer);
   }

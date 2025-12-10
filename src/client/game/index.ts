@@ -4,6 +4,7 @@ import Phaser from 'phaser';
 import { GameScene } from '../scenes/GameScene';
 import { SetupScene } from '../scenes/SetupScene';
 import { LoadDialogScene } from '../scenes/LoadDialogScene';
+import { PlayerHandScene } from '../scenes/PlayerHandScene';
 import RexUIPlugin from 'phaser3-rex-plugins/templates/ui/ui-plugin.js';
 
 // Get game ID from URL parameters or path
@@ -34,7 +35,7 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
-  scene: [SetupScene, LoadDialogScene, GameScene],
+  scene: [SetupScene, LoadDialogScene, GameScene, PlayerHandScene],
   plugins: {
     scene: [{
         key: 'rexUI',

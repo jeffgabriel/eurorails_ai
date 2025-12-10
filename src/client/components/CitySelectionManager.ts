@@ -89,14 +89,6 @@ export class CitySelectionManager extends SimpleDropDownList {
       return;
     }
     this.onCitySelected = onCitySelected;
-    // Add scroll wheel prevention at DOM level
-    // this.on("pointerover", () => {
-    //   this.scene.input.on('wheel', this.preventWheel, this);
-    // });
-
-    // this.on("pointerout", () => {
-    //   this.scene.input.off('wheel', this.preventWheel, this);
-    // });
     this.on("button.click", (_dropDownList, _listPanel, selectedOption) => {
       const selectedCity = selectedOption.value;
       this.onCitySelected(
@@ -182,17 +174,5 @@ export class CitySelectionManager extends SimpleDropDownList {
     }
 
     return true;
-  }
-
-  public destroy(): void {
-    //const canvas = this.scene.game.canvas;
-    //canvas.removeEventListener("wheel", this.preventWheel);
-    // Clean up event listeners
-    this.off("pointerover");
-    this.off("pointerout");
-    this.off("button.click");
-
-    // Call parent's preDestroy
-    super.destroy();
   }
 }
