@@ -75,11 +75,9 @@ module.exports = {
       'process.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL || 'http://localhost:3001'),
       'process.env.VITE_SOCKET_URL': JSON.stringify(process.env.VITE_SOCKET_URL || 'http://localhost:3001'),
       'process.env.VITE_DEBUG': JSON.stringify(process.env.VITE_DEBUG || 'false'),
-      // Only override NODE_ENV if it differs from webpack mode (i.e., when NODE_ENV=test)
-      // Otherwise let webpack handle it automatically to avoid conflicts
-      ...(originalNodeEnv !== webpackMode && {
-        'process.env.NODE_ENV': JSON.stringify(originalNodeEnv),
-      }),
+      // Always define NODE_ENV - use originalNodeEnv for client code (preserves 'test' if set),
+      // but webpack mode is used for optimization
+      'process.env.NODE_ENV': JSON.stringify(originalNodeEnv),
     }),
   ],
   devServer: {
