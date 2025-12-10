@@ -3,6 +3,7 @@ const HtmlWebpackPlugin = require('html-webpack-plugin');
 const webpack = require('webpack');
 
 module.exports = {
+  mode: process.env.NODE_ENV || 'development',
   entry: './src/client/index.tsx',
   output: {
     path: path.resolve(__dirname, 'dist/client'),
@@ -107,7 +108,7 @@ module.exports = {
       }
     ]
   },
-  devtool: 'eval-cheap-module-source-map',
+  devtool: process.env.NODE_ENV === 'production' ? 'source-map' : 'eval-source-map',
   cache: {
     type: 'filesystem',
     buildDependencies: {

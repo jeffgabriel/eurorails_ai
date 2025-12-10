@@ -25,7 +25,7 @@ export class UIManager {
   private trainInteractionManager!: TrainInteractionManager;
   private leaderboardManager!: LeaderboardManager;
   private playerHandDisplay!: PlayerHandDisplay;
-  private citySelectionManager!: CitySelectionManager;
+  //private citySelectionManager!: CitySelectionManager;
   private isDrawingMode: boolean = false;
 
   constructor(
@@ -117,6 +117,8 @@ export class UIManager {
         this.setupPlayerHand(this.isDrawingMode, totalCost).catch(console.error);
       },
       () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0,
+      this.mapRenderer,
+      this.trainInteractionManager,
       this.gameStateService
     );
 
@@ -125,14 +127,14 @@ export class UIManager {
     this.trainInteractionManager.setHandContainer(this.playerHandContainer);
     this.trainInteractionManager.setUIManager(this);
 
-    // Initialize the city selection manager (after playerHandDisplay is created)
-    this.citySelectionManager = new CitySelectionManager(
-      this.scene,
-      this.gameState,
-      this.mapRenderer,
-      (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col),
-      () => this.playerHandDisplay.isHandCollapsed()
-    );
+    // // Initialize the city selection manager (after playerHandDisplay is created)
+    // this.citySelectionManager = new CitySelectionManager(
+    //   this.scene,
+    //   this.gameState,
+    //   this.mapRenderer,
+    //   (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col),
+    //   () => this.playerHandDisplay.isHandCollapsed()
+    // );
   }
 
   public getContainers(): {
@@ -212,10 +214,10 @@ export class UIManager {
   }
 
   public cleanupCityDropdowns(): void {
-    this.citySelectionManager.cleanupCityDropdowns();
+    //this.citySelectionManager.cleanupCityDropdowns();
   }
 
   public showCitySelectionForPlayer(playerId: string): void {
-    this.citySelectionManager.showCitySelectionForPlayer(playerId);
+    //this.citySelectionManager.showCitySelectionForPlayer(playerId);
   }
 }

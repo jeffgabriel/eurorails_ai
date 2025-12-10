@@ -22,7 +22,8 @@
     "strictPropertyInitialization": false,
     "preserveConstEnums": true,
     "isolatedModules": true,
-    "sourceMap": true
+    "inlineSourceMap": true,
+    "sourceRoot": "./src",
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
