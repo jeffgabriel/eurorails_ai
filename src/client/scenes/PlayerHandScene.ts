@@ -61,19 +61,9 @@ export class PlayerHandScene extends Phaser.Scene {
   private readonly CARD_WIDTH = 170;
   private readonly CARD_HEIGHT = 255;
   private readonly CARD_SPACING_HORIZONTAL = 20;
-  private readonly CARD_SPACING_VERTICAL = 20;
 
   // Layout constants
-  private readonly CARDS_CONTAINER_MAX_WIDTH = 170 * 3 + 20 * 2 + 20 * 2; // 570
-  private readonly CARDS_CONTAINER_MIN_WIDTH = 170;
-  private readonly INFO_PANEL_MAX_WIDTH = 400;
-  private readonly INFO_PANEL_MIN_WIDTH = 200;
   private readonly HAND_HEIGHT_BASE = 280;
-  private readonly PADDING = 20;
-  private readonly CONTAINER_SPACING = 20;
-  private readonly LEFT_BUFFER = 75;
-  private readonly VERTICAL_PADDING = 30;
-  private layoutInfo = this.calculateLayout();
 
   constructor() {
     super({ key: "PlayerHandScene" });
@@ -179,7 +169,6 @@ export class PlayerHandScene extends Phaser.Scene {
       // Ensure we fully reset old layout (RexUI doesn't auto-heal after removals)
       this.destroyUI();
     }
-    this.layoutInfo = this.calculateLayout();
     //overall rexUI.sizer which contains all the UI elements in the player hand scene
     this.rootSizer = (this as any).rexUI.add
       .sizer({
@@ -223,176 +212,6 @@ export class PlayerHandScene extends Phaser.Scene {
       duration: 300,
       ease: "Power2",
     });
-  }
-
-  private calculateLayout(): {
-    containersSideBySide: boolean;
-    cardsStacked: boolean;
-    cardsContainerWidth: number;
-    cardsContainerX: number;
-    cardsContainerY: number;
-    trainCardX: number;
-    trainCardY: number;
-    playerInfoX: number;
-    playerInfoY: number;
-    cardStartX: number;
-    cardStartY: number;
-    cardSpacing: number;
-    handHeight: number;
-  } {
-    if (!this.scale)
-      return {
-        containersSideBySide: false,
-        cardsStacked: false,
-        cardsContainerWidth: 0,
-        cardsContainerX: 0,
-        cardsContainerY: 0,
-        trainCardX: 0,
-        trainCardY: 0,
-        playerInfoX: 0,
-        playerInfoY: 0,
-        cardStartX: 0,
-        cardStartY: 0,
-        cardSpacing: 0,
-        handHeight: 0,
-      };
-    const screenWidth = this.scale.width;
-    const numCards = 3;
-
-    const trainCardWidth = 100;
-    const playerInfoWidth = 300;
-    const totalRequiredWidth =
-      this.LEFT_BUFFER +
-      this.CARDS_CONTAINER_MAX_WIDTH +
-      this.CONTAINER_SPACING +
-      trainCardWidth +
-      this.CONTAINER_SPACING +
-      playerInfoWidth +
-      this.PADDING;
-    const containersSideBySide = screenWidth >= totalRequiredWidth;
-
-    const availableCardsWidth = containersSideBySide
-      ? this.CARDS_CONTAINER_MAX_WIDTH
-      : Math.max(
-          this.CARDS_CONTAINER_MIN_WIDTH,
-          Math.min(
-            this.CARDS_CONTAINER_MAX_WIDTH,
-            screenWidth - this.LEFT_BUFFER - this.PADDING
-          )
-        );
-
-    const cardsRequiredWidth =
-      this.CARD_WIDTH * numCards +
-      this.CARD_SPACING_HORIZONTAL * (numCards - 1);
-    const cardsStacked = availableCardsWidth < cardsRequiredWidth;
-
-    let cardStartX: number;
-    let cardStartY: number;
-    let cardSpacing: number;
-
-    if (cardsStacked) {
-      cardStartX = this.PADDING;
-      cardStartY = this.PADDING;
-      cardSpacing = this.CARD_SPACING_VERTICAL;
-    } else {
-      const totalCardWidth = this.CARD_WIDTH * numCards;
-      const totalSpacing =
-        availableCardsWidth - totalCardWidth - this.PADDING * 2;
-      const spacing = totalSpacing / (numCards - 1);
-      cardStartX = this.PADDING;
-      cardStartY = 0;
-      cardSpacing = spacing;
-    }
-
-    let cardsContainerX: number;
-    let cardsContainerY: number;
-    let trainCardX: number;
-    let trainCardY: number;
-    let playerInfoX: number;
-    let playerInfoY: number;
-    let infoHeight: number;
-    let handHeight: number;
-
-    const bottomPadding = 20;
-    const trainCardHeight = 85;
-
-    if (containersSideBySide) {
-      cardsContainerX = this.LEFT_BUFFER;
-      cardsContainerY = cardsStacked ? 0 : 140;
-
-      const cardsHeight = cardsStacked
-        ? this.CARD_HEIGHT * numCards +
-          this.CARD_SPACING_VERTICAL * (numCards - 1) +
-          this.PADDING * 2
-        : this.CARD_HEIGHT + bottomPadding;
-      const playerInfoHeight = 200;
-
-      const infoAreaX =
-        cardsContainerX + availableCardsWidth + this.CONTAINER_SPACING;
-      const availableInfoWidth = screenWidth - infoAreaX - this.PADDING;
-      const requiredInfoWidth =
-        trainCardWidth + this.CONTAINER_SPACING + playerInfoWidth;
-      const infoStacked = availableInfoWidth < requiredInfoWidth;
-
-      if (infoStacked) {
-        trainCardX = infoAreaX;
-        trainCardY = 10;
-        playerInfoX = infoAreaX;
-        playerInfoY = trainCardY + trainCardHeight + this.CONTAINER_SPACING;
-        infoHeight =
-          trainCardHeight + this.CONTAINER_SPACING + playerInfoHeight;
-      } else {
-        trainCardX = infoAreaX;
-        trainCardY = 10;
-        playerInfoX = trainCardX + trainCardWidth + this.CONTAINER_SPACING;
-        playerInfoY = cardsContainerY;
-        infoHeight = Math.max(trainCardHeight, playerInfoHeight);
-      }
-
-      handHeight = Math.max(cardsHeight, infoHeight);
-
-      if (!cardsStacked) {
-        cardStartY = 0;
-      }
-    } else {
-      cardsContainerX = this.LEFT_BUFFER;
-      cardsContainerY = cardsStacked ? 0 : 140;
-
-      const cardsHeight = cardsStacked
-        ? this.CARD_HEIGHT * numCards +
-          this.CARD_SPACING_VERTICAL * (numCards - 1) +
-          this.PADDING * 2
-        : this.CARD_HEIGHT + bottomPadding;
-
-      if (!cardsStacked) {
-        cardStartY = 0;
-      }
-
-      trainCardX = this.LEFT_BUFFER;
-      trainCardY = cardsContainerY + cardsHeight + this.CONTAINER_SPACING;
-      playerInfoX = this.LEFT_BUFFER;
-      playerInfoY = trainCardY + trainCardHeight + this.CONTAINER_SPACING;
-
-      const playerInfoHeight = 200;
-      infoHeight = trainCardHeight + this.CONTAINER_SPACING + playerInfoHeight;
-      handHeight = cardsHeight + this.CONTAINER_SPACING + infoHeight;
-    }
-
-    return {
-      containersSideBySide,
-      cardsStacked,
-      cardsContainerWidth: availableCardsWidth,
-      cardsContainerX,
-      cardsContainerY,
-      trainCardX,
-      trainCardY,
-      playerInfoX,
-      playerInfoY,
-      cardStartX,
-      cardStartY,
-      cardSpacing,
-      handHeight,
-    };
   }
 
   private createDemandCardSection(): void {
@@ -781,7 +600,6 @@ export class PlayerHandScene extends Phaser.Scene {
     if (!this.rootSizer) return;
 
     // Slide down animation
-    const layoutInfo = this.calculateLayout();
     this.tweens.add({
       targets: this.rootSizer,
       y: this.scale.height,
