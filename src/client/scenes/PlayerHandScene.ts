@@ -56,6 +56,9 @@ export class PlayerHandScene extends Phaser.Scene {
   private buildCostText: Phaser.GameObjects.Text | null = null;
   private crayonButtonImage: Phaser.GameObjects.Image | null = null;
   private crayonHighlightCircle: Phaser.GameObjects.Arc | null = null;
+  private lastCurrentPlayerIndex: number | null = null;
+  private lastIsLocalPlayerActive: boolean | null = null;
+  private lastCanUndo: boolean | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -104,13 +107,32 @@ export class PlayerHandScene extends Phaser.Scene {
     this.isDrawingMode = isDrawingMode;
     this.currentTrackCost = currentTrackCost;
 
-    // Avoid full UI teardown/rebuild for simple state changes (it causes a visible "blink").
-    // Only rebuild if UI hasn't been created yet.
-    if (!this.rootSizer) {
-      this.createUI();
+    const isLocalPlayerActive =
+      this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    const canUndoNow = this.canUndo ? this.canUndo() : false;
+    const currentPlayerIndex = this.gameState.currentPlayerIndex ?? 0;
+
+    const needsFullRefresh =
+      !this.rootSizer ||
+      this.lastCurrentPlayerIndex === null ||
+      this.lastIsLocalPlayerActive === null ||
+      this.lastCanUndo === null ||
+      this.lastCurrentPlayerIndex !== currentPlayerIndex ||
+      this.lastIsLocalPlayerActive !== isLocalPlayerActive ||
+      this.lastCanUndo !== canUndoNow;
+
+    // Turn changes and permission changes affect which controls render (undo button,
+    // active-player alpha/interactive state, etc.). Those are easiest to keep correct
+    // via a non-animated rebuild.
+    if (needsFullRefresh) {
+      this.createUI({ animate: false });
+      this.lastCurrentPlayerIndex = currentPlayerIndex;
+      this.lastIsLocalPlayerActive = isLocalPlayerActive;
+      this.lastCanUndo = canUndoNow;
       return;
     }
 
+    // Small updates (cost, draw-mode highlight, money text) can update in-place.
     this.refreshDynamicUI();
   }
 
@@ -164,7 +186,8 @@ export class PlayerHandScene extends Phaser.Scene {
     this.rootSizer?.layout?.();
   }
 
-  private createUI() {
+  private createUI(options: { animate?: boolean } = {}) {
+    const { animate = true } = options;
     if (this.rootSizer) {
       // Ensure we fully reset old layout (RexUI doesn't auto-heal after removals)
       this.destroyUI();
@@ -179,7 +202,7 @@ export class PlayerHandScene extends Phaser.Scene {
         // Keep root positioning simple and explicit; children are sizer-positioned.
         space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
       })
-      // Start off-screen (below) then tween into place (existing behavior).
+      // Start position: off-screen if animating, otherwise go straight to final.
       .setPosition(this.scale.width / 2, this.scale.height)
       .setName(`root-sizer`);
 
@@ -205,13 +228,18 @@ export class PlayerHandScene extends Phaser.Scene {
         ? this.rootSizer.height
         : this.HAND_HEIGHT_BASE;
     const finalY = this.scale.height - rootHeight / 2;
-    // Slide in animation - animate container up to visible position
-    this.tweens.add({
-      targets: this.rootSizer,
-      y: finalY,
-      duration: 300,
-      ease: "Power2",
-    });
+
+    if (animate) {
+      // Slide in animation - animate container up to visible position
+      this.tweens.add({
+        targets: this.rootSizer,
+        y: finalY,
+        duration: 300,
+        ease: "Power2",
+      });
+    } else {
+      this.rootSizer.setY(finalY);
+    }
   }
 
   private createDemandCardSection(): void {
@@ -455,11 +483,13 @@ export class PlayerHandScene extends Phaser.Scene {
       })
       .setName("crayon-stack-sizer");
 
+    // Crayon color should always reflect the *local player*, not the current-turn player.
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
     const crayonColor =
-      colorMap[
-        this.gameStateService.getCurrentPlayer()?.color?.toUpperCase() ||
-          "black"
-      ];
+      colorMap[(localPlayer?.color || "#000000").toUpperCase()] || "black";
     const crayonTexture = `crayon_${crayonColor}`;
 
     const isLocalPlayerActive =
