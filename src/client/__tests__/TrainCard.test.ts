@@ -94,14 +94,6 @@ describe("TrainCard", () => {
     );
   });
 
-  it("should handle visibility changes", () => {
-    trainCard.setVisible(false);
-    expect(mockScene.add.container().setVisible).toHaveBeenCalledWith(false);
-
-    trainCard.setVisible(true);
-    expect(mockScene.add.container().setVisible).toHaveBeenCalledWith(true);
-  });
-
   it("should clean up resources on destroy", () => {
     trainCard.destroy();
     expect(mockScene.add.container().destroy).toHaveBeenCalled();

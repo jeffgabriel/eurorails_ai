@@ -1,8 +1,8 @@
 import { Scene } from 'phaser';
 import { DemandCard as DemandCardType } from '../../shared/types/DemandCard';
-import { LoadType } from '../../shared/types/LoadTypes';
+import ContainerLite from 'phaser3-rex-plugins/plugins/containerlite.js';
 
-export class DemandCard extends Phaser.GameObjects.Container {
+export class DemandCard extends ContainerLite {
   private readonly CARD_WIDTH = 170;
   private readonly CARD_HEIGHT = 255;
   private readonly DEMAND_SPACING = 70; // Space between demand sections
@@ -19,6 +19,7 @@ export class DemandCard extends Phaser.GameObjects.Container {
     this.add(template);
 
     if (card) {
+      this.name = `demand-card-${card.id}`;
       // Add each demand to its slot
       card.demands.forEach((demand, index) => {
         const sectionY = this.DEMAND_START_Y + (index * this.DEMAND_SPACING);
@@ -58,6 +59,6 @@ export class DemandCard extends Phaser.GameObjects.Container {
       this.add(emptyText);
     }
 
-    scene.add.existing(this);
+    // scene.add.existing(this);
   }
 } 

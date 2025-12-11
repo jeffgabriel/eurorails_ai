@@ -63,7 +63,7 @@ export class GameScene extends Phaser.Scene {
       this.gameState = {
         ...data.gameState,
         // Ensure we preserve the camera state if it exists
-        cameraState: data.gameState.cameraState || this.gameState.cameraState,
+        cameraState: data.gameState?.cameraState || this.gameState.cameraState,
       };
 
       // If we have camera state, apply it immediately

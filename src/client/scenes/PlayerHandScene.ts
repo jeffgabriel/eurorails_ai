@@ -20,6 +20,17 @@ interface PlayerHandSceneData {
   onClose: () => void;
 }
 
+const colorMap: { [key: string]: string } = {
+  "#FFD700": "yellow",
+  "#FF0000": "red",
+  "#0000FF": "blue",
+  "#000000": "black",
+  "#008000": "green",
+  "#8B4513": "brown",
+};
+const MAX_TURN_BUILD_COST = 20;
+const COST_COLOR = "#ffffff";
+
 export class PlayerHandScene extends Phaser.Scene {
   private gameState!: GameState;
   private toggleDrawingCallback!: () => void;
@@ -37,7 +48,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private cards: DemandCard[] = [];
   private citySelectionManager: CitySelectionManager | null = null;
   private background: Phaser.GameObjects.Rectangle | null = null;
-  private rootContainer: Phaser.GameObjects.Container | null = null;
+  private rootSizer: any | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -55,6 +66,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private readonly CONTAINER_SPACING = 20;
   private readonly LEFT_BUFFER = 75;
   private readonly VERTICAL_PADDING = 30;
+  private layoutInfo = this.calculateLayout();
 
   constructor() {
     super({ key: "PlayerHandScene" });
@@ -74,24 +86,8 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   create() {
-    // Create root container that will hold all UI elements
-    // Start positioned below screen
-    const layoutInfo = this.calculateLayout();
-    const finalY = this.scale.height - layoutInfo.handHeight;
-    this.rootContainer = this.add.container(0, this.scale.height);
-    
     // Create the UI (which adds to rootContainer)
-    // CitySelectionManager will be positioned at final position since container animates
     this.createUI();
-    
-    // Slide in animation - animate container up to visible position
-    this.tweens.add({
-      targets: this.rootContainer,
-      y: finalY,
-      duration: 300,
-      ease: "Power2"
-    });
-    
     // Set camera to not scroll
     this.cameras.main.setScroll(0, 0);
   }
@@ -102,81 +98,64 @@ export class PlayerHandScene extends Phaser.Scene {
     }
   }
 
-  updateSceneData(
-    gameState: GameState,
-    isDrawingMode: boolean,
-    currentTrackCost: number
-  ) {
-    this.gameState = gameState;
-    this.isDrawingMode = isDrawingMode;
-    this.currentTrackCost = currentTrackCost;
-    
-    // Save current container position before destroying
-    const layoutInfo = this.calculateLayout();
-    const currentY = this.rootContainer ? this.rootContainer.y : (this.scale.height - layoutInfo.handHeight);
-    
-    // Destroy UI elements but keep container structure
-    if (this.trainCard) {
-      this.trainCard.destroy();
-      this.trainCard = null;
-    }
-    this.cards.forEach((card) => { if (card) card.destroy()});
-    this.cards = [];
-    if (this.citySelectionManager) {
-      this.citySelectionManager.destroy();
-      this.citySelectionManager = null;
-    }
-    if (this.rootContainer) {
-      this.rootContainer.removeAll(true);
-    } else {
-      // Create root container if it doesn't exist
-      this.rootContainer = this.add.container(0, currentY);
-    }
-    
-    // Ensure container is at correct position
-    if (this.rootContainer) {
-      this.rootContainer.y = currentY;
-    }
-    
-    // Recreate UI
-    this.createUI();
-  }
+  // updateSceneData(
+  //   gameState: GameState,
+  //   isDrawingMode: boolean,
+  //   currentTrackCost: number
+  // ) {
+  //   this.gameState = gameState;
+  //   this.isDrawingMode = isDrawingMode;
+  //   this.currentTrackCost = currentTrackCost;
+
+  //   //this.destroyUI();
+
+  //   // Recreate UI
+  //   this.createUI();
+  // }
 
   private createUI() {
-    if (!this.rootContainer) {
-      // If rootContainer doesn't exist, create UI elements directly (for updateSceneData)
-      const layoutInfo = this.calculateLayout();
-      this.rootContainer = this.add.container(0, this.scale.height - layoutInfo.handHeight);
+    if (this.rootSizer) {
+     // this.rootSizer.destroy();
     }
-    
-    // Calculate layout
-    const layoutInfo = this.calculateLayout();
+    this.layoutInfo = this.calculateLayout();
+    //overall rexUI.sizer which contains all the UI elements in the player hand scene
+    this.rootSizer = (this as any).rexUI.add
+      .sizer({
+        width: this.scale.width,
+        height: this.HAND_HEIGHT_BASE,
+        orientation: "x",
+        align: "center",
+        anchor: { bottom: 'bottom-100' },
+        space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
+      })
+      .setPosition(this.scale.width / 2 )
+      .setName(`root-sizer`);
 
-    // Create background
-    this.background = this.add
-      .rectangle(
-        0,
-        0,
-        this.scale.width,
-        layoutInfo.handHeight,
-        0x333333,
-        0.8
-      )
-      .setOrigin(0, 0);
-
-    this.rootContainer.add(this.background);
-
-    // Create demand cards section
-    this.createDemandCardSection(layoutInfo);
+    this.rootSizer.addBackground((this as any).rexUI.add.roundRectangle({
+      color: 0x333333,
+      alpha: 0.8,
+    }));
+    // Create demand cards section -
+    this.createDemandCardSection(this.layoutInfo);
 
     // Create train section
-    this.createTrainSection(layoutInfo);
+    this.createTrainSection(this.layoutInfo);
 
     // Create player info section
-    this.createPlayerInfoSection(layoutInfo);
+    this.createPlayerInfoSection(this.layoutInfo);
 
     // Create hide button
-    this.createHideButton(layoutInfo.handHeight);
+   this.createHideButton(this.layoutInfo.handHeight);
+
+    this.rootSizer.layout();
+    const finalY = this.scale.height - this.layoutInfo.handHeight;
+    // Slide in animation - animate container up to visible position
+    this.tweens.add({
+      targets: this.rootSizer,
+      y: finalY,
+      duration: 300,
+      ease: "Power2",
+    });
   }
 
   private calculateLayout(): {
@@ -194,6 +173,22 @@ export class PlayerHandScene extends Phaser.Scene {
     cardSpacing: number;
     handHeight: number;
   } {
+    if (!this.scale)
+      return {
+        containersSideBySide: false,
+        cardsStacked: false,
+        cardsContainerWidth: 0,
+        cardsContainerX: 0,
+        cardsContainerY: 0,
+        trainCardX: 0,
+        trainCardY: 0,
+        playerInfoX: 0,
+        playerInfoY: 0,
+        cardStartX: 0,
+        cardStartY: 0,
+        cardSpacing: 0,
+        handHeight: 0,
+      };
     const screenWidth = this.scale.width;
     const numCards = 3;
 
@@ -220,7 +215,8 @@ export class PlayerHandScene extends Phaser.Scene {
         );
 
     const cardsRequiredWidth =
-      this.CARD_WIDTH * numCards + this.CARD_SPACING_HORIZONTAL * (numCards - 1);
+      this.CARD_WIDTH * numCards +
+      this.CARD_SPACING_HORIZONTAL * (numCards - 1);
     const cardsStacked = availableCardsWidth < cardsRequiredWidth;
 
     let cardStartX: number;
@@ -233,7 +229,8 @@ export class PlayerHandScene extends Phaser.Scene {
       cardSpacing = this.CARD_SPACING_VERTICAL;
     } else {
       const totalCardWidth = this.CARD_WIDTH * numCards;
-      const totalSpacing = availableCardsWidth - totalCardWidth - this.PADDING * 2;
+      const totalSpacing =
+        availableCardsWidth - totalCardWidth - this.PADDING * 2;
       const spacing = totalSpacing / (numCards - 1);
       cardStartX = this.PADDING;
       cardStartY = 0;
@@ -263,7 +260,8 @@ export class PlayerHandScene extends Phaser.Scene {
         : this.CARD_HEIGHT + bottomPadding;
       const playerInfoHeight = 200;
 
-      const infoAreaX = cardsContainerX + availableCardsWidth + this.CONTAINER_SPACING;
+      const infoAreaX =
+        cardsContainerX + availableCardsWidth + this.CONTAINER_SPACING;
       const availableInfoWidth = screenWidth - infoAreaX - this.PADDING;
       const requiredInfoWidth =
         trainCardWidth + this.CONTAINER_SPACING + playerInfoWidth;
@@ -274,7 +272,8 @@ export class PlayerHandScene extends Phaser.Scene {
         trainCardY = 10;
         playerInfoX = infoAreaX;
         playerInfoY = trainCardY + trainCardHeight + this.CONTAINER_SPACING;
-        infoHeight = trainCardHeight + this.CONTAINER_SPACING + playerInfoHeight;
+        infoHeight =
+          trainCardHeight + this.CONTAINER_SPACING + playerInfoHeight;
       } else {
         trainCardX = infoAreaX;
         trainCardY = 10;
@@ -342,7 +341,9 @@ export class PlayerHandScene extends Phaser.Scene {
     }
 
     // Clear existing cards
-    this.cards.forEach((card) => { if (card) card.destroy()});
+    this.cards.forEach((card) => {
+      if (card) card.destroy();
+    });
     this.cards = [];
 
     if (currentPlayer.hand.length === 0) {
@@ -373,12 +374,12 @@ export class PlayerHandScene extends Phaser.Scene {
 
       const card =
         i < currentPlayer.hand.length ? currentPlayer.hand[i] : undefined;
-      const demandCard = new DemandCard(this, x, y, card);
+      const demandCard = new DemandCard(this, 0, 0, card);
+      this.rootSizer.add(demandCard, { proportion: 0, expand: true});
       this.cards.push(demandCard);
-      if (this.rootContainer) {
-        this.rootContainer.add(demandCard);
-      }
     }
+
+    // this.rootSizer.add(this.cards);
   }
 
   private createTrainSection(
@@ -412,9 +413,7 @@ export class PlayerHandScene extends Phaser.Scene {
         currentPlayer
       );
       this.trainCard.updateLoads();
-      if (this.rootContainer) {
-        this.rootContainer.add(this.trainCard.getContainer());
-      }
+      this.rootSizer.add(this.trainCard.getContainer());
     } catch (error) {
       console.error("Failed to create train card:", error);
     }
@@ -432,47 +431,43 @@ export class PlayerHandScene extends Phaser.Scene {
       return;
     }
 
-    // Only create CitySelectionManager if player needs to select a city
-    const shouldShowCitySelection = localPlayerId && 
-      currentPlayer.id === localPlayerId && 
-      !currentPlayer.trainState?.position;
+    var playerInfoContainer = (this as any).rexUI.add.container({
+      width: layoutInfo.cardsContainerWidth / 3,
+      space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
+    }).setName(`player-info-container`);
 
-    const MAX_TURN_BUILD_COST = 20;
+    this.createCitySelectionSection(playerInfoContainer);
 
-    const colorMap: { [key: string]: string } = {
-      "#FFD700": "yellow",
-      "#FF0000": "red",
-      "#0000FF": "blue",
-      "#000000": "black",
-      "#008000": "green",
-      "#8B4513": "brown",
-    };
+    this.createNameAndMoneySection(playerInfoContainer);
 
-    let costColor = "#ffffff";
-    let costWarning = "";
+    this.createBuildCostSection(playerInfoContainer);
 
-    if (this.currentTrackCost > currentPlayer.money) {
-      costColor = "#ff4444";
-      costWarning = " (Insufficient funds!)";
-    } else if (this.currentTrackCost > MAX_TURN_BUILD_COST) {
-      costColor = "#ff8800";
-      costWarning = " (Over turn limit!)";
-    } else if (this.currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
-      costColor = "#ffff00";
+    this.createCrayonButton(playerInfoContainer);
+
+    //playerInfoContainer.layout();
+    if (this.rootSizer) {
+      this.rootSizer.add(playerInfoContainer);
     }
+  }
 
-    const playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
-    const playerInfoWidth = 300;
-    const infoX = layoutInfo.playerInfoX + playerInfoWidth / 2;
-    const infoY = layoutInfo.playerInfoY;
-
+  private createCitySelectionSection(parentContainer: any): void {
+    // Only create CitySelectionManager if player needs to select a city
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const currentPlayer = this.gameStateService.getCurrentPlayer();
+    if (!currentPlayer) {
+      return;
+    }
+    const shouldShowCitySelection =
+      localPlayerId &&
+      currentPlayer.id === localPlayerId &&
+      !currentPlayer.trainState?.position;
     if (shouldShowCitySelection) {
       // Calculate absolute scene coordinates for CitySelectionManager
       // Use the FINAL container position (where it will be after animation), not current position
       // Container animates to: this.scale.height - layoutInfo.handHeight
-      const finalContainerY = this.scale.height - layoutInfo.handHeight;
-      const absoluteX = infoX + 170; // X offset for city selection relative to player info
-      const absoluteY = finalContainerY + infoY - 90; // Y: final container position + relative offset
+      // const finalContainerY = this.scale.height - layoutInfo.handHeight;
+      // const absoluteX = infoX + 170; // X offset for city selection relative to player info
+      // const absoluteY = finalContainerY + infoY - 90; // Y: final container position + relative offset
 
       // Create CitySelectionManager directly in scene (NOT in container)
       this.citySelectionManager = new CitySelectionManager(
@@ -489,52 +484,116 @@ export class PlayerHandScene extends Phaser.Scene {
           ),
         () => false // Always return false since we're in expanded view
       );
-      
+
       // Only proceed if CitySelectionManager was properly created
       if (this.citySelectionManager) {
         this.citySelectionManager.init();
-        this.citySelectionManager.setPosition(absoluteX-this.CARD_WIDTH, absoluteY);
         this.citySelectionManager.setInteractive(true);
         this.citySelectionManager.setDepth(10000);
         this.citySelectionManager.setScrollFactor(0, 0);
-        this.citySelectionManager.layout();
-        this.add.existing(this.citySelectionManager);
+        parentContainer.add(this.citySelectionManager, {
+          proportion: 1,
+          offsetX: 150,
+          offsetY: 250,
+        });
       }
     }
-    // CitySelectionManager is NOT added to rootContainer - it's positioned directly in scene
+  }
+
+  private createNameAndMoneySection(parentContainer: any): void {
+    const currentPlayer = this.gameStateService.getCurrentPlayer();
+    if (!currentPlayer) {
+      return;
+    }
+
+    const playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
+    // const playerInfoWidth = 300;
+    // const infoX = layoutInfo.playerInfoX + playerInfoWidth / 2;
+    // const infoY = layoutInfo.playerInfoY;
 
     // Create player name and money text
     const nameAndMoney = this.add
-      .text(infoX, infoY, playerInfoText, {
+      .text(0, 0, playerInfoText, {
         color: "#ffffff",
         fontSize: "20px",
         fontStyle: "bold",
       })
-      .setOrigin(0.5, 0);
-    if (this.rootContainer) {
-      this.rootContainer.add(nameAndMoney);
+      .setOrigin(0.5, 0).setName(`name-and-money-text`);
+    parentContainer.addLocal(nameAndMoney, {
+      proportion: 0,
+      expand: true,
+      offsetX: 150,
+      offsetY: 250,
+    });
+  }
+
+  private createBuildCostSection(parentContainer: any): void {
+    const currentPlayer = this.gameStateService.getCurrentPlayer();
+    if (!currentPlayer) {
+      return;
     }
+    let costWarning = "";
+    let costColor = COST_COLOR;
 
-    const textBounds = nameAndMoney.getBounds();
+    if (this.currentTrackCost > currentPlayer.money) {
+      costColor = "#ff4444";
+      costWarning = " (Insufficient funds!)";
+    } else if (this.currentTrackCost > MAX_TURN_BUILD_COST) {
+      costColor = "#ff8800";
+      costWarning = " (Over turn limit!)";
+    } else if (this.currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
+      costColor = "#ffff00";
+    }
+    // Build cost text
+    //const buildCostY = infoY + 45;
+    const buildCostText = this.add
+      .text(0, 0, `Build Cost: ${this.currentTrackCost}M${costWarning}`, {
+        color: costColor,
+        fontSize: "20px",
+        fontStyle: "bold",
+      })
+      .setOrigin(0.5, 0).setName(`build-cost-text`);
 
+    parentContainer.add(buildCostText, {
+      proportion: 1,
+    });
+  }
+
+  private createCrayonButton(parentContainer: any): void {
+    if (this.gameStateService.getCurrentPlayer() === null) {
+      return;
+    }
+    const crayonContainer = (this as any).rexUI.add.container({
+      width: 40,
+      height: 40,
+      space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
+    }).setName(`crayon-container`);
     // Position crayon
-    const crayonX = textBounds.right + 40;
-    const crayonY = infoY + 10;
+    //  const crayonX = textBounds.right + 40;
+    //  const crayonY = infoY + 10;
 
-    const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
+    const crayonColor =
+      colorMap[
+        this.gameStateService.getCurrentPlayer()?.color?.toUpperCase() ||
+          "black"
+      ];
     const crayonTexture = `crayon_${crayonColor}`;
 
     const isLocalPlayerActive =
       this.gameStateService?.isLocalPlayerActive() ?? false;
 
     const crayonButton = this.add
-      .image(crayonX, crayonY, crayonTexture)
+      .image(0, 0, crayonTexture)
       .setScale(0.15)
       .setAlpha(isLocalPlayerActive ? 1.0 : 0.4)
-      .setInteractive({ useHandCursor: isLocalPlayerActive });
-    if (this.rootContainer) {
-      this.rootContainer.add(crayonButton);
-    }
+      .setInteractive({ useHandCursor: isLocalPlayerActive }).setName(`crayon-button`);
+
+    crayonContainer.addLocal(crayonButton, {
+      proportion: 0,
+      expand: true,
+      offsetX: 150,
+      offsetY: 250,
+    });
 
     if (isLocalPlayerActive) {
       crayonButton
@@ -557,33 +616,23 @@ export class PlayerHandScene extends Phaser.Scene {
     } else {
       crayonButton.setInteractive({ useHandCursor: false });
     }
-
-    // Build cost text
-    const buildCostY = infoY + 45;
-    const buildCostText = this.add
-      .text(infoX, buildCostY, `Build Cost: ${this.currentTrackCost}M${costWarning}`, {
-        color: costColor,
-        fontSize: "20px",
-        fontStyle: "bold",
-      })
-      .setOrigin(0.5, 0);
-    if (this.rootContainer) {
-      this.rootContainer.add(buildCostText);
-    }
-
     // Drawing mode indicator
     if (this.isDrawingMode) {
       crayonButton.setScale(0.18);
       const highlight = this.add.circle(
-        crayonButton.x,
-        crayonButton.y,
+        // crayonButton.x,
+        // crayonButton.y,
+        0,
+        0,
         30,
         0xffff00,
         0.3
       );
-      if (this.rootContainer) {
-        this.rootContainer.add(highlight);
-      }
+
+      crayonContainer.addLocal(highlight, {
+        offsetX: 150,
+        offsetY: 250,
+      });
     } else {
       crayonButton.setScale(0.15);
     }
@@ -599,22 +648,26 @@ export class PlayerHandScene extends Phaser.Scene {
           padding: { left: 8, right: 8, top: 4, bottom: 4 },
         })
         .setOrigin(0.5, 0)
-        .setInteractive({ useHandCursor: true });
+        .setInteractive({ useHandCursor: true }).setName(`undo-button`);
       undoButton.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
         if (pointer.event) pointer.event.stopPropagation();
         this.onUndo();
       });
-      if (this.rootContainer) {
-        this.rootContainer.add(undoButton);
-      }
+      crayonContainer.addLocal(undoButton, {
+        offsetX: 150,
+        offsetY: 250,
+      });
     }
+    this.rootSizer.add(crayonContainer, {
+      proportion: 1,
+    });
   }
 
   private createHideButton(handHeight: number): void {
     const buttonX = this.scale.width - 40;
     const buttonY = 20;
 
-    const toggleGraphics = this.add.graphics();
+    const toggleGraphics = this.add.graphics().setName(`hide-button-graphics`);
     const arrowSize = 15;
     const arrowColor = 0xffffff;
 
@@ -625,32 +678,24 @@ export class PlayerHandScene extends Phaser.Scene {
     toggleGraphics.lineTo(buttonX + arrowSize, buttonY - arrowSize / 2);
     toggleGraphics.strokePath();
 
-    const hitArea = this.add.rectangle(
-      buttonX,
-      buttonY,
-      40,
-      40,
-      0x000000,
-      0
-    );
+    const hitArea = this.add.rectangle(buttonX, buttonY, 40, 40, 0x000000, 0).setName(`hide-button-hit-area`);
     hitArea.setInteractive({ useHandCursor: true });
 
     hitArea.on("pointerdown", () => {
       this.slideOutAndClose();
     });
-    
-    if (this.rootContainer) {
-      this.rootContainer.add([toggleGraphics, hitArea]);
-    }
+
+    this.rootSizer.add(toggleGraphics);
+    this.rootSizer.add(hitArea);
   }
 
   private slideOutAndClose(): void {
-    if (!this.rootContainer) return;
-    
+    if (!this.rootSizer) return;
+
     // Slide down animation
     const layoutInfo = this.calculateLayout();
     this.tweens.add({
-      targets: this.rootContainer,
+      targets: this.rootSizer,
       y: this.scale.height,
       duration: 300,
       ease: "Power2",
@@ -671,11 +716,11 @@ export class PlayerHandScene extends Phaser.Scene {
       }
       this.trainCard = null;
     }
-    
+
     // Destroy cards
     this.cards.forEach((card) => {
       try {
-        if (card && typeof card.destroy === 'function') {
+        if (card && typeof card.destroy === "function") {
           card.destroy();
         }
       } catch (e) {
@@ -683,16 +728,23 @@ export class PlayerHandScene extends Phaser.Scene {
       }
     });
     this.cards = [];
-    
+
     // Destroy city selection manager (not in container, so must be destroyed separately)
     // Make sure it exists and is still in the scene before trying to destroy
     if (this.citySelectionManager) {
       try {
         // Remove from scene's display list first
-        if (this.citySelectionManager.scene && this.citySelectionManager.scene.children.exists(this.citySelectionManager)) {
-          this.citySelectionManager.scene.children.remove(this.citySelectionManager);
+        if (
+          this.citySelectionManager.scene &&
+          this.citySelectionManager.scene.children.exists(
+            this.citySelectionManager
+          )
+        ) {
+          this.citySelectionManager.scene.children.remove(
+            this.citySelectionManager
+          );
         }
-        if (typeof this.citySelectionManager.destroy === 'function') {
+        if (typeof this.citySelectionManager.destroy === "function") {
           this.citySelectionManager.destroy();
         }
       } catch (e) {
@@ -700,29 +752,22 @@ export class PlayerHandScene extends Phaser.Scene {
       }
       this.citySelectionManager = null;
     }
-    
+
     // Destroy background (in container, will be removed with container)
     if (this.background) {
       this.background = null; // Will be destroyed when container is destroyed
     }
-    
+
     // Destroy root container and all its children
-    if (this.rootContainer) {
+    if (this.rootSizer) {
       try {
-        // Remove all children first
-        this.rootContainer.removeAll(true);
-        // Remove from scene
-        if (this.rootContainer.scene && this.rootContainer.scene.children.exists(this.rootContainer)) {
-          this.rootContainer.scene.children.remove(this.rootContainer);
-        }
-        // Then destroy
-        if (typeof this.rootContainer.destroy === 'function') {
-          this.rootContainer?.destroy();
-        }
+        //remove and destroy all children
+        this.rootSizer.clear(true);
+        this.rootSizer.destroy();
       } catch (e) {
         console.warn("Error destroying rootContainer:", e);
       }
-      this.rootContainer = null;
+      this.rootSizer = null;
     }
   }
 

@@ -4,7 +4,7 @@ import { LoadType } from "../../shared/types/LoadTypes";
 
 export class TrainCard {
   private scene: Phaser.Scene;
-  private container: Phaser.GameObjects.Container;
+  private container: any;
   private player: Player;
   private loadSlots: Phaser.GameObjects.Rectangle[] = [];
   private loadTokens: Phaser.GameObjects.Container[] = [];
@@ -15,7 +15,7 @@ export class TrainCard {
     this.player = player;
     
     // Create main container
-    this.container = scene.add.container(x, y);
+    this.container = (this.scene as any).rexUI.add.container({x, y}).setName(`train-card-container`);
     
     // Validate player and trainType
     if (!player) {
@@ -44,8 +44,8 @@ export class TrainCard {
     this.createLoadSlots(capacity);
     
     // Add all elements to container
-    this.container.add([this.trainCard]);
-    this.loadSlots.forEach(slot => this.container.add(slot));
+    this.container.addLocal(this.trainCard);
+    this.loadSlots.forEach(slot => this.container.addLocal(slot));
   }
 
   private createLoadSlots(capacity: number) {
@@ -87,7 +87,7 @@ export class TrainCard {
         slot.setFillStyle(0x444444, 0);
         
         // Create a container for the token and its background
-        const tokenContainer = this.scene.add.container(slot.x, slot.y);
+        const tokenContainer = (this.scene as any).rexUI.add.container(slot.x, slot.y);
         
         // Add white circular background - increased radius
         const background = this.scene.add.circle(0, 0, 14, 0xffffff);
@@ -104,11 +104,11 @@ export class TrainCard {
         loadToken.setScale(0.25); // Slightly increased scale to match larger circle
         
         // Add token to container
-        tokenContainer.add(loadToken);
+        tokenContainer.addLocal(loadToken);
         
         // Add token container to tracking array and main container
         this.loadTokens.push(tokenContainer);
-        this.container.add(tokenContainer);
+        this.container.addLocal(tokenContainer);
       } else {
         // Empty slot
         slot.setFillStyle(0x444444, 0.3);
@@ -155,13 +155,8 @@ export class TrainCard {
     }
   }
 
-  // Method to show/hide the train card
-  public setVisible(visible: boolean) {
-    this.container.setVisible(visible);
-  }
-
   // Method to get the container
-  public getContainer(): Phaser.GameObjects.Container {
+  public getContainer(): any {
     return this.container;
   }
 
