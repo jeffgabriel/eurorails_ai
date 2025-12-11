@@ -11,6 +11,8 @@ export class DemandCard extends ContainerLite {
 
   constructor(scene: Scene, x: number, y: number, card?: DemandCardType) {
     super(scene, x, y);
+    // Critical for RexUI sizers: ContainerLite must have an explicit footprint.
+    this.setSize(this.CARD_WIDTH, this.CARD_HEIGHT);
 
     // Add the card template background
     const template = scene.add.image(0, 0, 'demand-template')

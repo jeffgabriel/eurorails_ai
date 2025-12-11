@@ -49,6 +49,13 @@ export class PlayerHandScene extends Phaser.Scene {
   private citySelectionManager: CitySelectionManager | null = null;
   private background: Phaser.GameObjects.Rectangle | null = null;
   private rootSizer: any | null = null;
+  private cardsSizer: any | null = null;
+  private infoSizer: any | null = null;
+  private controlsSizer: any | null = null;
+  private nameAndMoneyText: Phaser.GameObjects.Text | null = null;
+  private buildCostText: Phaser.GameObjects.Text | null = null;
+  private crayonButtonImage: Phaser.GameObjects.Image | null = null;
+  private crayonHighlightCircle: Phaser.GameObjects.Arc | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -98,24 +105,79 @@ export class PlayerHandScene extends Phaser.Scene {
     }
   }
 
-  // updateSceneData(
-  //   gameState: GameState,
-  //   isDrawingMode: boolean,
-  //   currentTrackCost: number
-  // ) {
-  //   this.gameState = gameState;
-  //   this.isDrawingMode = isDrawingMode;
-  //   this.currentTrackCost = currentTrackCost;
+  updateSceneData(
+    gameState: GameState,
+    isDrawingMode: boolean,
+    currentTrackCost: number
+  ) {
+    this.gameState = gameState;
+    this.isDrawingMode = isDrawingMode;
+    this.currentTrackCost = currentTrackCost;
 
-  //   //this.destroyUI();
+    // Avoid full UI teardown/rebuild for simple state changes (it causes a visible "blink").
+    // Only rebuild if UI hasn't been created yet.
+    if (!this.rootSizer) {
+      this.createUI();
+      return;
+    }
 
-  //   // Recreate UI
-  //   this.createUI();
-  // }
+    this.refreshDynamicUI();
+  }
+
+  private getBuildCostDisplay(currentPlayer: any): { text: string; color: string } {
+    let costWarning = "";
+    let costColor = COST_COLOR;
+
+    if (this.currentTrackCost > currentPlayer.money) {
+      costColor = "#ff4444";
+      costWarning = " (Insufficient funds!)";
+    } else if (this.currentTrackCost > MAX_TURN_BUILD_COST) {
+      costColor = "#ff8800";
+      costWarning = " (Over turn limit!)";
+    } else if (this.currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
+      costColor = "#ffff00";
+    }
+
+    return {
+      text: `Build Cost: ${this.currentTrackCost}M${costWarning}`,
+      color: costColor,
+    };
+  }
+
+  private refreshDynamicUI(): void {
+    const currentPlayer = this.gameStateService.getCurrentPlayer();
+    if (!currentPlayer) return;
+
+    // Update name/money if it changed
+    if (this.nameAndMoneyText) {
+      this.nameAndMoneyText.setText(
+        `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`
+      );
+    }
+
+    // Update build cost text + color
+    if (this.buildCostText) {
+      const display = this.getBuildCostDisplay(currentPlayer);
+      this.buildCostText.setText(display.text);
+      this.buildCostText.setColor(display.color);
+    }
+
+    // Update crayon drawing mode visuals without recreating the whole UI.
+    if (this.crayonButtonImage) {
+      this.crayonButtonImage.setScale(this.isDrawingMode ? 0.18 : 0.15);
+    }
+    if (this.crayonHighlightCircle) {
+      this.crayonHighlightCircle.setVisible(this.isDrawingMode);
+    }
+
+    // Re-layout once (text size can change)
+    this.rootSizer?.layout?.();
+  }
 
   private createUI() {
     if (this.rootSizer) {
-     // this.rootSizer.destroy();
+      // Ensure we fully reset old layout (RexUI doesn't auto-heal after removals)
+      this.destroyUI();
     }
     this.layoutInfo = this.calculateLayout();
     //overall rexUI.sizer which contains all the UI elements in the player hand scene
@@ -125,30 +187,35 @@ export class PlayerHandScene extends Phaser.Scene {
         height: this.HAND_HEIGHT_BASE,
         orientation: "x",
         align: "center",
-        anchor: { bottom: 'bottom-100' },
+        // Keep root positioning simple and explicit; children are sizer-positioned.
         space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
       })
-      .setPosition(this.scale.width / 2 )
+      // Start off-screen (below) then tween into place (existing behavior).
+      .setPosition(this.scale.width / 2, this.scale.height)
       .setName(`root-sizer`);
 
-    this.rootSizer.addBackground((this as any).rexUI.add.roundRectangle({
-      color: 0x333333,
-      alpha: 0.8,
-    }));
-    // Create demand cards section -
-    this.createDemandCardSection(this.layoutInfo);
-
-    // Create train section
-    this.createTrainSection(this.layoutInfo);
-
-    // Create player info section
-    this.createPlayerInfoSection(this.layoutInfo);
-
-    // Create hide button
-   this.createHideButton(this.layoutInfo.handHeight);
+    // Give the background an explicit size so it always fills the bar.
+    this.rootSizer.addBackground(
+      (this as any).rexUI.add.roundRectangle({
+        width: this.scale.width,
+        height: this.HAND_HEIGHT_BASE,
+        color: 0x333333,
+        alpha: 0.8,
+      })
+    );
+    // Root horizontal layout: [cards region] [train] [player info] [controls]
+    this.createDemandCardSection();
+    this.createTrainSection();
+    this.createPlayerInfoSection();
+    this.createControlsSection();
 
     this.rootSizer.layout();
-    const finalY = this.scale.height - this.layoutInfo.handHeight;
+    // RexUI sizers are positioned by their center; anchor bottom flush.
+    const rootHeight =
+      (typeof this.rootSizer.height === "number" && this.rootSizer.height > 0)
+        ? this.rootSizer.height
+        : this.HAND_HEIGHT_BASE;
+    const finalY = this.scale.height - rootHeight / 2;
     // Slide in animation - animate container up to visible position
     this.tweens.add({
       targets: this.rootSizer,
@@ -328,9 +395,7 @@ export class PlayerHandScene extends Phaser.Scene {
     };
   }
 
-  private async createDemandCardSection(
-    layoutInfo: ReturnType<typeof this.calculateLayout>
-  ): Promise<void> {
+  private createDemandCardSection(): void {
     const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId
       ? this.gameState.players.find((p) => p.id === localPlayerId)
@@ -353,38 +418,38 @@ export class PlayerHandScene extends Phaser.Scene {
     const maxCards = 3;
     const cardsToShow = Math.max(currentPlayer.hand.length, maxCards);
 
-    // Create cards directly in scene (not in container)
+    // Cards region is its own sizer so rootSizer has stable child footprints.
+    // (Do NOT add cards directly to rootSizer if you want them grouped.)
+    this.cardsSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "x",
+        space: { item: this.CARD_SPACING_HORIZONTAL },
+      })
+      .setName("demand-cards-sizer");
+
     for (let i = 0; i < cardsToShow; i++) {
-      let x: number;
-      let y: number;
-
-      if (layoutInfo.cardsStacked) {
-        x = layoutInfo.cardsContainerX + layoutInfo.cardStartX;
-        y =
-          layoutInfo.cardsContainerY +
-          layoutInfo.cardStartY +
-          i * (this.CARD_HEIGHT + layoutInfo.cardSpacing);
-      } else {
-        x =
-          layoutInfo.cardsContainerX +
-          layoutInfo.cardStartX +
-          i * (this.CARD_WIDTH + layoutInfo.cardSpacing);
-        y = layoutInfo.cardsContainerY + layoutInfo.cardStartY;
-      }
-
       const card =
         i < currentPlayer.hand.length ? currentPlayer.hand[i] : undefined;
       const demandCard = new DemandCard(this, 0, 0, card);
-      this.rootSizer.add(demandCard, { proportion: 0, expand: true});
+      this.cardsSizer.add(demandCard, {
+        proportion: 0,
+        align: "center",
+        padding: 0,
+        expand: false,
+      });
       this.cards.push(demandCard);
     }
 
-    // this.rootSizer.add(this.cards);
+    // Keep cards as a natural-width block so train/info sit immediately after it.
+    this.rootSizer.add(this.cardsSizer, {
+      proportion: 0,
+      align: "center",
+      padding: { left: 8, right: 8 },
+      expand: false,
+    });
   }
 
-  private createTrainSection(
-    layoutInfo: ReturnType<typeof this.calculateLayout>
-  ): void {
+  private createTrainSection(): void {
     const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId
       ? this.gameState.players.find((p) => p.id === localPlayerId)
@@ -408,20 +473,24 @@ export class PlayerHandScene extends Phaser.Scene {
       // Create train card directly in scene
       this.trainCard = new TrainCard(
         this,
-        layoutInfo.trainCardX,
-        layoutInfo.trainCardY,
+        0,
+        0,
         currentPlayer
       );
       this.trainCard.updateLoads();
-      this.rootSizer.add(this.trainCard.getContainer());
+      // Add the ContainerLite itself; it has an explicit size (TrainCard sets it).
+      this.rootSizer.add(this.trainCard.getContainer(), {
+        proportion: 0,
+        align: "center",
+        padding: { left: 6, right: 6 },
+        expand: false,
+      });
     } catch (error) {
       console.error("Failed to create train card:", error);
     }
   }
 
-  private createPlayerInfoSection(
-    layoutInfo: ReturnType<typeof this.calculateLayout>
-  ): void {
+  private createPlayerInfoSection(): void {
     const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId
       ? this.gameState.players.find((p) => p.id === localPlayerId)
@@ -431,26 +500,27 @@ export class PlayerHandScene extends Phaser.Scene {
       return;
     }
 
-    var playerInfoContainer = (this as any).rexUI.add.container({
-      width: layoutInfo.cardsContainerWidth / 3,
-      space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
-    }).setName(`player-info-container`);
+    // Player info must be a Sizer (not a ContainerLite) because we want vertical layout.
+    this.infoSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { item: 8 },
+      })
+      .setName("player-info-sizer");
 
-    this.createCitySelectionSection(playerInfoContainer);
+    this.createCitySelectionSection(this.infoSizer);
+    this.createNameAndMoneySection(this.infoSizer);
+    this.createBuildCostSection(this.infoSizer);
 
-    this.createNameAndMoneySection(playerInfoContainer);
-
-    this.createBuildCostSection(playerInfoContainer);
-
-    this.createCrayonButton(playerInfoContainer);
-
-    //playerInfoContainer.layout();
-    if (this.rootSizer) {
-      this.rootSizer.add(playerInfoContainer);
-    }
+    this.rootSizer.add(this.infoSizer, {
+      proportion: 0,
+      align: "center",
+      padding: { left: 10, right: 10 },
+      expand: false,
+    });
   }
 
-  private createCitySelectionSection(parentContainer: any): void {
+  private createCitySelectionSection(parentSizer: any): void {
     // Only create CitySelectionManager if player needs to select a city
     const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = this.gameStateService.getCurrentPlayer();
@@ -462,14 +532,6 @@ export class PlayerHandScene extends Phaser.Scene {
       currentPlayer.id === localPlayerId &&
       !currentPlayer.trainState?.position;
     if (shouldShowCitySelection) {
-      // Calculate absolute scene coordinates for CitySelectionManager
-      // Use the FINAL container position (where it will be after animation), not current position
-      // Container animates to: this.scale.height - layoutInfo.handHeight
-      // const finalContainerY = this.scale.height - layoutInfo.handHeight;
-      // const absoluteX = infoX + 170; // X offset for city selection relative to player info
-      // const absoluteY = finalContainerY + infoY - 90; // Y: final container position + relative offset
-
-      // Create CitySelectionManager directly in scene (NOT in container)
       this.citySelectionManager = new CitySelectionManager(
         this,
         this.gameState,
@@ -488,89 +550,91 @@ export class PlayerHandScene extends Phaser.Scene {
       // Only proceed if CitySelectionManager was properly created
       if (this.citySelectionManager) {
         this.citySelectionManager.init();
-        this.citySelectionManager.setInteractive(true);
-        this.citySelectionManager.setDepth(10000);
-        this.citySelectionManager.setScrollFactor(0, 0);
-        parentContainer.add(this.citySelectionManager, {
-          proportion: 1,
-          offsetX: 150,
-          offsetY: 250,
+        // Give it a stable footprint so the infoSizer can measure it.
+        (this.citySelectionManager as any).setMinSize?.(220, 32);
+        (this.citySelectionManager as any).setSize?.(220, 32);
+
+        parentSizer.add(this.citySelectionManager, {
+          proportion: 0,
+          align: "center",
+          padding: 0,
+          expand: false,
         });
       }
     }
   }
 
-  private createNameAndMoneySection(parentContainer: any): void {
+  private createNameAndMoneySection(parentSizer: any): void {
     const currentPlayer = this.gameStateService.getCurrentPlayer();
     if (!currentPlayer) {
       return;
     }
 
     const playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
-    // const playerInfoWidth = 300;
-    // const infoX = layoutInfo.playerInfoX + playerInfoWidth / 2;
-    // const infoY = layoutInfo.playerInfoY;
-
-    // Create player name and money text
     const nameAndMoney = this.add
       .text(0, 0, playerInfoText, {
         color: "#ffffff",
         fontSize: "20px",
         fontStyle: "bold",
+        align: "center",
+        wordWrap: { width: 280, useAdvancedWrap: true },
       })
-      .setOrigin(0.5, 0).setName(`name-and-money-text`);
-    parentContainer.addLocal(nameAndMoney, {
+      .setName(`name-and-money-text`);
+    this.nameAndMoneyText = nameAndMoney;
+
+    parentSizer.add(nameAndMoney, {
       proportion: 0,
-      expand: true,
-      offsetX: 150,
-      offsetY: 250,
+      align: "center",
+      padding: 0,
+      expand: false,
     });
   }
 
-  private createBuildCostSection(parentContainer: any): void {
+  private createBuildCostSection(parentSizer: any): void {
     const currentPlayer = this.gameStateService.getCurrentPlayer();
     if (!currentPlayer) {
       return;
     }
-    let costWarning = "";
-    let costColor = COST_COLOR;
-
-    if (this.currentTrackCost > currentPlayer.money) {
-      costColor = "#ff4444";
-      costWarning = " (Insufficient funds!)";
-    } else if (this.currentTrackCost > MAX_TURN_BUILD_COST) {
-      costColor = "#ff8800";
-      costWarning = " (Over turn limit!)";
-    } else if (this.currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
-      costColor = "#ffff00";
-    }
-    // Build cost text
-    //const buildCostY = infoY + 45;
+    const display = this.getBuildCostDisplay(currentPlayer);
     const buildCostText = this.add
-      .text(0, 0, `Build Cost: ${this.currentTrackCost}M${costWarning}`, {
-        color: costColor,
+      .text(0, 0, display.text, {
+        color: display.color,
         fontSize: "20px",
         fontStyle: "bold",
+        align: "center",
+        wordWrap: { width: 280, useAdvancedWrap: true },
       })
-      .setOrigin(0.5, 0).setName(`build-cost-text`);
+      .setName(`build-cost-text`);
+    this.buildCostText = buildCostText;
 
-    parentContainer.add(buildCostText, {
-      proportion: 1,
+    parentSizer.add(buildCostText, {
+      proportion: 0,
+      align: "center",
+      padding: 0,
+      expand: false,
     });
   }
 
-  private createCrayonButton(parentContainer: any): void {
+  private createControlsSection(): void {
     if (this.gameStateService.getCurrentPlayer() === null) {
       return;
     }
-    const crayonContainer = (this as any).rexUI.add.container({
-      width: 40,
-      height: 40,
-      space: { left: 6, right: 6, top: 6, bottom: 6, item: 6 },
-    }).setName(`crayon-container`);
-    // Position crayon
-    //  const crayonX = textBounds.right + 40;
-    //  const crayonY = infoY + 10;
+    // Controls region: fill remaining horizontal space in rootSizer so we can
+    // keep the crayon stack on the left while pinning the hide arrow to the
+    // far top-right of the grey bar.
+    const controlsRegionSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "x",
+        space: { item: 0 },
+      })
+      .setName("controls-region-sizer");
+
+    const crayonStackSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { item: 10 },
+      })
+      .setName("crayon-stack-sizer");
 
     const crayonColor =
       colorMap[
@@ -582,18 +646,25 @@ export class PlayerHandScene extends Phaser.Scene {
     const isLocalPlayerActive =
       this.gameStateService?.isLocalPlayerActive() ?? false;
 
+    // Crayon button container (overlay highlight + icon)
+    const crayonButtonContainer = (this as any).rexUI.add
+      .container({ width: 60, height: 60 })
+      .setName("crayon-button-container");
+    crayonButtonContainer.setSize(60, 60);
+
     const crayonButton = this.add
       .image(0, 0, crayonTexture)
-      .setScale(0.15)
+      .setScale(this.isDrawingMode ? 0.18 : 0.15)
       .setAlpha(isLocalPlayerActive ? 1.0 : 0.4)
       .setInteractive({ useHandCursor: isLocalPlayerActive }).setName(`crayon-button`);
+    this.crayonButtonImage = crayonButton;
 
-    crayonContainer.addLocal(crayonButton, {
-      proportion: 0,
-      expand: true,
-      offsetX: 150,
-      offsetY: 250,
-    });
+    // Always create the highlight once; toggle visibility on state changes.
+    const highlight = this.add.circle(0, 0, 30, 0xffff00, 0.3);
+    highlight.setVisible(this.isDrawingMode);
+    this.crayonHighlightCircle = highlight;
+    crayonButtonContainer.addLocal(highlight);
+    crayonButtonContainer.addLocal(crayonButton);
 
     if (isLocalPlayerActive) {
       crayonButton
@@ -616,77 +687,94 @@ export class PlayerHandScene extends Phaser.Scene {
     } else {
       crayonButton.setInteractive({ useHandCursor: false });
     }
-    // Drawing mode indicator
-    if (this.isDrawingMode) {
-      crayonButton.setScale(0.18);
-      const highlight = this.add.circle(
-        // crayonButton.x,
-        // crayonButton.y,
-        0,
-        0,
-        30,
-        0xffff00,
-        0.3
-      );
-
-      crayonContainer.addLocal(highlight, {
-        offsetX: 150,
-        offsetY: 250,
-      });
-    } else {
-      crayonButton.setScale(0.15);
-    }
 
     // Undo button
     if (isLocalPlayerActive && this.canUndo()) {
       const undoButton = this.add
-        .text(crayonButton.x, crayonButton.y + 50, "⟲ Undo", {
+        .text(0, 0, "⟲ Undo", {
           color: "#ffffff",
           fontSize: "18px",
           fontStyle: "bold",
           backgroundColor: "#444",
           padding: { left: 8, right: 8, top: 4, bottom: 4 },
         })
-        .setOrigin(0.5, 0)
         .setInteractive({ useHandCursor: true }).setName(`undo-button`);
       undoButton.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
         if (pointer.event) pointer.event.stopPropagation();
         this.onUndo();
       });
-      crayonContainer.addLocal(undoButton, {
-        offsetX: 150,
-        offsetY: 250,
+      crayonStackSizer.add(undoButton, {
+        proportion: 0,
+        align: "center",
+        padding: 0,
+        expand: false,
       });
     }
-    this.rootSizer.add(crayonContainer, {
-      proportion: 1,
-    });
-  }
 
-  private createHideButton(handHeight: number): void {
-    const buttonX = this.scale.width - 40;
-    const buttonY = 20;
+    // Hide button (arrow) as a sized container so sizer can position it.
+    const hideButtonContainer = (this as any).rexUI.add
+      .container({ width: 40, height: 40 })
+      .setName("hide-button-container");
+    hideButtonContainer.setSize(40, 40);
 
     const toggleGraphics = this.add.graphics().setName(`hide-button-graphics`);
     const arrowSize = 15;
     const arrowColor = 0xffffff;
-
     toggleGraphics.lineStyle(3, arrowColor, 1);
     toggleGraphics.beginPath();
-    toggleGraphics.moveTo(buttonX - arrowSize, buttonY - arrowSize / 2);
-    toggleGraphics.lineTo(buttonX, buttonY + arrowSize / 2);
-    toggleGraphics.lineTo(buttonX + arrowSize, buttonY - arrowSize / 2);
+    // Draw centered arrow within the container's local space.
+    toggleGraphics.moveTo(-arrowSize, -arrowSize / 2);
+    toggleGraphics.lineTo(0, arrowSize / 2);
+    toggleGraphics.lineTo(arrowSize, -arrowSize / 2);
     toggleGraphics.strokePath();
 
-    const hitArea = this.add.rectangle(buttonX, buttonY, 40, 40, 0x000000, 0).setName(`hide-button-hit-area`);
+    const hitArea = this.add
+      .rectangle(0, 0, 40, 40, 0x000000, 0)
+      .setName(`hide-button-hit-area`);
     hitArea.setInteractive({ useHandCursor: true });
+    hitArea.on("pointerdown", () => this.slideOutAndClose());
 
-    hitArea.on("pointerdown", () => {
-      this.slideOutAndClose();
+    hideButtonContainer.addLocal(toggleGraphics);
+    hideButtonContainer.addLocal(hitArea);
+
+    // Crayon should be lower with more separation from the arrow.
+    crayonStackSizer.add(crayonButtonContainer, {
+      proportion: 0,
+      align: "center",
+      padding: 0,
+      expand: false,
     });
 
-    this.rootSizer.add(toggleGraphics);
-    this.rootSizer.add(hitArea);
+    // Flex spacer pushes arrow to the far right edge.
+    const flexSpace = this.add.zone(0, 0, 1, 1).setName("controls-flex-space");
+
+    controlsRegionSizer.add(crayonStackSizer, {
+      proportion: 0,
+      // Keep the crayon safely inside the bar (bottom alignment can push it off-screen)
+      align: "center",
+      padding: { left: 0, right: 0, bottom: 0 },
+      expand: false,
+    });
+    controlsRegionSizer.add(flexSpace, {
+      proportion: 1,
+      align: "center",
+      padding: 0,
+      expand: true,
+    });
+    controlsRegionSizer.add(hideButtonContainer, {
+      proportion: 0,
+      align: "top",
+      padding: { right: 0, top: 0 },
+      expand: false,
+    });
+
+    // Add controls region as last child; let it consume remaining width.
+    this.rootSizer.add(controlsRegionSizer, {
+      proportion: 1,
+      align: "center",
+      padding: { left: 8, right: 4 },
+      expand: true,
+    });
   }
 
   private slideOutAndClose(): void {

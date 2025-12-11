@@ -9,13 +9,19 @@ export class TrainCard {
   private loadSlots: Phaser.GameObjects.Rectangle[] = [];
   private loadTokens: Phaser.GameObjects.Container[] = [];
   private trainCard: Phaser.GameObjects.Image;
+  private cardOffsetX: number = 0;
+  private cardOffsetY: number = 0;
 
   constructor(scene: Phaser.Scene, x: number, y: number, player: Player) {
     this.scene = scene;
     this.player = player;
     
     // Create main container
-    this.container = (this.scene as any).rexUI.add.container({x, y}).setName(`train-card-container`);
+    // NOTE: When this container is added to a RexUI sizer, the sizer owns its position.
+    // We keep x/y for non-sizer use, but the important part is giving it a stable size.
+    this.container = (this.scene as any).rexUI.add
+      .container({ x, y })
+      .setName(`train-card-container`);
     
     // Validate player and trainType
     if (!player) {
@@ -38,6 +44,12 @@ export class TrainCard {
     this.trainCard = scene.add.image(0, 0, `train_card_${trainType}`);
     this.trainCard.setOrigin(0, 0);
     this.trainCard.setScale(0.165); // Scale down to 18% of original size
+
+    // ContainerLite's local (0,0) behaves like a center point; our card layout math
+    // assumes (0,0) is top-left. Shift everything by (-w/2, -h/2) to reconcile.
+    this.cardOffsetX = -this.trainCard.displayWidth / 2;
+    this.cardOffsetY = -this.trainCard.displayHeight / 2;
+    this.trainCard.setPosition(this.cardOffsetX, this.cardOffsetY);
     
     // Create load slots based on train capacity
     const capacity = TRAIN_PROPERTIES[player.trainType].capacity;
@@ -46,6 +58,10 @@ export class TrainCard {
     // Add all elements to container
     this.container.addLocal(this.trainCard);
     this.loadSlots.forEach(slot => this.container.addLocal(slot));
+
+    // Critical for RexUI sizers: ContainerLite must have an explicit footprint.
+    // Use the scaled display size of the background image as the container size.
+    this.container.setSize(this.trainCard.displayWidth, this.trainCard.displayHeight);
   }
 
   private createLoadSlots(capacity: number) {
@@ -55,13 +71,13 @@ export class TrainCard {
     
     // Position slots to match the white circles on the card
     // These values are relative to the scaled card size (18% of original)
-    const startX = 51;  // About 1/3 across the card width
-    const startY = 185; // Lowered to match circle position in bottom portion
+    const startX = 51;  // About 1/3 across the card width (top-left-based)
+    const startY = 185; // Lowered to match circle position in bottom portion (top-left-based)
     
     for (let i = 0; i < capacity; i++) {
       const slot = this.scene.add.rectangle(
-        startX + (slotSize + padding) * i,
-        startY,
+        this.cardOffsetX + startX + (slotSize + padding) * i,
+        this.cardOffsetY + startY,
         slotSize,
         slotSize,
         0x444444,
@@ -87,11 +103,13 @@ export class TrainCard {
         slot.setFillStyle(0x444444, 0);
         
         // Create a container for the token and its background
-        const tokenContainer = (this.scene as any).rexUI.add.container(slot.x, slot.y);
+        // Create in local space then place at the slot's local coordinates.
+        const tokenContainer = (this.scene as any).rexUI.add.container(0, 0);
+        tokenContainer.setPosition(slot.x, slot.y);
         
         // Add white circular background - increased radius
         const background = this.scene.add.circle(0, 0, 14, 0xffffff);
-        tokenContainer.add(background);
+        tokenContainer.addLocal(background);
         
         // Create load token sprite
         const loadToken = this.scene.add.image(
