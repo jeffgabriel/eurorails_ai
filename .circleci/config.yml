@@ -60,6 +60,7 @@ jobs:
           command: |
             # Set NODE_ENV=test BEFORE starting services so server uses test database
             export NODE_ENV=test
+            export CI=true
             echo "Set NODE_ENV=$NODE_ENV for test database usage"
             
             # Ensure we're in the project root
