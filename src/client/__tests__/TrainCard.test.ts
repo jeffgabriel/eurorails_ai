@@ -30,11 +30,11 @@ describe("TrainCard", () => {
         displayHeight: 300,
         setOrigin: jest.fn().mockReturnThis(),
         setTexture: jest.fn().mockReturnThis(),
-        setScale: jest.fn().mockImplementation(function (_scale: number) {
+        setScale: jest.fn().mockImplementation((_scale: number) => {
           // Keep display size stable for layout math in TrainCard
-          this.displayWidth = 200;
-          this.displayHeight = 300;
-          return this;
+          image.displayWidth = 200;
+          image.displayHeight = 300;
+          return image;
         }),
         setPosition: jest.fn().mockReturnThis(),
         destroy: jest.fn(),
