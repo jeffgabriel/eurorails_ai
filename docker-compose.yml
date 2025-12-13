@@ -37,6 +37,10 @@ services:
       - DB_USER=$DB_USER
       - DB_PASSWORD=$DB_PASSWORD
       - DB_NAME=$DB_NAME
+      # In test mode the server defaults to DB_NAME_TEST (or 'eurorails_test').
+      # In CI our databases are ephemeral; default DB_NAME_TEST to DB_NAME so the
+      # test server connects to the database that postgresdb actually created.
+      - DB_NAME_TEST=${DB_NAME_TEST:-${DB_NAME}}
       - DB_PORT=$DB_PORT
       - NODE_ENV=${NODE_ENV:-development}
     stdin_open: true

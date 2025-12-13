@@ -25,7 +25,7 @@ export class UIManager {
   private trainInteractionManager!: TrainInteractionManager;
   private leaderboardManager!: LeaderboardManager;
   private playerHandDisplay!: PlayerHandDisplay;
-  private citySelectionManager!: CitySelectionManager;
+  //private citySelectionManager!: CitySelectionManager;
   private isDrawingMode: boolean = false;
 
   constructor(
@@ -53,6 +53,16 @@ export class UIManager {
 
     // Initialize component managers
     this.initializeComponentManagers(nextPlayerCallback);
+  }
+
+  public updateGameState(gameState: GameState): void {
+    this.gameState = gameState;
+    // Update component managers that need fresh gameState
+    this.playerHandDisplay.updateGameState(gameState);
+    // Turn changes can toggle whether the local player's train is interactive.
+    // Ensure train clickability stays in sync without requiring a full refresh.
+    this.trainInteractionManager.updateTrainZOrders();
+    this.trainInteractionManager.updateTrainInteractivity();
   }
 
   private initializeComponentManagers(nextPlayerCallback: () => void): void {
@@ -117,6 +127,8 @@ export class UIManager {
         this.setupPlayerHand(this.isDrawingMode, totalCost).catch(console.error);
       },
       () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0,
+      this.mapRenderer,
+      this.trainInteractionManager,
       this.gameStateService
     );
 
@@ -125,13 +137,14 @@ export class UIManager {
     this.trainInteractionManager.setHandContainer(this.playerHandContainer);
     this.trainInteractionManager.setUIManager(this);
 
-    // Initialize the city selection manager
-    this.citySelectionManager = new CitySelectionManager(
-      this.scene,
-      this.gameState,
-      this.mapRenderer,
-      (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col)
-    );
+    // // Initialize the city selection manager (after playerHandDisplay is created)
+    // this.citySelectionManager = new CitySelectionManager(
+    //   this.scene,
+    //   this.gameState,
+    //   this.mapRenderer,
+    //   (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col),
+    //   () => this.playerHandDisplay.isHandCollapsed()
+    // );
   }
 
   public getContainers(): {
@@ -200,21 +213,26 @@ export class UIManager {
     
     // Update leaderboard directly on UI container
     this.leaderboardManager.update(this.uiContainer);
+    
+    // Update gameState in playerHandDisplay
+    this.playerHandDisplay.updateGameState(this.gameState);
   }
 
   public async setupPlayerHand(
     isDrawingMode: boolean = false,
     currentTrackCost: number = 0
   ): Promise<void> {
+    // Update gameState first
+    this.playerHandDisplay.updateGameState(this.gameState);
     // Update the player hand display with the current container
     await this.playerHandDisplay.update(isDrawingMode, currentTrackCost, this.playerHandContainer);
   }
 
   public cleanupCityDropdowns(): void {
-    this.citySelectionManager.cleanupCityDropdowns();
+    //this.citySelectionManager.cleanupCityDropdowns();
   }
 
   public showCitySelectionForPlayer(playerId: string): void {
-    this.citySelectionManager.showCitySelectionForPlayer(playerId);
+    //this.citySelectionManager.showCitySelectionForPlayer(playerId);
   }
 }

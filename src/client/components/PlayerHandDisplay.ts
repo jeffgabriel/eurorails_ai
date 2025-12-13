@@ -1,9 +1,8 @@
 import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
-import { TrainCard } from "./TrainCard";
-import { DemandCard } from './DemandCard';
-import { PlayerHand } from '../../shared/types/PlayerHand';
 import { GameStateService } from "../services/GameStateService";
+import { MapRenderer } from "./MapRenderer";
+import { TrainInteractionManager } from "./TrainInteractionManager";
 
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
@@ -13,20 +12,27 @@ export class PlayerHandDisplay {
   private onUndo: () => void;
   private canUndo: () => boolean;
   private gameStateService: GameStateService | null = null;
-  public trainCard: TrainCard | null = null;
-  private readonly CARD_SPACING = 180;
-  private readonly START_X = 110;
-  private readonly START_Y = 140;
-  private cards: DemandCard[] = [];
-  private readonly HAND_HEIGHT = 280;
+  private mapRenderer: MapRenderer;
+  private trainInteractionManager: TrainInteractionManager;
+
+  // Layout constants
+  private readonly STATUS_BAR_HEIGHT = 50; // Height when collapsed
+
+  // State management
+  private isCollapsed: boolean = true; // Start collapsed
+  private statusBarContainer: Phaser.GameObjects.Container | null = null;
   private currentContainer: Phaser.GameObjects.Container | null = null;
-  
+  private lastDrawingMode: boolean = false;
+  private lastTrackCost: number = 0;
+
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
     toggleDrawingCallback: () => void,
     onUndo: () => void,
     canUndo: () => boolean,
+    mapRenderer: MapRenderer,
+    trainInteractionManager: TrainInteractionManager,
     gameStateService?: GameStateService
   ) {
     this.scene = scene;
@@ -35,334 +41,260 @@ export class PlayerHandDisplay {
     this.onUndo = onUndo;
     this.canUndo = canUndo;
     this.gameStateService = gameStateService || null;
+    this.mapRenderer = mapRenderer;
+    this.trainInteractionManager = trainInteractionManager;
     this.container = this.scene.add.container(0, 0);
   }
-  
-  public async update(isDrawingMode: boolean = false, currentTrackCost: number = 0, targetContainer: Phaser.GameObjects.Container): Promise<void> {
-    if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
+
+  public updateGameState(gameState: GameState): void {
+    this.gameState = gameState;
+    // Update scene if it's running
+    const playerHandScene = this.scene.scene.get("PlayerHandScene");
+    if (playerHandScene && playerHandScene.scene.isActive()) {
+      this.updateSceneData(gameState, this.lastDrawingMode, this.lastTrackCost);
+    }
+  }
+
+  public async update(
+    isDrawingMode: boolean = false,
+    currentTrackCost: number = 0,
+    targetContainer: Phaser.GameObjects.Container
+  ): Promise<void> {
+    if (
+      !this.gameState ||
+      !this.gameState.players ||
+      this.gameState.players.length === 0
+    ) {
       return;
     }
 
-    // Clean up old train card if it exists
-    if (this.trainCard) {
-      this.trainCard.destroy();
-      this.trainCard = null;
-    }
+    // Store current state
+    this.lastDrawingMode = isDrawingMode;
+    this.lastTrackCost = currentTrackCost;
+    this.currentContainer = targetContainer;
 
     // Clear target container
     targetContainer.removeAll(true);
 
-    // Create a container for the hand area that will hold all elements
-    const handArea = this.scene.add.container(0, this.scene.scale.height - this.HAND_HEIGHT);
-    targetContainer.add(handArea);
-
-    // Create the background, cards, and player info sections and add to handArea
-    this.createHandBackground(handArea);
-    await this.createDemandCardSection(handArea);
-    this.createTrainSection(handArea);
-    this.createPlayerInfoSection(isDrawingMode, currentTrackCost, handArea);
-
-    // Store reference to the current container
-    this.currentContainer = targetContainer;
+    // Always show status bar when collapsed
+    if (this.isCollapsed) {
+      this.createStatusBar(targetContainer);
+      // Update the scene if it's running (shouldn't be, but just in case)
+      const playerHandScene = this.scene.scene.get("PlayerHandScene");
+      if (playerHandScene && playerHandScene.scene.isActive()) {
+        this.scene.scene.stop("PlayerHandScene");
+      }
+    } else {
+      // Launch the PlayerHandScene
+      await this.launchPlayerHandScene(isDrawingMode, currentTrackCost);
+    }
   }
 
-  private createHandBackground(targetContainer: Phaser.GameObjects.Container): void {
-    // Create background for player's hand area
-    const handBackground = this.scene.add
+  private async launchPlayerHandScene(
+    isDrawingMode: boolean,
+    currentTrackCost: number
+  ): Promise<void> {
+    // Check if scene exists, if not add it
+    if (!this.scene.scene.manager.getScene("PlayerHandScene")) {
+      const module = await import("../scenes/PlayerHandScene");
+      const PlayerHandScene = module.PlayerHandScene;
+      this.scene.scene.add("PlayerHandScene", PlayerHandScene);
+    }
+
+    const playerHandScene = this.scene.scene.get("PlayerHandScene");
+
+    if (playerHandScene) {
+      // If scene is already running, update it instead of launching again
+      if (playerHandScene.scene.isActive()) {
+        (playerHandScene as any).updateSceneData(
+          this.gameState,
+          isDrawingMode,
+          currentTrackCost
+        );
+      } else {
+        // Launch the scene with data
+        this.scene.scene.launch("PlayerHandScene", {
+          gameState: this.gameState,
+          toggleDrawingCallback: this.toggleDrawingCallback,
+          onUndo: this.onUndo,
+          canUndo: this.canUndo,
+          gameStateService: this.gameStateService!,
+          mapRenderer: this.mapRenderer,
+          trainInteractionManager: this.trainInteractionManager,
+          isDrawingMode: isDrawingMode,
+          currentTrackCost: currentTrackCost,
+          onClose: () => {
+            this.setCollapsed(true);
+            // Update status bar
+            if (this.currentContainer) {
+              this.update(this.lastDrawingMode, this.lastTrackCost, this.currentContainer).catch(console.error);
+            }
+          },
+        });
+      }
+    }
+  }
+
+  public async updateSceneData(
+    gameState: GameState,
+    isDrawingMode: boolean,
+    currentTrackCost: number
+  ): Promise<void> {
+    this.gameState = gameState;
+    this.lastDrawingMode = isDrawingMode;
+    this.lastTrackCost = currentTrackCost;
+
+    // Update the scene if it's running
+    const playerHandScene = this.scene.scene.get("PlayerHandScene");
+    if (playerHandScene && playerHandScene.scene.isActive()) {
+      (playerHandScene as any).updateSceneData(
+        gameState,
+        isDrawingMode,
+        currentTrackCost
+      );
+    }
+  }
+
+  private createStatusBar(targetContainer: Phaser.GameObjects.Container): void {
+    if (!this.gameStateService) {
+      return;
+    }
+
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const currentPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+
+    if (!currentPlayer) {
+      return;
+    }
+
+    // Create status bar container at bottom of screen
+    const statusBarY = this.scene.scale.height - this.STATUS_BAR_HEIGHT;
+    const statusBar = this.scene.add.container(0, statusBarY);
+    targetContainer.add(statusBar);
+    this.statusBarContainer = statusBar;
+
+    // Create status bar background
+    const statusBarBg = this.scene.add
       .rectangle(
         0,
-        0, // Position relative to hand area container
+        0,
         this.scene.scale.width,
-        this.HAND_HEIGHT,
+        this.STATUS_BAR_HEIGHT,
         0x333333,
         0.8
       )
-      .setOrigin(0, 0)
-      .setDepth(0); // Set background to lowest depth
+      .setOrigin(0, 0);
 
-    targetContainer.add(handBackground);
-  }
+    statusBar.add(statusBarBg);
 
-  private async createDemandCardSection(targetContainer: Phaser.GameObjects.Container): Promise<void> {
-    // Guard against race condition when gameStateService is null
-    if (!this.gameStateService) {
-      console.error('PlayerHandDisplay.createDemandCardSection: gameStateService is null, cannot determine local player');
-      return;
-    }
-    
-    // Show only local player's cards
-    const localPlayerId = this.gameStateService.getLocalPlayerId();
-    const currentPlayer = localPlayerId 
-      ? this.gameState.players.find(p => p.id === localPlayerId)
-      : null;
-    
-    // If no local player found, don't show cards
-    if (!currentPlayer) {
-      return;
-    }
-
-    // Clear existing cards
-    this.cards.forEach(card => card.destroy());
-    this.cards = [];
-
-    // Cards should be loaded from the database
-    // Only draw if hand is truly empty AND we're sure the database has been checked
-    // The hand should be populated from the game state which comes from the database
-    if (currentPlayer.hand.length === 0) {
-      console.warn(`Player ${currentPlayer.name} has no cards in hand. This should only happen if:`, {
-        message: '1) Player was just created and cards need to be drawn server-side, OR',
-        message2: '2) Cards were not loaded from database properly',
-        playerId: currentPlayer.id,
-        playerName: currentPlayer.name,
-        gameId: this.gameState.id
-      });
-      // DO NOT draw cards here - cards must be drawn server-side and saved to DB
-      // The hand should persist in the database and be loaded via game state
-    }
-
-    // Create new cards
-    currentPlayer.hand.forEach((card, index) => {
-      const x = this.START_X + (index * this.CARD_SPACING);
-      const demandCard = new DemandCard(this.scene, x, this.START_Y, card);
-      this.cards.push(demandCard);
-      targetContainer.add(demandCard);
-    });
-
-    // Add empty slots if needed
-    const maxCards = 3; // Maximum number of demand cards in hand
-    for (let i = currentPlayer.hand.length; i < maxCards; i++) {
-      const x = this.START_X + (i * this.CARD_SPACING);
-      const emptyCard = new DemandCard(this.scene, x, this.START_Y);
-      this.cards.push(emptyCard);
-      targetContainer.add(emptyCard);
-    }
-  }
-
-  private createTrainSection(targetContainer: Phaser.GameObjects.Container): void {
-    // Guard against race condition when gameStateService is null
-    if (!this.gameStateService) {
-      console.warn('PlayerHandDisplay.createTrainSection: gameStateService not available');
-      return;
-    }
-
-    // Show local player's train card
-    const localPlayerId = this.gameStateService.getLocalPlayerId();
-    const currentPlayer = localPlayerId 
-      ? this.gameState.players.find(p => p.id === localPlayerId)
-      : null;
-    
-    if (!currentPlayer) {
-      console.error('PlayerHandDisplay.createTrainSection: No local player found');
-      return;
-    }
-
-    // Ensure player has a trainType
-    if (!currentPlayer.trainType) {
-      console.warn('PlayerHandDisplay.createTrainSection: Player missing trainType, defaulting to Freight');
-      currentPlayer.trainType = 'freight' as any; // Use any to avoid type issues
-    }
-
-    try {
-      // Create train card using the TrainCard component
-      this.trainCard = new TrainCard(
-        this.scene,
-        600, // Position after demand cards
-        13, // Position relative to hand area
-        currentPlayer
-      );
-
-      // Update the loads display
-      this.trainCard.updateLoads();
-
-      // Add the train card's container to the target container
-      targetContainer.add(this.trainCard.getContainer());
-    } catch (error) {
-      console.error('PlayerHandDisplay.createTrainSection: Failed to create train card:', error);
-    }
-  }
-
-  private createPlayerInfoSection(isDrawingMode: boolean, currentTrackCost: number, targetContainer: Phaser.GameObjects.Container): void {
-    // Guard against race condition when gameStateService is null
-    if (!this.gameStateService) {
-      return; // Don't show player info if gameStateService is not available
-    }
-    
-    // Show local player's info
-    const localPlayerId = this.gameStateService.getLocalPlayerId();
-    const currentPlayer = localPlayerId 
-      ? this.gameState.players.find(p => p.id === localPlayerId)
-      : null;
-    
-    if (!currentPlayer) {
-      return; // Don't show player info if no local player
-    }
-    
-    const MAX_TURN_BUILD_COST = 20; // ECU 20M per turn limit
-
-    // Add crayon button for track drawing
-    const colorMap: { [key: string]: string } = {
-      "#FFD700": "yellow",
-      "#FF0000": "red",
-      "#0000FF": "blue",
-      "#000000": "black",
-      "#008000": "green",
-      "#8B4513": "brown",
-    };
-
-    // Determine cost display color based on constraints
-    let costColor = "#ffffff"; // Default white
-    let costWarning = "";
-    
-    if (currentTrackCost > currentPlayer.money) {
-      costColor = "#ff4444"; // Red for over budget
-      costWarning = " (Insufficient funds!)";
-    } else if (currentTrackCost > MAX_TURN_BUILD_COST) {
-      costColor = "#ff8800"; // Orange for over turn limit
-      costWarning = " (Over turn limit!)";
-    } else if (currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
-      costColor = "#ffff00"; // Yellow for approaching limit
-    }
-
-    // Build player info text
-    let playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
-    
-    // Calculate responsive positions based on scene width
-    // City dropdown positioning (matching CitySelectionManager)
-    const dropdownLeft = Math.min(820, this.scene.scale.width - 200);
-    const dropdownWidth = 180;
-    const dropdownCenterX = dropdownLeft + dropdownWidth / 2;
-    
-    // Create separate text objects for better color control
-    // Position below city dropdown but ensure responsive
-    const nameAndMoney = this.scene.add
+    // Add player name and money
+    const statusText = this.scene.add
       .text(
-        dropdownCenterX, // Position below city dropdown
-        60, // Position below the dropdown (dropdown is ~40px tall at 20px from top)
-        playerInfoText,
+        20,
+        this.STATUS_BAR_HEIGHT / 2,
+        `${currentPlayer.name} | Money: ECU ${currentPlayer.money}M`,
         {
           color: "#ffffff",
-          fontSize: "20px",
+          fontSize: "18px",
           fontStyle: "bold",
         }
       )
-      .setOrigin(0.5, 0); // Center horizontally
+      .setOrigin(0, 0.5);
 
-    // Calculate text bounds to position crayon to the right
-    const textBounds = nameAndMoney.getBounds();
-    
-    // Position crayon to the right of the money text
-    const crayonX = textBounds.right + 40; // 40px spacing from text
-    const crayonY = 70; // Align vertically with money text area
-    
-    const crayonColor = colorMap[currentPlayer.color.toUpperCase()] || "black";
-    const crayonTexture = `crayon_${crayonColor}`;
-    
-    // Check if local player is active
-    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive() ?? false;
-    
-    const crayonButton = this.scene.add
-      .image(
-        crayonX,
-        crayonY,
-        crayonTexture
-      )
-      .setScale(0.15)
-      .setAlpha(isLocalPlayerActive ? 1.0 : 0.4) // Gray out when not active
-      .setInteractive({ useHandCursor: isLocalPlayerActive });
+    statusBar.add(statusText);
 
-    if (isLocalPlayerActive) {
-      crayonButton
-        .on("pointerover", () => {
-          if (!isDrawingMode) {
-            crayonButton.setScale(0.17);
-          }
-        })
-        .on("pointerout", () => {
-          if (!isDrawingMode) {
-            crayonButton.setScale(0.15);
-          }
-        })
-        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-          if (pointer.event) {
-            pointer.event.stopPropagation(); // Prevent click from propagating
-          }
-          this.toggleDrawingCallback();
-        });
-    } else {
-      // Disabled state - no interaction
-      crayonButton.setInteractive({ useHandCursor: false });
+    // Add mini train icon
+    if (currentPlayer.trainType) {
+      const trainType = currentPlayer.trainType
+        .toLowerCase()
+        .replace(/[\s-]+/g, "");
+      try {
+        const miniTrain = this.scene.add.image(
+          this.scene.scale.width - 60,
+          this.STATUS_BAR_HEIGHT / 2,
+          `train_card_${trainType}`
+        );
+        miniTrain.setScale(0.08);
+        miniTrain.setOrigin(0.5, 0.5);
+        statusBar.add(miniTrain);
+      } catch (error) {
+        console.warn("Could not load train icon for status bar:", error);
+      }
     }
 
-    // Add player info texts to the hand area container first so they render behind
-    targetContainer.add(nameAndMoney);
-    
-    // Add crayon to the hand area container so it moves with the hand
-    targetContainer.add(crayonButton);
+    // Add toggle button (up arrow to expand)
+    const buttonX = this.scene.scale.width - 40;
+    const buttonY = this.STATUS_BAR_HEIGHT / 2;
 
-    // Create build cost as separate text with dynamic color
-    const buildCostText = this.scene.add
-      .text(
-        dropdownCenterX, // Position below city dropdown
-        105, // Position below money text
-        `Build Cost: ${currentTrackCost}M${costWarning}`,
-        {
-          color: costColor,
-          fontSize: "20px",
-          fontStyle: "bold",
-        }
-      )
-      .setOrigin(0.5, 0); // Center horizontally
+    const toggleGraphics = this.scene.add.graphics();
+    const arrowSize = 15;
+    const arrowColor = 0xffffff;
 
-    // Add build cost text to the hand area container
-    targetContainer.add(buildCostText);
-    
-    // Add visual indicator for drawing mode
-    if (isDrawingMode) {
-      crayonButton.setScale(0.18);
-      // Add glowing effect or highlight around the crayon
-      const highlight = this.scene.add.circle(
-        crayonButton.x,
-        crayonButton.y,
-        30, // Radius slightly larger than the crayon
-        0xffff00, // Yellow glow
-        0.3 // Semi-transparent
-      );
-      targetContainer.add(highlight);
-    } else {
-      crayonButton.setScale(0.15);
+    toggleGraphics.lineStyle(3, arrowColor, 1);
+    toggleGraphics.beginPath();
+    toggleGraphics.moveTo(buttonX - arrowSize, buttonY + arrowSize / 2);
+    toggleGraphics.lineTo(buttonX, buttonY - arrowSize / 2);
+    toggleGraphics.lineTo(buttonX + arrowSize, buttonY + arrowSize / 2);
+    toggleGraphics.strokePath();
+
+    const hitArea = this.scene.add.rectangle(
+      buttonX,
+      buttonY,
+      40,
+      40,
+      0x000000,
+      0
+    );
+    hitArea.setInteractive({ useHandCursor: true });
+
+    hitArea.on("pointerdown", async () => {
+      await this.toggleCollapse();
+    });
+
+    statusBar.add([toggleGraphics, hitArea]);
+
+    // Make entire status bar clickable to expand
+    statusBarBg.setInteractive({ useHandCursor: true });
+    statusBarBg.on("pointerdown", async () => {
+      await this.toggleCollapse();
+    });
+  }
+
+  private async toggleCollapse(): Promise<void> {
+    this.isCollapsed = !this.isCollapsed;
+
+    // Update display
+    if (this.currentContainer) {
+      await this.update(this.lastDrawingMode, this.lastTrackCost, this.currentContainer);
     }
+  }
 
-    // --- Undo button below crayon ---
-    // Only show undo button if local player is active AND can undo
-    // (isLocalPlayerActive already declared above for crayon button)
-    if (isLocalPlayerActive && this.canUndo()) {
-      const undoButton = this.scene.add
-        .text(
-          crayonButton.x,
-          crayonButton.y + 50, // 50px below crayon
-          '⟲ Undo',
-          {
-            color: '#ffffff',
-            fontSize: '18px',
-            fontStyle: 'bold',
-            backgroundColor: '#444',
-            padding: { left: 8, right: 8, top: 4, bottom: 4 },
-          }
-        )
-        .setOrigin(0.5, 0)
-        .setInteractive({ useHandCursor: true });
-      undoButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-        if (pointer.event) pointer.event.stopPropagation();
-        this.onUndo();
-      });
-      targetContainer.add(undoButton);
+  public setCollapsed(collapsed: boolean): void {
+    this.isCollapsed = collapsed;
+  }
+
+  public isHandCollapsed(): boolean {
+    return this.isCollapsed;
+  }
+
+  public updateTrainCardLoads(): void {
+    // Update train card in the scene if it's running
+    const playerHandScene = this.scene.scene.get("PlayerHandScene");
+    if (playerHandScene && playerHandScene.scene.isActive()) {
+      (playerHandScene as any).updateTrainCardLoads();
     }
   }
 
   public destroy(): void {
-    if (this.trainCard) {
-      this.trainCard.destroy();
+    // Stop the scene if it's running
+    const playerHandScene = this.scene.scene.get("PlayerHandScene");
+    if (playerHandScene && playerHandScene.scene.isActive()) {
+      this.scene.scene.stop("PlayerHandScene");
     }
-    this.container.destroy();
+    if (this.container) {
+      this.container.destroy();
+    }
   }
 }

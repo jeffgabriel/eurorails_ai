@@ -5,12 +5,13 @@
   "main": "dist/server/index.js",
   "scripts": {
     "build:server": "tsc -p tsconfig.json",
-    "build:client": "webpack --mode production",
+    "build:client": "webpack",
     "build": "npm run build:server && npm run build:client",
     "start": "npm run build && node dist/server/index.js",
-    "dev:client": "webpack serve --mode development --open",
+    "dev:client": "webpack serve --open",
     "dev:server": "npx nodemon",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:test": "NODE_ENV=test npm run dev",
     "test": "jest",
     "test:coverage": "jest --coverage",
     "debug": "npx nodemon --exec \"node --inspect -r ts-node/register src/server/index.ts\""
@@ -63,6 +64,7 @@
     "next-themes": "^0.4.6",
     "pg": "^8.7.0",
     "phaser": "^3.88.2",
+    "phaser3-rex-plugins": "^1.80.17",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
     "react-dom": "^18.3.1",

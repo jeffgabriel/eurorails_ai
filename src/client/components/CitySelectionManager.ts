@@ -1,115 +1,96 @@
 import "phaser";
 import { GameState, TerrainType } from "../../shared/types/GameTypes";
 import { MapRenderer } from "./MapRenderer";
-
-export class CitySelectionManager {
-  private scene: Phaser.Scene;
+import SimpleDropDownList from "phaser3-rex-plugins/templates/ui/simpledropdownlist/SimpleDropDownList";
+export class CitySelectionManager extends SimpleDropDownList {
+  public scene: Phaser.Scene;
   private gameState: GameState;
   private mapRenderer: MapRenderer;
-  private onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>;
-  private dropdownDomElement: Phaser.GameObjects.DOMElement | null = null;
-  
+  private onCitySelected: (
+    playerId: string,
+    x: number,
+    y: number,
+    row: number,
+    col: number
+  ) => Promise<void>;
+  private dropdownDomElement: any | null = null; // RexUI DropDownList type
+  private isHandCollapsed: () => boolean;
+  private dropdown: Phaser.GameObjects.GameObject;
+  private static style = {
+    list: {
+      maxHeight: 200,
+      mouseWheelScroller: {
+        focus: 2,
+        speed: 0.1,
+      },
+      // createTrackCallback: function (scene) {
+      //   return scene.rexUI.add.roundRectangle({ width: 10, color: 0x808588 });
+      // },
+      createThumbCallback: function (scene) {
+        return scene.rexUI.add.roundRectangle({
+          width: 14,
+          height: 24,
+          color: 0x363636,
+        });
+      },
+      sliderAdaptThumbSize: false,
+      space: { panel: 2 },
+    },
+    label: {
+      space: { left: 5, right: 5, top: 5, bottom: 5 },
+      // width: 210,
+      // height: 30,
+      background: { color: 0x444444 },
+      text: {
+        fontSize: 17,
+        fontFamily: "Arial",
+        fixedWidth: 150
+      },
+    },
+
+    button: {
+      space: { left: 10, right: 10, top: 10, bottom: 10 },
+      background: {
+        color: 0xbdb7ab,
+        strokeWidth: 0,
+        "hover.strokeColor": 0xffffff,
+        "hover.strokeWidth": 2,
+      },
+      text: {
+        fontSize: 16,
+        fontFamily: "Arial",
+      },
+    },
+  };
+
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
     mapRenderer: MapRenderer,
-    onCitySelected: (playerId: string, x: number, y: number, row: number, col: number) => Promise<void>
-  ) {
+    onCitySelected: (
+      playerId: string,
+      x: number,
+      y: number,
+      row: number,
+      col: number
+    ) => Promise<void>,
+    isHandCollapsed?: () => boolean
+  ) { //@ts-ignore: Type 'number' is not assignable to type 'boolean | 0 | 2 | 1 | undefined'
+    super(scene, CitySelectionManager.style);
     this.scene = scene;
     this.gameState = gameState;
     this.mapRenderer = mapRenderer;
+    this.setInteractive(true);
+    const playerId =
+      this.gameState.players[this.gameState.currentPlayerIndex].id;
+    this.isHandCollapsed = isHandCollapsed || (() => false);
+    if (!this.shouldShowCitySelectionForPlayer(playerId)) {
+      this.visible = false;
+      return;
+    }
     this.onCitySelected = onCitySelected;
-  }
-  
-  public showCitySelectionForPlayer(playerId: string): void {
-    // Only show selection for current player
-    
-    // Find the player
-    const player = this.gameState.players.find((p) => p.id === playerId);
-    if (!player) {
-      return;
-    }
-
-    // Check if this is the current player
-    const isCurrentPlayer = this.gameState.players[this.gameState.currentPlayerIndex].id === playerId;
-    if (!isCurrentPlayer) {
-      return;
-    }
-
-    // Check if player already has a position
-    if (player.trainState && player.trainState.position) {
-      return;
-    }
-
-    try {
-      // Remove any existing dropdown DOM element
-      this.cleanupCityDropdowns();
-
-      // Find all major cities from the grid
-      const majorCities = [
-        ...new Map(
-          this.mapRenderer.gridPoints
-            .flat()
-            .filter((point) => point?.city?.type === TerrainType.MajorCity)
-            .map((point) => [
-              point.city!.name, // use name as key for uniqueness
-              {
-                name: point.city!.name,
-                x: point.x,
-                y: point.y,
-                row: point.row,
-                col: point.col,
-              },
-            ])
-        ).values(),
-      ];
-
-    // Create dropdown (as a DOM element)
-    const dropdown = document.createElement("select");
-    dropdown.className = "city-selection-dropdown";
-    dropdown.style.width = "180px";
-    dropdown.style.padding = "5px";
-    dropdown.style.backgroundColor = "#444444";
-    dropdown.style.color = "#ffffff";
-    dropdown.style.border = "1px solid #666666";
-    dropdown.style.fontSize = "16px";
-    dropdown.style.fontFamily = "Arial, sans-serif";
-    dropdown.style.pointerEvents = "auto";
-
-    // Add prompt option
-    const promptOption = document.createElement("option");
-    promptOption.value = "";
-    promptOption.text = "Choose Starting City...";
-    promptOption.disabled = true;
-    promptOption.selected = true;
-    dropdown.appendChild(promptOption);
-
-    // Add options for each major city
-    majorCities.forEach((city) => {
-      const option = document.createElement("option");
-      option.value = JSON.stringify({
-        name: city.name,
-        x: city.x,
-        y: city.y,
-        row: city.row,
-        col: city.col,
-      });
-      option.text = city.name;
-      dropdown.appendChild(option);
-
-      // If this city matches player's current position, select it
-      if (player.trainState?.position && 
-          player.trainState.position.row === city.row && 
-          player.trainState.position.col === city.col) {
-        option.selected = true;
-        promptOption.selected = false;
-      }
-    });
-
-    // Handle selection
-    dropdown.onchange = () => {
-      if (!dropdown.value) return; // Don't process if prompt is selected
-      const selectedCity = JSON.parse(dropdown.value);
+    this.on("button.click", (_dropDownList, _listPanel, selectedOption) => {
+      const selectedCity = selectedOption.value;
       this.onCitySelected(
         playerId,
         selectedCity.x,
@@ -117,38 +98,81 @@ export class CitySelectionManager {
         selectedCity.row,
         selectedCity.col
       );
-    };
-
-    // Position the dropdown in the player hand area (above player name)
-    // Use responsive positioning based on screen width
-    const handY = this.scene.scale.height - 280 + 20; // 20px from top of hand area
-    const dropdownLeft = Math.min(820, this.scene.scale.width - 200); // Keep 200px margin from right
-    dropdown.style.position = 'fixed';
-    dropdown.style.left = `${dropdownLeft}px`;
-    dropdown.style.top = `${handY}px`;
-    dropdown.style.zIndex = '10000';
-    dropdown.style.pointerEvents = 'auto';
-    
-    // Add to document body
-    document.body.appendChild(dropdown);
-    
-    // Store reference for cleanup
-    this.dropdownDomElement = dropdown as any; // Store direct reference for cleanup
-    
-    } catch (error) {
-      console.error('Error in city selection:', error);
-    }
+      this.setText(selectedOption.text);
+    });
   }
-  
-  public cleanupCityDropdowns(): void {
-    // Remove dropdown using stored reference
-    if (this.dropdownDomElement) {
-      if (this.dropdownDomElement instanceof HTMLElement) {
-        this.dropdownDomElement.remove();
-      } else {
-        this.dropdownDomElement.destroy();
-      }
-      this.dropdownDomElement = null;
+
+  // private preventWheel = (e: WheelEvent) => {
+  //   console.log("preventWheel", e);
+  //   e.preventDefault();
+  //   e.stopPropagation();
+  // };
+
+  public init(): void {
+    this.createOptions();
+    this.resetDisplayContent("Select Starting City...");
+    super.layout();
+  }
+
+  private createOptions(): void {
+    // Find all major cities from the grid
+    const majorCities = [
+      ...new Map(
+        this.mapRenderer.gridPoints
+          .flat()
+          .filter((point) => point?.city?.type === TerrainType.MajorCity)
+          .map((point) => [
+            point.city!.name, // use name as key for uniqueness
+            {
+              name: point.city!.name,
+              x: point.x,
+              y: point.y,
+              row: point.row,
+              col: point.col,
+            },
+          ])
+      ).values(),
+    ];
+
+    // Create options array for the dropdown
+    const options = majorCities.map((city) => ({
+      text: city.name,
+      value: {
+        name: city.name,
+        x: city.x,
+        y: city.y,
+        row: city.row,
+        col: city.col,
+      },
+    }));
+
+    this.setOptions(options);
+  }
+
+  public shouldShowCitySelectionForPlayer(playerId: string): boolean {
+    // Don't show dropdown if hand is collapsed
+    if (this.isHandCollapsed()) {
+      return false;
     }
+
+    // Find the player
+    const player = this.gameState.players.find((p) => p.id === playerId);
+    if (!player) {
+      return false;
+    }
+
+    // Check if this is the current player
+    const isCurrentPlayer =
+      this.gameState.players[this.gameState.currentPlayerIndex].id === playerId;
+    if (!isCurrentPlayer) {
+      return false;
+    }
+
+    // Check if player already has a position
+    if (player.trainState && player.trainState.position) {
+      return false;
+    }
+
+    return true;
   }
 }

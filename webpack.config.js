@@ -2,7 +2,13 @@ const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
 const webpack = require('webpack');
 
+// Store original NODE_ENV for client code
+const originalNodeEnv = process.env.NODE_ENV || 'development';
+// Map 'test' to 'development' for webpack mode (webpack only accepts 'development', 'production', or 'none')
+const webpackMode = originalNodeEnv === 'test' ? 'development' : originalNodeEnv;
+
 module.exports = {
+  mode: webpackMode,
   entry: './src/client/index.tsx',
   output: {
     path: path.resolve(__dirname, 'dist/client'),
@@ -69,7 +75,9 @@ module.exports = {
       'process.env.VITE_API_BASE_URL': JSON.stringify(process.env.VITE_API_BASE_URL || 'http://localhost:3001'),
       'process.env.VITE_SOCKET_URL': JSON.stringify(process.env.VITE_SOCKET_URL || 'http://localhost:3001'),
       'process.env.VITE_DEBUG': JSON.stringify(process.env.VITE_DEBUG || 'false'),
-      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
+      // Always define NODE_ENV - use originalNodeEnv for client code (preserves 'test' if set),
+      // but webpack mode is used for optimization
+      'process.env.NODE_ENV': JSON.stringify(originalNodeEnv),
     }),
   ],
   devServer: {
@@ -107,7 +115,7 @@ module.exports = {
       }
     ]
   },
-  devtool: 'eval-cheap-module-source-map',
+  devtool: originalNodeEnv === 'production' ? 'source-map' : 'eval-source-map',
   cache: {
     type: 'filesystem',
     buildDependencies: {
