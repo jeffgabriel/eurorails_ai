@@ -9,19 +9,47 @@ describe("TrainCard", () => {
 
   beforeEach(() => {
     // Mock Phaser.Scene
+    const mockContainer = () => {
+      const container = {
+        x: 0,
+        y: 0,
+        add: jest.fn(),
+        addLocal: jest.fn(),
+        setName: jest.fn().mockReturnThis(),
+        setSize: jest.fn().mockReturnThis(),
+        setPosition: jest.fn().mockReturnThis(),
+        setVisible: jest.fn(),
+        destroy: jest.fn(),
+      };
+      return container;
+    };
+
+    const mockImage = () => {
+      const image: any = {
+        displayWidth: 200,
+        displayHeight: 300,
+        setOrigin: jest.fn().mockReturnThis(),
+        setTexture: jest.fn().mockReturnThis(),
+        setScale: jest.fn().mockImplementation(function (_scale: number) {
+          // Keep display size stable for layout math in TrainCard
+          this.displayWidth = 200;
+          this.displayHeight = 300;
+          return this;
+        }),
+        setPosition: jest.fn().mockReturnThis(),
+        destroy: jest.fn(),
+      };
+      return image;
+    };
+
     mockScene = {
+      rexUI: {
+        add: {
+          container: jest.fn().mockImplementation(() => mockContainer()),
+        },
+      },
       add: {
-        container: jest.fn().mockReturnValue({
-          add: jest.fn(),
-          setVisible: jest.fn(),
-          destroy: jest.fn()
-        }),
-        image: jest.fn().mockReturnValue({
-          setOrigin: jest.fn().mockReturnThis(),
-          setTexture: jest.fn().mockReturnThis(),
-          setScale: jest.fn().mockReturnThis(),
-          destroy: jest.fn()
-        }),
+        image: jest.fn().mockImplementation(() => mockImage()),
         rectangle: jest.fn().mockReturnValue({
           setOrigin: jest.fn().mockReturnThis(),
           setStrokeStyle: jest.fn().mockReturnThis(),
@@ -75,9 +103,11 @@ describe("TrainCard", () => {
   });
 
   it("should update train card image when train type changes", () => {
+    const trainImage = mockScene.add.image.mock.results[0].value;
     mockPlayer.trainType = TrainType.FastFreight;
     trainCard.updateTrainType();
-    expect(mockScene.add.image().setTexture).toHaveBeenCalledWith("train_card_fast_freight");
+    // The existing TrainCard image should be re-textured.
+    expect(trainImage.setTexture).toHaveBeenCalledWith("train_card_fast_freight");
   });
 
   it("should update load slots based on current loads", () => {
@@ -95,7 +125,9 @@ describe("TrainCard", () => {
   });
 
   it("should clean up resources on destroy", () => {
+    const trainContainer = mockScene.rexUI.add.container.mock.results[0].value;
     trainCard.destroy();
-    expect(mockScene.add.container().destroy).toHaveBeenCalled();
+    // TrainCard uses rexUI ContainerLite now
+    expect(trainContainer.destroy).toHaveBeenCalled();
   });
 }); 
