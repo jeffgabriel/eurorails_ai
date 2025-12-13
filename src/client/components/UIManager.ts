@@ -59,6 +59,10 @@ export class UIManager {
     this.gameState = gameState;
     // Update component managers that need fresh gameState
     this.playerHandDisplay.updateGameState(gameState);
+    // Turn changes can toggle whether the local player's train is interactive.
+    // Ensure train clickability stays in sync without requiring a full refresh.
+    this.trainInteractionManager.updateTrainZOrders();
+    this.trainInteractionManager.updateTrainInteractivity();
   }
 
   private initializeComponentManagers(nextPlayerCallback: () => void): void {

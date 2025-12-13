@@ -93,10 +93,11 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   public updateTrainCardLoads(): void {
-    if (this.trainCard) {
-      this.trainCard.updateLoads();
-    }
+    if (!this.trainCard) return;
+    this.trainCard.updateLoads();
+    this.rootSizer?.layout?.();
   }
+
 
   updateSceneData(
     gameState: GameState,
@@ -236,10 +237,24 @@ export class PlayerHandScene extends Phaser.Scene {
         y: finalY,
         duration: 300,
         ease: "Power2",
+        onComplete: () => {
+          this.refreshTrainCardLoadsAfterLayout();
+        },
       });
     } else {
       this.rootSizer.setY(finalY);
+      this.refreshTrainCardLoadsAfterLayout();
     }
+  }
+
+  private refreshTrainCardLoadsAfterLayout(): void {
+    // When the hand is reopened, TrainCard containers may not have stable transforms
+    // until after the slide-in/layout pass. Defer one tick to avoid NaN positions.
+    this.time.delayedCall(0, () => {
+      if (!this.trainCard || !this.rootSizer) return;
+      this.trainCard.updateLoads();
+      this.rootSizer.layout();
+    });
   }
 
   private createDemandCardSection(): void {
@@ -324,7 +339,6 @@ export class PlayerHandScene extends Phaser.Scene {
         0,
         currentPlayer
       );
-      this.trainCard.updateLoads();
       // Add the ContainerLite itself; it has an explicit size (TrainCard sets it).
       this.rootSizer.add(this.trainCard.getContainer(), {
         proportion: 0,

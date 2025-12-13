@@ -103,9 +103,13 @@ export class TrainCard {
         slot.setFillStyle(0x444444, 0);
         
         // Create a container for the token and its background
-        // Create in local space then place at the slot's local coordinates.
-        const tokenContainer = (this.scene as any).rexUI.add.container(0, 0);
-        tokenContainer.setPosition(slot.x, slot.y);
+        // IMPORTANT: Avoid NaN propagation from ContainerLite world/local transforms:
+        // - Create at (0,0) so addLocal doesn't subtract undefined coords
+        // - Add children at explicit local (0,0)
+        // - Add to main TrainCard container
+        // - Then set tokenContainer's *local* position to the slot's local coords
+        const tokenContainer = (this.scene as any).rexUI.add.container({ x: 0, y: 0 });
+        tokenContainer.setSize(1, 1);
         
         // Add white circular background - increased radius
         const background = this.scene.add.circle(0, 0, 14, 0xffffff);
@@ -127,6 +131,7 @@ export class TrainCard {
         // Add token container to tracking array and main container
         this.loadTokens.push(tokenContainer);
         this.container.addLocal(tokenContainer);
+        tokenContainer.setPosition(slot.x, slot.y);
       } else {
         // Empty slot
         slot.setFillStyle(0x444444, 0.3);
