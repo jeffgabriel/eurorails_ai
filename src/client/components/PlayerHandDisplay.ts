@@ -3,7 +3,7 @@ import { GameState } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
-
+import { UI_FONT_FAMILY } from "../config/uiFont";
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
@@ -199,6 +199,7 @@ export class PlayerHandDisplay {
           color: "#ffffff",
           fontSize: "18px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
         }
       )
       .setOrigin(0, 0.5);

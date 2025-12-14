@@ -2,6 +2,7 @@ import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -60,6 +61,7 @@ export class LeaderboardManager {
           color: "#ffffff",
           fontSize: "16px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
         }
       )
       .setOrigin(0.5, 0);
@@ -110,6 +112,7 @@ export class LeaderboardManager {
                 color: "#ffffff", // Keep white for subtlety
                 fontSize: "16px", // Slightly larger but not too prominent
                 fontStyle: "bold",
+                fontFamily: UI_FONT_FAMILY,
               }
             )
             .setOrigin(0, 0);
@@ -126,6 +129,7 @@ export class LeaderboardManager {
               color: "#ffffff", // Keep white for all players
               fontSize: "14px", // Same size for all
               fontStyle: isCurrentPlayer ? "bold" : "normal",
+              fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(0, 0);
@@ -141,6 +145,7 @@ export class LeaderboardManager {
               color: "#ffffff", // Keep white for all players
               fontSize: "14px", // Same size for all
               fontStyle: isCurrentPlayer ? "bold" : "normal",
+              fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(1, 0); // Right-align
@@ -191,6 +196,7 @@ export class LeaderboardManager {
           color: "#ffffff",
           fontSize: "16px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
         }
       )
       .setOrigin(0.5, 0.5);

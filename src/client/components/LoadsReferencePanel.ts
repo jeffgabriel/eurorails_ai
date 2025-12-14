@@ -1,4 +1,5 @@
 import Phaser from "phaser";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 type LoadsReferencePage = {
   key: string;
@@ -60,6 +61,7 @@ export class LoadsReferencePanel {
           color: "#e2e8f0",
           fontSize: "14px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
         })
         .setOrigin(0, 0);
 
@@ -89,6 +91,7 @@ export class LoadsReferencePanel {
         color: "#ffffff",
         fontSize: "14px",
         fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
       })
       .setOrigin(0.5);
     this.handleText.setRotation(-Math.PI / 2);
@@ -108,8 +111,15 @@ export class LoadsReferencePanel {
     const width = this.scene.scale.width;
     const height = this.scene.scale.height;
 
+    // Keep the visible handle out of the top-left settings area and above the player-hand bar.
+    // Use slightly looser bounds when open so the reference image can scale up.
+    const safeTop = this.isOpen ? 30 : 70;
+    const safeBottom = this.isOpen ? 50 : 300;
+
     const marginY = 18;
-    this.root.y = marginY;
+    // Allow the panel to scale up when open; keep it slimmer when closed so
+    // the always-visible handle doesn't crowd other UI.
+    const shrinkPx = this.isOpen ? 0 : 75;
 
     const tabsPadding = 12;
     const tabHeight = 40;
@@ -119,8 +129,11 @@ export class LoadsReferencePanel {
     const imageTop = tabsPadding + tabHeight + 12;
 
     // Constrain panel to viewport (never exceed)
-    const maxPanelWidth = Math.max(360, Math.floor(width * 0.92));
-    const maxPanelHeight = Math.max(320, Math.floor(height - marginY * 2));
+    const widthFactor = this.isOpen ? 0.98 : 0.92;
+    const maxPanelWidth = Math.max(360, Math.floor(width * widthFactor) - shrinkPx);
+    const maxPanelHeightFromViewport = Math.floor(height - marginY * 2) - shrinkPx;
+    const maxPanelHeightFromSafeBand = Math.floor(height - safeTop - safeBottom) - shrinkPx;
+    const maxPanelHeight = Math.max(240, Math.min(maxPanelHeightFromViewport, maxPanelHeightFromSafeBand));
 
     // Determine panel size based on scaled image size (so it doesn't slide out farther than needed)
     this.image.setTexture(this.pages[this.activePageIndex].key);
@@ -129,9 +142,7 @@ export class LoadsReferencePanel {
       | HTMLCanvasElement
       | ImageBitmap;
 
-    // @ts-expect-error - width/height exist on all supported source image types
     const srcW: number = source.width;
-    // @ts-expect-error - width/height exist on all supported source image types
     const srcH: number = source.height;
 
     const maxImageHeight = maxPanelHeight - imageTop - imagePaddingBottom;
@@ -154,6 +165,15 @@ export class LoadsReferencePanel {
       Math.max(this.handleWidth + 20, scaledW + imagePaddingX * 2, minWidthForTabs)
     );
     this.panelHeight = Math.min(maxPanelHeight, Math.max(220, imageTop + scaledH + imagePaddingBottom));
+
+    // Center vertically *within* the safe band so it doesn't collide with top-left controls
+    // or the bottom player-hand bar.
+    const availableTop = Math.max(marginY, safeTop);
+    const availableBottom = Math.max(availableTop + 1, height - safeBottom);
+    const availableHeight = Math.max(1, availableBottom - availableTop);
+    const centeredY = Math.floor(availableTop + (availableHeight - this.panelHeight) / 2);
+    const clampedY = Math.max(availableTop, Math.min(centeredY, availableBottom - this.panelHeight));
+    this.root.y = clampedY;
 
     // Keep handle full height and always clickable
     this.handleHeight = this.panelHeight;
@@ -220,7 +240,18 @@ export class LoadsReferencePanel {
   }
 
   private toggle(): void {
+    // Preserve the handle's screen X position while the panel resizes between
+    // closed/open layouts.
+    const oldPanelWidth = this.panelWidth;
+    const handleWorldX = this.root.x + (oldPanelWidth - this.handleWidth);
+
     this.isOpen = !this.isOpen;
+
+    // Recompute panel size for open vs closed.
+    this.layout();
+
+    // Re-anchor root so the handle stays under the cursor.
+    this.root.x = handleWorldX - (this.panelWidth - this.handleWidth);
 
     const closedX = -(this.panelWidth - this.handleWidth);
     const targetX = this.isOpen ? 0 : closedX;

@@ -11,6 +11,7 @@ import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -39,6 +40,7 @@ export class GameScene extends Phaser.Scene {
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private previousActivePlayerId: string | null = null;
   private loadsReferencePanel?: LoadsReferencePanel;
+  
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -469,7 +471,7 @@ export class GameScene extends Phaser.Scene {
   private createSettingsButton(): Phaser.GameObjects.Container {
     const buttonContainer = this.add.container(1, 1);
     const icon = this.add
-      .text(10, 10, "⚙️", { fontSize: "28px", color: "#ffffff" })
+      .text(10, 10, "⚙️", { fontSize: "28px", color: "#ffffff", fontFamily: UI_FONT_FAMILY })
       .setPadding(8)
       .setInteractive({ useHandCursor: true })
       .on("pointerdown", () => this.openSettings());
