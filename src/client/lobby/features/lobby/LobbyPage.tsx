@@ -210,7 +210,10 @@ export function LobbyPage() {
   // Load my games when on lobby home (no current game)
   useEffect(() => {
     if (!currentGame) {
-      loadMyGames().catch(() => {});
+      loadMyGames().catch((e) => {
+        // Non-blocking, but don't swallow useful debugging info.
+        console.warn('Failed to load My Games list:', e);
+      });
     }
   }, [currentGame, loadMyGames]);
 

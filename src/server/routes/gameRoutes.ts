@@ -60,13 +60,6 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
         }
         
         const gameState = await GameService.getGame(gameId, userId);
-        
-        if (!gameState) {
-            return res.status(404).json({ 
-                error: 'GAME_NOT_FOUND',
-                details: 'Game not found'
-            });
-        }
 
         return res.status(200).json(gameState);
     } catch (error: any) {

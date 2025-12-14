@@ -741,8 +741,8 @@ export class LobbyService {
         g.is_public,
         g.created_at,
         g.updated_at,
-        COUNT(p_all.*)::int AS player_count,
-        COUNT(*) FILTER (WHERE p_all.is_online = true)::int AS online_count
+        COUNT(*) FILTER (WHERE COALESCE(p_all.is_deleted, false) = false)::int AS player_count,
+        COUNT(*) FILTER (WHERE p_all.is_online = true AND COALESCE(p_all.is_deleted, false) = false)::int AS online_count
       FROM games g
       JOIN players p_me
         ON p_me.game_id = g.id

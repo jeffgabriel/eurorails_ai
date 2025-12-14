@@ -3,6 +3,21 @@
 -- This migration is intentionally redundant to protect environments where
 -- schema_migrations advanced but the underlying DDL did not fully apply.
 
+-- Data migration: consolidate legacy lobby_status into games.status before dropping column
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'games'
+      AND column_name = 'lobby_status'
+  ) THEN
+    UPDATE games
+    SET status = 'abandoned'
+    WHERE lobby_status = 'ABANDONED';
+  END IF;
+END $$;
+
 -- Remove lobby_status if present
 DROP INDEX IF EXISTS idx_games_lobby_status;
 ALTER TABLE games DROP CONSTRAINT IF EXISTS games_lobby_status_check;

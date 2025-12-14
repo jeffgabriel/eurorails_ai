@@ -6,6 +6,21 @@
 -- - players.is_deleted supports per-player soft delete/hide
 -- - players.last_seen_at supports server-driven presence staleness (5-minute timeout)
 
+-- 0) Data migration: consolidate legacy lobby_status into games.status before dropping column
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_name = 'games'
+      AND column_name = 'lobby_status'
+  ) THEN
+    UPDATE games
+    SET status = 'abandoned'
+    WHERE lobby_status = 'ABANDONED';
+  END IF;
+END $$;
+
 -- 1) Remove lobby_status (no longer used)
 DROP INDEX IF EXISTS idx_games_lobby_status;
 ALTER TABLE games DROP CONSTRAINT IF EXISTS games_lobby_status_check;

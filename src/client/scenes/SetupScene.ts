@@ -16,6 +16,21 @@ export class SetupScene extends Phaser.Scene {
     private isLobbyGame: boolean = false;
     private pendingInitErrorMessage: string | null = null;
 
+    private navigateToRoute(path: string, options?: { replace?: boolean }) {
+        try {
+            if (options?.replace) {
+                window.history.replaceState({}, '', path);
+            } else {
+                window.history.pushState({}, '', path);
+            }
+            // BrowserRouter listens to popstate; force React Router to notice.
+            window.dispatchEvent(new PopStateEvent('popstate'));
+        } catch (e) {
+            // Fallback to full navigation if history API is unavailable
+            window.location.href = path;
+        }
+    }
+
     constructor() {
         super({ 
             key: 'SetupScene'
@@ -96,7 +111,7 @@ export class SetupScene extends Phaser.Scene {
 
             // If the game is still in setup, send the user back to the lobby setup UI.
             if (this.gameState.status === 'setup') {
-                window.location.href = `/lobby/game/${gameId}`;
+                this.navigateToRoute(`/lobby/game/${gameId}`);
                 return;
             }
 

@@ -8,6 +8,9 @@ import { db } from '../db';
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
 
+const PRESENCE_HEARTBEAT_MS = 60_000;
+const PRESENCE_STALE_INTERVAL = '5 minutes';
+
 /**
  * Initialize Socket.IO server
  */
@@ -60,12 +63,13 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           `UPDATE players
            SET is_online = false
            WHERE is_online = true
-             AND last_seen_at < NOW() - INTERVAL '5 minutes'`
+             AND last_seen_at < NOW() - $1::interval`,
+          [PRESENCE_STALE_INTERVAL]
         );
       } catch (err) {
         console.error('Presence sweep failed:', err);
       }
-    }, 60_000);
+    }, PRESENCE_HEARTBEAT_MS);
     // Allow Node process (and Jest) to exit naturally
     presenceSweepInterval.unref?.();
   }
@@ -92,7 +96,7 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         // Do not crash the process on heartbeat failures
         console.error('Presence heartbeat update failed:', err);
       }
-    }, 60_000);
+    }, PRESENCE_HEARTBEAT_MS);
     // Allow Node process (and Jest) to exit naturally
     heartbeatInterval.unref?.();
 
