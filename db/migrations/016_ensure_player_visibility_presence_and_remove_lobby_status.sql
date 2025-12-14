@@ -3,6 +3,12 @@
 -- This migration is intentionally redundant to protect environments where
 -- schema_migrations advanced but the underlying DDL did not fully apply.
 
+-- Ensure games.status supports abandoned FIRST (so the data migration cannot violate it)
+ALTER TABLE games DROP CONSTRAINT IF EXISTS games_status_check;
+ALTER TABLE games
+ADD CONSTRAINT games_status_check
+CHECK (status IN ('setup', 'initialBuild', 'active', 'completed', 'abandoned'));
+
 -- Data migration: consolidate legacy lobby_status into games.status before dropping column
 DO $$
 BEGIN
@@ -22,12 +28,6 @@ END $$;
 DROP INDEX IF EXISTS idx_games_lobby_status;
 ALTER TABLE games DROP CONSTRAINT IF EXISTS games_lobby_status_check;
 ALTER TABLE games DROP COLUMN IF EXISTS lobby_status;
-
--- Ensure games.status supports abandoned
-ALTER TABLE games DROP CONSTRAINT IF EXISTS games_status_check;
-ALTER TABLE games
-ADD CONSTRAINT games_status_check
-CHECK (status IN ('setup', 'initialBuild', 'active', 'completed', 'abandoned'));
 
 -- Ensure per-player visibility + presence columns exist
 ALTER TABLE players

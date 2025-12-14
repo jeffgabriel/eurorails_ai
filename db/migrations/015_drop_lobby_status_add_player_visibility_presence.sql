@@ -6,7 +6,13 @@
 -- - players.is_deleted supports per-player soft delete/hide
 -- - players.last_seen_at supports server-driven presence staleness (5-minute timeout)
 
--- 0) Data migration: consolidate legacy lobby_status into games.status before dropping column
+-- 0) Ensure games.status constraint supports abandoned (so data migration cannot violate it)
+ALTER TABLE games DROP CONSTRAINT IF EXISTS games_status_check;
+ALTER TABLE games
+ADD CONSTRAINT games_status_check
+CHECK (status IN ('setup', 'initialBuild', 'active', 'completed', 'abandoned'));
+
+-- 1) Data migration: consolidate legacy lobby_status into games.status before dropping column
 DO $$
 BEGIN
   IF EXISTS (
@@ -21,16 +27,10 @@ BEGIN
   END IF;
 END $$;
 
--- 1) Remove lobby_status (no longer used)
+-- 2) Remove lobby_status (no longer used)
 DROP INDEX IF EXISTS idx_games_lobby_status;
 ALTER TABLE games DROP CONSTRAINT IF EXISTS games_lobby_status_check;
 ALTER TABLE games DROP COLUMN IF EXISTS lobby_status;
-
--- 2) Extend games.status constraint to include abandoned
-ALTER TABLE games DROP CONSTRAINT IF EXISTS games_status_check;
-ALTER TABLE games
-ADD CONSTRAINT games_status_check
-CHECK (status IN ('setup', 'initialBuild', 'active', 'completed', 'abandoned'));
 
 -- 3) Add per-player visibility + presence tracking
 ALTER TABLE players
