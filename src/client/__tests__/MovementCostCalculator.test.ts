@@ -318,15 +318,6 @@ describe('MovementCostCalculator', () => {
         trackFromMadrid, 
         madridCityPoints
       );
-      
-      console.log('Madrid Test Debug:');
-      console.log('  From node in track?', trackFromMadrid.segments.some(s => 
-        (s.from.row === madridPerimeter1.row && s.from.col === madridPerimeter1.col) ||
-        (s.to.row === madridPerimeter1.row && s.to.col === madridPerimeter1.col)
-      ));
-      console.log('  Track segments:', trackFromMadrid.segments.map(s => `${s.from.row},${s.from.col} -> ${s.to.row},${s.to.col}`));
-      console.log('  Result:', result);
-      
       expect(result.isValid).toBe(true);
       expect(result.totalCost).toBe(0); // Should be 0 cost for city internal movement from unconnected start
       expect(result.segments).toHaveLength(1);

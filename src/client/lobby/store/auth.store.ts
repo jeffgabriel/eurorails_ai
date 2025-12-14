@@ -132,9 +132,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     }
 
     try {
-      console.log('Calling refresh token endpoint...');
       const result = await api.refreshToken(refreshToken);
-      console.log('Refresh token response received');
       
       // Update stored tokens
       localStorage.setItem(JWT_STORAGE_KEY, result.token);
@@ -148,7 +146,6 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         isAuthenticated: true,
       });
       
-      console.log('Token refresh successful');
       return true;
     } catch (error) {
       console.error('Failed to refresh token:', error);

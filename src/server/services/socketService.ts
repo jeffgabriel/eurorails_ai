@@ -22,15 +22,10 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
     transports: ['websocket'],
   });
 
-  console.log('Socket.IO server initialized');
-
   // Handle socket connections
   io.on('connection', (socket: Socket) => {
-    console.log('Client connected:', socket.id);
-
     // Handle disconnection
     socket.on('disconnect', () => {
-      console.log('Client disconnected:', socket.id);
     });
 
     // Handle join lobby event
@@ -40,7 +35,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         return;
       }
       const { gameId } = data;
-      console.log(`Client ${socket.id} joining lobby for game ${gameId}`);
       socket.join(`lobby-${gameId}`);
       // Note: We don't emit lobby-updated here because the LobbyService
       // handles emitting proper events with player data when players actually join/leave
@@ -53,7 +47,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         return;
       }
       const { gameId } = data;
-      console.log(`Client ${socket.id} leaving lobby for game ${gameId}`);
       socket.leave(`lobby-${gameId}`);
       // Note: We don't emit lobby-updated here because the LobbyService
       // handles emitting proper events with player data when players actually join/leave
@@ -65,7 +58,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         console.warn(`Invalid gameId from client ${socket.id} for join`);
         return;
       }
-      console.log(`Client ${socket.id} joining game ${data.gameId}`);
       socket.join(data.gameId);
     });
 
@@ -78,7 +70,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         console.warn(`Invalid action type from client ${socket.id}`);
         return;
       }
-      console.log(`Client ${socket.id} sent action: ${data.type} for game ${data.gameId}`);
       // Forward action to other players in the game
       socket.to(data.gameId).emit('state:patch', {
         patch: data.payload as any,
@@ -105,8 +96,6 @@ export function emitToLobby(gameId: string, event: string, data: unknown): void 
     console.warn('Socket.IO not initialized, cannot emit to lobby');
     return;
   }
-
-  console.log(`Emitting ${event} to lobby-${gameId}`);
   io.to(`lobby-${gameId}`).emit(event, data);
 }
 
@@ -134,8 +123,6 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
     console.warn('Socket.IO not initialized, cannot emit turn change');
     return;
   }
-
-  console.log(`Emitting turn:change to game ${gameId} - currentPlayerIndex: ${currentPlayerIndex}`);
   io.to(gameId).emit('turn:change', {
     currentPlayerIndex,
     currentPlayerId,
@@ -155,8 +142,6 @@ export function emitToGame(gameId: string, event: string, data: unknown): void {
     console.warn('Socket.IO not initialized, cannot emit to game');
     return;
   }
-
-  console.log(`Emitting ${event} to game ${gameId}`);
   io.to(gameId).emit(event, data);
 }
 
@@ -173,7 +158,6 @@ export function emitStatePatch(gameId: string, patch: Partial<GameState>): void 
   }
 
   const serverSeq = Date.now(); // Can be replaced with proper sequence number later
-  console.log(`Emitting state:patch to game ${gameId} with serverSeq ${serverSeq}`);
   io.to(gameId).emit('state:patch', {
     patch,
     serverSeq,

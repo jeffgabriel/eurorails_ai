@@ -40,14 +40,12 @@ export async function authenticatedFetch(
   if (response.status === 401 && retryOn401) {
     const refreshToken = localStorage.getItem('eurorails.refreshToken');
     if (refreshToken) {
-      console.log('Token expired, attempting refresh...');
       try {
         // Import auth store dynamically to avoid circular dependency
         const { useAuthStore } = await import('../lobby/store/auth.store');
         const refreshed = await useAuthStore.getState().refreshAccessToken();
         
         if (refreshed) {
-          console.log('Token refreshed successfully, retrying request');
           // Retry the original request with new token (don't retry again to avoid infinite loop)
           return authenticatedFetch(url, options, false);
         } else {

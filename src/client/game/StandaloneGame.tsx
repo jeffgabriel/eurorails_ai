@@ -8,9 +8,6 @@ export function StandaloneGame() {
   const { id: gameId } = useParams<{ id: string }>();
 
   useEffect(() => {
-    console.log('StandaloneGame mounted with gameId:', gameId);
-    console.log('Current URL:', window.location.href);
-    
     if (!containerRef.current) return;
 
     // Create the game container div if it doesn't exist
@@ -25,7 +22,6 @@ export function StandaloneGame() {
 
     // Dynamically import and initialize the game
     import('./index').then((gameModule) => {
-      console.log('Standalone game initialized with ID:', gameId);
       // Store reference to the game instance for cleanup
       gameRef.current = gameModule.game;
     }).catch(error => {

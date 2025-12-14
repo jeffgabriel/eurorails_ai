@@ -11,9 +11,6 @@ router.get('/test', (req, res) => {
 
 // Save track state
 router.post('/save', async (req, res) => {
-    console.debug('Received track save request at /api/tracks/save');
-    console.debug('Request body:', req.body);
-
     try {
         const { gameId, playerId, trackState } = req.body;
 
@@ -27,7 +24,6 @@ router.post('/save', async (req, res) => {
         }
 
         await TrackService.saveTrackState(gameId, playerId, trackState);
-        console.log('Successfully saved track state for player:', playerId);
 
         // Emit track update event to all clients in the game room
         const io = getSocketIO();
@@ -37,7 +33,6 @@ router.post('/save', async (req, res) => {
                 playerId,
                 timestamp: Date.now()
             });
-            console.log(`Emitted track:updated event for game ${gameId}, player ${playerId}`);
         }
 
         return res.status(200).json({ message: 'Track state saved successfully' });
@@ -52,9 +47,6 @@ router.post('/save', async (req, res) => {
 
 // Get track state for a player
 router.get('/:gameId/:playerId', async (req, res) => {
-    console.debug('Received get track state request');
-    console.debug('Request params:', req.params);
-
     try {
         const { gameId, playerId } = req.params;
 
@@ -80,9 +72,6 @@ router.get('/:gameId/:playerId', async (req, res) => {
 
 // Get all tracks for a game
 router.get('/:gameId', async (req, res) => {
-    console.debug('Received get all tracks request');
-    console.debug('Request params:', req.params);
-
     try {
         const { gameId } = req.params;
 
@@ -103,13 +92,6 @@ router.get('/:gameId', async (req, res) => {
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
         });
-    }
-});
-
-console.log('Track routes registered:');
-router.stack.forEach((r: any) => {
-    if (r.route && r.route.path) {
-        console.log(`${Object.keys(r.route.methods)} ${r.route.path}`);
     }
 });
 

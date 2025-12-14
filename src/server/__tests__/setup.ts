@@ -32,11 +32,8 @@ async function ensureTestDatabase() {
     );
 
     if (dbCheckResult.rows.length === 0) {
-      console.log(`Creating test database: ${testDbName}`);
       await adminPool.query(`CREATE DATABASE ${testDbName}`);
-      console.log(`Test database ${testDbName} created successfully`);
     } else {
-      console.log(`Test database ${testDbName} already exists`);
     }
   } catch (err) {
     console.error(`Error ensuring test database exists:`, err);
@@ -51,7 +48,6 @@ async function ensureTestDatabase() {
     if (!initialized) {
       throw new Error("Failed to initialize test database");
     }
-    console.log(`Test database ${testDbName} initialized with migrations`);
   } catch (err) {
     console.error(`Error initializing test database:`, err);
     throw err;
@@ -69,7 +65,6 @@ beforeAll(async () => {
     
     // Test the connection by running a simple query
     await db.query("SELECT NOW()");
-    console.log("Database connected for tests");
   } catch (err) {
     console.error("Failed to connect to database:", err);
     throw err;
@@ -118,7 +113,6 @@ afterAll(async () => {
     try {
       // Close the connection pool
       await db.end();
-      console.log("Database connection closed");
     } catch (err) {
       // Ignore errors if pool is already closed
       if (err instanceof Error && !err.message.includes('Called end on pool more than once')) {

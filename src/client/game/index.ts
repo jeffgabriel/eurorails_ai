@@ -52,15 +52,11 @@ const game = new Phaser.Game(config);
 
 // Get game ID and pass it to the setup scene
 const gameId = getGameIdFromUrl();
-console.log('Game index.ts loaded, gameId:', gameId);
-console.log('Current URL:', window.location.href);
 
 if (gameId) {
-  console.log('Starting game with ID:', gameId);
   // The SetupScene will handle loading the game with this ID
   game.scene.start('SetupScene', { gameId });
 } else {
-  console.log('No game ID found, starting setup scene normally');
   game.scene.start('SetupScene');
 }
 

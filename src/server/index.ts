@@ -31,20 +31,17 @@ function getCorsOrigins(): string | string[] {
     // If ALLOWED_ORIGINS is set, use it (comma-separated list)
     if (process.env.ALLOWED_ORIGINS) {
         const origins = process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean);
-        console.log('CORS: Using ALLOWED_ORIGINS:', origins);
         return origins;
     }
     
     // If CLIENT_URL is set, use it
     if (process.env.CLIENT_URL) {
-        console.log('CORS: Using CLIENT_URL:', process.env.CLIENT_URL);
         return process.env.CLIENT_URL;
     }
     
     // In development, default to localhost on the configured server port
     if (process.env.NODE_ENV === 'development') {
         const defaultOrigin = `http://localhost:${serverPort}`;
-        console.log('CORS: Using default development origin:', defaultOrigin);
         return defaultOrigin;
     }
     
@@ -65,22 +62,11 @@ function getCorsOrigins(): string | string[] {
     return `http://localhost:${serverPort}`;
 }
 
-// Debug logging middleware - add more detail
-app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    next();
-});
-
 // Middleware for parsing JSON and serving static files
 // CORS configuration - use function to evaluate at request time for dynamic origins
 app.use(cors({
     origin: (origin, callback) => {
         const allowedOrigins = getCorsOrigins();
-        
-        // Log CORS check for debugging
-        if (process.env.NODE_ENV === 'production') {
-            console.log(`CORS check - Origin: ${origin}, Allowed: ${JSON.stringify(allowedOrigins)}`);
-        }
         
         // If no origin (e.g., same-origin request, Postman), allow it
         if (!origin) {
@@ -116,16 +102,6 @@ app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
-
-// Log registered routes
-console.log('Registered routes:');
-app._router.stack.forEach((r: any) => {
-    if (r.route && r.route.path) {
-        console.log(`Route: ${Object.keys(r.route.methods)} ${r.route.path}`);
-    } else if (r.name === 'router') {
-        console.log('Router middleware:', r.regexp);
-    }
-});
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));
@@ -250,42 +226,6 @@ app.get('/health', async (req, res) => {
         }
     };
     
-    // Log diagnostics to stdout for Railway logs
-    console.log('=================================');
-    console.log('HEALTH CHECK DIAGNOSTICS:');
-    console.log('=================================');
-    console.log('File System Checks:');
-    console.log(`  index.html exists: ${fileExists}`);
-    console.log(`  index.html path: ${path.resolve(indexPath)}`);
-    if (fileError) console.log(`  index.html error: ${fileError}`);
-    console.log(`  dist/client exists: ${dirExists}`);
-    console.log(`  dist/client path: ${path.resolve(clientDistPath)}`);
-    if (dirError) console.log(`  dist/client error: ${dirError}`);
-    console.log('');
-    console.log('Server Info:');
-    console.log(`  __dirname: ${__dirname}`);
-    console.log(`  cwd: ${process.cwd()}`);
-    console.log(`  port: ${port}`);
-    console.log(`  server address: ${JSON.stringify(httpServer?.address())}`);
-    console.log('');
-    console.log('Environment Variables:');
-    console.log(`  CLIENT_URL: ${process.env.CLIENT_URL || '(not set)'}`);
-    console.log(`  VITE_API_BASE_URL: ${process.env.VITE_API_BASE_URL || '(not set)'}`);
-    console.log(`  VITE_SOCKET_URL: ${process.env.VITE_SOCKET_URL || '(not set)'}`);
-    console.log(`  PORT: ${process.env.PORT || '(not set)'}`);
-    console.log(`  NODE_ENV: ${process.env.NODE_ENV || '(not set)'}`);
-    console.log('');
-    console.log('Endpoint Tests:');
-    console.log(`  Root path (${serverUrl}/): ${rootPathTest.success ? 'SUCCESS' : 'FAILED'}`);
-    if (rootPathTest.statusCode) console.log(`    Status: ${rootPathTest.statusCode}`);
-    if (rootPathTest.error) console.log(`    Error: ${rootPathTest.error}`);
-    if (rootPathTest.duration) console.log(`    Duration: ${rootPathTest.duration}ms`);
-    console.log(`  API test (${serverUrl}/api/test): ${apiTestTest.success ? 'SUCCESS' : 'FAILED'}`);
-    if (apiTestTest.statusCode) console.log(`    Status: ${apiTestTest.statusCode}`);
-    if (apiTestTest.error) console.log(`    Error: ${apiTestTest.error}`);
-    if (apiTestTest.duration) console.log(`    Duration: ${apiTestTest.duration}ms`);
-    console.log('=================================');
-    
     // Always return 200 so Railway doesn't restart, but include diagnostics
     res.status(200).json({ 
         status: 'healthy',
@@ -350,7 +290,6 @@ async function startServer() {
         // Initialize default game
         try {
             const gameId = await PlayerService.initializeDefaultGame();
-            console.log('Default game initialized with ID:', gameId);
         } catch (err) {
             console.error('Failed to initialize default game:', err);
             // Don't exit - the game might already exist
@@ -371,21 +310,7 @@ async function startServer() {
 
         // Start server - explicitly bind to 0.0.0.0 to accept connections from Railway
         server.listen(port, '0.0.0.0', () => {
-            console.log('=================================');
-            console.log(`Server running in ${process.env.NODE_ENV} mode`);
-            console.log(`API server listening on port ${port} (bound to 0.0.0.0)`);
-            console.log(`Socket.IO initialized and ready`);
-            console.log(`API routes available at http://localhost:${port}/api`);
-            console.log('In development mode:');
-            console.log('- Client dev server runs on port 3000');
-            console.log('- API requests are proxied from port 3000 to 3001');
-            console.log('Database connection established');
-            console.log('=================================');
-        });
-
-        // Log when server closes
-        server.on('close', () => {
-            console.log('Server shutting down');
+            console.log(`API server listening on port ${port}`);
         });
 
     } catch (error) {

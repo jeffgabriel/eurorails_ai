@@ -129,18 +129,15 @@ export function LobbyPage() {
   useEffect(() => {
     if (currentGame && currentGame.status === 'IN_SETUP' && token) {
       // Connect to socket and join lobby room
-      console.log('Connecting to lobby socket for game:', currentGame.id);
       connectToLobbySocket(currentGame.id, token);
       
       // Listen for game started event
       onGameStarted((gameId) => {
-        console.log('Game started, navigating to game:', gameId);
         navigate(`/game/${gameId}`);
       });
       
       // Cleanup on unmount
       return () => {
-        console.log('Disconnecting from lobby socket for game:', currentGame.id);
         disconnectFromLobbySocket(currentGame.id);
       };
     }

@@ -37,7 +37,6 @@ export class SetupScene extends Phaser.Scene {
             this.isLobbyGame = true;
             this.loadSpecificGame(data.gameId);
         } else {
-            console.log('No gameId provided, redirecting to lobby');
             window.location.href = '/lobby';
         }
     }
@@ -87,9 +86,6 @@ export class SetupScene extends Phaser.Scene {
             if (!Array.isArray(lobbyPlayers)) {
                 throw new Error('Players data must be an array');
             }
-
-            console.log('Game has', lobbyPlayers.length, 'players');
-            console.log('lobbyPlayers:', lobbyPlayers);
             
             // Convert lobby players to game players format
             const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => {
@@ -130,7 +126,6 @@ export class SetupScene extends Phaser.Scene {
                 status: effectiveGameStatus === 'setup' ? 'setup' : 'active',
                 maxPlayers: game.maxPlayers || 6
             };
-            console.log('Updated gameState:', this.gameState);
 
             // If game is in setup status (or null, which we treat as setup), show the setup screen
             if (effectiveGameStatus === 'setup') {
@@ -157,7 +152,6 @@ export class SetupScene extends Phaser.Scene {
                         throw new Error('Failed to fetch active game state');
                     }
                     const activeGameState = await response.json();
-                    console.log('Active game state:', activeGameState);
                     this.gameState = activeGameState;
                 } catch (error) {
                     console.error('Error fetching active game state:', error);
@@ -173,7 +167,6 @@ export class SetupScene extends Phaser.Scene {
             
             // If game is completed or abandoned, show appropriate message
             if (game.gameStatus === 'completed' || game.gameStatus === 'abandoned') {
-                console.log('Game is in', game.gameStatus, 'status, showing completion message');
                 this.showGameCompletionMessage(game.gameStatus);
                 return;
             }
@@ -217,17 +210,14 @@ export class SetupScene extends Phaser.Scene {
 
         // Add start game button if we have enough players
         if (this.gameState.players.length >= 2) {
-            console.log('Adding start game button - game has', this.gameState.players.length, 'players');
             this.addStartGameButton();
         } else if (this.gameState.players.length === 0) {
-            console.log('No players yet, showing waiting message');
             this.add.text(this.scale.width / 2, 300, 'No players have joined yet. Waiting for players to join...', {
                 color: '#666666',
                 fontSize: '16px',
                 align: 'center'
             }).setOrigin(0.5);
         } else {
-            console.log('Not enough players yet, showing waiting message');
             this.add.text(this.scale.width / 2, 300, `Waiting for more players... (${this.gameState.players.length}/2 minimum)`, {
                 color: '#666666',
                 fontSize: '16px',
@@ -265,8 +255,6 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private addStartGameButton() {
-        console.log('addStartGameButton called');
-        
         const button = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height - 100,
@@ -284,7 +272,6 @@ export class SetupScene extends Phaser.Scene {
         }).setOrigin(0.5);
         
         button.on('pointerdown', () => {
-            console.log('Start Game button clicked!');
             this.startGame();
         });
     }
@@ -442,8 +429,6 @@ export class SetupScene extends Phaser.Scene {
     }
 
     private async startGame() {
-        console.log('startGame called for game', this.gameState.id);
-        
         // Update game status to active
         try {
             // Get user ID from localStorage (same way as lobby store does)
@@ -470,7 +455,6 @@ export class SetupScene extends Phaser.Scene {
             });
 
             if (response.ok) {
-                console.log('Game started successfully, updating local game state to active');
                 // Update local game state to active
                 this.gameState.status = 'active';
                 // Start the game scene
@@ -502,7 +486,6 @@ export class SetupScene extends Phaser.Scene {
         // Only proceed with the old setup logic if we're not loading from the lobby
         if (!this.isLobbyGame) {
             // This is the old standalone setup flow - not used when loading from lobby
-            console.log('Using old standalone setup flow');
             this.setupStandaloneGame();
         }
         // If we're loading from lobby, the loadSpecificGame method will handle the setup

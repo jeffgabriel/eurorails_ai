@@ -551,13 +551,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       // Only refresh player list if we don't have players yet
       const currentPlayers = get().players;
-      console.log('Connecting to lobby socket - current players:', currentPlayers?.length || 0);
       if (!currentPlayers || currentPlayers.length === 0) {
         try {
-          console.log('Loading players for game:', gameId);
           await get().loadGamePlayers(gameId);
-          const afterLoad = get().players;
-          console.log('Players loaded, count:', afterLoad?.length || 0);
         } catch (error) {
           console.warn('Failed to load initial players on socket connect:', error);
         }
@@ -566,11 +562,6 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       // Listen for lobby updates
       socketService.onLobbyUpdate((data) => {
         if (data.gameId === gameId) {
-          console.log('Lobby updated event received:', {
-            action: data.action,
-            playerCount: data.players?.length || 0,
-            players: data.players,
-          });
           // Update player list
           set({ players: data.players });
         }
@@ -590,7 +581,6 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   onGameStarted: (callback: (gameId: ID) => void) => {
     socketService.onGameStarted((data) => {
-      console.log('Game started event received:', data.gameId);
       callback(data.gameId);
     });
   },

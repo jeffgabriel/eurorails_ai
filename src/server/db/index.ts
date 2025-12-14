@@ -50,16 +50,6 @@ function parseDatabaseUrl(): Partial<{
             database: url.pathname.slice(1), // Remove leading '/'
             ssl: sslConfig
         };
-        
-        // Log database connection info (without sensitive data)
-        console.log('DATABASE_URL detected. Connecting to:', {
-            host: parsed.host,
-            port: parsed.port,
-            database: parsed.database,
-            user: parsed.user,
-            ssl: parsed.ssl !== false
-        });
-        
         return parsed;
     } catch (error) {
         console.error('Error parsing DATABASE_URL:', error);
@@ -82,9 +72,7 @@ const databaseName = TEST_MODE
 
 // Log which database we're using
 if (usingDatabaseUrl) {
-    console.log(`Using database from DATABASE_URL: ${databaseName}`);
 } else {
-    console.log(`Using database from DB_NAME: ${databaseName || '(not set)'}`);
 }
 
 // Create a connection pool
@@ -134,11 +122,9 @@ async function connectWithRetry(retries = 5, delay = 2000): Promise<PoolClient> 
     for (let i = 0; i < retries; i++) {
         try {
             const client = await pool.connect();
-            console.log('Successfully connected to the database.');
             return client;
         } catch (err) {
             if (i < retries - 1) {
-                console.log(`Database connection failed. Retrying in ${delay / 1000} seconds... (${i + 1}/${retries})`);
                 await new Promise(res => setTimeout(res, delay));
             } else {
                 console.error('Database connection failed after multiple retries.');
@@ -154,7 +140,6 @@ export async function checkDatabase() {
     let client: PoolClient | undefined;
     try {
         client = await connectWithRetry();
-        console.log('Initializing and verifying database schema...');
 
         // 1. Ensure schema_migrations table exists.
         await client.query(`
@@ -167,7 +152,6 @@ export async function checkDatabase() {
         // 2. Get the current schema version.
         const versionResult = await client.query('SELECT MAX(version) as version FROM schema_migrations;');
         const currentVersion = versionResult.rows[0].version || 0;
-        console.log(`Current database schema version: ${currentVersion}`);
 
         // 3. Read migration files from the filesystem.
         const migrationsDir = path.join(process.cwd(), 'db', 'migrations');
@@ -184,24 +168,20 @@ export async function checkDatabase() {
         const pendingMigrations = migrationFiles.filter(m => m.version > currentVersion);
 
         if (pendingMigrations.length > 0) {
-            console.log('Pending migrations found. Applying now...');
             await client.query('BEGIN');
             try {
                 for (const migration of pendingMigrations) {
-                    console.log(`- Applying migration ${migration.file}...`);
                     const sql = fs.readFileSync(migration.path, 'utf-8');
                     await client.query(sql);
                     await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [migration.version]);
                 }
                 await client.query('COMMIT');
-                console.log('All pending migrations applied successfully.');
             } catch (err) {
                 await client.query('ROLLBACK');
                 console.error('Error applying migrations, rolled back transaction.', err);
                 throw err;
             }
         } else {
-            console.log('Database schema is up to date.');
         }
 
         // Clean database if in development mode and flag is set

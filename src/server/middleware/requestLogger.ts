@@ -124,8 +124,6 @@ class RequestLogger {
       timestamp: new Date().toISOString()
     };
 
-    this.info('Incoming request', requestData, requestId);
-
     // Log response when it finishes
     res.on('finish', () => {
       const duration = Date.now() - startTime;
@@ -135,9 +133,9 @@ class RequestLogger {
         responseTime: duration,
         responseSize: res.get('Content-Length') ? parseInt(res.get('Content-Length')!) : undefined
       };
-
-      const level = res.statusCode >= 400 ? LogLevel.ERROR : LogLevel.INFO;
-      this.log(level, 'Request completed', responseData, requestId);
+      if (res.statusCode >= 400) {
+        this.error('Request completed', responseData, requestId);
+      }
     });
 
     next();
