@@ -21,11 +21,33 @@ export interface Game {
   id: string;
   joinCode: string;
   createdBy: string;
-  status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
-  gameStatus: 'setup' | 'active' | 'completed' | 'abandoned';
+  // games.status is the single source of truth
+  status: 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
+  // Backward compatibility for older clients (e.g. SetupScene) that still read gameStatus
+  gameStatus: 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
+}
+
+export interface GameSummary {
+  id: string;
+  joinCode: string | null;
+  createdBy: string | null;
+  status: Game['status'];
+  maxPlayers: number;
+  isPublic: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  playerCount: number;
+  onlineCount: number;
+  isOwner: boolean;
+}
+
+export interface MyGamesResponse {
+  active: GameSummary[];
+  setupOwned: GameSummary[];
+  archived: GameSummary[];
 }
 
 export interface Player {
@@ -106,10 +128,10 @@ export class LobbyService {
       
       // Create the game using the database function for join code generation
       const gameResult = await client.query(
-        `INSERT INTO games (join_code, max_players, is_public, lobby_status, status) 
-         VALUES (generate_unique_join_code(), $1, $2, $3, $4) 
-         RETURNING id, join_code, max_players, is_public, lobby_status, status, created_at`,
-        [data.maxPlayers || 6, data.isPublic || false, 'IN_SETUP', 'setup']
+        `INSERT INTO games (join_code, max_players, is_public, status) 
+         VALUES (generate_unique_join_code(), $1, $2, $3) 
+         RETURNING id, join_code, max_players, is_public, status, created_at, updated_at`,
+        [data.maxPlayers || 6, data.isPublic || false, 'setup']
       );
       
       const game = gameResult.rows[0];
@@ -160,7 +182,7 @@ export class LobbyService {
       id: game.id,
       joinCode: game.join_code,
       createdBy: data.createdByUserId, // Use user ID, not player ID
-      status: game.lobby_status,
+      status: game.status,
       gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
@@ -205,18 +227,25 @@ export class LobbyService {
     // Check if player is already in the game FIRST
     // This allows existing players to rejoin active games after refresh
     const existingPlayer = await db.query(
-      'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+      'SELECT id, is_deleted FROM players WHERE game_id = $1 AND user_id = $2',
       [game.id, joinData.userId]  
     );
     
     if (existingPlayer.rows.length > 0) {
+      // If the user previously soft-deleted the game, restore visibility on join
+      if (existingPlayer.rows[0].is_deleted === true) {
+        await db.query(
+          'UPDATE players SET is_deleted = false WHERE game_id = $1 AND user_id = $2',
+          [game.id, joinData.userId]
+        );
+      }
       // Player already in game, return game info regardless of status
       // This allows rejoining active games
       return {
         id: game.id,
         joinCode: game.join_code,
         createdBy: game.creator_user_id,
-        status: game.lobby_status,
+        status: game.status,
         gameStatus: game.status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
@@ -224,8 +253,8 @@ export class LobbyService {
       };
     }
     
-    // Only enforce "game must be IN_SETUP" for NEW players joining
-    if (game.lobby_status !== 'IN_SETUP') {
+    // Only enforce "game must be setup" for NEW players joining
+    if (game.status !== 'setup') {
       throw new GameAlreadyStartedError();
     }
     
@@ -347,7 +376,7 @@ export class LobbyService {
         id: game.id,
         joinCode: game.join_code,
         createdBy: game.creator_user_id,
-        status: game.lobby_status,
+        status: game.status,
         gameStatus: game.status,
         maxPlayers: game.max_players,
         isPublic: game.is_public,
@@ -386,7 +415,7 @@ export class LobbyService {
       id: game.id,
       joinCode: game.join_code,
       createdBy: game.creator_user_id,
-      status: game.lobby_status,
+      status: game.status,
       gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
@@ -455,7 +484,7 @@ export class LobbyService {
       id: game.id,
       joinCode: game.join_code,
       createdBy: game.creator_user_id,
-      status: game.lobby_status,
+      status: game.status,
       gameStatus: game.status,
       maxPlayers: game.max_players,
       isPublic: game.is_public,
@@ -530,7 +559,7 @@ export class LobbyService {
         throw new NotGameCreatorError();
       }
       
-      if (game.lobby_status !== 'IN_SETUP') {
+      if (game.status !== 'setup') {
         throw new GameAlreadyStartedError();
       }
       
@@ -547,8 +576,8 @@ export class LobbyService {
       
       // Update game status
       await client.query(
-        'UPDATE games SET lobby_status = $1, status = $2 WHERE id = $3',
-        ['ACTIVE', 'active', gameId]
+        'UPDATE games SET status = $1 WHERE id = $2',
+        ['active', gameId]
       );
       
       await client.query('COMMIT');
@@ -626,8 +655,8 @@ export class LobbyService {
         } else {
           // No other players, mark game as abandoned instead of deleting
           await client.query(
-            'UPDATE games SET lobby_status = $1 WHERE id = $2',
-            ['ABANDONED', gameId]
+            'UPDATE games SET status = $1 WHERE id = $2',
+            ['abandoned', gameId]
           );
         }
       }
@@ -646,8 +675,8 @@ export class LobbyService {
       
       if (parseInt(playerCountResult.rows[0].count) === 0) {
         await client.query(
-          'UPDATE games SET lobby_status = $1 WHERE id = $2',
-          ['ABANDONED', gameId]
+          'UPDATE games SET status = $1 WHERE id = $2',
+          ['abandoned', gameId]
         );
       }
       
@@ -689,6 +718,219 @@ export class LobbyService {
     
     if (result.rowCount === 0) {
       throw new LobbyError('Player not found', 'PLAYER_NOT_FOUND', 404);
+    }
+  }
+
+  /**
+   * List games for a user, grouped for lobby UI.
+   * Filters out soft-deleted games (players.is_deleted = true).
+   */
+  static async getMyGames(userId: string): Promise<MyGamesResponse> {
+    if (!userId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+
+    const result = await db.query(
+      `
+      SELECT
+        g.id,
+        g.join_code,
+        g.created_by,
+        g.status,
+        g.max_players,
+        g.is_public,
+        g.created_at,
+        g.updated_at,
+        COUNT(p_all.*)::int AS player_count,
+        COUNT(*) FILTER (WHERE p_all.is_online = true)::int AS online_count
+      FROM games g
+      JOIN players p_me
+        ON p_me.game_id = g.id
+       AND p_me.user_id = $1
+       AND COALESCE(p_me.is_deleted, false) = false
+      LEFT JOIN players p_all
+        ON p_all.game_id = g.id
+      GROUP BY
+        g.id, g.join_code, g.created_by, g.status, g.max_players, g.is_public, g.created_at, g.updated_at
+      ORDER BY g.updated_at DESC
+      `,
+      [userId]
+    );
+
+    const rows: GameSummary[] = result.rows.map((row) => {
+      const status = row.status as Game['status'];
+      return {
+        id: row.id,
+        joinCode: row.join_code ?? null,
+        createdBy: row.created_by ?? null,
+        status,
+        maxPlayers: row.max_players,
+        isPublic: row.is_public,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        playerCount: row.player_count,
+        onlineCount: row.online_count,
+        isOwner: row.created_by === userId,
+      };
+    });
+
+    const active = rows.filter(r => r.status === 'active' || r.status === 'initialBuild');
+    const setupOwned = rows.filter(r => r.status === 'setup' && r.isOwner);
+    const archived = rows.filter(r => r.status === 'completed' || r.status === 'abandoned');
+
+    return { active, setupOwned, archived };
+  }
+
+  static async deleteGame(
+    gameId: string,
+    requestingUserId: string,
+    options: { mode: 'soft' | 'hard' | 'transfer'; newOwnerUserId?: string }
+  ): Promise<void> {
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+    if (!requestingUserId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+    if (!options?.mode) {
+      throw new LobbyError('mode is required', 'MISSING_MODE', 400);
+    }
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      const gameResult = await client.query(
+        'SELECT id, created_by, status FROM games WHERE id = $1',
+        [gameId]
+      );
+      if (gameResult.rows.length === 0) {
+        throw new GameNotFoundError();
+      }
+      const game = gameResult.rows[0] as { id: string; created_by: string | null; status: string };
+      const isOwner = game.created_by === requestingUserId;
+
+      if (options.mode === 'soft') {
+        // Non-owner soft delete (hide in lobby)
+        if (isOwner) {
+          throw new LobbyError('Owner must use hard delete or transfer', 'INVALID_DELETE_MODE', 400);
+        }
+        const updateResult = await client.query(
+          'UPDATE players SET is_deleted = true WHERE game_id = $1 AND user_id = $2',
+          [gameId, requestingUserId]
+        );
+        if (updateResult.rowCount === 0) {
+          throw new LobbyError('Player not found in this game', 'PLAYER_NOT_IN_GAME', 404);
+        }
+        await client.query('COMMIT');
+        return;
+      }
+
+      // Owner-only modes below
+      if (!isOwner) {
+        throw new LobbyError('Only the game owner can perform this action', 'NOT_GAME_CREATOR', 403);
+      }
+
+      if (options.mode === 'hard') {
+        await client.query('DELETE FROM games WHERE id = $1', [gameId]);
+        await client.query('COMMIT');
+        return;
+      }
+
+      // transfer
+      const newOwnerUserId = options.newOwnerUserId;
+      if (!newOwnerUserId) {
+        throw new LobbyError('newOwnerUserId is required for transfer', 'MISSING_NEW_OWNER', 400);
+      }
+      if (newOwnerUserId === requestingUserId) {
+        throw new LobbyError('newOwnerUserId must be different from current owner', 'INVALID_NEW_OWNER', 400);
+      }
+
+      // New owner must be a player in the game and online
+      const newOwnerResult = await client.query(
+        `SELECT user_id, is_online
+         FROM players
+         WHERE game_id = $1 AND user_id = $2 AND COALESCE(is_deleted, false) = false
+         LIMIT 1`,
+        [gameId, newOwnerUserId]
+      );
+      if (newOwnerResult.rows.length === 0) {
+        throw new LobbyError('Selected new owner is not a player in this game', 'INVALID_NEW_OWNER', 400);
+      }
+      if (newOwnerResult.rows[0].is_online !== true) {
+        throw new LobbyError('Selected new owner must be online', 'NEW_OWNER_NOT_ONLINE', 400);
+      }
+
+      await client.query(
+        'UPDATE games SET created_by = $1 WHERE id = $2',
+        [newOwnerUserId, gameId]
+      );
+
+      // Remove current owner's player record from the game
+      await client.query(
+        'DELETE FROM players WHERE game_id = $1 AND user_id = $2',
+        [gameId, requestingUserId]
+      );
+
+      // If that removal leaves no players, abandon the game instead of orphaning it
+      const countResult = await client.query(
+        'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',
+        [gameId]
+      );
+      if (countResult.rows[0].count === 0) {
+        await client.query(
+          'UPDATE games SET status = $1 WHERE id = $2',
+          ['abandoned', gameId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  static async bulkDeleteGames(
+    requestingUserId: string,
+    options: { gameIds: string[]; mode: 'soft' | 'hard' }
+  ): Promise<void> {
+    if (!requestingUserId) {
+      throw new LobbyError('userId is required', 'MISSING_USER_ID', 400);
+    }
+    if (!options?.gameIds || options.gameIds.length === 0) {
+      throw new LobbyError('gameIds is required', 'MISSING_GAME_IDS', 400);
+    }
+
+    // Process sequentially to keep semantics simple and predictable
+    for (const gameId of options.gameIds) {
+      if (options.mode === 'soft') {
+        // Soft delete is always per-player hide
+        await db.query(
+          'UPDATE players SET is_deleted = true WHERE game_id = $1 AND user_id = $2',
+          [gameId, requestingUserId]
+        );
+      } else {
+        // Hard delete only if owner; otherwise fallback to soft delete
+        const ownerResult = await db.query(
+          'SELECT created_by FROM games WHERE id = $1',
+          [gameId]
+        );
+        if (ownerResult.rows.length === 0) {
+          continue;
+        }
+        const isOwner = ownerResult.rows[0].created_by === requestingUserId;
+        if (isOwner) {
+          await db.query('DELETE FROM games WHERE id = $1', [gameId]);
+        } else {
+          await db.query(
+            'UPDATE players SET is_deleted = true WHERE game_id = $1 AND user_id = $2',
+            [gameId, requestingUserId]
+          );
+        }
+      }
     }
   }
 }

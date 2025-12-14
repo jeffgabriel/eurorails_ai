@@ -9,6 +9,7 @@ import type {
   RegisterForm,
   CreateGameForm,
   JoinGameForm,
+  MyGamesResponse,
   ID
 } from './types';
 import type { LoadState, LoadType } from '../../../shared/types/LoadTypes';
@@ -198,6 +199,26 @@ class ApiClient {
     return { message: response.message };
   }
 
+  // Lobby listings / management
+  async getMyGames(): Promise<MyGamesResponse> {
+    const response = await this.request<{ success: boolean; data: MyGamesResponse }>('/api/lobby/my-games');
+    return response.data;
+  }
+
+  async deleteGame(gameId: ID, data: { mode: 'soft' | 'hard' | 'transfer'; newOwnerUserId?: ID }): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/delete`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async bulkDeleteGames(data: { gameIds: ID[]; mode: 'soft' | 'hard' }): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/bulk-delete`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Load endpoints
   // Note: Load endpoints return unwrapped responses (arrays/objects directly, not { success, data })
   async getLoadState(): Promise<LoadState[]> {
@@ -276,6 +297,9 @@ export function getErrorMessage(error: ApiError): string {
     GAME_ALREADY_STARTED: 'Game has already started',
     INVALID_JOIN_CODE: 'Invalid join code',
     NOT_GAME_CREATOR: 'Only the game creator can start the game',
+    GAME_NOT_AVAILABLE: 'Game is no longer available',
+    FORBIDDEN: 'Access forbidden',
+    NEW_OWNER_NOT_ONLINE: 'Selected new owner must be online',
     
     // HTTP errors
     HTTP_401: 'Authentication required',

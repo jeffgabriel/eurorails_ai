@@ -632,8 +632,8 @@ export class PlayerService {
     status: GameStatus
   ): Promise<void> {
     // Validate status is lowercase and matches database constraint
-    // Database constraint allows: 'setup', 'initialBuild', 'active', 'completed'
-    const allowedStatuses = ['setup', 'initialBuild', 'active', 'completed'];
+    // Database constraint allows: 'setup', 'initialBuild', 'active', 'completed', 'abandoned'
+    const allowedStatuses = ['setup', 'initialBuild', 'active', 'completed', 'abandoned'];
     const normalizedStatus = status.toLowerCase();
     
     let finalStatus: string;

@@ -1,4 +1,4 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './lobby/store/auth.store';
 import { LoginPage } from './lobby/features/auth/LoginPage';
@@ -48,22 +48,33 @@ function PublicRoute({ children }: PublicRouteProps) {
 
 export default function App() {
   const { loadPersistedAuth, isLoading } = useAuthStore();
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
 
-  React.useEffect(() => {
-    // Load persisted authentication on app start (works for both dev and prod)
-    debug.log('App starting, loading persisted auth...');
+  useEffect(() => {
+    // IMPORTANT:
+    // On a hard refresh of a protected deep-link (e.g. /game/:id), React renders once
+    // before effects run. If we render routes immediately, ProtectedRoute will redirect
+    // while isAuthenticated is still false, causing a replace() navigation back to /login
+    // then /lobby. That looks like "refresh always returns to lobby" and also wipes
+    // /game/:id from browser history.
+    const initializeApp = async () => {
+      debug.log('App starting, loading persisted auth...');
+      try {
+        await loadPersistedAuth();
+      } catch (error) {
+        debug.error('Error loading persisted auth:', error);
+      } finally {
+        setInitialLoadComplete(true);
+      }
 
-    try {
-      loadPersistedAuth();
-    } catch (error) {
-      debug.error('Error loading persisted auth:', error);
-    }
+      debug.log('Current location:', window.location.href);
+    };
 
-    // Log current location for debugging route issues
-    debug.log('Current location:', window.location.href);
+    initializeApp();
   }, [loadPersistedAuth]);
 
-  if (isLoading) {
+  // Block initial routing until auth hydration completes to prevent deep-link refresh redirects.
+  if (!initialLoadComplete || isLoading) {
     return (
       <div className="size-full flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">

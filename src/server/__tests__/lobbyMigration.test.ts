@@ -22,8 +22,8 @@ describe('Lobby Migration (Phase 1)', () => {
 
     // Create a test game
     const gameResult = await db.query(
-      'INSERT INTO games (join_code, created_by, is_public, lobby_status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING id, join_code',
-      [testUserId, true, 'IN_SETUP']
+      'INSERT INTO games (join_code, created_by, is_public, status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING id, join_code',
+      [testUserId, true, 'setup']
     );
     testGameId = gameResult.rows[0].id;
   });
@@ -62,12 +62,12 @@ describe('Lobby Migration (Phase 1)', () => {
       expect(result.rows[0].is_public).toBe(true);
     });
 
-    it('should have lobby_status field', async () => {
+    it('should use games.status as lifecycle source of truth', async () => {
       const result = await db.query(
-        'SELECT lobby_status FROM games WHERE id = $1',
+        'SELECT status FROM games WHERE id = $1',
         [testGameId]
       );
-      expect(result.rows[0].lobby_status).toBe('IN_SETUP');
+      expect(result.rows[0].status).toBe('setup');
     });
   });
 
@@ -86,6 +86,22 @@ describe('Lobby Migration (Phase 1)', () => {
         [testPlayerId]
       );
       expect(result.rows[0].is_online).toBe(true); // Should be true by default
+    });
+
+    it('should have is_deleted field', async () => {
+      const result = await db.query(
+        'SELECT is_deleted FROM players WHERE id = $1',
+        [testPlayerId]
+      );
+      expect(result.rows[0].is_deleted).toBe(false); // Should be false by default
+    });
+
+    it('should have last_seen_at field', async () => {
+      const result = await db.query(
+        'SELECT last_seen_at FROM players WHERE id = $1',
+        [testPlayerId]
+      );
+      expect(result.rows[0].last_seen_at).toBeDefined();
     });
   });
 
@@ -121,15 +137,17 @@ describe('Lobby Migration (Phase 1)', () => {
         ORDER BY indexname
       `);
       
+      const actualIndexes = result.rows.map(row => row.indexname);
       const expectedIndexes = [
         'idx_games_created_by',
-        'idx_games_is_public', 
+        'idx_games_is_public',
         'idx_games_join_code',
-        'idx_games_lobby_status',
         'idx_games_status'
       ];
-      
-      expect(result.rows.map(row => row.indexname)).toEqual(expectedIndexes);
+
+      expectedIndexes.forEach(idx => {
+        expect(actualIndexes).toContain(idx);
+      });
     });
 
     it('should have players table indexes', async () => {
@@ -143,7 +161,9 @@ describe('Lobby Migration (Phase 1)', () => {
       // Expected indexes from lobby migration (migration 011)
       const expectedLobbyIndexes = [
         'idx_players_is_online',
-        'idx_players_user_id'
+        'idx_players_user_id',
+        'idx_players_last_seen_at',
+        'idx_players_user_game_visible'
       ];
       
       const actualIndexes = result.rows.map(row => row.indexname);
@@ -157,11 +177,10 @@ describe('Lobby Migration (Phase 1)', () => {
   });
 
   describe('Constraints', () => {
-    it('should enforce lobby_status check constraint', async () => {
-      // This should fail
+    it('should enforce games.status check constraint', async () => {
       await expect(
         db.query(
-          'UPDATE games SET lobby_status = $1 WHERE id = $2',
+          'UPDATE games SET status = $1 WHERE id = $2',
           ['INVALID_STATUS', testGameId]
         )
       ).rejects.toThrow();
@@ -178,8 +197,8 @@ describe('Lobby Migration (Phase 1)', () => {
       // Try to create another game with the same join code
       await expect(
         db.query(
-          'INSERT INTO games (join_code, is_public, lobby_status) VALUES ($1, $2, $3)',
-          [existingCode, false, 'IN_SETUP']
+          'INSERT INTO games (join_code, is_public, status) VALUES ($1, $2, $3)',
+          [existingCode, false, 'setup']
         )
       ).rejects.toThrow();
     });
@@ -194,14 +213,14 @@ describe('Lobby Migration (Phase 1)', () => {
       const newUserId = newUserResult.rows[0].id;
 
       const newGameResult = await db.query(
-        'INSERT INTO games (join_code, created_by, is_public, lobby_status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING *',
-        [newUserId, false, 'IN_SETUP']
+        'INSERT INTO games (join_code, created_by, is_public, status) VALUES (generate_unique_join_code(), $1, $2, $3) RETURNING *',
+        [newUserId, false, 'setup']
       );
 
       expect(newGameResult.rows[0].join_code).toBeDefined();
       expect(newGameResult.rows[0].created_by).toBe(newUserId);
       expect(newGameResult.rows[0].is_public).toBe(false);
-      expect(newGameResult.rows[0].lobby_status).toBe('IN_SETUP');
+      expect(newGameResult.rows[0].status).toBe('setup');
 
       // Clean up
       await db.query('DELETE FROM games WHERE id = $1', [newGameResult.rows[0].id]);

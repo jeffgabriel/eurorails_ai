@@ -112,7 +112,7 @@ describe('Lobby API Integration Tests', () => {
       testGameIds.push(game.id);
 
       expect(game).toBeDefined();
-      expect(game.status).toBe('IN_SETUP');
+      expect(game.status).toBe('setup');
       expect(game.joinCode).toHaveLength(8);
 
       // 2. Join the game
@@ -131,7 +131,7 @@ describe('Lobby API Integration Tests', () => {
 
       // 5. Verify game status changed
       const startedGame = await LobbyService.getGame(game.id);
-      expect(startedGame!.status).toBe('ACTIVE');
+      expect(startedGame!.status).toBe('active');
 
       // 6. Leave the game
       await LobbyService.leaveGame(game.id, testUserId2);
@@ -189,7 +189,7 @@ describe('Lobby API Integration Tests', () => {
       // Verify game still exists
       const remainingGame = await LobbyService.getGame(game.id);
       expect(remainingGame).not.toBeNull();
-      expect(remainingGame!.status).toBe('IN_SETUP');
+      expect(remainingGame!.status).toBe('setup');
 
       // Verify only one player remains
       const players = await LobbyService.getGamePlayers(game.id);
@@ -222,7 +222,7 @@ describe('Lobby API Integration Tests', () => {
       // Verify game is marked as abandoned instead of deleted
       remainingGame = await LobbyService.getGame(game.id);
       expect(remainingGame).not.toBeNull();
-      expect(remainingGame?.status).toBe('ABANDONED');
+      expect(remainingGame?.status).toBe('abandoned');
     });
   });
 
@@ -288,7 +288,7 @@ describe('Lobby API Integration Tests', () => {
 
       // Verify all games are in IN_SETUP status
       games.forEach(game => {
-        expect(game.status).toBe('IN_SETUP');
+        expect(game.status).toBe('setup');
         expect(game.joinCode).toHaveLength(8);
       });
     });
@@ -396,7 +396,7 @@ describe('Lobby API Integration Tests', () => {
       // Verify game is marked as abandoned instead of deleted
       const abandonedGame = await LobbyService.getGame(game.id);
       expect(abandonedGame).not.toBeNull();
-      expect(abandonedGame?.status).toBe('ABANDONED');
+      expect(abandonedGame?.status).toBe('abandoned');
 
       // Verify no orphaned players (players are still removed when game is abandoned)
       const remainingPlayers = await LobbyService.getGamePlayers(game.id);

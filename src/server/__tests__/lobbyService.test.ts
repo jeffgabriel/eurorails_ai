@@ -116,7 +116,7 @@ describe('LobbyService', () => {
       expect(game.joinCode).toHaveLength(8);
       expect(game.joinCode).toMatch(/^[A-F0-9]{8}$/);
       expect(game.createdBy).toBeDefined();
-      expect(game.status).toBe('IN_SETUP');
+      expect(game.status).toBe('setup');
       expect(game.maxPlayers).toBe(4);
       expect(game.isPublic).toBe(true);
       expect(game.createdAt).toBeInstanceOf(Date);
@@ -132,7 +132,7 @@ describe('LobbyService', () => {
 
       expect(game.maxPlayers).toBe(6);
       expect(game.isPublic).toBe(false);
-      expect(game.status).toBe('IN_SETUP');
+      expect(game.status).toBe('setup');
     });
 
     it('should throw error for missing createdByUserId', async () => {
@@ -201,7 +201,7 @@ describe('LobbyService', () => {
 
       expect(joinedGame.id).toBe(testGame.id);
       expect(joinedGame.joinCode).toBe(testJoinCode);
-      expect(joinedGame.status).toBe('IN_SETUP');
+      expect(joinedGame.status).toBe('setup');
     });
 
     it('should return same game if player already in game', async () => {
@@ -357,7 +357,7 @@ describe('LobbyService', () => {
 
       // Verify game status changed
       const updatedGame = await LobbyService.getGame(testGame.id);
-      expect(updatedGame!.status).toBe('ACTIVE');
+      expect(updatedGame!.status).toBe('active');
     });
 
     it('should throw error for non-existent game', async () => {
@@ -445,7 +445,7 @@ describe('LobbyService', () => {
       // Verify game is marked as abandoned instead of deleted
       game = await LobbyService.getGame(testGame.id);
       expect(game).not.toBeNull();
-      expect(game?.status).toBe('ABANDONED');
+      expect(game?.status).toBe('abandoned');
     });
 
     it('should throw error for player not in game', async () => {
@@ -562,7 +562,7 @@ describe('LobbyService', () => {
 
       // Verify game status didn't change
       const retrievedGame = await LobbyService.getGame(game.id);
-      expect(retrievedGame!.status).toBe('IN_SETUP');
+      expect(retrievedGame!.status).toBe('setup');
     });
   });
 

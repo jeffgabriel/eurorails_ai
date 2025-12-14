@@ -63,7 +63,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -119,7 +119,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -156,7 +156,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-456',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -241,7 +241,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -250,7 +250,7 @@ describe('Lobby End-to-End Flows', () => {
 
       const mockStartedGame = {
         ...mockGame,
-        status: 'IN_PROGRESS' as const,
+        status: 'active' as const,
       };
 
       const mockPlayers = [
@@ -285,12 +285,12 @@ describe('Lobby End-to-End Flows', () => {
       
       // 1. Start game
       expect(store.isLoading).toBe(false);
-      expect(store.currentGame?.status).toBe('IN_SETUP');
+      expect(store.currentGame?.status).toBe('setup');
       
       await store.startGame('game-123');
       
       // Lobby startGame does nothing - just sets loading to false
-      expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
+      expect(useLobbyStore.getState().currentGame?.status).toBe('setup');
       expect(useLobbyStore.getState().isLoading).toBe(false);
       expect(useLobbyStore.getState().error).toBeNull();
       
@@ -303,7 +303,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -334,7 +334,7 @@ describe('Lobby End-to-End Flows', () => {
       // Should have no error state (lobby doesn't validate)
       expect(useLobbyStore.getState().error).toBeNull();
       expect(useLobbyStore.getState().isLoading).toBe(false);
-      expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP'); // Should remain unchanged
+      expect(useLobbyStore.getState().currentGame?.status).toBe('setup'); // Should remain unchanged
     });
   });
 
@@ -344,7 +344,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -401,7 +401,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),
@@ -476,7 +476,7 @@ describe('Lobby End-to-End Flows', () => {
         id: 'game-123',
         joinCode: 'ABC123',
         createdBy: 'user-123',
-        status: 'IN_SETUP' as const,
+        status: 'setup' as const,
         maxPlayers: 4,
         isPublic: true,
       createdAt: new Date(),

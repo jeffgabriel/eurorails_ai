@@ -215,7 +215,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 3. Verify all fields match what was created
       expect(retrievedGame.game.id).toBe(gameId);
       expect(retrievedGame.game.joinCode).toBe(createResult.game.joinCode);
-      expect(retrievedGame.game.status).toBe('IN_SETUP');
+      expect(retrievedGame.game.status).toBe('setup');
       expect(retrievedGame.game.isPublic).toBe(true);
       expect(retrievedGame.game.maxPlayers).toBe(6); // Default max players is now 6
       // Note: createdBy might be different due to server-side user ID generation
@@ -238,7 +238,7 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       // 3. Verify game persists and settings are correct
       const retrievedGame = await api.getGame(gameId);
       expect(retrievedGame.game.isPublic).toBe(false);
-      expect(retrievedGame.game.status).toBe('IN_SETUP');
+      expect(retrievedGame.game.status).toBe('setup');
     }, TEST_TIMEOUT);
   });
 
@@ -348,14 +348,14 @@ describe('True End-to-End Tests - Database Outcomes', () => {
       
       // Verify initial status is IN_SETUP
       const initialGame = await api.getGame(gameId);
-      expect(initialGame.game.status).toBe('IN_SETUP');
+      expect(initialGame.game.status).toBe('setup');
       
       // Call startGame API (should change database status to ACTIVE)
       await api.startGame(gameId);
 
       // 4. Verify game status changed to ACTIVE
       const retrievedGame = await api.getGame(gameId);
-      expect(retrievedGame.game.status).toBe('ACTIVE');
+      expect(retrievedGame.game.status).toBe('active');
     }, TEST_TIMEOUT);
 
     it('should update player presence and verify in database', async () => {
