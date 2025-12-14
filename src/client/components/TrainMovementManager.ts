@@ -41,7 +41,6 @@ export class TrainMovementManager {
       }
 
       const tracks: PlayerTrackState[] = await response.json();
-      console.debug("[TrainMovementManager] Loaded track data:", tracks);
       // Initialize playerTracks Map with loaded data
       tracks.forEach(trackState => {
         this.playerTracks.set(trackState.playerId, trackState);
@@ -174,9 +173,6 @@ export class TrainMovementManager {
       playerTrackState || null,
       mapConfig.points
     );
-    
-    console.debug("[TrainMovementManager] Movement cost result:", result);
-    
     if (!result.isValid) {
       console.warn(`[TrainMovementManager] Invalid movement: ${result.errorMessage}, using direct distance`);
       const dx = Math.abs(to.col - from.col);

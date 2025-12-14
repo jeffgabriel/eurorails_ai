@@ -1349,7 +1349,6 @@ export class TrackDrawingManager {
         }
 
         // Move train to the track's starting node
-        console.log(`Moving train from starting city (${trainPosition.row},${trainPosition.col}) to track start (${trackStartNode.row},${trackStartNode.col})`);
         currentPlayer.trainState.position = {
             x: trackStartNode.x,
             y: trackStartNode.y,

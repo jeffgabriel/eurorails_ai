@@ -7,7 +7,6 @@ import { ErrorBoundary } from './shared/ErrorBoundary';
 import { debug } from './shared/config';
 
 export default function App() {
-  console.log('[App] Rendering');
   const { loadPersistedAuth } = useAuthStore();
   const { restoreGameState } = useLobbyStore();
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
@@ -25,7 +24,6 @@ export default function App() {
       } catch (error) {
         debug.error('Error loading persisted auth:', error);
       } finally {
-        console.log('[App] Initial load complete, showing router');
         setInitialLoadComplete(true);
       }
 
@@ -35,10 +33,6 @@ export default function App() {
 
     initializeApp();
   }, [loadPersistedAuth, restoreGameState]);
-
-  useEffect(() => {
-    console.log('[App] initialLoadComplete:', initialLoadComplete);
-  }, [initialLoadComplete]);
 
   if (!initialLoadComplete) {
     return (

@@ -18,7 +18,6 @@ const initializeDatabase = () => {
     
     pool.query(schemaSQL)
         .then(() => {
-            console.log('Database schema initialized successfully');
             return pool.end();
         })
         .catch((error: Error) => {

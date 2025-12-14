@@ -422,12 +422,6 @@ export class SettingsScene extends Phaser.Scene {
                 color: this.selectedColor || this.editingPlayer.color
             };
 
-            // Log the request payload
-            console.log('Saving player changes with payload:', {
-                gameId: this.gameState.id,
-                player: updatedPlayer
-            });
-
             // Save to database
             const response = await fetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
@@ -439,19 +433,15 @@ export class SettingsScene extends Phaser.Scene {
                     player: updatedPlayer
                 })
             });
-
-            console.log('Server response status:', response.status);
             
             // Log headers in a TypeScript-friendly way
             const headers: Record<string, string> = {};
             response.headers.forEach((value, key) => {
                 headers[key] = value;
             });
-            console.log('Response headers:', headers);
 
             // Try to get response body regardless of status
             const responseText = await response.text();
-            console.log('Raw response body:', responseText);
 
             let errorData;
             try {
@@ -469,7 +459,6 @@ export class SettingsScene extends Phaser.Scene {
             const playerIndex = this.gameState.players.findIndex(p => p.id === this.editingPlayer!.id);
             if (playerIndex !== -1) {
                 this.gameState.players[playerIndex] = updatedPlayer;
-                console.log('Successfully updated player in local state:', updatedPlayer);
             }
 
             // Close just the edit dialog and return to main settings
@@ -549,8 +538,6 @@ export class SettingsScene extends Phaser.Scene {
                 hand: []
             };
 
-            console.log('Creating new player with data:', playerData);
-
             // Save to database using the create endpoint
             const response = await fetch(`${config.apiBaseUrl}/api/players/create`, {
                 method: 'POST',
@@ -564,7 +551,6 @@ export class SettingsScene extends Phaser.Scene {
             });
 
             const responseText = await response.text();
-            console.log('Server response:', responseText);
 
             if (!response.ok) {
                 let errorMessage = 'Failed to create player';
@@ -592,7 +578,6 @@ export class SettingsScene extends Phaser.Scene {
 
             // Update local state with the server response
             this.gameState.players.push(newPlayer);
-            console.log('Added new player to game state:', newPlayer);
 
             // Close the dialog and refresh the display
             this.closeEditDialog();

@@ -14,10 +14,6 @@ router.get('/test', (req, res) => {
 
 // Create game
 router.post('/game/create', async (req, res) => {
-    console.debug('Received game create request at /api/players/game/create');
-    console.debug('Request body:', req.body);
-    console.debug('Request headers:', req.headers);
-
     try {
         const { gameId } = req.body;
 
@@ -31,7 +27,6 @@ router.post('/game/create', async (req, res) => {
         }
 
         await PlayerService.createGame(gameId);
-        console.log('Successfully created game:', gameId);
 
         return res.status(200).json({ message: 'Game created successfully', gameId });
     } catch (error: any) {
@@ -45,10 +40,6 @@ router.post('/game/create', async (req, res) => {
 
 // Create player
 router.post('/create', async (req, res) => {
-    console.debug('Received player create request at /api/players/create');
-    console.debug('Request body:', req.body);
-    console.debug('Request headers:', req.headers);
-
     try {
         const { gameId, player } = req.body;
 
@@ -100,9 +91,7 @@ router.post('/create', async (req, res) => {
             }
         };
 
-        console.log('Creating new player in database:', { gameId, player: newPlayer });
         await PlayerService.createPlayer(gameId, newPlayer);
-        console.log('Successfully created player');
 
         return res.status(200).json(newPlayer);
     } catch (error: any) {
@@ -132,10 +121,6 @@ router.post('/create', async (req, res) => {
 
 // Update player
 router.post('/update', async (req, res) => {
-    console.debug('Received player update request at /api/players/update');
-    console.debug('Request body:', req.body);
-    console.debug('Request headers:', req.headers);
-
     try {
         const { gameId, player } = req.body;
 
@@ -180,9 +165,7 @@ router.post('/update', async (req, res) => {
             });
         }
 
-        console.log('Updating player in database:', { gameId, player });
         await PlayerService.updatePlayer(gameId, player);
-        console.log('Successfully updated player');
 
         // Get updated player data for socket broadcast
         // Use empty string to hide private hand data when broadcasting to all players
@@ -230,10 +213,6 @@ router.post('/update', async (req, res) => {
 
 // Delete player
 router.post('/delete', async (req, res) => {
-    console.log('Received player delete request at /api/players/delete');
-    console.log('Request body:', req.body);
-    console.log('Request headers:', req.headers);
-
     try {
         const { gameId, playerId } = req.body;
 
@@ -243,9 +222,7 @@ router.post('/delete', async (req, res) => {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
-        console.log('Deleting player from database:', { gameId, playerId });
         await PlayerService.deletePlayer(gameId, playerId);
-        console.log('Successfully deleted player');
 
         return res.status(200).json({ message: 'Player deleted successfully' });
     } catch (error) {
@@ -257,10 +234,6 @@ router.post('/delete', async (req, res) => {
 // Get players for a game
 // Require authentication to enforce per-player hand visibility
 router.get('/:gameId', authenticateToken, async (req, res) => {
-    console.log('Received get players request at /api/players/:gameId');
-    console.log('Request params:', req.params);
-    console.log('Request headers:', req.headers);
-
     try {
         const gameId = req.params.gameId;
         const userId = req.user?.id; // Authentication required, so userId should always be present
@@ -279,9 +252,7 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
             });
         }
 
-        console.log('Fetching players from database for game:', gameId);
         const players = await PlayerService.getPlayers(gameId, userId);
-        console.log('Successfully retrieved players:', players.length, 'players');
 
         return res.status(200).json(players);
     } catch (error) {
@@ -292,10 +263,6 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
 
 // Update current player
 router.post('/updateCurrentPlayer', async (req, res) => {
-    console.debug('Received current player update request at /api/players/updateCurrentPlayer');
-    console.debug('Request body:', req.body);
-    console.debug('Request headers:', req.headers);
-
     try {
         const { gameId, currentPlayerIndex } = req.body;
 
@@ -415,9 +382,6 @@ router.post('/game/:gameId/status', async (req, res) => {
 
 // Fulfill demand card
 router.post('/fulfill-demand', authenticateToken, async (req, res) => {
-    console.debug('Received fulfill demand request at /api/players/fulfill-demand');
-    console.debug('Request body:', req.body);
-
     try {
         const { gameId, playerId, city, loadType, cardId } = req.body;
         const userId = req.user?.id;
@@ -459,7 +423,6 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
 
         // Call the service to handle the demand fulfillment
         const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
-        console.log('Successfully fulfilled demand card');
 
         // Get updated player data with new hand for socket broadcast
         const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
@@ -495,14 +458,6 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
         });
-    }
-});
-
-// Log that routes are being registered
-console.log('Player routes registered:');
-router.stack.forEach((r: any) => {
-    if (r.route && r.route.path) {
-        console.log(`${Object.keys(r.route.methods)} ${r.route.path}`);
     }
 });
 

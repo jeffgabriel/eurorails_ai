@@ -224,10 +224,6 @@ export class GameStateService {
             
             const gameState = await gameResponse.json();
             this.gameState = gameState;
-            
-            // Sanitize logging to avoid exposing sensitive player information
-            console.log('Loaded game state with', gameState.players?.length || 0, 'players');
-            
             return gameState;
         } catch (error) {
             console.error('Error loading game state:', error);

@@ -113,7 +113,6 @@ export class PlayerService {
 
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
-    console.log(`Drawing initial 3 cards server-side for new player ${player.id} (${player.name})`);
     const handCardIds: number[] = [];
     for (let i = 0; i < 3; i++) {
       const card = demandDeckService.drawCard();
@@ -121,9 +120,7 @@ export class PlayerService {
         throw new Error(`Failed to draw initial card ${i + 1} for player ${player.id}`);
       }
       handCardIds.push(card.id);
-      console.log(`Drew card ${card.id} for player ${player.id}`);
     }
-    console.log(`Successfully drew ${handCardIds.length} initial cards for player ${player.id}`);
 
     const query = `
             INSERT INTO players (
@@ -164,12 +161,9 @@ export class PlayerService {
   }
 
   static async updatePlayer(gameId: string, player: Player): Promise<void> {
-    console.log("Starting database update for player:", { gameId, player });
-
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      console.log("Started transaction");
 
       // Validate and normalize color
       const normalizedColor = this.validateColor(player.color);
@@ -177,23 +171,15 @@ export class PlayerService {
       // Check if game exists, create if it doesn't
       const gameExists = await this.gameExists(gameId);
       if (!gameExists) {
-        console.log("Game does not exist, creating new game");
         await this.createGame(gameId);
       }
 
       // Check if player exists
       const exists = await this.playerExists(gameId, player.id);
-      console.log("Player exists check:", {
-        exists,
-        gameId,
-        playerId: player.id,
-      });
 
       if (!exists) {
-        console.log("Player does not exist, creating new player");
         await this.createPlayer(gameId, player);
         await client.query("COMMIT");
-        console.log("Successfully created new player");
         return;
       }
 
@@ -276,13 +262,8 @@ export class PlayerService {
         player.trainState.loads || [],
         player.cameraState || null,
       ];
-      console.log("Executing update query");
 
       const result: QueryResult<PlayerRow> = await client.query(query, values);
-      console.log("Update result:", {
-        rowCount: result.rowCount,
-        row: result.rows[0],
-      });
 
       if (result.rows.length === 0) {
         throw new Error("Player update failed");
@@ -326,7 +307,6 @@ export class PlayerService {
       }
 
       await client.query("COMMIT");
-      console.log("Transaction committed successfully");
     } catch (err) {
       await client.query("ROLLBACK");
       console.error("Database error during player update:", err);
@@ -345,7 +325,6 @@ export class PlayerService {
       throw err;
     } finally {
       client.release();
-      console.log("Database connection released");
     }
   }
 
@@ -385,7 +364,6 @@ export class PlayerService {
    * @returns Array of players, with hands filtered based on requestingUserId
    */
   static async getPlayers(gameId: string, requestingUserId: string): Promise<Player[]> {
-    console.log("Starting database query for players:", { gameId });
     const client = await db.connect();
     try {
       const query = `
@@ -417,7 +395,6 @@ export class PlayerService {
                 ORDER BY players.created_at ASC
             `;
       const values = [gameId];
-      console.log("Executing select query:", { query, values });
 
       const result = await client.query(query, values);
       // console.log("Query result:", {
@@ -431,16 +408,6 @@ export class PlayerService {
       //       }
       //     : null,
       // });
-
-      // Log the raw hand data before processing for debugging
-      console.log("Raw hand data from database:", result.rows.map(row => ({
-        playerId: row.id,
-        playerName: row.name,
-        handIds: row.hand,
-        handType: typeof row.hand,
-        handLength: Array.isArray(row.hand) ? row.hand.length : 'not array',
-        user_id: row.user_id
-      })));
 
       const players = result.rows.map((row) => {
         // Security: Only include hand data for the requesting user's own player
@@ -465,17 +432,9 @@ export class PlayerService {
               return card;
             }).filter(Boolean); // Remove any null entries
           }
-          
-          console.log(`Processed hand for requesting player ${row.id}:`, {
-            playerName: row.name,
-            handIds: handArray,
-            cardCount: handCards.length,
-            cards: handCards.map(c => c.id)
-          });
         } else {
           // This is another player's data - hide their hand for security
           handCards = [];
-          console.log(`Hidden hand for player ${row.id} (not requesting user)`);
         }
 
         // Cast trainType from database string to TrainType enum
@@ -511,28 +470,12 @@ export class PlayerService {
         };
       });
 
-      console.log("Processed players:", {
-        count: players.length,
-        playerIds: players.map((p) => p.id),
-        samplePlayer: players[0]
-          ? {
-              id: players[0].id,
-              hasPosition: !!players[0].trainState.position,
-              hasMovementHistory:
-                players[0].trainState.movementHistory.length > 0,
-              handSize: players[0].hand.length,
-              handExample: players[0].hand[0],
-            }
-          : null,
-      });
-
       return players;
     } catch (err) {
       console.error("Database error during players query:", err);
       throw err;
     } finally {
       client.release();
-      console.log("Database connection released");
     }
   }
 

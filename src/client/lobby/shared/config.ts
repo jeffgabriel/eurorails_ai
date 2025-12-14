@@ -34,7 +34,6 @@ function getEnvVar(key: string, defaultValue: string): string {
   //    Must use literal property access for DefinePlugin to work
   const buildValue = BUILD_TIME_ENV[key as keyof typeof BUILD_TIME_ENV];
   if (buildValue !== undefined) {
-    console.log(`[Config] Using build-time ${key}:`, buildValue);
     return buildValue;
   }
 
@@ -43,11 +42,9 @@ function getEnvVar(key: string, defaultValue: string): string {
   if (typeof window !== 'undefined' && window.__APP_CONFIG__) {
     const runtimeConfig = window.__APP_CONFIG__;
     if (key === 'VITE_API_BASE_URL' && runtimeConfig.apiBaseUrl) {
-      console.log('[Config] Using runtime API base URL:', runtimeConfig.apiBaseUrl);
       return runtimeConfig.apiBaseUrl;
     }
     if (key === 'VITE_SOCKET_URL' && runtimeConfig.socketUrl) {
-      console.log('[Config] Using runtime Socket URL:', runtimeConfig.socketUrl);
       return runtimeConfig.socketUrl;
     }
     if (key === 'VITE_DEBUG' && runtimeConfig.debugEnabled !== undefined) {
@@ -56,7 +53,6 @@ function getEnvVar(key: string, defaultValue: string): string {
   }
 
   // 3. Fallback to default value
-  console.log(`[Config] Using default value for ${key}:`, defaultValue);
   return defaultValue;
 }
 

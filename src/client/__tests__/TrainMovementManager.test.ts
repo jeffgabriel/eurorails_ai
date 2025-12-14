@@ -119,11 +119,7 @@ describe('TrainMovementManager calculateDistance', () => {
       const maxDistance = Math.max(dx, dy);   // max(5, 9) = 9
       
       const distance = calculateDistance(from, to);
-      
-      console.log(`Move from (${from.row},${from.col}) to (${to.row},${to.col})`);
-      console.log(`dx=${dx}, dy=${dy}, max=${maxDistance}, calculated=${distance}`);
-      console.log(`Should this be allowed with 9 movement? ${distance <= 9 ? 'YES' : 'NO'}`);
-      
+
       // The issue: this calculates as 9, which is <= 9, so it's allowed
       // But the actual path requires 10 steps
       expect(distance).toBe(9);
@@ -185,10 +181,6 @@ describe('TrainMovementManager calculateDistance', () => {
         {...target, x: 0, y: 0}
       );
       const directDistance = calculateDistance({...start, x: 0, y: 0}, {...target, x: 0, y: 0});
-
-      console.log(`Path-based distance: ${pathDistance}`);
-      console.log(`Direct distance: ${directDistance}`);
-      console.log(`Path-based calculation should now return correct distance!`);
 
       // The path distance should be 10, not 9
       expect(pathDistance).toBe(10);
@@ -395,10 +387,7 @@ describe('TrainMovementManager calculateDistance', () => {
         const result = fullManager.canMoveTo(gridPoint);
         const movementAfter = player.trainState.remainingMovement;
         const actualDeduction = movementBefore - movementAfter;
-        
-        console.log(`Move ${index}: (${player.trainState.position?.row},${player.trainState.position?.col}) -> (${move.row},${move.col})`);
-        console.log(`  Movement before: ${movementBefore}, after: ${movementAfter}, deducted: ${actualDeduction}`);
-        
+
         expect(result.canMove).toBe(true);
         expect(actualDeduction).toBe(expectedDeductions[index]);
       });

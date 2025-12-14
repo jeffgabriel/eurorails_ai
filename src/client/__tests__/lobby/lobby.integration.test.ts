@@ -169,7 +169,6 @@ describe('Integration Tests - Real Server Communication', () => {
     
     // Skip if server is not available
     if (!serverAvailable) {
-      console.log('Skipping test setup - server not available');
       return;
     }
     
@@ -212,7 +211,6 @@ describe('Integration Tests - Real Server Communication', () => {
   describe('API Client Integration', () => {
     it('should call real server health endpoint', async () => {
       if (!serverAvailable) {
-        console.log('Skipping test - server not available');
         return;
       }
       const result = await api.healthCheck();
@@ -224,7 +222,6 @@ describe('Integration Tests - Real Server Communication', () => {
 
     it('should create game with real server', async () => {
       if (!serverAvailable) {
-        console.log('Skipping test - server not available');
         return;
       }
       const gameData: CreateGameForm = {
@@ -244,7 +241,6 @@ describe('Integration Tests - Real Server Communication', () => {
 
     it('should join game with real server', async () => {
       if (!serverAvailable) {
-        console.log('Skipping test - server not available');
         return;
       }
       // First create a game
@@ -269,7 +265,6 @@ describe('Integration Tests - Real Server Communication', () => {
   describe('Lobby Store Integration', () => {
     it('should create game through store with real server', async () => {
       if (!serverAvailable) {
-        console.log('Skipping test - server not available');
         return;
       }
       const gameData: CreateGameForm = {

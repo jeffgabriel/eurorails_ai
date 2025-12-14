@@ -64,15 +64,12 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
 
     setIsValidatingCode(true);
     try {
-      console.log('Validating join code:', joinCode);
-      
       // First, validate the join code by getting the game
       const gameResult = await api.getGameByJoinCode(joinCode);
       
       // Race condition prevention: Check if join code is still current
       const currentJoinCode = form.getValues('joinCode');
       if (currentJoinCode !== joinCode) {
-        console.log('Join code changed during validation, ignoring response');
         return;
       }
       
@@ -85,7 +82,6 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
       // Race condition prevention: Check again if join code is still current
       const currentJoinCodeAfterColors = form.getValues('joinCode');
       if (currentJoinCodeAfterColors !== joinCode) {
-        console.log('Join code changed during colors fetch, ignoring response');
         return;
       }
       

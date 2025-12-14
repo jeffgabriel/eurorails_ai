@@ -73,7 +73,6 @@ export class LoadDialogScene extends Scene {
         try {
             // Ensure LoadService is initialized before proceeding
             await this.loadService.loadInitialState();
-            console.log('LoadService initialized successfully');
 
             // Create a semi-transparent background overlay
             const overlay = this.add.rectangle(
@@ -145,7 +144,6 @@ export class LoadDialogScene extends Scene {
     }
 
     private async createLoadSections() {
-        console.log('Creating load sections for city:', this.city.name);
         const sectionsContainer = this.add.container(0, 0);
         this.dialogContainer.add(sectionsContainer);
         sectionsContainer.setName('sectionsContainer');
@@ -156,9 +154,7 @@ export class LoadDialogScene extends Scene {
     }
 
     private async createPickupSection(container: Phaser.GameObjects.Container) {
-        console.log('Creating pickup section...');
         const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
-        console.log('City load details for pickup:', cityLoadDetails);
         
         if (cityLoadDetails.length > 0) {
             const title = this.add.text(-300, -100, "Available for Pickup:", {
@@ -182,13 +178,10 @@ export class LoadDialogScene extends Scene {
     }
 
     private async createDeliverySection(container: Phaser.GameObjects.Container) {
-        console.log('Creating delivery section...');
         const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
-        console.log('City load details for delivery:', cityLoadDetails);
         
         // Get deliverable loads (loads on train that have a demand card for this city)
         const deliverableLoads = this.getDeliverableLoads(this.player.trainState.loads || []);
-        console.log('Deliverable loads:', deliverableLoads);
         
         if (deliverableLoads.length > 0) {
             const title = this.add.text(-50, -100, "Can be Delivered:", {
@@ -212,13 +205,10 @@ export class LoadDialogScene extends Scene {
     }
 
     private async createDropSection(container: Phaser.GameObjects.Container) {
-        console.log('Creating drop section...');
         const cityLoadDetails = await this.loadService.getCityLoadDetails(this.city.name);
-        console.log('City load details for drop:', cityLoadDetails);
         
         // Get droppable loads (all loads currently on the train)
         const droppableLoads = this.player.trainState.loads || [];
-        console.log('Droppable loads:', droppableLoads);
         
         if (droppableLoads.length > 0) {
             const title = this.add.text(150, -100, "Drop Loads:", {

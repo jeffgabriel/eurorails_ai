@@ -37,13 +37,8 @@ export function LoginPage() {
   });
 
   useEffect(() => {
-    console.log('[LoginPage] Mounted');
-    return () => console.log('[LoginPage] Unmounted');
+    // no-op
   }, []);
-
-  useEffect(() => {
-    console.log('[LoginPage] isLoading:', isLoading, 'isAuthenticated:', isAuthenticated, 'error:', error);
-  }, [isLoading, isAuthenticated, error]);
 
   // Save email to sessionStorage on change (never save password)
   // Save even empty strings so clearing the field persists

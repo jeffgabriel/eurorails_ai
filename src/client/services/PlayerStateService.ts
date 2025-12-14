@@ -31,7 +31,6 @@ export class PlayerStateService {
                 if (matchingPlayer) {
                     this.localPlayerId = matchingPlayer.id;
                     this.localPlayer = matchingPlayer;
-                    console.log(`Local player identified by userId: ${matchingPlayer.name} (${this.localPlayerId})`);
                     return true;
                 }
             }
@@ -42,7 +41,6 @@ export class PlayerStateService {
                 matchingPlayer = players[0];
                 this.localPlayerId = matchingPlayer.id;
                 this.localPlayer = matchingPlayer;
-                console.log(`Local player identified as single player: ${matchingPlayer.name} (${this.localPlayerId})`);
                 return true;
             }
 

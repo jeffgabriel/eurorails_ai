@@ -43,7 +43,6 @@ export class GameScene extends Phaser.Scene {
 
   constructor() {
     super({ key: "GameScene" });
-    console.log('🚀 GameScene: constructor() called');
     // Initialize with empty game state
     this.gameState = {
       id: "", // Will be set by SetupScene
@@ -56,8 +55,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   init(data: { gameState?: GameState }) {
-    console.log('🚀 GameScene: init() called with data:', data);
-    
     // If we get a gameState, always use it
     if (data.gameState) {
       this.gameState = {
@@ -125,9 +122,6 @@ export class GameScene extends Phaser.Scene {
   }
 
   async create() {
-    console.log('🚀 GameScene: create() called');
-    console.log('🚀 GameScene: gameState in create:', this.gameState);
-    
     // Clear any existing containers
     this.children.removeAll(true);
     // Initialize services and load initial state
@@ -146,7 +140,6 @@ export class GameScene extends Phaser.Scene {
     
     // Set up turn change listener to refresh UI when turn changes
     this.turnChangeListener = (currentPlayerIndex: number) => {
-      console.log(`Turn changed to player index: ${currentPlayerIndex}`);
       this.handleTurnChange(currentPlayerIndex);
     };
     this.gameStateService.onTurnChange(this.turnChangeListener);
@@ -165,7 +158,6 @@ export class GameScene extends Phaser.Scene {
         console.warn('⚠️ Will use polling fallback.');
         shouldPoll = true;
       } else if (socketService.isConnected()) {
-        console.log('✅ Socket.IO is connected, skipping polling fallback');
         shouldPoll = false;
       } else {
         // Try to connect if we have a token
@@ -177,7 +169,6 @@ export class GameScene extends Phaser.Scene {
             // Give it a moment to connect
             await new Promise(resolve => setTimeout(resolve, 500));
             if (socketService.isConnected()) {
-              console.log('✅ Socket.IO connected successfully, skipping polling fallback');
               shouldPoll = false;
             } else {
               console.warn('⚠️ Socket.IO connection attempt failed or still connecting. Will use polling fallback.');
@@ -210,8 +201,6 @@ export class GameScene extends Phaser.Scene {
       // This reduces server load compared to the previous 2-second interval
       this.gameStateService.startPollingForTurnChanges(5000);
     } else {
-      console.log('✅ Polling disabled - using Socket.IO for real-time updates');
-      
       // Register socket listener for turn changes
       try {
         const { socketService } = await import('../lobby/shared/socket');
@@ -419,22 +408,11 @@ export class GameScene extends Phaser.Scene {
     await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode);
 
     // Show city selection for current player if needed - do this last to prevent cleanup
-    console.log('GameScene: Checking for city selection');
-    console.log('GameScene: gameState:', this.gameState);
-    console.log('GameScene: players:', this.gameState.players);
-    console.log('GameScene: currentPlayerIndex:', this.gameState.currentPlayerIndex);
-    
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
-    console.log('GameScene: currentPlayer:', currentPlayer);
-    console.log('GameScene: currentPlayer.trainState:', currentPlayer?.trainState);
-    console.log('GameScene: currentPlayer.trainState?.position:', currentPlayer?.trainState?.position);
-    
     if (!currentPlayer.trainState?.position) {
-      console.log('GameScene: No position found, showing city selection');
       this.uiManager.showCitySelectionForPlayer(currentPlayer.id);
     } else {
-      console.log('GameScene: Player has position, not showing city selection');
     }
 
     // Set a low frame rate for the scene
@@ -611,8 +589,6 @@ export class GameScene extends Phaser.Scene {
 
       // Clear ferry state after successful crossing
       player.trainState.ferryState = undefined;
-      
-      console.log(`Player ${player.name} crossed ferry to ${actualOtherSide.city?.name || 'other side'}`);
     }
     
     // If status was already 'ready_to_cross', it means the player didn't move last turn
@@ -887,9 +863,7 @@ export class GameScene extends Phaser.Scene {
       // Update all train sprites after state is updated
       for (const train of trainsToUpdate) {
         try {
-          console.log(`Refreshing train position for player ${train.playerId} at (${train.row}, ${train.col})`);
           await this.uiManager.updateTrainPosition(train.playerId, train.x, train.y, train.row, train.col);
-          console.log(`Train sprite updated for player ${train.playerId}`);
         } catch (error) {
           console.error(`Error updating train position for player ${train.playerId}:`, error);
         }

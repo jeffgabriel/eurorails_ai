@@ -9,10 +9,8 @@ const router = express.Router();
 
 // Get initial load state including dropped loads
 const getLoadState: RequestHandler = async (_req: Request, res: Response) => {
-  console.log('Received request for load state');
   try {
     const loadStates = await loadService.getAllLoadStates();
-    console.log('Sending load states:', loadStates);
     res.json(loadStates);
   } catch (error) {
     console.error('Error getting load state:', error);
