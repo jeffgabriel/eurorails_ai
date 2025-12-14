@@ -10,6 +10,8 @@ import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
+import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -37,6 +39,8 @@ export class GameScene extends Phaser.Scene {
   private loadService: LoadService;
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private previousActivePlayerId: string | null = null;
+  private loadsReferencePanel?: LoadsReferencePanel;
+  
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -83,6 +87,9 @@ export class GameScene extends Phaser.Scene {
   preload() {
     this.load.svg("ferry-port", "/assets/ferry-port.svg", { scale: 0.05 });
     this.load.image("demand-template", "/assets/demand.png");
+    // Static "loads at cities" reference pages (slideout UI)
+    this.load.image("loads-reference-page-1", "/assets/rules_loads_1.png");
+    this.load.image("loads-reference-page-2", "/assets/load_rules_2.png");
 
     // Preload crayon images for each player color
     const colors = ["red", "blue", "green", "yellow", "black", "brown"];
@@ -379,11 +386,19 @@ export class GameScene extends Phaser.Scene {
     uiCamera.setScroll(0, 0);
     uiCamera.ignore([this.mapContainer]); // UI camera ignores the map
 
+    // Static slideout reference panel (independent of game state)
+    this.loadsReferencePanel = new LoadsReferencePanel(this, [
+      { key: "loads-reference-page-1", label: "Loads Available" },
+      { key: "loads-reference-page-2", label: "Cities and Loads" },
+    ]);
+    this.loadsReferencePanel.create();
+
     // Main camera ignores UI elements
     this.cameras.main.ignore([
       this.uiContainer,
       this.playerHandContainer,
       buttonContainer,
+      this.loadsReferencePanel.getContainer(),
     ]);
 
     // Setup camera
@@ -447,13 +462,16 @@ export class GameScene extends Phaser.Scene {
       } else {
         await this.uiManager.setupPlayerHand(false);
       }
+
+      // Re-layout static overlays
+      this.loadsReferencePanel?.layout();
     });
   }
 
   private createSettingsButton(): Phaser.GameObjects.Container {
     const buttonContainer = this.add.container(1, 1);
     const icon = this.add
-      .text(10, 10, "⚙️", { fontSize: "28px", color: "#ffffff" })
+      .text(10, 10, "⚙️", { fontSize: "28px", color: "#ffffff", fontFamily: UI_FONT_FAMILY })
       .setPadding(8)
       .setInteractive({ useHandCursor: true })
       .on("pointerdown", () => this.openSettings());
@@ -724,6 +742,9 @@ export class GameScene extends Phaser.Scene {
     if (this.trackManager) {
       this.trackManager.destroy();
     }
+
+    // Clean up static overlays
+    this.loadsReferencePanel?.destroy();
   }
 
   /**

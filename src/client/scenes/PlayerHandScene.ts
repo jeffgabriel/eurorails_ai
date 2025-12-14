@@ -6,6 +6,7 @@ import { GameStateService } from "../services/GameStateService";
 import { CitySelectionManager } from "../components/CitySelectionManager";
 import { MapRenderer } from "../components/MapRenderer";
 import { TrainInteractionManager } from "../components/TrainInteractionManager";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 interface PlayerHandSceneData {
   gameState: GameState;
@@ -437,6 +438,7 @@ export class PlayerHandScene extends Phaser.Scene {
         color: "#ffffff",
         fontSize: "20px",
         fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
         align: "center",
         wordWrap: { width: 280, useAdvancedWrap: true },
       })
@@ -462,6 +464,7 @@ export class PlayerHandScene extends Phaser.Scene {
         color: display.color,
         fontSize: "20px",
         fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
         align: "center",
         wordWrap: { width: 280, useAdvancedWrap: true },
       })
@@ -558,6 +561,7 @@ export class PlayerHandScene extends Phaser.Scene {
           color: "#ffffff",
           fontSize: "18px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
           backgroundColor: "#444",
           padding: { left: 8, right: 8, top: 4, bottom: 4 },
         })

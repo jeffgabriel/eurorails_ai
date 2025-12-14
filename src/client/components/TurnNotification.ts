@@ -1,4 +1,5 @@
 import "phaser";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 /**
  * TurnNotification Component
@@ -65,6 +66,7 @@ export class TurnNotification {
           color: "#ffffff",
           fontSize: "20px",
           fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
           align: "center",
         }
       )
