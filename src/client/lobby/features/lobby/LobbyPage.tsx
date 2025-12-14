@@ -1,6 +1,6 @@
 // features/lobby/LobbyPage.tsx
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Users, LogOut, Play } from 'lucide-react';
 import { Button } from '../../components/ui/button';
@@ -30,6 +30,7 @@ import { getErrorMessage, api } from '../../shared/api';
 
 export function LobbyPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { gameId } = useParams<{ gameId?: string }>();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -60,6 +61,7 @@ export function LobbyPage() {
     leaveGame,
     loadGameFromUrl,
     restoreGameState,
+    clearGameState,
     loadMyGames,
     connectToLobbySocket,
     disconnectFromLobbySocket,
@@ -79,12 +81,6 @@ export function LobbyPage() {
   // State recovery on component mount
   useEffect(() => {
     const recoverState = async () => {
-      // Check if we have a current game and it's active (but not completed)
-      if (currentGame && (currentGame.status === 'active' || currentGame.status === 'initialBuild')) {
-        navigate(`/game/${currentGame.id}`);
-        return;
-      }
-      
       if (gameId && !currentGame) {
         // Load from URL
         try {
@@ -123,38 +119,19 @@ export function LobbyPage() {
             navigate('/lobby');
           }
         }
-      } else if (!gameId && !currentGame) {
-        // Try to restore from localStorage
-        const restored = await restoreGameState();
-        if (restored) {
-          // Get the updated currentGame from the store
-          const updatedGame = get().currentGame;
-          if (updatedGame) {
-            // Only redirect if we're not already on a game route
-            const currentPath = window.location.pathname;
-            if (!currentPath.startsWith('/game/')) {
-              // Redirect to lobby with game ID
-              navigate(`/lobby/game/${updatedGame.id}`);
-            }
-          }
-        }
       }
     };
     
     recoverState();
   }, [gameId]);
 
-  // Navigate to lobby with game ID when currentGame changes (from create/join operations)
+  // Ensure users can land on /lobby without being forced into a game/setup view.
+  // If they're on the lobby home route, clear any persisted "current game" state.
   useEffect(() => {
-    if (currentGame && !gameId) {
-      // Only redirect if we're not already on a game route
-      const currentPath = window.location.pathname;
-      if (!currentPath.startsWith('/game/')) {
-        // We have a current game but no gameId in URL - navigate to lobby with game ID
-        navigate(`/lobby/game/${currentGame.id}`, { replace: true });
-      }
+    if (location.pathname === '/lobby' && currentGame) {
+      clearGameState();
     }
-  }, [currentGame, gameId, navigate]);
+  }, [location.pathname, currentGame, clearGameState]);
 
   // Socket connection for real-time lobby updates
   useEffect(() => {

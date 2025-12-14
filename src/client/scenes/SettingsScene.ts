@@ -700,16 +700,14 @@ export class SettingsScene extends Phaser.Scene {
             this.scene.stop('GameScene');
             this.scene.stop('SettingsScene');
 
-            // Start fresh with SetupScene and pass empty game state to force new game creation
-            this.scene.start('SetupScene', { 
-                gameState: {
-                    id: '',
-                    players: [],
-                    currentPlayerIndex: 0,
-                    status: 'setup',
-                    maxPlayers: 6
-                }
-            });
+            // Clear persisted lobby "current game" state so /lobby doesn't auto-resume.
+            // (Keys defined in lobby store; duplicated here to avoid importing React store into Phaser scene.)
+            localStorage.removeItem('eurorails.currentGame');
+            localStorage.removeItem('eurorails.currentPlayers');
+            localStorage.removeItem('eurorails.gameTimestamp');
+
+            // Return user to the lobby (do not show SetupScene / completion screens here).
+            window.location.href = '/lobby';
         } catch (error) {
             console.error('Error ending game:', error);
             this.showErrorMessage('Failed to end game');

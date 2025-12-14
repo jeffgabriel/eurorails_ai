@@ -484,6 +484,13 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
           get().clearGameState();
           return false;
         }
+
+        // If game is no longer available (completed/abandoned) or access is forbidden, clear stale state.
+        if (apiError.error === 'HTTP_410' || apiError.error === 'GAME_NOT_AVAILABLE' || apiError.error === 'FORBIDDEN') {
+          console.warn('Game not available or access forbidden, clearing stale state:', stored.game.id);
+          get().clearGameState();
+          return false;
+        }
         
         // If auth failed, we can't proceed - auth should be handled at a higher level
         // Don't use stale localStorage data when authentication has failed

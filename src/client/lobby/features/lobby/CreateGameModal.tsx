@@ -3,6 +3,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '../../components/ui/form';
@@ -22,6 +23,7 @@ interface CreateGameModalProps {
 
 export function CreateGameModal({ open, onOpenChange }: CreateGameModalProps) {
   const { createGame, isLoading } = useLobbyStore();
+  const navigate = useNavigate();
 
   const form = useForm<CreateGameForm>({
     resolver: zodResolver(createGameSchema),
@@ -35,6 +37,7 @@ export function CreateGameModal({ open, onOpenChange }: CreateGameModalProps) {
     try {
       const game = await createGame(data);
       toast.success(`Game created! Join code: ${game.joinCode}`);
+      navigate(`/lobby/game/${game.id}`);
       onOpenChange(false);
       form.reset();
     } catch {
