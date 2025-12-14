@@ -172,6 +172,7 @@ export async function checkDatabase() {
             try {
                 for (const migration of pendingMigrations) {
                     const sql = fs.readFileSync(migration.path, 'utf-8');
+                    console.log(`Applying migration ${migration.version}: ${sql}`);
                     await client.query(sql);
                     await client.query('INSERT INTO schema_migrations (version) VALUES ($1)', [migration.version]);
                 }

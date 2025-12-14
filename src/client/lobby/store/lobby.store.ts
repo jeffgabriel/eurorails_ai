@@ -1,12 +1,14 @@
 // store/lobby.store.ts
 import { create } from 'zustand';
-import type { Game, Player, ApiError, CreateGameForm, JoinGameForm, ID } from '../shared/types';
+import type { Game, Player, ApiError, CreateGameForm, JoinGameForm, ID, MyGamesResponse } from '../shared/types';
 import { api, getErrorMessage } from '../shared/api';
 import { socketService } from '../shared/socket';
 
 interface LobbyState {
   currentGame: Game | null;
   players: Player[];
+  myGames: MyGamesResponse | null;
+  isLoadingMyGames: boolean;
   isLoading: boolean;
   error: ApiError | null;
   retryCount: number;
@@ -27,6 +29,8 @@ interface LobbyActions {
   saveGameState: () => void;
   clearGameState: () => void;
   refreshGameState: () => Promise<void>;
+  // Lobby listings
+  loadMyGames: (options?: { silent?: boolean }) => Promise<void>;
   // Socket methods
   connectToLobbySocket: (gameId: ID, token: string) => void;
   disconnectFromLobbySocket: (gameId: ID) => void;
@@ -150,13 +154,14 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
   // Initial state
   currentGame: null,
   players: [],
+  myGames: null,
+  isLoadingMyGames: false,
   isLoading: false,
   error: null,
   retryCount: 0,
 
   // Actions
   createGame: async (gameData: CreateGameForm = {}) => {
-    const state = get();
     set({ isLoading: true, error: null, retryCount: 0 });
     
     try {
@@ -180,6 +185,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       // Save to localStorage
       get().saveGameState();
+
+      // Refresh my games list
+      get().loadMyGames({ silent: true }).catch(() => {});
       
       return result.game;
     } catch (error) {
@@ -205,7 +213,6 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       throw error;
     }
 
-    const state = get();
     set({ isLoading: true, error: null, retryCount: 0 });
     
     try {
@@ -228,6 +235,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       
       // Save to localStorage
       get().saveGameState();
+
+      // Refresh my games list
+      get().loadMyGames({ silent: true }).catch(() => {});
       
       return result.game;
     } catch (error) {
@@ -253,7 +263,6 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       throw error;
     }
 
-    const state = get();
     set({ isLoading: true, error: null, retryCount: 0 });
     
     try {
@@ -330,7 +339,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     }
 
     // Check if game is already started
-    if (currentGame.status === 'ACTIVE') {
+    if (currentGame.status === 'active' || currentGame.status === 'initialBuild') {
       const error: ApiError = {
         error: 'GAME_ALREADY_STARTED',
         message: 'Game has already started',
@@ -339,7 +348,6 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       throw error;
     }
 
-    const state = get();
     set({ isLoading: true, error: null, retryCount: 0 });
     
     try {
@@ -375,6 +383,9 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     
     // Clear localStorage and state
     get().clearGameState();
+
+    // Refresh my games list
+    get().loadMyGames({ silent: true }).catch(() => {});
   },
 
   updatePlayerPresence: async (userId: ID, isOnline: boolean) => {
@@ -473,6 +484,13 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
           get().clearGameState();
           return false;
         }
+
+        // If game is no longer available (completed/abandoned) or access is forbidden, clear stale state.
+        if (apiError.error === 'HTTP_410' || apiError.error === 'GAME_NOT_AVAILABLE' || apiError.error === 'FORBIDDEN') {
+          console.warn('Game not available or access forbidden, clearing stale state:', stored.game.id);
+          get().clearGameState();
+          return false;
+        }
         
         // If auth failed, we can't proceed - auth should be handled at a higher level
         // Don't use stale localStorage data when authentication has failed
@@ -531,6 +549,18 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
       const handledError = handleError(error, 0);
       set({ error: handledError });
       throw handledError;
+    }
+  },
+
+  loadMyGames: async (options) => {
+    const silent = options?.silent === true;
+    set({ isLoadingMyGames: true, ...(silent ? {} : { error: null }) });
+    try {
+      const result = await api.getMyGames();
+      set({ myGames: result, isLoadingMyGames: false });
+    } catch (error) {
+      const handledError = handleError(error, 0);
+      set({ isLoadingMyGames: false, ...(silent ? {} : { error: handledError }) });
     }
   },
 

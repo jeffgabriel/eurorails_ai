@@ -1,12 +1,26 @@
 // features/lobby/LobbyPage.tsx
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Plus, Users, LogOut, Play } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Separator } from '../../components/ui/separator';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
+import { TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../../components/ui/alert-dialog';
+import { Checkbox } from '../../components/ui/checkbox';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { CreateGameModal } from './CreateGameModal';
 import { JoinGameModal } from './JoinGameModal';
 import { GameRow } from './GameRow';
@@ -16,20 +30,39 @@ import { getErrorMessage, api } from '../../shared/api';
 
 export function LobbyPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { gameId } = useParams<{ gameId?: string }>();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+
+  // Active game delete/transfer dialog state
+  const [activeDeleteGameId, setActiveDeleteGameId] = useState<string | null>(null);
+  const [activeDeletePlayers, setActiveDeletePlayers] = useState<Array<{ userId: string; name: string; isOnline: boolean }> | null>(null);
+  const [activeTransferToUserId, setActiveTransferToUserId] = useState<string | null>(null);
+
+  // Archived multi-select delete state
+  const [archivedSelectedIds, setArchivedSelectedIds] = useState<Set<string>>(new Set());
+  const [showArchivedDeleteDialog, setShowArchivedDeleteDialog] = useState(false);
+  const [hardDeleteOwnedArchived, setHardDeleteOwnedArchived] = useState(false);
+
+  // Switch setup game dialog state (when a setup game is already loaded)
+  const [showSwitchSetupDialog, setShowSwitchSetupDialog] = useState(false);
+  const [switchToSetupGameId, setSwitchToSetupGameId] = useState<string | null>(null);
   
   const { user, logout, token } = useAuthStore();
   const { 
     currentGame, 
     players, 
+    myGames,
+    isLoadingMyGames,
     isLoading, 
     error, 
     clearError,
     leaveGame,
     loadGameFromUrl,
     restoreGameState,
+    clearGameState,
+    loadMyGames,
     connectToLobbySocket,
     disconnectFromLobbySocket,
     onGameStarted
@@ -48,12 +81,6 @@ export function LobbyPage() {
   // State recovery on component mount
   useEffect(() => {
     const recoverState = async () => {
-      // Check if we have a current game and it's active (but not completed)
-      if (currentGame && currentGame.status === 'ACTIVE' && currentGame.gameStatus !== 'completed' && currentGame.gameStatus !== 'abandoned') {
-        navigate(`/game/${currentGame.id}`);
-        return;
-      }
-      
       if (gameId && !currentGame) {
         // Load from URL
         try {
@@ -71,14 +98,14 @@ export function LobbyPage() {
           }
           
           // Check if game is accessible (not abandoned or completed)
-          if (game.status === 'ABANDONED' || game.status === 'COMPLETE') {
+          if (game.status === 'abandoned' || game.status === 'completed') {
             toast.error('This game is no longer available');
             navigate('/lobby');
             return;
           }
           
           // If game is active and not completed/abandoned, redirect to the game
-          if (game.status === 'ACTIVE' && game.gameStatus !== 'completed' && game.gameStatus !== 'abandoned') {
+          if (game.status === 'active' || game.status === 'initialBuild') {
             navigate(`/game/${game.id}`);
             return;
           }
@@ -92,42 +119,23 @@ export function LobbyPage() {
             navigate('/lobby');
           }
         }
-      } else if (!gameId && !currentGame) {
-        // Try to restore from localStorage
-        const restored = await restoreGameState();
-        if (restored) {
-          // Get the updated currentGame from the store
-          const updatedGame = get().currentGame;
-          if (updatedGame) {
-            // Only redirect if we're not already on a game route
-            const currentPath = window.location.pathname;
-            if (!currentPath.startsWith('/game/')) {
-              // Redirect to lobby with game ID
-              navigate(`/lobby/game/${updatedGame.id}`);
-            }
-          }
-        }
       }
     };
     
     recoverState();
   }, [gameId]);
 
-  // Navigate to lobby with game ID when currentGame changes (from create/join operations)
+  // Ensure users can land on /lobby without being forced into a game/setup view.
+  // If they're on the lobby home route, clear any persisted "current game" state.
   useEffect(() => {
-    if (currentGame && !gameId) {
-      // Only redirect if we're not already on a game route
-      const currentPath = window.location.pathname;
-      if (!currentPath.startsWith('/game/')) {
-        // We have a current game but no gameId in URL - navigate to lobby with game ID
-        navigate(`/lobby/game/${currentGame.id}`, { replace: true });
-      }
+    if (location.pathname === '/lobby' && currentGame) {
+      clearGameState();
     }
-  }, [currentGame, gameId, navigate]);
+  }, [location.pathname, currentGame, clearGameState]);
 
   // Socket connection for real-time lobby updates
   useEffect(() => {
-    if (currentGame && currentGame.status === 'IN_SETUP' && token) {
+    if (currentGame && currentGame.status === 'setup' && token) {
       // Connect to socket and join lobby room
       connectToLobbySocket(currentGame.id, token);
       
@@ -173,8 +181,52 @@ export function LobbyPage() {
 
   const canStartGame = currentGame && 
     currentGame.createdBy === user?.id && 
-    currentGame.status === 'IN_SETUP' &&
+    currentGame.status === 'setup' &&
     players && players.length >= 2; // Minimum players needed
+
+  // Load my games when on lobby home (no current game)
+  useEffect(() => {
+    if (!currentGame) {
+      loadMyGames().catch((e) => {
+        // Non-blocking, but don't swallow useful debugging info.
+        console.warn('Failed to load My Games list:', e);
+      });
+    }
+  }, [currentGame, loadMyGames]);
+
+  const renderStatusBadge = (status: string) => {
+    switch (status) {
+      case 'setup':
+        return <Badge variant="secondary">Setup</Badge>;
+      case 'initialBuild':
+      case 'active':
+        return <Badge variant="default">In Progress</Badge>;
+      case 'completed':
+        return <Badge variant="outline">Completed</Badge>;
+      case 'abandoned':
+        return <Badge variant="outline">Abandoned</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  const openActiveDeleteDialog = async (gameId: string) => {
+    setActiveDeleteGameId(gameId);
+    setActiveDeletePlayers(null);
+    setActiveTransferToUserId(null);
+    try {
+      const result = await api.getGamePlayers(gameId);
+      setActiveDeletePlayers(result.players.map(p => ({ userId: p.userId, name: p.name, isOnline: p.isOnline })));
+    } catch (e) {
+      // Fallback: show dialog without transfer options
+      setActiveDeletePlayers([]);
+    }
+  };
+
+  const clearArchivedSelection = () => {
+    setArchivedSelectedIds(new Set());
+    setHardDeleteOwnedArchived(false);
+  };
 
   // Show loading state when recovering game state
   if (isLoading && !currentGame) {
@@ -219,123 +271,211 @@ export function LobbyPage() {
 
       <div className="container mx-auto px-4 py-8 max-w-4xl">
         {!currentGame ? (
-          // No current game - show create/join options
+          // No current game - show my games + create/join
           <div className="space-y-8">
-            <div className="text-center">
-              <h2 className="text-3xl font-bold mb-4">Ready to Play?</h2>
-              <p className="text-muted-foreground mb-8">
-                Create a new game or join an existing one to start building your railway empire.
-              </p>
-              
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button 
-                  size="lg"
-                  onClick={() => setShowCreateModal(true)}
-                  disabled={isLoading}
-                >
-                  <Plus className="size-5 mr-2" />
-                  Create New Game
-                </Button>
-                
-                <Button 
-                  variant="outline" 
-                  size="lg"
-                  onClick={() => setShowJoinModal(true)}
-                  disabled={isLoading}
-                >
-                  <Users className="size-5 mr-2" />
-                  Join Game
-                </Button>
-              </div>
-            </div>
-
-            {/* Game Rules / Info */}
             <Card>
               <CardHeader>
-                <CardTitle>How to Play</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="text-center">
-                    <div className="size-12 bg-accent/10 rounded-lg flex items-center justify-center mx-auto mb-3">
-                      <Plus className="size-6 text-accent" />
-                    </div>
-                    <h3 className="font-semibold mb-2">Create Game</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Start a new railway network and invite friends with a join code
-                    </p>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <CardTitle>My Games</CardTitle>
+                    <CardDescription>
+                      Resume a game in progress, continue setup, or manage archived games.
+                    </CardDescription>
                   </div>
-                  
-                  <div className="text-center">
-                    <div className="size-12 bg-accent/10 rounded-lg flex items-center justify-center mx-auto mb-3">
-                      <Users className="size-6 text-accent" />
-                    </div>
-                    <h3 className="font-semibold mb-2">Build Railways</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Construct tracks across Europe to connect cities and deliver cargo
-                    </p>
-                  </div>
-                  
-                  <div className="text-center">
-                    <div className="size-12 bg-accent/10 rounded-lg flex items-center justify-center mx-auto mb-3">
-                      <Play className="size-6 text-accent" />
-                    </div>
-                    <h3 className="font-semibold mb-2">Win the Game</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Complete deliveries and expand your network to achieve victory
-                    </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Button onClick={() => setShowCreateModal(true)} disabled={isLoading}>
+                      <Plus className="size-4 mr-2" />
+                      Create
+                    </Button>
+                    <Button variant="outline" onClick={() => setShowJoinModal(true)} disabled={isLoading}>
+                      <Users className="size-4 mr-2" />
+                      Join
+                    </Button>
                   </div>
                 </div>
+              </CardHeader>
+              <CardContent>
+                <Tabs defaultValue="in-progress">
+                  <TabsList>
+                    <TabsTrigger value="in-progress">In Progress</TabsTrigger>
+                    <TabsTrigger value="setup">Setup (Owned)</TabsTrigger>
+                    <TabsTrigger value="archived">Completed/Abandoned</TabsTrigger>
+                  </TabsList>
+
+                  <TabsContent value="in-progress" className="mt-4">
+                    {isLoadingMyGames ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="size-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : !myGames || myGames.active.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-6">No games in progress.</p>
+                    ) : (
+                      <div className="overflow-auto rounded-md border" style={{ maxHeight: '60vh' }}>
+                        <table className="w-full caption-bottom text-sm">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="sticky top-0 z-10 bg-background">Status</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background">Players</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background">Join Code</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background text-right">Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {myGames.active.map((g) => (
+                              <TableRow key={g.id}>
+                                <TableCell>{renderStatusBadge(g.status)}</TableCell>
+                                <TableCell>{g.onlineCount}/{g.playerCount} online</TableCell>
+                                <TableCell className="font-mono">{g.joinCode ?? '-'}</TableCell>
+                                <TableCell className="text-right">
+                                  <div className="flex justify-end gap-2">
+                                    <Button size="sm" onClick={() => navigate(`/game/${g.id}`)}>
+                                      Join game in progress
+                                    </Button>
+                                    {g.isOwner && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        onClick={() => openActiveDeleteDialog(g.id)}
+                                      >
+                                        Delete
+                                      </Button>
+                                    )}
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </table>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="setup" className="mt-4">
+                    {isLoadingMyGames ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="size-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : !myGames || myGames.setupOwned.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-6">No setup games you own.</p>
+                    ) : (
+                      <div className="overflow-auto rounded-md border" style={{ maxHeight: '60vh' }}>
+                        <table className="w-full caption-bottom text-sm">
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="sticky top-0 z-10 bg-background">Status</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background">Players</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background">Join Code</TableHead>
+                              <TableHead className="sticky top-0 z-10 bg-background text-right">Action</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {myGames.setupOwned.map((g) => (
+                              <TableRow key={g.id}>
+                                <TableCell>{renderStatusBadge(g.status)}</TableCell>
+                                <TableCell>{g.onlineCount}/{g.playerCount} online</TableCell>
+                                <TableCell className="font-mono">{g.joinCode ?? '-'}</TableCell>
+                                <TableCell className="text-right">
+                                  <Button
+                                    size="sm"
+                                    onClick={async () => {
+                                      try {
+                                        await loadGameFromUrl(g.id);
+                                        navigate(`/lobby/game/${g.id}`);
+                                      } catch {
+                                        toast.error('Failed to load game');
+                                      }
+                                    }}
+                                  >
+                                    Continue setup
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </table>
+                      </div>
+                    )}
+                  </TabsContent>
+
+                  <TabsContent value="archived" className="mt-4">
+                    {isLoadingMyGames ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="size-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    ) : !myGames || myGames.archived.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-6">No completed or abandoned games.</p>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-muted-foreground">
+                            Select games to remove from your list. If you own a game, you can permanently delete it for everyone.
+                          </p>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={archivedSelectedIds.size === 0}
+                            onClick={() => setShowArchivedDeleteDialog(true)}
+                          >
+                            Delete selected ({archivedSelectedIds.size})
+                          </Button>
+                        </div>
+
+                        <div className="overflow-auto rounded-md border" style={{ maxHeight: '60vh' }}>
+                          <table className="w-full caption-bottom text-sm">
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="sticky top-0 z-10 bg-background">
+                                  <Checkbox
+                                    checked={archivedSelectedIds.size === myGames.archived.length}
+                                    onCheckedChange={(checked) => {
+                                      if (checked) {
+                                        setArchivedSelectedIds(new Set(myGames.archived.map(g => g.id)));
+                                      } else {
+                                        setArchivedSelectedIds(new Set());
+                                      }
+                                    }}
+                                  />
+                                </TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-background">Status</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-background">Players</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-background">Join Code</TableHead>
+                                <TableHead className="sticky top-0 z-10 bg-background text-right">Owner</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {myGames.archived.map((g) => {
+                                const isSelected = archivedSelectedIds.has(g.id);
+                                return (
+                                  <TableRow key={g.id}>
+                                    <TableCell>
+                                      <Checkbox
+                                        checked={isSelected}
+                                        onCheckedChange={(checked) => {
+                                          const next = new Set(archivedSelectedIds);
+                                          if (checked) next.add(g.id);
+                                          else next.delete(g.id);
+                                          setArchivedSelectedIds(next);
+                                        }}
+                                      />
+                                    </TableCell>
+                                    <TableCell>{renderStatusBadge(g.status)}</TableCell>
+                                    <TableCell>{g.onlineCount}/{g.playerCount} online</TableCell>
+                                    <TableCell className="font-mono">{g.joinCode ?? '-'}</TableCell>
+                                    <TableCell className="text-right">
+                                      {g.isOwner ? <Badge variant="secondary">You</Badge> : <span className="text-muted-foreground text-sm">—</span>}
+                                    </TableCell>
+                                  </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </TabsContent>
+                </Tabs>
               </CardContent>
             </Card>
-
-            {/* Mock Mode - Available Test Games */}
-            {process.env.REACT_APP_MOCK_MODE === 'true' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    🧪 Mock Mode
-                  </CardTitle>
-                  <CardDescription>
-                    Available test games for development and testing
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="p-4 border rounded-lg">
-                      <h4 className="font-semibold mb-2">Game ABC123</h4>
-                      <p className="text-sm text-muted-foreground mb-2">Created by dev-user</p>
-                      <Badge variant="secondary" className="mb-2">IN_SETUP</Badge>
-                      <p className="text-xs text-muted-foreground">2/4 players</p>
-                    </div>
-                    
-                    <div className="p-4 border rounded-lg">
-                      <h4 className="font-semibold mb-2">Game DEF456</h4>
-                      <p className="text-sm text-muted-foreground mb-2">Created by other-user</p>
-                      <Badge variant="secondary" className="mb-2">IN_SETUP</Badge>
-                      <p className="text-xs text-muted-foreground">2/3 players</p>
-                    </div>
-                    
-                    <div className="p-4 border rounded-lg">
-                      <h4 className="font-semibold mb-2">Game GHI789</h4>
-                      <p className="text-sm text-muted-foreground mb-2">Created by dev-user</p>
-                      <Badge variant="default" className="mb-2">ACTIVE</Badge>
-                      <p className="text-xs text-muted-foreground">3/4 players</p>
-                    </div>
-                  </div>
-                  
-                  <div className="p-4 bg-muted rounded-lg">
-                    <h4 className="font-medium mb-2">Test Instructions:</h4>
-                    <ul className="text-sm text-muted-foreground space-y-1">
-                      <li>• Use join code <strong>ABC123</strong> to join a game in setup</li>
-                      <li>• Use join code <strong>DEF456</strong> to join another game</li>
-                      <li>• Try joining <strong>GHI789</strong> (will show "already started" error)</li>
-                      <li>• Create a new game to test the full flow</li>
-                    </ul>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
           </div>
         ) : (
           // Current game - show waiting room
@@ -349,8 +489,8 @@ export function LobbyPage() {
                       Waiting for players to join...
                     </CardDescription>
                   </div>
-                  <Badge variant={currentGame.status === 'IN_SETUP' ? 'secondary' : 'default'}>
-                    {currentGame.status === 'IN_SETUP' ? 'Setting Up' : currentGame.status}
+                  <Badge variant={currentGame.status === 'setup' ? 'secondary' : 'default'}>
+                    {currentGame.status === 'setup' ? 'Setting Up' : currentGame.status}
                   </Badge>
                 </div>
               </CardHeader>
@@ -406,15 +546,28 @@ export function LobbyPage() {
                     </Button>
                   )}
                   
-                  <Button 
-                    variant="outline" 
+                  <Button
+                    variant="outline"
                     onClick={handleLeaveGame}
                   >
                     Leave Game
                   </Button>
+
+                  {currentGame.status === 'setup' && currentGame.createdBy === user?.id && (
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        await loadMyGames().catch(() => {});
+                        setSwitchToSetupGameId(null);
+                        setShowSwitchSetupDialog(true);
+                      }}
+                    >
+                      Switch setup game
+                    </Button>
+                  )}
                 </div>
 
-                {!canStartGame && currentGame.status === 'IN_SETUP' && (
+                {!canStartGame && currentGame.status === 'setup' && (
                   <p className="text-sm text-muted-foreground text-center">
                     {currentGame.createdBy !== user?.id 
                       ? 'Waiting for the game creator to start the game...'
@@ -440,6 +593,217 @@ export function LobbyPage() {
         open={showJoinModal}
         onOpenChange={setShowJoinModal}
       />
+
+      {/* Active game owner delete/transfer dialog */}
+      <AlertDialog open={!!activeDeleteGameId} onOpenChange={(open) => { if (!open) setActiveDeleteGameId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete active game</AlertDialogTitle>
+            <AlertDialogDescription>
+              You can permanently delete this game for everyone, or transfer ownership to another online player and leave the game.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {activeDeletePlayers && (
+            <div className="space-y-3">
+              {activeDeletePlayers.filter(p => p.userId !== user?.id && p.isOnline).length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">Transfer ownership to</p>
+                  <Select value={activeTransferToUserId ?? undefined} onValueChange={(v) => setActiveTransferToUserId(v)}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an online player" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {activeDeletePlayers
+                        .filter(p => p.userId !== user?.id && p.isOnline)
+                        .map(p => (
+                          <SelectItem key={p.userId} value={p.userId}>
+                            {p.name}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No other online players are present. Ownership transfer is unavailable.
+                </p>
+              )}
+            </div>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setActiveDeleteGameId(null)}>Cancel</AlertDialogCancel>
+
+            <AlertDialogAction
+              disabled={!activeDeleteGameId || !activeTransferToUserId}
+              onClick={async () => {
+                if (!activeDeleteGameId || !activeTransferToUserId) return;
+                try {
+                  await api.deleteGame(activeDeleteGameId, { mode: 'transfer', newOwnerUserId: activeTransferToUserId });
+                  toast.success('Ownership transferred');
+                  setActiveDeleteGameId(null);
+                  await loadMyGames();
+                } catch (e) {
+                  toast.error('Failed to transfer ownership');
+                }
+              }}
+            >
+              Transfer and leave
+            </AlertDialogAction>
+
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={async () => {
+                if (!activeDeleteGameId) return;
+                try {
+                  await api.deleteGame(activeDeleteGameId, { mode: 'hard' });
+                  toast.success('Game deleted');
+                  setActiveDeleteGameId(null);
+                  await loadMyGames();
+                } catch (e) {
+                  toast.error('Failed to delete game');
+                }
+              }}
+            >
+              Delete for all users
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Archived multi-select delete dialog */}
+      <AlertDialog open={showArchivedDeleteDialog} onOpenChange={(open) => { if (!open) { setShowArchivedDeleteDialog(false); } }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete selected games</AlertDialogTitle>
+            <AlertDialogDescription>
+              Choose whether games you own should be permanently deleted for everyone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {myGames && (
+            (() => {
+              const selected = myGames.archived.filter(g => archivedSelectedIds.has(g.id));
+              const owned = selected.filter(g => g.isOwner).map(g => g.id);
+              const notOwned = selected.filter(g => !g.isOwner).map(g => g.id);
+              return (
+                <div className="space-y-4">
+                  <div className="text-sm text-muted-foreground">
+                    {notOwned.length > 0 && <div>- {notOwned.length} game(s) will be removed from your list only.</div>}
+                    {owned.length > 0 && (
+                      <div>- {owned.length} game(s) are owned by you and can be permanently deleted.</div>
+                    )}
+                  </div>
+
+                  {owned.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        checked={hardDeleteOwnedArchived}
+                        onCheckedChange={(checked) => setHardDeleteOwnedArchived(Boolean(checked))}
+                      />
+                      <span className="text-sm">
+                        Permanently delete games I own (cannot be undone)
+                      </span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => { setShowArchivedDeleteDialog(false); }}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={async () => {
+                if (!myGames) return;
+                const selected = myGames.archived.filter(g => archivedSelectedIds.has(g.id));
+                const owned = selected.filter(g => g.isOwner).map(g => g.id);
+                const notOwned = selected.filter(g => !g.isOwner).map(g => g.id);
+                try {
+                  if (notOwned.length > 0) {
+                    await api.bulkDeleteGames({ gameIds: notOwned, mode: 'soft' });
+                  }
+                  if (owned.length > 0) {
+                    await api.bulkDeleteGames({ gameIds: owned, mode: hardDeleteOwnedArchived ? 'hard' : 'soft' });
+                  }
+                  toast.success('Games deleted');
+                  setShowArchivedDeleteDialog(false);
+                  clearArchivedSelection();
+                  await loadMyGames();
+                } catch (e) {
+                  toast.error('Failed to delete games');
+                }
+              }}
+            >
+              Confirm delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Switch setup game dialog */}
+      <AlertDialog open={showSwitchSetupDialog} onOpenChange={(open) => { if (!open) setShowSwitchSetupDialog(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Switch setup game?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Switching will leave the current setup game. If you are the last player, it will be marked as abandoned.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          {myGames && currentGame && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Continue setup for</p>
+              <Select
+                value={switchToSetupGameId ?? undefined}
+                onValueChange={(v) => setSwitchToSetupGameId(v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a setup game" />
+                </SelectTrigger>
+                <SelectContent>
+                  {myGames.setupOwned
+                    .filter(g => g.id !== currentGame.id)
+                    .map(g => (
+                      <SelectItem key={g.id} value={g.id}>
+                        {g.joinCode ?? g.id}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              {myGames.setupOwned.filter(g => g.id !== currentGame.id).length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  You don’t have any other setup games.
+                </p>
+              )}
+            </div>
+          )}
+
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setShowSwitchSetupDialog(false)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!switchToSetupGameId}
+              onClick={async () => {
+                if (!switchToSetupGameId) return;
+                try {
+                  await leaveGame();
+                  await loadGameFromUrl(switchToSetupGameId);
+                  setShowSwitchSetupDialog(false);
+                  navigate(`/lobby/game/${switchToSetupGameId}`);
+                } catch (e) {
+                  toast.error('Failed to switch setup games');
+                }
+              }}
+            >
+              Switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

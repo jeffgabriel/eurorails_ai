@@ -28,11 +28,31 @@ export interface Game {
   id: ID;
   joinCode: string;
   createdBy: ID;
-  status: 'IN_SETUP' | 'ACTIVE' | 'COMPLETE' | 'ABANDONED';
-  gameStatus?: 'setup' | 'active' | 'completed' | 'abandoned';
+  // games.status is the single source of truth
+  status: 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
   maxPlayers: number;
   isPublic: boolean;
   createdAt: Date;
+}
+
+export interface GameSummary {
+  id: ID;
+  joinCode: string | null;
+  createdBy: ID | null;
+  status: Game['status'];
+  maxPlayers: number;
+  isPublic: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  playerCount: number;
+  onlineCount: number;
+  isOwner: boolean;
+}
+
+export interface MyGamesResponse {
+  active: GameSummary[];
+  setupOwned: GameSummary[];
+  archived: GameSummary[];
 }
 
 // Minimal game state for UI

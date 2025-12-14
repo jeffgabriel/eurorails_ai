@@ -4,6 +4,7 @@ import { IdService } from '../../shared/services/IdService';
 import { DemandDeckService } from '../../shared/services/DemandDeckService';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
+import { authenticatedFetch } from '../services/authenticatedFetch';
 export class SetupScene extends Phaser.Scene {
     private gameState: GameState;
     private nameInput?: HTMLInputElement;
@@ -13,11 +14,26 @@ export class SetupScene extends Phaser.Scene {
     private playerList?: Phaser.GameObjects.Text;
     private demandDeckService: DemandDeckService;
     private isLobbyGame: boolean = false;
+    private pendingInitErrorMessage: string | null = null;
+
+    private navigateToRoute(path: string, options?: { replace?: boolean }) {
+        try {
+            if (options?.replace) {
+                window.history.replaceState({}, '', path);
+            } else {
+                window.history.pushState({}, '', path);
+            }
+            // BrowserRouter listens to popstate; force React Router to notice.
+            window.dispatchEvent(new PopStateEvent('popstate'));
+        } catch (e) {
+            // Fallback to full navigation if history API is unavailable
+            window.location.href = path;
+        }
+    }
 
     constructor() {
         super({ 
-            key: 'SetupScene',
-            active: true
+            key: 'SetupScene'
         });
         this.demandDeckService = new DemandDeckService();
         // Initialize with default state
@@ -32,144 +48,76 @@ export class SetupScene extends Phaser.Scene {
     }
 
     init(data: { gameState?: GameState; gameId?: string }) {
-        // If we have a specific gameId, try to load that game
-        if (data.gameId) {
+        // Prefer explicit init param; fall back to URL (important on refresh)
+        const effectiveGameId = data.gameId ?? this.getGameIdFromUrl();
+
+        if (!effectiveGameId) {
+            // Never hard-redirect on missing init data; show a friendly error instead.
             this.isLobbyGame = true;
-            this.loadSpecificGame(data.gameId);
-        } else {
-            window.location.href = '/lobby';
+            this.pendingInitErrorMessage = 'Missing game id. Please return to the lobby and re-join the game.';
+            console.warn('[SetupScene] Missing gameId in init and URL; cannot load game.');
+            return;
         }
+
+        this.isLobbyGame = true;
+        this.pendingInitErrorMessage = null;
+        this.loadSpecificGame(effectiveGameId);
+    }
+
+    private getGameIdFromUrl(): string | null {
+        try {
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameIdFromParams = urlParams.get('gameId');
+            if (gameIdFromParams) return gameIdFromParams;
+
+            const pathParts = window.location.pathname.split('/');
+            const gameIndex = pathParts.indexOf('game');
+            if (gameIndex !== -1 && pathParts[gameIndex + 1]) {
+                return pathParts[gameIndex + 1];
+            }
+        } catch {
+            // ignore
+        }
+        return null;
     }
 
     private async loadSpecificGame(gameId: string) {
         try {
-            // First, fetch the game data
-            const gameResponse = await fetch(`${config.apiBaseUrl}/api/lobby/games/${gameId}`);
-            if (!gameResponse.ok) {
-                throw new Error(`Failed to fetch game: ${gameResponse.status}`);
-            }
-            
-            const gameData = await gameResponse.json();
-            
-            // Validate API response structure
-            if (!gameData || typeof gameData !== 'object') {
-                throw new Error('Invalid game data response format');
-            }
-            
-            const game = gameData.data; // The API returns { success: true, data: game }
-            
-            // Validate game data structure
-            if (!game || typeof game !== 'object') {
-                throw new Error('Invalid game data structure');
-            }
-            
-            if (!game.id || !game.joinCode || !game.status) {
-                throw new Error('Missing required game properties (id, joinCode, status)');
-            }
-
-            // Then, fetch the players for this game
-            const playersResponse = await fetch(`${config.apiBaseUrl}/api/lobby/games/${gameId}/players`);
-            if (!playersResponse.ok) {
-                throw new Error(`Failed to fetch players: ${playersResponse.status}`);
-            }
-
-            const playersData = await playersResponse.json();
-            
-            // Validate players response structure
-            if (!playersData || typeof playersData !== 'object') {
-                throw new Error('Invalid players data response format');
-            }
-            
-            const lobbyPlayers = playersData.data; // The API returns { success: true, data: players }
-            
-            // Validate players data structure
-            if (!Array.isArray(lobbyPlayers)) {
-                throw new Error('Players data must be an array');
-            }
-            
-            // Convert lobby players to game players format
-            const gamePlayers: Player[] = lobbyPlayers.map((lobbyPlayer: any) => {
-                // Validate individual player data
-                if (!lobbyPlayer || typeof lobbyPlayer !== 'object') {
-                    throw new Error('Invalid player data structure');
-                }
-                
-                if (!lobbyPlayer.id || !lobbyPlayer.name || !lobbyPlayer.color) {
-                    throw new Error('Missing required player properties (id, name, color)');
-                }
-                
-                return {
-                    id: lobbyPlayer.id,
-                    name: lobbyPlayer.name,
-                    color: lobbyPlayer.color,
-                    money: INITIAL_PLAYER_MONEY, // Use the constant from GameTypes
-                    trainType: TrainType.Freight,
-                    turnNumber: 0,
-                    trainState: {
-                    position: null,
-                    remainingMovement: 0,
-                    movementHistory: [],
-                    loads: []
-                },
-                hand: [] // Will be populated by demand deck service
-                };
+            // For /game/:id, always load authoritative state via authenticated game endpoint.
+            // This avoids lobby-only endpoints and fixes first-load flakiness.
+            console.info('[SetupScene] Loading game from /api/game/:id', {
+                gameId,
+                hasToken: Boolean(localStorage.getItem('eurorails.jwt')),
+                path: window.location.pathname,
             });
-            
-            // Convert lobby game data to our game state format
-            // Use gameStatus (actual game state) instead of status (lobby status)
-            // Treat null gameStatus as 'setup'
-            const effectiveGameStatus = game.gameStatus || 'setup';
-            this.gameState = {
-                id: game.id,
-                players: gamePlayers,
-                currentPlayerIndex: 0,
-                status: effectiveGameStatus === 'setup' ? 'setup' : 'active',
-                maxPlayers: game.maxPlayers || 6
-            };
 
-            // If game is in setup status (or null, which we treat as setup), show the setup screen
-            if (effectiveGameStatus === 'setup') {
-                this.setupExistingPlayers();
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/game/${gameId}`, {
+                method: 'GET',
+            });
+
+            if (response.status === 410) {
+                // Completed/abandoned (server hides which). Show a friendly message.
+                this.showGameCompletionMessage('completed');
                 return;
             }
-            
-            // If game is in initialBuild or active status, transition to game scene
-            if (game.gameStatus === 'initialBuild' || game.gameStatus === 'active') {
-                try {
-                    // Include auth headers for authenticated requests
-                    const token = localStorage.getItem('eurorails.jwt');
-                    const headers: Record<string, string> = {
-                        'Content-Type': 'application/json',
-                    };
-                    if (token) {
-                        headers.Authorization = `Bearer ${token}`;
-                    }
-                    
-                    const response = await fetch(`${config.apiBaseUrl}/api/game/${game.id}`, {
-                        headers
-                    });
-                    if (!response.ok) {
-                        throw new Error('Failed to fetch active game state');
-                    }
-                    const activeGameState = await response.json();
-                    this.gameState = activeGameState;
-                } catch (error) {
-                    console.error('Error fetching active game state:', error);
-                    throw error; // Re-throw to handle it in the outer try-catch
-                }
-                try {
-                    this.scene.start('GameScene', { gameState: this.gameState });
-                } catch (error) {
-                    console.error('Error starting GameScene:', error);
-                }
+
+            if (!response.ok) {
+                const text = await response.text().catch(() => '');
+                throw new Error(`Failed to fetch game state (${response.status}) ${text ? `- ${text}` : ''}`);
+            }
+
+            const gameState = await response.json();
+            this.gameState = gameState;
+
+            // If the game is still in setup, send the user back to the lobby setup UI.
+            if (this.gameState.status === 'setup') {
+                this.navigateToRoute(`/lobby/game/${gameId}`);
                 return;
             }
-            
-            // If game is completed or abandoned, show appropriate message
-            if (game.gameStatus === 'completed' || game.gameStatus === 'abandoned') {
-                this.showGameCompletionMessage(game.gameStatus);
-                return;
-            }
+
+            // Start the actual game scenes for active/initialBuild.
+            this.scene.start('GameScene', { gameState: this.gameState });
+            return;
             
         } catch (error) {
             console.error('Error loading specific game:', error);
@@ -482,6 +430,11 @@ export class SetupScene extends Phaser.Scene {
             this.scale.height,
             0xffffff
         ).setOrigin(0.5);
+
+        if (this.pendingInitErrorMessage) {
+            this.showErrorMessage(this.pendingInitErrorMessage);
+            return;
+        }
 
         // Only proceed with the old setup logic if we're not loading from the lobby
         if (!this.isLobbyGame) {

@@ -17,15 +17,49 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
                 details: 'Authentication required to view game state' 
             });
         }
-        
-        const gameState = await GameService.getGame(gameId, userId);
-        
-        if (!gameState) {
-            return res.status(404).json({ 
-                error: 'Not found',
+
+        // Validate game exists and is available (do not depend on lobby flow for this)
+        const gameResult = await db.query(
+            'SELECT status FROM games WHERE id = $1',
+            [gameId]
+        );
+
+        if (gameResult.rows.length === 0) {
+            return res.status(404).json({
+                error: 'GAME_NOT_FOUND',
                 details: 'Game not found'
             });
         }
+
+        const gameStatus: string = gameResult.rows[0].status;
+        if (gameStatus === 'completed' || gameStatus === 'abandoned') {
+            return res.status(410).json({
+                error: 'GAME_NOT_AVAILABLE',
+                details: `Game is ${gameStatus} and cannot be loaded`
+            });
+        }
+
+        // Validate membership (and not soft-deleted) before returning any state
+        const membershipResult = await db.query(
+            'SELECT is_deleted FROM players WHERE game_id = $1 AND user_id = $2 LIMIT 1',
+            [gameId, userId]
+        );
+
+        if (membershipResult.rows.length === 0) {
+            return res.status(403).json({
+                error: 'FORBIDDEN',
+                details: 'You are not a player in this game'
+            });
+        }
+
+        if (membershipResult.rows[0].is_deleted === true) {
+            return res.status(403).json({
+                error: 'FORBIDDEN',
+                details: 'You no longer have access to this game'
+            });
+        }
+        
+        const gameState = await GameService.getGame(gameId, userId);
 
         return res.status(200).json(gameState);
     } catch (error: any) {

@@ -182,18 +182,33 @@ export class SettingsScene extends Phaser.Scene {
             }
         });
 
-        // Add end game button before the back button
+        // --- Button block layout ---
+        // Keep buttons nicely spaced and centered within the panel regardless of panelHeight.
+        const buttonX = this.scale.width / 2;
+        const panelBottomY = this.scale.height / 2 + (panelHeight / 2);
+        const buttonWidth = 260;
+        const buttonHeight = 48;
+        const buttonGap = 14;
+        const bottomPadding = 48;
+        const buttonCount = 3;
+        const blockHeight = (buttonCount * buttonHeight) + ((buttonCount - 1) * buttonGap);
+        const blockTopY = panelBottomY - bottomPadding - blockHeight;
+
+        const yForButtonIndex = (idx: number) =>
+            blockTopY + (buttonHeight / 2) + idx * (buttonHeight + buttonGap);
+
+        // Add end game button
         const endGameButton = this.add.rectangle(
-            this.scale.width / 2,
-            this.scale.height / 2 + (panelHeight / 2) - 120,
-            200,
-            45,
+            buttonX,
+            yForButtonIndex(0),
+            buttonWidth,
+            buttonHeight,
             0xff0000
         ).setInteractive({ useHandCursor: true });
 
         this.add.text(
-            this.scale.width / 2,
-            this.scale.height / 2 + (panelHeight / 2) - 120,
+            buttonX,
+            yForButtonIndex(0),
             'End Game',
             {
                 color: '#ffffff',
@@ -203,18 +218,43 @@ export class SettingsScene extends Phaser.Scene {
 
         endGameButton.on('pointerdown', () => this.endGame());
 
-        // Add back button
+        // Add lobby button
+        const lobbyButton = this.add.rectangle(
+            buttonX,
+            yForButtonIndex(1),
+            buttonWidth,
+            buttonHeight,
+            0x2563eb // blue
+        ).setInteractive({ useHandCursor: true });
+
+        this.add.text(
+            buttonX,
+            yForButtonIndex(1),
+            'Back to Lobby',
+            {
+                color: '#ffffff',
+                fontSize: '20px'
+            }
+        ).setOrigin(0.5);
+
+        lobbyButton.on('pointerdown', () => {
+            // Do not end the game; just return to the lobby UI.
+            // Use a full navigation since Phaser is running outside React.
+            window.location.href = '/lobby';
+        });
+
+        // Add back-to-game button
         const backButton = this.add.rectangle(
-            this.scale.width / 2,
-            this.scale.height / 2 + (panelHeight / 2) - 60,
-            200,
-            45,
+            buttonX,
+            yForButtonIndex(2),
+            buttonWidth,
+            buttonHeight,
             0x666666
         ).setInteractive({ useHandCursor: true });
 
         this.add.text(
-            this.scale.width / 2,
-            this.scale.height / 2 + (panelHeight / 2) - 60,
+            buttonX,
+            yForButtonIndex(2),
             'Back to Game',
             {
                 color: '#ffffff',
@@ -660,16 +700,14 @@ export class SettingsScene extends Phaser.Scene {
             this.scene.stop('GameScene');
             this.scene.stop('SettingsScene');
 
-            // Start fresh with SetupScene and pass empty game state to force new game creation
-            this.scene.start('SetupScene', { 
-                gameState: {
-                    id: '',
-                    players: [],
-                    currentPlayerIndex: 0,
-                    status: 'setup',
-                    maxPlayers: 6
-                }
-            });
+            // Clear persisted lobby "current game" state so /lobby doesn't auto-resume.
+            // (Keys defined in lobby store; duplicated here to avoid importing React store into Phaser scene.)
+            localStorage.removeItem('eurorails.currentGame');
+            localStorage.removeItem('eurorails.currentPlayers');
+            localStorage.removeItem('eurorails.gameTimestamp');
+
+            // Return user to the lobby (do not show SetupScene / completion screens here).
+            window.location.href = '/lobby';
         } catch (error) {
             console.error('Error ending game:', error);
             this.showErrorMessage('Failed to end game');

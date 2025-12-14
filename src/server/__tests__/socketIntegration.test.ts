@@ -142,6 +142,8 @@ describe('Socket.IO Lobby Integration', () => {
     it('should handle client connect event', () => {
       const mockSocket: any = {
         id: 'socket-123',
+        data: {},
+        handshake: { auth: {} },
         on: jest.fn(),
       };
 

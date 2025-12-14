@@ -57,7 +57,7 @@ describe('Lobby E2E - Simple Verification', () => {
       id: 'game-123',
       joinCode: 'ABC123',
       createdBy: 'user-123',
-      status: 'IN_SETUP' as const,
+      status: 'setup' as const,
       maxPlayers: 4,
       isPublic: true,
       createdAt: new Date('2023-01-01T00:00:00Z'),
@@ -83,7 +83,7 @@ describe('Lobby E2E - Simple Verification', () => {
       id: 'game-123',
       joinCode: 'ABC123',
       createdBy: 'user-456',
-      status: 'IN_SETUP' as const,
+      status: 'setup' as const,
       maxPlayers: 4,
       isPublic: true,
       createdAt: new Date('2023-01-01T00:00:00Z'),
@@ -114,12 +114,12 @@ describe('Lobby E2E - Simple Verification', () => {
     expect(useLobbyStore.getState().error).toBeNull();
   });
 
-  it('should not call startGame API and keep status IN_SETUP when startGame is called', async () => {
+  it('should not call startGame API and keep status setup when startGame is called', async () => {
     const mockGame = {
       id: 'game-123',
       joinCode: 'ABC123',
       createdBy: 'user-123',
-      status: 'IN_SETUP' as const,
+      status: 'setup' as const,
       maxPlayers: 4,
       isPublic: true,
       createdAt: new Date('2023-01-01T00:00:00Z'),
@@ -135,14 +135,14 @@ describe('Lobby E2E - Simple Verification', () => {
 
     const store = useLobbyStore.getState();
     
-    // Verify initial state is IN_SETUP
-    expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
+    // Verify initial state is setup
+    expect(useLobbyStore.getState().currentGame?.status).toBe('setup');
     await store.startGame('game-123');
 
     // Verify the API was NOT called (lobby startGame does nothing)
     expect(mockApi.startGame).not.toHaveBeenCalled();
-    // Verify the status remains IN_SETUP (lobby doesn't set active)
-    expect(useLobbyStore.getState().currentGame?.status).toBe('IN_SETUP');
+    // Verify the status remains setup (lobby doesn't set active)
+    expect(useLobbyStore.getState().currentGame?.status).toBe('setup');
     expect(useLobbyStore.getState().isLoading).toBe(false);
     expect(useLobbyStore.getState().error).toBeNull();
   });

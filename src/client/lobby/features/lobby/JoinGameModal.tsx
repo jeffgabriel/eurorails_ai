@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -39,6 +40,7 @@ interface JoinGameModalProps {
 
 export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
   const { joinGame, isLoading } = useLobbyStore();
+  const navigate = useNavigate();
   const [joinStep, setJoinStep] = useState<'code' | 'color'>('code');
   const [availableColors, setAvailableColors] = useState<string[]>([]);
   const [validatedGameId, setValidatedGameId] = useState<string>('');
@@ -133,6 +135,7 @@ export function JoinGameModal({ open, onOpenChange }: JoinGameModalProps) {
     try {
       const game = await joinGame(data);
       toast.success(`Joined game successfully!`);
+      navigate(`/lobby/game/${game.id}`);
       onOpenChange(false);
       form.reset();
       setJoinStep('code');

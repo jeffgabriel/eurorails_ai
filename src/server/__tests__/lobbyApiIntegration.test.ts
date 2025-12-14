@@ -108,7 +108,7 @@ describe('Lobby API HTTP Integration Tests', () => {
       expect(response.body.data).toBeDefined();
       expect(response.body.data.id).toBeDefined();
       expect(response.body.data.joinCode).toHaveLength(8);
-      expect(response.body.data.status).toBe('IN_SETUP');
+      expect(response.body.data.status).toBe('setup');
       expect(response.body.data.createdBy).toBeDefined();
       expect(response.body.data.createdBy).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       expect(response.body.data.maxPlayers).toBe(4);
@@ -279,7 +279,7 @@ describe('Lobby API HTTP Integration Tests', () => {
       expect(response.body.success).toBe(true);
       expect(response.body.data.id).toBe(testGame.id);
       expect(response.body.data.joinCode).toBe(testGame.joinCode);
-      expect(response.body.data.status).toBe('IN_SETUP');
+      expect(response.body.data.status).toBe('setup');
     });
 
     it('should handle non-existent game', async () => {
@@ -406,7 +406,7 @@ describe('Lobby API HTTP Integration Tests', () => {
         .get(`/api/lobby/games/${testGame.id}`)
         .expect(200);
 
-      expect(gameResponse.body.data.status).toBe('ACTIVE');
+      expect(gameResponse.body.data.status).toBe('active');
     });
 
     it('should handle insufficient players', async () => {
@@ -523,7 +523,7 @@ describe('Lobby API HTTP Integration Tests', () => {
   describe('POST /api/lobby/players/presence - Update Presence', () => {
     it('should return 404 when updating presence for non-existent player', async () => {
       const presenceData = {
-        userId: testUserId,
+        userId: uuidv4(),
         isOnline: true
       };
 

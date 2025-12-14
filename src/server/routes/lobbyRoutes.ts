@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
-import { optionalAuth } from '../middleware/authMiddleware';
+import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
 
 // Extend the Request type to include requestId (needed for this file)
 declare global {
@@ -41,6 +41,78 @@ interface UpdatePresenceRequest {
   userId: string;
   isOnline: boolean;
 }
+
+interface DeleteGameRequest {
+  mode: 'soft' | 'hard' | 'transfer';
+  newOwnerUserId?: string;
+}
+
+interface BulkDeleteGamesRequest {
+  gameIds: string[];
+  mode: 'soft' | 'hard';
+}
+
+// GET /api/lobby/my-games - List games for current user
+router.get('/my-games', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+
+  logLobbyOperation('List my games request', { userId }, req);
+
+  const result = await LobbyService.getMyGames(userId);
+
+  res.status(200).json({
+    success: true,
+    data: result
+  });
+}));
+
+// POST /api/lobby/games/:id/delete - Delete (soft/hard) or transfer ownership
+router.post('/games/:id/delete', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId } = req.params;
+  const userId = req.user!.id;
+  const { mode, newOwnerUserId }: DeleteGameRequest = req.body;
+
+  logLobbyOperation('Delete game request', { gameId, userId, mode, newOwnerUserId }, req);
+
+  if (!validateRequiredFields({ mode }, res)) {
+    return;
+  }
+
+  await LobbyService.deleteGame(gameId, userId, { mode, newOwnerUserId });
+
+  res.status(200).json({
+    success: true,
+    message: 'Game deleted successfully'
+  });
+}));
+
+// POST /api/lobby/games/bulk-delete - Bulk delete (soft/hard)
+router.post('/games/bulk-delete', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const userId = req.user!.id;
+  const { gameIds, mode }: BulkDeleteGamesRequest = req.body;
+
+  logLobbyOperation('Bulk delete games request', { userId, count: gameIds?.length || 0, mode }, req);
+
+  if (!validateRequiredFields({ gameIds, mode }, res)) {
+    return;
+  }
+
+  if (!Array.isArray(gameIds) || gameIds.length === 0) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'gameIds must be a non-empty array',
+      details: 'Invalid gameIds'
+    });
+    return;
+  }
+
+  await LobbyService.bulkDeleteGames(userId, { gameIds, mode });
+
+  res.status(200).json({
+    success: true,
+    message: 'Games deleted successfully'
+  });
+}));
 
 // Enhanced request logging for lobby operations
 function logLobbyOperation(operation: string, data?: any, req?: Request): void {

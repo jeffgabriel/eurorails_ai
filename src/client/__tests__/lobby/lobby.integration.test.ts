@@ -234,7 +234,7 @@ describe('Integration Tests - Real Server Communication', () => {
       expect(result.game).toBeDefined();
       expect(result.game.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       expect(result.game.joinCode).toMatch(/^[A-Z0-9]{8}$/);
-      expect(result.game.status).toBe('IN_SETUP');
+      expect(result.game.status).toBe('setup');
       expect(result.game.maxPlayers).toBe(6); // Default max players is now 6
       expect(result.game.isPublic).toBe(true);
     }, TEST_TIMEOUT);
@@ -277,7 +277,7 @@ describe('Integration Tests - Real Server Communication', () => {
       expect(result).toBeDefined();
       expect(result.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
       expect(result.joinCode).toMatch(/^[A-Z0-9]{8}$/);
-      expect(result.status).toBe('IN_SETUP');
+      expect(result.status).toBe('setup');
       
       // Verify store state
       const state = useLobbyStore.getState();
