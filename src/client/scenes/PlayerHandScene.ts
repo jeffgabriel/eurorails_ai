@@ -159,19 +159,22 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private refreshDynamicUI(): void {
-    const currentPlayer = this.gameStateService.getCurrentPlayer();
-    if (!currentPlayer) return;
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+    if (!localPlayer) return;
 
     // Update name/money if it changed
     if (this.nameAndMoneyText) {
       this.nameAndMoneyText.setText(
-        `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`
+        `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M`
       );
     }
 
     // Update build cost text + color
     if (this.buildCostText) {
-      const display = this.getBuildCostDisplay(currentPlayer);
+      const display = this.getBuildCostDisplay(localPlayer);
       this.buildCostText.setText(display.text);
       this.buildCostText.setColor(display.color);
     }
@@ -427,12 +430,15 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private createNameAndMoneySection(parentSizer: any): void {
-    const currentPlayer = this.gameStateService.getCurrentPlayer();
-    if (!currentPlayer) {
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+    if (!localPlayer) {
       return;
     }
 
-    const playerInfoText = `${currentPlayer.name}\nMoney: ECU ${currentPlayer.money}M`;
+    const playerInfoText = `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M`;
     const nameAndMoney = this.add
       .text(0, 0, playerInfoText, {
         color: "#ffffff",
@@ -454,11 +460,14 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private createBuildCostSection(parentSizer: any): void {
-    const currentPlayer = this.gameStateService.getCurrentPlayer();
-    if (!currentPlayer) {
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+    if (!localPlayer) {
       return;
     }
-    const display = this.getBuildCostDisplay(currentPlayer);
+    const display = this.getBuildCostDisplay(localPlayer);
     const buildCostText = this.add
       .text(0, 0, display.text, {
         color: display.color,
