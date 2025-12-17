@@ -37,6 +37,7 @@ export class LoadDialogScene extends Scene {
     private playerStateService: PlayerStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
     private loadOperations: LoadOperation[] = []; // Track operations this turn
+    private errorText: Phaser.GameObjects.Text | null = null;
 
     constructor() {
         super({ key: 'LoadDialogScene' });
@@ -74,26 +75,38 @@ export class LoadDialogScene extends Scene {
             // Ensure LoadService is initialized before proceeding
             await this.loadService.loadInitialState();
 
+            // Keep input focused on this scene while open
+            this.input.setTopOnly(true);
+
             // Create a semi-transparent background overlay
             const overlay = this.add.rectangle(
                 0, 0,
-                this.cameras.main.width,
-                this.cameras.main.height,
-                0x000000, 0.7
+                this.scale.width,
+                this.scale.height,
+                0x000000, 0.88
             ).setOrigin(0);
+            overlay.setScrollFactor(0);
+            overlay.setDepth(10000);
 
             // Make overlay interactive to prevent clicking through
-            overlay.setInteractive();
+            overlay.setInteractive({ useHandCursor: true });
+            overlay.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+                // Swallow clicks so they don't reach the board.
+                if (pointer.event) {
+                    pointer.event.stopPropagation();
+                }
+            });
 
             // Create the dialog container
             this.dialogContainer = this.add.container(
                 this.cameras.main.centerX,
                 this.cameras.main.centerY
             );
+            this.dialogContainer.setDepth(10001);
 
             // Create dialog background - make it wider and taller
             const dialogBg = this.add.rectangle(
-                0, 0, 700, 400, 0x333333, 0.95  // Increased width from 500 to 700
+                0, 0, 700, 420, 0x222222, 1.0  // Slightly taller + fully opaque
             ).setOrigin(0.5);
 
             // Add title
@@ -257,6 +270,42 @@ export class LoadDialogScene extends Scene {
         return container;
     }
 
+    private showError(message: string): void {
+        try {
+            if (this.errorText) {
+                this.errorText.destroy();
+                this.errorText = null;
+            }
+            this.errorText = this.add.text(0, 165, message, {
+                color: "#ff6666",
+                fontSize: "16px",
+                fontStyle: "bold",
+                wordWrap: { width: 640, useAdvancedWrap: true },
+                align: "center",
+            }).setOrigin(0.5);
+            this.dialogContainer.add(this.errorText);
+            this.time.addEvent({
+                delay: 2500,
+                callback: () => {
+                    this.errorText?.destroy();
+                    this.errorText = null;
+                }
+            });
+        } catch (e) {
+            console.error("Failed to show error:", e);
+        }
+    }
+
+    private getTrainCapacitySafe(): number {
+        const props = (TRAIN_PROPERTIES as any)[this.player.trainType];
+        if (props && typeof props.capacity === 'number') {
+            return props.capacity;
+        }
+        // Defensive fallback: Freight capacity
+        console.warn(`Unknown trainType "${String(this.player.trainType)}" in LoadDialogScene; defaulting capacity=2`);
+        return 2;
+    }
+
     private getDeliverableLoads(currentLoads: LoadType[]): Array<{type: LoadType, payment: number, cardId: number}> {
         if (!this.player.hand) return [];
         
@@ -296,19 +345,19 @@ export class LoadDialogScene extends Scene {
             }
             
             // Calculate train capacity using TRAIN_PROPERTIES
-            const maxCapacity = TRAIN_PROPERTIES[this.player.trainType].capacity;
+            const maxCapacity = this.getTrainCapacitySafe();
                               
             // Check if train has space
             if (this.player.trainState.loads.length >= maxCapacity) {
-                console.error('Train is at maximum capacity');
+                this.showError('Train is at maximum capacity');
                 return;
             }
             
             // Server-authoritative: Make API calls first
             // Try to pick up the load from the city
-            const pickupSuccess = await this.loadService.pickupLoad(loadType, this.city.name);
+            const pickupSuccess = await this.loadService.pickupLoad(loadType, this.city.name, this.gameState.id);
             if (!pickupSuccess) {
-                console.error('Failed to pick up load from city');
+                this.showError('Could not pick up that load (not available or server rejected).');
                 return;
             }
 
@@ -324,7 +373,7 @@ export class LoadDialogScene extends Scene {
             if (!success) {
                 // If update failed, revert load pickup
                 await this.loadService.returnLoad(loadType);
-                console.error('Failed to update player loads in game state');
+                this.showError('Failed to update your train loads. Please try again.');
                 return;
             }
 
@@ -354,6 +403,7 @@ export class LoadDialogScene extends Scene {
         } catch (error) {
             console.error('Failed to pickup load:', error);
             // Show error - no need to revert since we never updated local state
+            this.showError('Pickup failed. Check console for details.');
             this.refreshLoadOperationsUI();
         }
     }
@@ -380,7 +430,7 @@ export class LoadDialogScene extends Scene {
             
             // Server-authoritative pattern: Make all API calls first
             // Return the load to global availability
-            await this.loadService.returnLoad(load.type);
+            await this.loadService.returnLoad(load.type, this.gameState.id);
 
             // Update all game state in parallel
             const [loadsUpdated, moneyUpdated, cardFulfilled] = await Promise.all([
@@ -494,11 +544,11 @@ export class LoadDialogScene extends Scene {
             const cityProducesLoad = availableLoads.some(l => l.loadType === loadType);
             
             if (cityProducesLoad) {
-                await this.loadService.returnLoad(loadType);
+                await this.loadService.returnLoad(loadType, this.gameState.id);
             } else {
                 // If city doesn't produce this load, it stays in the city
                 // and any existing load of the same type goes back to the tray
-                await this.loadService.setLoadInCity(this.city.name, loadType);
+                await this.loadService.setLoadInCity(this.city.name, loadType, this.gameState.id);
             }
 
             // Update game state with new train loads
@@ -556,7 +606,7 @@ export class LoadDialogScene extends Scene {
 
                 // Server-authoritative: Make API calls first
                 // Return the load to the city
-                await this.loadService.returnLoad(operation.loadType);
+                await this.loadService.returnLoad(operation.loadType, this.gameState.id);
 
                 // Update game state
                 const success = await this.playerStateService.updatePlayerLoads(
@@ -592,7 +642,7 @@ export class LoadDialogScene extends Scene {
                     const updatedLoads = [...this.player.trainState.loads, operation.loadType];
                     
                     // Server-authoritative: Make API calls first
-                    const pickupSuccess = await this.loadService.pickupLoad(operation.loadType, this.city.name);
+                    const pickupSuccess = await this.loadService.pickupLoad(operation.loadType, this.city.name, this.gameState.id);
                     if (!pickupSuccess) {
                         console.error('Failed to pick up load');
                         return;
@@ -606,7 +656,7 @@ export class LoadDialogScene extends Scene {
 
                     if (!success) {
                         // Revert pickup if update failed
-                        await this.loadService.returnLoad(operation.loadType);
+                        await this.loadService.returnLoad(operation.loadType, this.gameState.id);
                         console.error('Failed to update game state');
                         return;
                     }

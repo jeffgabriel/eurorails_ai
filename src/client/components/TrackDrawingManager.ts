@@ -28,7 +28,8 @@ export class TrackDrawingManager {
     private previewPath: GridPoint[] = [];
     
     // Track building costs
-    private readonly MAX_TURN_BUILD_COST = 20; // 20M ECU per turn
+    // Turn build budget (defaults to 20M, can be reduced to 15M after crossgrade)
+    private turnBuildLimit: number = 20;
     private readonly TERRAIN_COSTS: { [key in TerrainType]: number } = {
         [TerrainType.Clear]: 1,
         [TerrainType.Mountain]: 2,
@@ -66,6 +67,9 @@ export class TrackDrawingManager {
     private updateEventHandler: (() => void) | null = null;
     
     public segmentsDrawnThisTurn: TrackSegment[] = [];
+
+    // When true, player may not enter drawing mode for the rest of the turn (e.g., after a full upgrade)
+    private drawingDisabledForTurn: boolean = false;
     
     constructor(
         scene: Phaser.Scene, 
@@ -196,6 +200,11 @@ export class TrackDrawingManager {
     public async toggleDrawingMode(): Promise<boolean> {
         // Toggle drawing mode state
         const oldMode = this.isDrawingMode;
+        // Prevent entering drawing mode if disabled for the turn
+        if (!this.isDrawingMode && this.drawingDisabledForTurn) {
+            return false;
+        }
+
         this.isDrawingMode = !this.isDrawingMode;
         
         if (this.isDrawingMode) {
@@ -259,11 +268,48 @@ export class TrackDrawingManager {
         const totalExistingCost = previousSessionsCost + this.turnBuildCost;
         
         // Check against both the turn budget and the player's available money
-        const isWithinBudget = totalExistingCost + additionalCost <= this.MAX_TURN_BUILD_COST;
+        const isWithinBudget = totalExistingCost + additionalCost <= this.turnBuildLimit;
         const isWithinMoney = totalExistingCost + additionalCost <= playerMoney;
         const result = isWithinBudget && isWithinMoney;
         
         return result;
+    }
+
+    /**
+     * Turn build limit helpers.
+     * Default is 20M; crossgrade reduces it to 15M for the remainder of the turn.
+     */
+    public setTurnBuildLimit(limit: number): void {
+        // Defensive clamp: only allow 0..20
+        const clamped = Math.max(0, Math.min(20, Math.floor(limit)));
+        this.turnBuildLimit = clamped;
+    }
+
+    public getTurnBuildLimit(): number {
+        return this.turnBuildLimit;
+    }
+
+    public resetTurnBuildLimit(): void {
+        this.turnBuildLimit = 20;
+        this.drawingDisabledForTurn = false;
+    }
+
+    /**
+     * Disable entering drawing mode for the remainder of the turn.
+     */
+    public setDrawingDisabledForTurn(disabled: boolean): void {
+        this.drawingDisabledForTurn = disabled;
+        // If we are currently drawing and drawing is being disabled, leave drawing mode safely.
+        // (Callers should typically avoid disabling while drawing; this is defensive.)
+        if (disabled && this.isDrawingMode) {
+            // No async here; caller can toggle explicitly if needed.
+            this.isDrawingMode = false;
+            this.cleanupDrawingMode();
+        }
+    }
+
+    public isDrawingDisabledForTurn(): boolean {
+        return this.drawingDisabledForTurn;
     }
 
     /**

@@ -1,6 +1,7 @@
 import { GameState } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
+import { TrainType } from '../../shared/types/GameTypes';
 
 /**
  * Event listener type for turn changes
@@ -248,5 +249,52 @@ export class GameStateService {
     
     public getPlayers() {
         return this.gameState.players;
+    }
+
+    /**
+     * Purchase a train upgrade or crossgrade for the local player's active turn.
+     * Server-authoritative: endpoint validates money, legality, and per-turn track spend.
+     */
+    public async purchaseTrainType(
+        kind: 'upgrade' | 'crossgrade',
+        targetTrainType: TrainType
+    ): Promise<boolean> {
+        try {
+            const { authenticatedFetch } = await import('./authenticatedFetch');
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/upgrade-train`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    kind,
+                    targetTrainType
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to purchase train type:', errorData);
+                return false;
+            }
+
+            const data = await response.json();
+            const updatedPlayer = data?.player;
+            if (!updatedPlayer?.id) {
+                return false;
+            }
+
+            // Merge into local game state
+            const idx = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+            if (idx >= 0) {
+                this.gameState.players[idx] = {
+                    ...this.gameState.players[idx],
+                    ...updatedPlayer
+                };
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Error purchasing train type:', error);
+            return false;
+        }
     }
 }
