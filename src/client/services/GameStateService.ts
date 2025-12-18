@@ -258,7 +258,7 @@ export class GameStateService {
     public async purchaseTrainType(
         kind: 'upgrade' | 'crossgrade',
         targetTrainType: TrainType
-    ): Promise<boolean> {
+    ): Promise<{ ok: boolean; errorMessage?: string }> {
         try {
             const { authenticatedFetch } = await import('./authenticatedFetch');
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/upgrade-train`, {
@@ -271,15 +271,18 @@ export class GameStateService {
             });
 
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                console.error('Failed to purchase train type:', errorData);
-                return false;
+                const errorData: any = await response.json().catch(() => ({}));
+                // Keep console noise low: return a user-facing message to the caller.
+                const details = (typeof errorData?.details === 'string' && errorData.details.trim().length > 0)
+                    ? errorData.details
+                    : (typeof errorData?.error === 'string' ? errorData.error : 'Purchase failed');
+                return { ok: false, errorMessage: details };
             }
 
             const data = await response.json();
             const updatedPlayer = data?.player;
             if (!updatedPlayer?.id) {
-                return false;
+                return { ok: false, errorMessage: 'Purchase failed' };
             }
 
             // Merge into local game state
@@ -299,10 +302,10 @@ export class GameStateService {
                 }
             }
 
-            return true;
+            return { ok: true };
         } catch (error) {
-            console.error('Error purchasing train type:', error);
-            return false;
+            // Avoid noisy console logging; callers can show a toast.
+            return { ok: false, errorMessage: 'Purchase failed' };
         }
     }
 }

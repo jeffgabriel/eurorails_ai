@@ -64,6 +64,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private lastIsLocalPlayerActive: boolean | null = null;
   private lastCanUndo: boolean | null = null;
   private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
+  private toastContainer: Phaser.GameObjects.Container | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -439,9 +440,75 @@ export class PlayerHandScene extends Phaser.Scene {
     this.trainPurchaseModal = null;
   }
 
+  private showToast(message: string): void {
+    try {
+      if (this.toastContainer) {
+        this.toastContainer.destroy(true);
+        this.toastContainer = null;
+      }
+
+      const paddingX = 16;
+      const paddingY = 10;
+      const maxWidth = Math.min(520, this.scale.width - 40);
+
+      const text = this.add.text(0, 0, message, {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        wordWrap: { width: maxWidth - paddingX * 2, useAdvancedWrap: true },
+        align: "center",
+      }).setOrigin(0.5);
+
+      const bgW = Math.min(maxWidth, text.width + paddingX * 2);
+      const bgH = text.height + paddingY * 2;
+      const bg = (this as any).rexUI.add.roundRectangle({
+        width: bgW,
+        height: bgH,
+        color: 0x111111,
+        alpha: 0.92,
+        radius: 10,
+      });
+
+      const container = this.add.container(this.scale.width / 2, this.scale.height - this.HAND_HEIGHT_BASE - 24);
+      container.setDepth(2500);
+      container.add([bg, text]);
+      text.setPosition(0, 0);
+      bg.setPosition(0, 0);
+
+      this.toastContainer = container;
+
+      this.tweens.add({
+        targets: container,
+        alpha: 0,
+        duration: 1200,
+        delay: 1600,
+        ease: "Power2",
+        onComplete: () => {
+          container.destroy(true);
+          if (this.toastContainer === container) {
+            this.toastContainer = null;
+          }
+        },
+      });
+    } catch (e) {
+      // Silent: toast is non-critical
+    }
+  }
+
   private async handleTrainPurchase(kind: "upgrade" | "crossgrade", targetTrainType: TrainType): Promise<void> {
-    const ok = await this.gameStateService.purchaseTrainType(kind, targetTrainType);
-    if (!ok) {
+    const result = await this.gameStateService.purchaseTrainType(kind, targetTrainType);
+    if (!result.ok) {
+      const msg = (result.errorMessage || "Purchase failed").toLowerCase();
+      if (msg.includes("too many loads")) {
+        this.showToast("Current loads could not be transferred to new train.");
+      } else if (msg.includes("spending more than 15m") || msg.includes("15m")) {
+        this.showToast("Crossgrade requires track spend ≤ 15M this turn.");
+      } else if (msg.includes("insufficient")) {
+        this.showToast("Insufficient funds for that train change.");
+      } else {
+        this.showToast(result.errorMessage || "Purchase failed.");
+      }
       return;
     }
 
