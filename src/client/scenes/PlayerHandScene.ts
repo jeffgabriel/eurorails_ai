@@ -50,6 +50,9 @@ export class PlayerHandScene extends Phaser.Scene {
   // UI elements
   private trainCard: TrainCard | null = null;
   private cards: DemandCard[] = [];
+  // Visual-only demand card marks: cardId -> selected demand line (0..2) or null
+  private demandCardMarkedLineByCardId: Map<number, number | null> = new Map();
+  private demandMarksStorageKey: string | null = null;
   private citySelectionManager: CitySelectionManager | null = null;
   private background: Phaser.GameObjects.Rectangle | null = null;
   private rootSizer: any | null = null;
@@ -90,6 +93,9 @@ export class PlayerHandScene extends Phaser.Scene {
     this.isDrawingMode = data.isDrawingMode;
     this.currentTrackCost = data.currentTrackCost;
     this.onCloseCallback = data.onClose;
+
+    // Make sure per-game/per-player mark state survives scene lifecycles.
+    this.ensureDemandMarksLoaded();
   }
 
   create() {
@@ -114,6 +120,9 @@ export class PlayerHandScene extends Phaser.Scene {
     this.gameState = gameState;
     this.isDrawingMode = isDrawingMode;
     this.currentTrackCost = currentTrackCost;
+
+    // If game or local player changed, reload persisted marks for the new context.
+    this.ensureDemandMarksLoaded();
 
     const isLocalPlayerActive =
       this.gameStateService?.isLocalPlayerActive?.() ?? false;
@@ -600,6 +609,9 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private createDemandCardSection(): void {
+    // Ensure marks are loaded before we instantiate cards.
+    this.ensureDemandMarksLoaded();
+
     const localPlayerId = this.gameStateService.getLocalPlayerId();
     const currentPlayer = localPlayerId
       ? this.gameState.players.find((p) => p.id === localPlayerId)
@@ -622,6 +634,19 @@ export class PlayerHandScene extends Phaser.Scene {
     const maxCards = 3;
     const cardsToShow = Math.max(currentPlayer.hand.length, maxCards);
 
+    // Prune marks for cards no longer in hand to avoid unbounded growth.
+    const currentHandIds = new Set<number>();
+    currentPlayer.hand.forEach((c: any) => {
+      if (c && typeof c.id === "number") currentHandIds.add(c.id);
+    });
+    for (const existingId of this.demandCardMarkedLineByCardId.keys()) {
+      if (!currentHandIds.has(existingId)) {
+        this.demandCardMarkedLineByCardId.delete(existingId);
+      }
+    }
+    // Persist pruning as well (so stale card ids don't accumulate across sessions).
+    this.saveDemandMarksToStorage();
+
     // Cards region is its own sizer so rootSizer has stable child footprints.
     // (Do NOT add cards directly to rootSizer if you want them grouped.)
     this.cardsSizer = (this as any).rexUI.add
@@ -634,7 +659,15 @@ export class PlayerHandScene extends Phaser.Scene {
     for (let i = 0; i < cardsToShow; i++) {
       const card =
         i < currentPlayer.hand.length ? currentPlayer.hand[i] : undefined;
-      const demandCard = new DemandCard(this, 0, 0, card);
+      const demandCard = new DemandCard(this, 0, 0, card, card
+        ? {
+          markedDemandIndex: this.demandCardMarkedLineByCardId.get(card.id) ?? null,
+          onMarkedDemandIndexChange: (cardId, markedIndex) => {
+            this.demandCardMarkedLineByCardId.set(cardId, markedIndex);
+            this.saveDemandMarksToStorage();
+          },
+        }
+        : undefined);
       this.cardsSizer.add(demandCard, {
         proportion: 0,
         align: "center",
@@ -1132,5 +1165,79 @@ export class PlayerHandScene extends Phaser.Scene {
 
   shutdown() {
     this.destroyUI();
+  }
+
+  private computeDemandMarksStorageKey(): string | null {
+    try {
+      // Keyed by game + local player so marks persist across refresh and don't leak between games/players.
+      const gameId = this.gameState?.id;
+      const localPlayerId = this.gameStateService?.getLocalPlayerId?.();
+      if (!gameId || !localPlayerId) return null;
+      return `eurorails.demandMarks.v1.${gameId}.${localPlayerId}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private ensureDemandMarksLoaded(): void {
+    const key = this.computeDemandMarksStorageKey();
+    if (!key) return;
+    if (this.demandMarksStorageKey === key) return;
+    this.demandMarksStorageKey = key;
+    this.loadDemandMarksFromStorage();
+  }
+
+  private loadDemandMarksFromStorage(): void {
+    try {
+      if (!this.demandMarksStorageKey) return;
+      if (typeof window === "undefined" || !window.localStorage) return;
+      const raw = window.localStorage.getItem(this.demandMarksStorageKey);
+      if (!raw) {
+        this.demandCardMarkedLineByCardId = new Map();
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      const marksObj: Record<string, unknown> =
+        parsed && typeof parsed === "object" && (parsed as any).marks && typeof (parsed as any).marks === "object"
+          ? (parsed as any).marks
+          : {};
+      const next = new Map<number, number | null>();
+      for (const [cardIdStr, idx] of Object.entries(marksObj)) {
+        const cardId = Number(cardIdStr);
+        if (!Number.isFinite(cardId)) continue;
+        if (idx === null) {
+          next.set(cardId, null);
+          continue;
+        }
+        if (typeof idx === "number" && Number.isInteger(idx) && idx >= 0 && idx <= 2) {
+          next.set(cardId, idx);
+        }
+      }
+      this.demandCardMarkedLineByCardId = next;
+    } catch {
+      // Non-critical. If localStorage is unavailable/corrupt, just behave like ephemeral marks.
+      this.demandCardMarkedLineByCardId = new Map();
+    }
+  }
+
+  private saveDemandMarksToStorage(): void {
+    try {
+      if (!this.demandMarksStorageKey) return;
+      if (typeof window === "undefined" || !window.localStorage) return;
+      const marks: Record<string, number | null> = {};
+      for (const [cardId, idx] of this.demandCardMarkedLineByCardId.entries()) {
+        marks[String(cardId)] = idx ?? null;
+      }
+      window.localStorage.setItem(
+        this.demandMarksStorageKey,
+        JSON.stringify({
+          version: 1,
+          updatedAt: Date.now(),
+          marks,
+        })
+      );
+    } catch {
+      // Non-critical: localStorage might be blocked; ignore.
+    }
   }
 }
