@@ -795,9 +795,58 @@ describe('TrainMovementManager City Direction Reversal', () => {
       terrain: TerrainType.Clear, 
       id: 'prev-clear' 
     } as GridPoint;
+
+    // Ensure terrain lookup is deterministic for this test
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === clearPoint.row && col === clearPoint.col) return clearPoint;
+      if (row === prevClearPoint.row && col === prevClearPoint.col) return prevClearPoint;
+      return null;
+    }) as any);
     
     // Try to reverse direction - should fail
     const result = manager.canMoveTo(prevClearPoint);
+    expect(result.canMove).toBe(false);
+    expect(result.message).toContain('can only reverse at cities or ferry ports');
+  });
+
+  it('prevents reversal when last move was multi-segment (non-adjacent move)', () => {
+    // A -- B -- C (player previously moved from A to C in one click; last traversed edge is B->C)
+    const A = { row: 1, col: 1, x: 0, y: 0, terrain: TerrainType.Clear, id: 'A' } as GridPoint;
+    const B = { row: 1, col: 2, x: 0, y: 0, terrain: TerrainType.Clear, id: 'B' } as GridPoint;
+    const C = { row: 1, col: 3, x: 0, y: 0, terrain: TerrainType.Clear, id: 'C' } as GridPoint;
+
+    player.trainState.position = { ...C };
+    player.trainState.remainingMovement = 9;
+    player.trainState.movementHistory = [
+      { from: { ...A }, to: { ...C }, cost: 0 }
+    ];
+
+    // Mock terrain lookup: current position is Clear, so reversal should be blocked.
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === C.row && col === C.col) return C;
+      if (row === B.row && col === B.col) return B;
+      if (row === A.row && col === A.col) return A;
+      return null;
+    }) as any);
+
+    // Track graph supports A<->B<->C
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: { ...A }, to: { ...B }, cost: 1 },
+        { from: { ...B }, to: { ...C }, cost: 1 }
+      ],
+      totalCost: 2,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+
+    // Proposed move from C to A would start by traversing C->B (reverse of last traversed B->C)
+    const result = manager.canMoveTo(A);
     expect(result.canMove).toBe(false);
     expect(result.message).toContain('can only reverse at cities or ferry ports');
   });
