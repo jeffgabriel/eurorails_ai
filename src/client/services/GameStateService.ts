@@ -285,10 +285,18 @@ export class GameStateService {
             // Merge into local game state
             const idx = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
             if (idx >= 0) {
-                this.gameState.players[idx] = {
-                    ...this.gameState.players[idx],
-                    ...updatedPlayer
-                };
+                // IMPORTANT: mutate in-place so any existing references (e.g. PlayerStateService.localPlayer)
+                // stay valid. Replacing the object can cause later updates (like money-only updates)
+                // to send stale trainType back to the server.
+                const existing: any = this.gameState.players[idx];
+                Object.assign(existing, updatedPlayer);
+                if (updatedPlayer.trainState) {
+                    if (existing.trainState) {
+                        Object.assign(existing.trainState, updatedPlayer.trainState);
+                    } else {
+                        existing.trainState = updatedPlayer.trainState;
+                    }
+                }
             }
 
             return true;
