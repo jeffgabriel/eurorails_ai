@@ -209,6 +209,16 @@ export class TrainInteractionManager {
 
     if (nearestMilepost) {
       if (this.isTrainMovementMode) {
+        // If the player clicks the city they are already on, allow reopening the load dialog
+        // without requiring a successful movement (distance 0 moves are typically rejected).
+        if (
+          this.isCity(nearestMilepost) &&
+          this.isSamePoint(nearestMilepost, currentPlayer.trainState.position)
+        ) {
+          await this.handleCityArrival(currentPlayer, nearestMilepost);
+          return;
+        }
+
         // Store position before movement to verify movement actually succeeded
         const positionBeforeMovement = currentPlayer.trainState.position
           ? { ...currentPlayer.trainState.position }
@@ -378,12 +388,18 @@ export class TrainInteractionManager {
       return;
     }
 
+    // Prevent accidental board interaction while dialog is open.
+    // LoadDialogScene will handle its own input; we disable this scene's input until close.
+    this.scene.input.enabled = false;
+
     this.scene.scene.launch("LoadDialogScene", {
       city: city,
       player: player,
       gameState: this.gameState,
       onClose: () => {
         this.scene.scene.stop("LoadDialogScene");
+        // Re-enable board input after dialog closes.
+        this.scene.input.enabled = true;
       },
       onUpdateTrainCard: () => {
         // Update the train card display through PlayerHandDisplay
@@ -399,6 +415,13 @@ export class TrainInteractionManager {
       },
       uiManager: this.uiManager,
     });
+
+    // Ensure the dialog scene renders above the game scene.
+    try {
+      this.scene.scene.bringToTop("LoadDialogScene");
+    } catch (e) {
+      // Non-fatal
+    }
   }
 
   public async enterTrainMovementMode(): Promise<void> {
@@ -536,7 +559,11 @@ export class TrainInteractionManager {
     const trainTexture = `${spritePrefix}_${trainColor}`;
 
     const trainSprite = this.scene.add.image(x, y, trainTexture);
-    trainSprite.setScale(0.1); // Adjust scale as needed
+    // Pawn sprite sizing: train_12_* art is visually larger, so scale it down.
+    // Here we set it to 50% of the baseline pawn size.
+    const baseScale = 0.1;
+    const desiredScale = spritePrefix === 'train_12' ? baseScale * 0.5 : baseScale;
+    trainSprite.setScale(desiredScale);
     this.trainContainer.add(trainSprite);
 
     return trainSprite;
@@ -619,6 +646,52 @@ export class TrainInteractionManager {
       );
       if (currentPlayerSprite) {
         this.trainContainer.bringToTop(currentPlayerSprite);
+      }
+    });
+  }
+
+  /**
+   * If a player's trainType changes (upgrade/crossgrade), update the existing pawn sprite texture.
+   * This is safe to call on every gameState refresh.
+   */
+  public refreshTrainSpriteTextures(): void {
+    if (!this.gameState.trainSprites) return;
+
+    const colorMap: { [key: string]: string } = {
+      "#FFD700": "yellow",
+      "#FF0000": "red",
+      "#0000FF": "blue",
+      "#000000": "black",
+      "#008000": "green",
+      "#8B4513": "brown",
+    };
+
+    this.gameState.players.forEach((player) => {
+      const sprite = this.gameState.trainSprites?.get(player.id);
+      if (!sprite) return;
+
+      const trainColor = colorMap[player.color.toUpperCase()] || "black";
+      const trainProps = TRAIN_PROPERTIES[player.trainType];
+      const spritePrefix = trainProps ? trainProps.spritePrefix : "train";
+      const desiredTexture = `${spritePrefix}_${trainColor}`;
+      const baseScale = 0.1;
+      const desiredScale = spritePrefix === 'train_12' ? baseScale * 0.5 : baseScale;
+
+      if ((sprite as any).texture?.key !== desiredTexture) {
+        try {
+          sprite.setTexture(desiredTexture);
+        } catch (e) {
+          console.warn("Failed to update train sprite texture:", e);
+        }
+      }
+
+      // Keep scale in sync with texture family (fast sprites are larger).
+      try {
+        if (Math.abs(sprite.scaleX - desiredScale) > 0.0001) {
+          sprite.setScale(desiredScale);
+        }
+      } catch (e) {
+        console.warn("Failed to update train sprite scale:", e);
       }
     });
   }

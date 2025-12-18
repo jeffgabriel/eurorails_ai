@@ -1,6 +1,7 @@
 import { GameState } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
+import { TrainType } from '../../shared/types/GameTypes';
 
 /**
  * Event listener type for turn changes
@@ -248,5 +249,63 @@ export class GameStateService {
     
     public getPlayers() {
         return this.gameState.players;
+    }
+
+    /**
+     * Purchase a train upgrade or crossgrade for the local player's active turn.
+     * Server-authoritative: endpoint validates money, legality, and per-turn track spend.
+     */
+    public async purchaseTrainType(
+        kind: 'upgrade' | 'crossgrade',
+        targetTrainType: TrainType
+    ): Promise<{ ok: boolean; errorMessage?: string }> {
+        try {
+            const { authenticatedFetch } = await import('./authenticatedFetch');
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/upgrade-train`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: this.gameState.id,
+                    kind,
+                    targetTrainType
+                })
+            });
+
+            if (!response.ok) {
+                const errorData: any = await response.json().catch(() => ({}));
+                // Keep console noise low: return a user-facing message to the caller.
+                const details = (typeof errorData?.details === 'string' && errorData.details.trim().length > 0)
+                    ? errorData.details
+                    : (typeof errorData?.error === 'string' ? errorData.error : 'Purchase failed');
+                return { ok: false, errorMessage: details };
+            }
+
+            const data = await response.json();
+            const updatedPlayer = data?.player;
+            if (!updatedPlayer?.id) {
+                return { ok: false, errorMessage: 'Purchase failed' };
+            }
+
+            // Merge into local game state
+            const idx = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+            if (idx >= 0) {
+                // IMPORTANT: mutate in-place so any existing references (e.g. PlayerStateService.localPlayer)
+                // stay valid. Replacing the object can cause later updates (like money-only updates)
+                // to send stale trainType back to the server.
+                const existing: any = this.gameState.players[idx];
+                Object.assign(existing, updatedPlayer);
+                if (updatedPlayer.trainState) {
+                    if (existing.trainState) {
+                        Object.assign(existing.trainState, updatedPlayer.trainState);
+                    } else {
+                        existing.trainState = updatedPlayer.trainState;
+                    }
+                }
+            }
+
+            return { ok: true };
+        } catch (error) {
+            // Avoid noisy console logging; callers can show a toast.
+            return { ok: false, errorMessage: 'Purchase failed' };
+        }
     }
 }

@@ -38,6 +38,7 @@ describe('PlayerService Integration Tests', () => {
             await client.query('DELETE FROM player_tracks');
             await client.query('DELETE FROM games'); // Delete games first (they reference players)
             await client.query('DELETE FROM players');
+            await client.query('DELETE FROM users');
         });
     });
 
@@ -224,6 +225,190 @@ describe('PlayerService Integration Tests', () => {
 
             const trackResult = await db.query('SELECT * FROM player_tracks WHERE player_id = $1', [playerId]);
             expect(trackResult.rows.length).toBe(0);
+        });
+    });
+
+    describe('Train purchases (upgrade / crossgrade)', () => {
+        it('should allow Freight -> FastFreight upgrade for 20M when no track spent this turn', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'Upgrader',
+                color: '#FF0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            const updated = await PlayerService.purchaseTrainType(
+                gameId,
+                userId,
+                'upgrade',
+                TrainType.FastFreight
+            );
+
+            expect(updated.trainType).toBe(TrainType.FastFreight);
+            expect(updated.money).toBe(30);
+        });
+
+        it('should block upgrade if turn_build_cost > 0', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'Blocked',
+                color: '#00FF00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            // Simulate track spend this turn
+            await db.query(
+                `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+                 VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [gameId, playerId, JSON.stringify([]), 0, 1]
+            );
+
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'upgrade', TrainType.FastFreight)
+            ).rejects.toThrow('Cannot upgrade after building track this turn');
+        });
+
+        it('should allow crossgrade after building as long as turn_build_cost <= 15', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'Crossgrader',
+                color: '#0000FF',
+                money: 50,
+                trainType: TrainType.FastFreight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 12,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            await db.query(
+                `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+                 VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [gameId, playerId, JSON.stringify([]), 0, 12]
+            );
+
+            const updated = await PlayerService.purchaseTrainType(
+                gameId,
+                userId,
+                'crossgrade',
+                TrainType.HeavyFreight
+            );
+
+            expect(updated.trainType).toBe(TrainType.HeavyFreight);
+            expect(updated.money).toBe(45);
+        });
+
+        it('should block crossgrade if turn_build_cost > 15', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'CrossgradeBlocked',
+                color: '#000000',
+                money: 50,
+                trainType: TrainType.HeavyFreight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            await db.query(
+                `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+                 VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [gameId, playerId, JSON.stringify([]), 0, 16]
+            );
+
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.FastFreight)
+            ).rejects.toThrow('Cannot crossgrade after spending more than 15M on track this turn');
+        });
+
+        it('should block crossgrade if current loads exceed target capacity', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'OverCapacity',
+                color: '#8B4513',
+                money: 50,
+                trainType: TrainType.HeavyFreight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [LoadType.Wheat, LoadType.Coal, LoadType.Oil] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            // Crossgrade heavy -> fast would reduce capacity to 2, but player has 3 loads.
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.FastFreight)
+            ).rejects.toThrow('Cannot crossgrade: too many loads for target train capacity');
         });
     });
 

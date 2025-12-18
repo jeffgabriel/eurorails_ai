@@ -76,10 +76,16 @@ export class TrackService {
         }
 
         const row = result.rows[0];
+        // segments is stored as JSONB in newer schemas; pg may return it as an object/array.
+        // Older rows or test setups may return it as a string. Normalize safely.
+        const segments =
+            typeof row.segments === 'string'
+                ? JSON.parse(row.segments || '[]')
+                : (row.segments || []);
         return {
             playerId: row.player_id,
             gameId: row.game_id,
-            segments: JSON.parse(row.segments),
+            segments,
             totalCost: row.total_cost,
             turnBuildCost: row.turn_build_cost,
             lastBuildTimestamp: row.last_build_timestamp
@@ -92,14 +98,20 @@ export class TrackService {
             [gameId]
         );
 
-        return result.rows.map(row => ({
-            playerId: row.player_id,
-            gameId: row.game_id,
-            segments: row.segments,
-            totalCost: row.total_cost,
-            turnBuildCost: row.turn_build_cost,
-            lastBuildTimestamp: row.last_build_timestamp
-        }));
+        return result.rows.map(row => {
+            const segments =
+                typeof row.segments === 'string'
+                    ? JSON.parse(row.segments || '[]')
+                    : (row.segments || []);
+            return {
+                playerId: row.player_id,
+                gameId: row.game_id,
+                segments,
+                totalCost: row.total_cost,
+                turnBuildCost: row.turn_build_cost,
+                lastBuildTimestamp: row.last_build_timestamp
+            };
+        });
     }
     
     static async clearTurnBuildCost(gameId: string, playerId: string): Promise<void> {

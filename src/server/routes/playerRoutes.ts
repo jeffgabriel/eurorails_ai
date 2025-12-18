@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { emitStatePatch, emitTurnChange } from '../services/socketService';
+import { TrainType } from '../../shared/types/GameTypes';
 
 const router = express.Router();
 
@@ -376,6 +377,84 @@ router.post('/game/:gameId/status', async (req, res) => {
         return res.status(500).json({ 
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Upgrade / crossgrade train (authenticated, server-authoritative)
+router.post('/upgrade-train', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, kind, targetTrainType } = req.body as {
+            gameId?: string;
+            kind?: 'upgrade' | 'crossgrade';
+            targetTrainType?: TrainType;
+        };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId || !kind || !targetTrainType) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId, kind, and targetTrainType are required'
+            });
+        }
+
+        if (kind !== 'upgrade' && kind !== 'crossgrade') {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'kind must be "upgrade" or "crossgrade"'
+            });
+        }
+
+        if (!Object.values(TrainType).includes(targetTrainType)) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Invalid targetTrainType'
+            });
+        }
+
+        const updatedPlayer = await PlayerService.purchaseTrainType(
+            gameId,
+            userId,
+            kind,
+            targetTrainType
+        );
+
+        // Broadcast player update
+        emitStatePatch(gameId, {
+            players: [updatedPlayer]
+        });
+
+        return res.status(200).json({ player: updatedPlayer });
+    } catch (error: any) {
+        console.error('Error in /upgrade-train route:', error);
+
+        const message = error?.message || 'An unexpected error occurred';
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (
+            message.includes('Invalid') ||
+            message.includes('Illegal') ||
+            message.includes('Cannot') ||
+            message.includes('Insufficient') ||
+            message.includes('already')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({
+            error: 'Server error',
+            details: message
         });
     }
 });

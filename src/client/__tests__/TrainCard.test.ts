@@ -107,7 +107,7 @@ describe("TrainCard", () => {
     mockPlayer.trainType = TrainType.FastFreight;
     trainCard.updateTrainType();
     // The existing TrainCard image should be re-textured.
-    expect(trainImage.setTexture).toHaveBeenCalledWith("train_card_fast_freight");
+    expect(trainImage.setTexture).toHaveBeenCalledWith("train_card_fastfreight");
   });
 
   it("should update load slots based on current loads", () => {

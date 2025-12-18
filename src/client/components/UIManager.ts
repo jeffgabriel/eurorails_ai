@@ -62,6 +62,7 @@ export class UIManager {
     // Turn changes can toggle whether the local player's train is interactive.
     // Ensure train clickability stays in sync without requiring a full refresh.
     this.trainInteractionManager.updateTrainZOrders();
+    this.trainInteractionManager.refreshTrainSpriteTextures();
     this.trainInteractionManager.updateTrainInteractivity();
   }
 
@@ -129,6 +130,7 @@ export class UIManager {
       () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0,
       this.mapRenderer,
       this.trainInteractionManager,
+      this.trackDrawingManager,
       this.gameStateService
     );
 

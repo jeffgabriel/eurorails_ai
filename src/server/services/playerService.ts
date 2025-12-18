@@ -3,6 +3,7 @@ import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES } from "../../sha
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
+import { TrackService } from "./trackService";
 
 interface PlayerRow {
   id: string;
@@ -20,6 +21,23 @@ interface PlayerRow {
 }
 
 export class PlayerService {
+  private static normalizeTrainType(raw: unknown): TrainType {
+    const s = String(raw ?? "").toLowerCase();
+    const compact = s.replace(/[\s_-]+/g, "");
+    switch (compact) {
+      case "freight":
+        return TrainType.Freight;
+      case "fastfreight":
+        return TrainType.FastFreight;
+      case "heavyfreight":
+        return TrainType.HeavyFreight;
+      case "superfreight":
+        return TrainType.Superfreight;
+      default:
+        return TrainType.Freight;
+    }
+  }
+
   private static validateColor(color: string): string {
     // Ensure color is a valid hex code
     const hexColorRegex = /^#[0-9A-Fa-f]{6}$/;
@@ -437,8 +455,8 @@ export class PlayerService {
           handCards = [];
         }
 
-        // Cast trainType from database string to TrainType enum
-        const trainType = row.trainType as TrainType;
+        // Normalize trainType from database (legacy values like "Freight" may exist)
+        const trainType = this.normalizeTrainType(row.trainType);
 
         // Calculate remainingMovement based on train type
         // Note: This is a default value; actual remainingMovement should be managed client-side
@@ -720,6 +738,146 @@ export class PlayerService {
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Apply a train upgrade or crossgrade for the authenticated user's player.
+   *
+   * Rules implemented:
+   * - upgrade (20M):
+   *   - Freight -> FastFreight | HeavyFreight (choice)
+   *   - FastFreight | HeavyFreight -> Superfreight
+   *   - Requires turn_build_cost === 0 (no track spend yet this turn)
+   * - crossgrade (5M):
+   *   - FastFreight <-> HeavyFreight
+   *   - Allowed even if track has been built this turn, as long as turn_build_cost <= 15
+   *
+   * Server-authoritative on money + train_type. Track build-limit enforcement remains client-side.
+   */
+  static async purchaseTrainType(
+    gameId: string,
+    userId: string,
+    kind: "upgrade" | "crossgrade",
+    targetTrainType: TrainType
+  ): Promise<Player> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Find the requesting user's player in this game
+      const playerRowResult = await client.query(
+        `SELECT id, money, train_type as "trainType", loads
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+      const playerId: string = playerRowResult.rows[0].id;
+      const currentMoney: number = playerRowResult.rows[0].money;
+      const currentTrainType: TrainType = playerRowResult.rows[0].trainType as TrainType;
+      const currentLoads: unknown = playerRowResult.rows[0].loads;
+      const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
+
+      // Validate game exists + determine whose turn it is
+      const gameState = await this.getGameState(gameId);
+      const currentPlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, gameState.currentPlayerIndex]
+      );
+      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      // Track spend this turn (server-side)
+      const trackState = await TrackService.getTrackState(gameId, playerId);
+      const turnBuildCost = trackState?.turnBuildCost ?? 0;
+
+      // Validate target train type
+      const isValidTrainType = Object.values(TrainType).includes(targetTrainType);
+      if (!isValidTrainType) {
+        throw new Error("Invalid train type");
+      }
+
+      // Validate transition + determine cost
+      let cost = 0;
+
+      if (kind === "upgrade") {
+        cost = 20;
+        if (turnBuildCost !== 0) {
+          throw new Error("Cannot upgrade after building track this turn");
+        }
+        const legalUpgrade =
+          (currentTrainType === TrainType.Freight &&
+            (targetTrainType === TrainType.FastFreight ||
+              targetTrainType === TrainType.HeavyFreight)) ||
+          ((currentTrainType === TrainType.FastFreight ||
+            currentTrainType === TrainType.HeavyFreight) &&
+            targetTrainType === TrainType.Superfreight);
+        if (!legalUpgrade) {
+          throw new Error("Illegal upgrade transition");
+        }
+      } else {
+        // crossgrade
+        cost = 5;
+        if (turnBuildCost > 15) {
+          throw new Error("Cannot crossgrade after spending more than 15M on track this turn");
+        }
+        const targetCapacity = TRAIN_PROPERTIES[targetTrainType]?.capacity;
+        if (typeof targetCapacity !== "number") {
+          throw new Error("Invalid train type");
+        }
+        if (currentLoadCount > targetCapacity) {
+          throw new Error("Cannot crossgrade: too many loads for target train capacity");
+        }
+        const legalCrossgrade =
+          (currentTrainType === TrainType.FastFreight &&
+            targetTrainType === TrainType.HeavyFreight) ||
+          (currentTrainType === TrainType.HeavyFreight &&
+            targetTrainType === TrainType.FastFreight);
+        if (!legalCrossgrade) {
+          throw new Error("Illegal crossgrade transition");
+        }
+      }
+
+      if (currentTrainType === targetTrainType) {
+        throw new Error("Train is already that type");
+      }
+
+      // Validate funds
+      if (currentMoney < cost) {
+        throw new Error("Insufficient funds");
+      }
+
+      // Apply update
+      await client.query(
+        `UPDATE players
+         SET train_type = $1, money = money - $2
+         WHERE game_id = $3 AND id = $4`,
+        [targetTrainType, cost, gameId, playerId]
+      );
+
+      await client.query("COMMIT");
+
+      // Return updated player with proper hand filtering for this user
+      const updatedPlayers = await this.getPlayers(gameId, userId);
+      const updatedPlayer = updatedPlayers.find((p) => p.id === playerId);
+      if (!updatedPlayer) {
+        throw new Error("Failed to load updated player");
+      }
+      return updatedPlayer;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
     } finally {
       client.release();
     }

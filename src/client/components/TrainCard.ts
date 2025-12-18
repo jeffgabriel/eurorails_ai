@@ -40,7 +40,7 @@ export class TrainCard {
     }
     
     // Create train card using the appropriate image
-    const trainType = player.trainType.toLowerCase().replace(/[\s-]+/g, '');
+    const trainType = player.trainType.toLowerCase().replace(/[\s_-]+/g, '');
     this.trainCard = scene.add.image(0, 0, `train_card_${trainType}`);
     this.trainCard.setOrigin(0, 0);
     this.trainCard.setScale(0.165); // Scale down to 18% of original size
@@ -153,7 +153,7 @@ export class TrainCard {
     }
     
     // Update train card image
-    const trainType = this.player.trainType.toLowerCase().replace(/[\s-]+/g, '');
+    const trainType = this.player.trainType.toLowerCase().replace(/[\s_-]+/g, '');
     this.trainCard.setTexture(`train_card_${trainType}`);
     
     // Update load slots

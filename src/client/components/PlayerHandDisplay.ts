@@ -4,6 +4,7 @@ import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { TrackDrawingManager } from "./TrackDrawingManager";
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
@@ -14,6 +15,7 @@ export class PlayerHandDisplay {
   private gameStateService: GameStateService | null = null;
   private mapRenderer: MapRenderer;
   private trainInteractionManager: TrainInteractionManager;
+  private trackDrawingManager: TrackDrawingManager;
 
   // Layout constants
   private readonly STATUS_BAR_HEIGHT = 50; // Height when collapsed
@@ -33,6 +35,7 @@ export class PlayerHandDisplay {
     canUndo: () => boolean,
     mapRenderer: MapRenderer,
     trainInteractionManager: TrainInteractionManager,
+    trackDrawingManager: TrackDrawingManager,
     gameStateService?: GameStateService
   ) {
     this.scene = scene;
@@ -43,6 +46,7 @@ export class PlayerHandDisplay {
     this.gameStateService = gameStateService || null;
     this.mapRenderer = mapRenderer;
     this.trainInteractionManager = trainInteractionManager;
+    this.trackDrawingManager = trackDrawingManager;
     this.container = this.scene.add.container(0, 0);
   }
 
@@ -121,6 +125,7 @@ export class PlayerHandDisplay {
           gameStateService: this.gameStateService!,
           mapRenderer: this.mapRenderer,
           trainInteractionManager: this.trainInteractionManager,
+          trackDrawingManager: this.trackDrawingManager,
           isDrawingMode: isDrawingMode,
           currentTrackCost: currentTrackCost,
           onClose: () => {
@@ -210,7 +215,7 @@ export class PlayerHandDisplay {
     if (currentPlayer.trainType) {
       const trainType = currentPlayer.trainType
         .toLowerCase()
-        .replace(/[\s-]+/g, "");
+        .replace(/[\s_-]+/g, "");
       try {
         const miniTrain = this.scene.add.image(
           this.scene.scale.width - 60,

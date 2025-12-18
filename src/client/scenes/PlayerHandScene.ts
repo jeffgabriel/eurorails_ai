@@ -6,7 +6,9 @@ import { GameStateService } from "../services/GameStateService";
 import { CitySelectionManager } from "../components/CitySelectionManager";
 import { MapRenderer } from "../components/MapRenderer";
 import { TrainInteractionManager } from "../components/TrainInteractionManager";
+import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { TrainType } from "../../shared/types/GameTypes";
 
 interface PlayerHandSceneData {
   gameState: GameState;
@@ -16,6 +18,7 @@ interface PlayerHandSceneData {
   gameStateService: GameStateService;
   mapRenderer: MapRenderer;
   trainInteractionManager: TrainInteractionManager;
+  trackDrawingManager: TrackDrawingManager;
   isDrawingMode: boolean;
   currentTrackCost: number;
   onClose: () => void;
@@ -29,7 +32,6 @@ const colorMap: { [key: string]: string } = {
   "#008000": "green",
   "#8B4513": "brown",
 };
-const MAX_TURN_BUILD_COST = 20;
 const COST_COLOR = "#ffffff";
 
 export class PlayerHandScene extends Phaser.Scene {
@@ -40,6 +42,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private gameStateService!: GameStateService;
   private mapRenderer!: MapRenderer;
   private trainInteractionManager!: TrainInteractionManager;
+  private trackDrawingManager!: TrackDrawingManager;
   private isDrawingMode: boolean = false;
   private currentTrackCost: number = 0;
   private onCloseCallback!: () => void;
@@ -60,6 +63,8 @@ export class PlayerHandScene extends Phaser.Scene {
   private lastCurrentPlayerIndex: number | null = null;
   private lastIsLocalPlayerActive: boolean | null = null;
   private lastCanUndo: boolean | null = null;
+  private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
+  private toastContainer: Phaser.GameObjects.Container | null = null;
 
   // Card dimensions
   private readonly CARD_WIDTH = 170;
@@ -81,6 +86,7 @@ export class PlayerHandScene extends Phaser.Scene {
     this.gameStateService = data.gameStateService;
     this.mapRenderer = data.mapRenderer;
     this.trainInteractionManager = data.trainInteractionManager;
+    this.trackDrawingManager = data.trackDrawingManager;
     this.isDrawingMode = data.isDrawingMode;
     this.currentTrackCost = data.currentTrackCost;
     this.onCloseCallback = data.onClose;
@@ -141,14 +147,15 @@ export class PlayerHandScene extends Phaser.Scene {
   private getBuildCostDisplay(currentPlayer: any): { text: string; color: string } {
     let costWarning = "";
     let costColor = COST_COLOR;
+    const turnLimit = this.trackDrawingManager?.getTurnBuildLimit?.() ?? 20;
 
     if (this.currentTrackCost > currentPlayer.money) {
       costColor = "#ff4444";
       costWarning = " (Insufficient funds!)";
-    } else if (this.currentTrackCost > MAX_TURN_BUILD_COST) {
+    } else if (this.currentTrackCost > turnLimit) {
       costColor = "#ff8800";
-      costWarning = " (Over turn limit!)";
-    } else if (this.currentTrackCost >= MAX_TURN_BUILD_COST * 0.8) {
+      costWarning = ` (Over turn limit: ${turnLimit}M!)`;
+    } else if (this.currentTrackCost >= turnLimit * 0.8) {
       costColor = "#ffff00";
     }
 
@@ -189,6 +196,337 @@ export class PlayerHandScene extends Phaser.Scene {
 
     // Re-layout once (text size can change)
     this.rootSizer?.layout?.();
+  }
+
+  private getLocalPlayer(): any | null {
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    return localPlayerId ? this.gameState.players.find((p) => p.id === localPlayerId) : null;
+  }
+
+  private getTurnBuildCostThisTurn(localPlayer: any): number {
+    const previousSessionsCost =
+      this.trackDrawingManager.getPlayerTrackState(localPlayer.id)?.turnBuildCost || 0;
+    const currentSessionCost = this.trackDrawingManager.getCurrentTurnBuildCost();
+    return previousSessionsCost + currentSessionCost;
+  }
+
+  private trainTypeToCardKey(trainType: TrainType): string {
+    // Train card textures are loaded as: train_card_freight, train_card_fastfreight, etc.
+    return `train_card_${trainType.toLowerCase().replace(/[_\s-]+/g, "")}`;
+  }
+
+  private openTrainPurchaseModal(): void {
+    if (this.trainPurchaseModal) {
+      this.closeTrainPurchaseModal();
+    }
+    const localPlayer = this.getLocalPlayer();
+    if (!localPlayer) return;
+
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const turnBuildCost = this.getTurnBuildCostThisTurn(localPlayer);
+    const hasAnyTrackThisTurn =
+      this.isDrawingMode || (this.canUndo ? this.canUndo() : false) || turnBuildCost > 0;
+
+    const options: Array<{
+      kind: "upgrade" | "crossgrade";
+      targetTrainType: TrainType;
+      cost: number;
+      title: string;
+      subtitle: string;
+      enabled: boolean;
+      disabledReason?: string;
+    }> = [];
+
+    // Helper for option enable/disable text
+    const needsMoney = (cost: number) => localPlayer.money < cost;
+
+    if (localPlayer.trainType === TrainType.Freight) {
+      // 20M upgrade choice (requires no track built yet this turn)
+      const baseEnabled = !needsMoney(20) && !hasAnyTrackThisTurn;
+      const baseReason = needsMoney(20)
+        ? "Need 20M"
+        : hasAnyTrackThisTurn
+          ? "Must upgrade before building"
+          : undefined;
+
+      options.push(
+        {
+          kind: "upgrade",
+          targetTrainType: TrainType.FastFreight,
+          cost: 20,
+          title: "Fast Freight",
+          subtitle: "2 loads, 12 moves",
+          enabled: baseEnabled,
+          disabledReason: baseEnabled ? undefined : baseReason,
+        },
+        {
+          kind: "upgrade",
+          targetTrainType: TrainType.HeavyFreight,
+          cost: 20,
+          title: "Heavy Freight",
+          subtitle: "3 loads, 9 moves",
+          enabled: baseEnabled,
+          disabledReason: baseEnabled ? undefined : baseReason,
+        }
+      );
+    } else if (localPlayer.trainType === TrainType.FastFreight) {
+      // Upgrade to Superfreight (20M) requires no track built yet this turn
+      const canUpgrade = !needsMoney(20) && !hasAnyTrackThisTurn;
+      options.push({
+        kind: "upgrade",
+        targetTrainType: TrainType.Superfreight,
+        cost: 20,
+        title: "Superfreight",
+        subtitle: "3 loads, 12 moves",
+        enabled: canUpgrade,
+        disabledReason: canUpgrade ? undefined : (needsMoney(20) ? "Need 20M" : "Must upgrade before building"),
+      });
+
+      // Crossgrade to Heavy (5M), allowed if turnBuildCost <= 15
+      const canCrossgrade = !needsMoney(5) && turnBuildCost <= 15;
+      options.push({
+        kind: "crossgrade",
+        targetTrainType: TrainType.HeavyFreight,
+        cost: 5,
+        title: "Crossgrade: Heavy",
+        subtitle: "3 loads, 9 moves (limit 15M build)",
+        enabled: canCrossgrade,
+        disabledReason: canCrossgrade
+          ? undefined
+          : (needsMoney(5) ? "Need 5M" : "Track spend must be ≤ 15M"),
+      });
+    } else if (localPlayer.trainType === TrainType.HeavyFreight) {
+      const canUpgrade = !needsMoney(20) && !hasAnyTrackThisTurn;
+      options.push({
+        kind: "upgrade",
+        targetTrainType: TrainType.Superfreight,
+        cost: 20,
+        title: "Superfreight",
+        subtitle: "3 loads, 12 moves",
+        enabled: canUpgrade,
+        disabledReason: canUpgrade ? undefined : (needsMoney(20) ? "Need 20M" : "Must upgrade before building"),
+      });
+
+      const canCrossgrade = !needsMoney(5) && turnBuildCost <= 15;
+      options.push({
+        kind: "crossgrade",
+        targetTrainType: TrainType.FastFreight,
+        cost: 5,
+        title: "Crossgrade: Fast",
+        subtitle: "2 loads, 12 moves (limit 15M build)",
+        enabled: canCrossgrade,
+        disabledReason: canCrossgrade
+          ? undefined
+          : (needsMoney(5) ? "Need 5M" : "Track spend must be ≤ 15M"),
+      });
+    } else {
+      // Superfreight: no options
+      return;
+    }
+
+    // Backdrop + modal root
+    const modalRoot = this.add.container(0, 0).setDepth(1000);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.55)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", () => this.closeTrainPurchaseModal());
+    modalRoot.add(backdrop);
+
+    const panelW = Math.min(640, this.scale.width - 40);
+    const panelH = 220;
+    const panelX = this.scale.width / 2;
+    // Place the panel inside the hand bar region
+    const panelY = this.scale.height - this.HAND_HEIGHT_BASE / 2;
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: panelH,
+      color: 0x222222,
+      alpha: 0.95,
+      radius: 14,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 14, right: 14, top: 12, bottom: 12, item: 10 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const title = this.add.text(0, 0, "Train Upgrade", {
+      color: "#ffffff",
+      fontSize: "20px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(title, { proportion: 0, align: "center", expand: false });
+
+    const optionsRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 18 },
+    });
+
+    options.forEach((opt) => {
+      const optionSizer = (this as any).rexUI.add.sizer({
+        orientation: "y",
+        space: { item: 6 },
+      });
+
+      const texKey = this.trainTypeToCardKey(opt.targetTrainType);
+      const cardImg = this.add.image(0, 0, texKey).setScale(0.085);
+      cardImg.setAlpha(opt.enabled ? 1.0 : 0.35);
+      cardImg.setInteractive({ useHandCursor: opt.enabled });
+      if (opt.enabled) {
+        cardImg.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) pointer.event.stopPropagation();
+          await this.handleTrainPurchase(opt.kind, opt.targetTrainType);
+        });
+      }
+
+      const label = this.add.text(0, 0, `${opt.title} (ECU ${opt.cost}M)`, {
+        color: opt.enabled ? "#ffffff" : "#aaaaaa",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: 180, useAdvancedWrap: true },
+      });
+      const sub = this.add.text(0, 0, opt.enabled ? opt.subtitle : (opt.disabledReason || opt.subtitle), {
+        color: opt.enabled ? "#dddddd" : "#888888",
+        fontSize: "12px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: 180, useAdvancedWrap: true },
+      });
+
+      optionSizer.add(cardImg, { proportion: 0, align: "center", expand: false });
+      optionSizer.add(label, { proportion: 0, align: "center", expand: false });
+      optionSizer.add(sub, { proportion: 0, align: "center", expand: false });
+
+      optionsRow.add(optionSizer, { proportion: 0, align: "center", expand: false });
+    });
+
+    panelSizer.add(optionsRow, { proportion: 0, align: "center", expand: false });
+
+    const closeBtn = this.add
+      .text(0, 0, "Close", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 10, right: 10, top: 6, bottom: 6 },
+      })
+      .setInteractive({ useHandCursor: true });
+    closeBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeTrainPurchaseModal();
+    });
+    panelSizer.add(closeBtn, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.trainPurchaseModal = modalRoot;
+  }
+
+  private closeTrainPurchaseModal(): void {
+    if (!this.trainPurchaseModal) return;
+    this.trainPurchaseModal.destroy(true);
+    this.trainPurchaseModal = null;
+  }
+
+  private showToast(message: string): void {
+    try {
+      if (this.toastContainer) {
+        this.toastContainer.destroy(true);
+        this.toastContainer = null;
+      }
+
+      const paddingX = 16;
+      const paddingY = 10;
+      const maxWidth = Math.min(520, this.scale.width - 40);
+
+      const text = this.add.text(0, 0, message, {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        wordWrap: { width: maxWidth - paddingX * 2, useAdvancedWrap: true },
+        align: "center",
+      }).setOrigin(0.5);
+
+      const bgW = Math.min(maxWidth, text.width + paddingX * 2);
+      const bgH = text.height + paddingY * 2;
+      const bg = (this as any).rexUI.add.roundRectangle({
+        width: bgW,
+        height: bgH,
+        color: 0x111111,
+        alpha: 0.92,
+        radius: 10,
+      });
+
+      const container = this.add.container(this.scale.width / 2, this.scale.height - this.HAND_HEIGHT_BASE - 24);
+      container.setDepth(2500);
+      container.add([bg, text]);
+      text.setPosition(0, 0);
+      bg.setPosition(0, 0);
+
+      this.toastContainer = container;
+
+      this.tweens.add({
+        targets: container,
+        alpha: 0,
+        duration: 1200,
+        delay: 1600,
+        ease: "Power2",
+        onComplete: () => {
+          container.destroy(true);
+          if (this.toastContainer === container) {
+            this.toastContainer = null;
+          }
+        },
+      });
+    } catch (e) {
+      // Silent: toast is non-critical
+    }
+  }
+
+  private async handleTrainPurchase(kind: "upgrade" | "crossgrade", targetTrainType: TrainType): Promise<void> {
+    const result = await this.gameStateService.purchaseTrainType(kind, targetTrainType);
+    if (!result.ok) {
+      const msg = (result.errorMessage || "Purchase failed").toLowerCase();
+      if (msg.includes("too many loads")) {
+        this.showToast("Current loads could not be transferred to new train.");
+      } else if (msg.includes("spending more than 15m") || msg.includes("15m")) {
+        this.showToast("Crossgrade requires track spend ≤ 15M this turn.");
+      } else if (msg.includes("insufficient")) {
+        this.showToast("Insufficient funds for that train change.");
+      } else {
+        this.showToast(result.errorMessage || "Purchase failed.");
+      }
+      return;
+    }
+
+    // Apply per-turn build rules locally
+    if (kind === "upgrade") {
+      // Full upgrade consumes build phase: no drawing mode for remainder of turn
+      this.trackDrawingManager.setDrawingDisabledForTurn(true);
+    } else {
+      // Crossgrade reduces remaining build allowance to 15M this turn
+      this.trackDrawingManager.setTurnBuildLimit(15);
+    }
+
+    // Refresh our local view of game state (same object reference updated by GameStateService)
+    this.gameState = this.gameStateService.getGameState();
+
+    this.closeTrainPurchaseModal();
+    // Rebuild UI to ensure TrainCard is recreated with latest player object
+    this.createUI({ animate: false });
   }
 
   private createUI(options: { animate?: boolean } = {}) {
@@ -343,8 +681,65 @@ export class PlayerHandScene extends Phaser.Scene {
         0,
         currentPlayer
       );
-      // Add the ContainerLite itself; it has an explicit size (TrainCard sets it).
-      this.rootSizer.add(this.trainCard.getContainer(), {
+
+      // Train column: card + upgrade button
+      const trainColumn = (this as any).rexUI.add
+        .sizer({
+          orientation: "y",
+          space: { item: 8 },
+        })
+        .setName("train-column-sizer");
+
+      trainColumn.add(this.trainCard.getContainer(), {
+        proportion: 0,
+        align: "center",
+        expand: false,
+      });
+
+      const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+      const isSuperfreight = currentPlayer.trainType === TrainType.Superfreight;
+      const turnBuildCost = this.getTurnBuildCostThisTurn(currentPlayer);
+      const hasAnyTrackThisTurn =
+        this.isDrawingMode || (this.canUndo ? this.canUndo() : false) || turnBuildCost > 0;
+
+      const hasUpgradeOption =
+        !isSuperfreight &&
+        currentPlayer.money >= 20 &&
+        !hasAnyTrackThisTurn &&
+        currentPlayer.trainType !== TrainType.Superfreight;
+      const hasCrossgradeOption =
+        !isSuperfreight &&
+        (currentPlayer.trainType === TrainType.FastFreight ||
+          currentPlayer.trainType === TrainType.HeavyFreight) &&
+        currentPlayer.money >= 5 &&
+        turnBuildCost <= 15;
+
+      if (isLocalPlayerActive && (hasUpgradeOption || hasCrossgradeOption)) {
+        const upgradeButton = this.add
+          .text(0, 0, "Upgrade", {
+            color: "#ffffff",
+            fontSize: "18px",
+            fontStyle: "bold",
+            fontFamily: UI_FONT_FAMILY,
+            backgroundColor: "#3b5",
+            padding: { left: 10, right: 10, top: 6, bottom: 6 },
+          })
+          .setInteractive({ useHandCursor: true })
+          .setName("train-upgrade-button");
+        upgradeButton.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) pointer.event.stopPropagation();
+          this.openTrainPurchaseModal();
+        });
+
+        trainColumn.add(upgradeButton, {
+          proportion: 0,
+          align: "center",
+          expand: false,
+        });
+      }
+
+      // Add the train column to the root sizer
+      this.rootSizer.add(trainColumn, {
         proportion: 0,
         align: "center",
         padding: { left: 6, right: 6 },
@@ -520,6 +915,7 @@ export class PlayerHandScene extends Phaser.Scene {
 
     const isLocalPlayerActive =
       this.gameStateService?.isLocalPlayerActive() ?? false;
+    const canEnterDrawingMode = !this.trackDrawingManager?.isDrawingDisabledForTurn?.();
 
     // Crayon button container (overlay highlight + icon)
     const crayonButtonContainer = (this as any).rexUI.add
@@ -531,7 +927,7 @@ export class PlayerHandScene extends Phaser.Scene {
       .image(0, 0, crayonTexture)
       .setScale(this.isDrawingMode ? 0.18 : 0.15)
       .setAlpha(isLocalPlayerActive ? 1.0 : 0.4)
-      .setInteractive({ useHandCursor: isLocalPlayerActive }).setName(`crayon-button`);
+      .setInteractive({ useHandCursor: isLocalPlayerActive && canEnterDrawingMode }).setName(`crayon-button`);
     this.crayonButtonImage = crayonButton;
 
     // Always create the highlight once; toggle visibility on state changes.
@@ -541,7 +937,7 @@ export class PlayerHandScene extends Phaser.Scene {
     crayonButtonContainer.addLocal(highlight);
     crayonButtonContainer.addLocal(crayonButton);
 
-    if (isLocalPlayerActive) {
+    if (isLocalPlayerActive && canEnterDrawingMode) {
       crayonButton
         .on("pointerover", () => {
           if (!this.isDrawingMode) {

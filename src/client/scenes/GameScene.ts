@@ -538,8 +538,11 @@ export class GameScene extends Phaser.Scene {
       }
 
       // Clear the build cost after processing it to avoid double-counting
-      await this.trackManager.endTurnCleanup(currentPlayer.id);
     }
+
+    // Always end-turn cleanup (even if buildCost was 0) so per-turn UI state resets
+    // and undo state doesn't leak across turns (e.g., 0-cost ferry builds).
+    await this.trackManager.endTurnCleanup(currentPlayer.id);
 
     // Use the game state service to handle player turn changes
     await this.gameStateService.nextPlayerTurn();
@@ -655,6 +658,10 @@ export class GameScene extends Phaser.Scene {
     
     // Update game state from server data (currentPlayerIndex comes from server)
     this.gameState.currentPlayerIndex = currentPlayerIndex;
+
+    // Reset per-turn build rules for the newly active player
+    // (crossgrade build-limit and upgrade drawing lock are turn-scoped).
+    this.trackManager.resetTurnBuildLimit();
     
     if (newCurrentPlayer) {
       // Increment turn number for the new current player
