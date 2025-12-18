@@ -769,7 +769,7 @@ export class PlayerService {
 
       // Find the requesting user's player in this game
       const playerRowResult = await client.query(
-        `SELECT id, money, train_type as "trainType"
+        `SELECT id, money, train_type as "trainType", loads
          FROM players
          WHERE game_id = $1 AND user_id = $2
          LIMIT 1`,
@@ -781,6 +781,8 @@ export class PlayerService {
       const playerId: string = playerRowResult.rows[0].id;
       const currentMoney: number = playerRowResult.rows[0].money;
       const currentTrainType: TrainType = playerRowResult.rows[0].trainType as TrainType;
+      const currentLoads: unknown = playerRowResult.rows[0].loads;
+      const currentLoadCount = Array.isArray(currentLoads) ? currentLoads.length : 0;
 
       // Validate game exists + determine whose turn it is
       const gameState = await this.getGameState(gameId);
@@ -829,6 +831,13 @@ export class PlayerService {
         cost = 5;
         if (turnBuildCost > 15) {
           throw new Error("Cannot crossgrade after spending more than 15M on track this turn");
+        }
+        const targetCapacity = TRAIN_PROPERTIES[targetTrainType]?.capacity;
+        if (typeof targetCapacity !== "number") {
+          throw new Error("Invalid train type");
+        }
+        if (currentLoadCount > targetCapacity) {
+          throw new Error("Cannot crossgrade: too many loads for target train capacity");
         }
         const legalCrossgrade =
           (currentTrainType === TrainType.FastFreight &&

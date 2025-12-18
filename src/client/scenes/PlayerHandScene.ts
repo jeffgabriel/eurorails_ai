@@ -644,7 +644,8 @@ export class PlayerHandScene extends Phaser.Scene {
         !isSuperfreight &&
         (currentPlayer.trainType === TrainType.FastFreight ||
           currentPlayer.trainType === TrainType.HeavyFreight) &&
-        currentPlayer.money >= 5;
+        currentPlayer.money >= 5 &&
+        turnBuildCost <= 15;
 
       if (isLocalPlayerActive && (hasUpgradeOption || hasCrossgradeOption)) {
         const upgradeButton = this.add

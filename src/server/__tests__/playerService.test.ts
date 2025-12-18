@@ -379,6 +379,37 @@ describe('PlayerService Integration Tests', () => {
                 PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.FastFreight)
             ).rejects.toThrow('Cannot crossgrade after spending more than 15M on track this turn');
         });
+
+        it('should block crossgrade if current loads exceed target capacity', async () => {
+            const playerId = uuidv4();
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+            const player = {
+                id: playerId,
+                userId,
+                name: 'OverCapacity',
+                color: '#8B4513',
+                money: 50,
+                trainType: TrainType.HeavyFreight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [LoadType.Wheat, LoadType.Coal, LoadType.Oil] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            // Crossgrade heavy -> fast would reduce capacity to 2, but player has 3 loads.
+            await expect(
+                PlayerService.purchaseTrainType(gameId, userId, 'crossgrade', TrainType.FastFreight)
+            ).rejects.toThrow('Cannot crossgrade: too many loads for target train capacity');
+        });
     });
 
     describe('Default Game', () => {
