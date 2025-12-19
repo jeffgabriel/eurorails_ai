@@ -5,7 +5,7 @@
     "Name": null,
     "GridX": 3,
     "GridY": 51,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "885fe41f-d048-439d-944d-c48f423873ad",
@@ -29,6 +29,30 @@
     "Name": null,
     "GridX": 3,
     "GridY": 46,
+    "Ocean": "Atlantic Ocean"
+  },
+  {
+    "Id": "910696b1-5454-4584-9f87-f1f86dbe9677",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 3,
+    "GridY": 47,
+    "Ocean": "Atlantic Ocean"
+  },
+  {
+    "Id": "910696b1-5454-5484-9f87-f1f86dbe9677",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 3,
+    "GridY": 49,
+    "Ocean": null
+  },
+  {
+    "Id": "910696c1-5454-5484-9f87-f1f86dbe9677",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 2,
+    "GridY": 49,
     "Ocean": "Atlantic Ocean"
   },
   {
@@ -80,12 +104,20 @@
     "Ocean": null
   },
   {
+    "Id": "adfed853-9a62-4820-86b7-81d892079c4d",
+    "Type": "Water",
+    "Name": null,
+    "GridX": 42,
+    "GridY": 50,
+    "Ocean": "Mediterranean Sea"
+  },
+  {
     "Id": "634542c4-911a-4fcc-a588-101e4bc5b322",
     "Type": "Milepost",
     "Name": null,
     "GridX": 4,
     "GridY": 52,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "c5198acb-2f32-4553-a469-c6e240ab92dd",
@@ -133,7 +165,7 @@
     "Name": null,
     "GridX": 5,
     "GridY": 52,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "6bb78000-3750-41bf-9630-ada673b36508",
@@ -302,6 +334,14 @@
     "GridX": 7,
     "GridY": 45,
     "Ocean": null
+  },
+    {
+    "Id": "de358416-1289-45ef-9841-dd56fb4ba7cc",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 7,
+    "GridY": 40,
+    "Ocean": "Atlantic Ocean"
   },
   {
     "Id": "d54c2e30-1e35-42a7-9da7-2e816b8eb72c",
@@ -1105,7 +1145,7 @@
   },
   {
     "Id": "0f66cfb1-ed6c-4352-b209-726b23033987",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 11,
     "GridY": 35,
@@ -1201,7 +1241,7 @@
   },
   {
     "Id": "2e8fe6b7-a9e0-4f9f-af35-bd4a42eb2b06",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 12,
     "GridY": 36,
@@ -1649,7 +1689,7 @@
   },
   {
     "Id": "e6a79a09-9d44-4ccf-9d52-f6bef682df1a",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 14,
     "GridY": 37,
@@ -1729,7 +1769,7 @@
   },
   {
     "Id": "11cd78fa-0d8d-487c-a8e1-c7958eff9d1f",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 15,
     "GridY": 38,
@@ -1921,7 +1961,7 @@
   },
   {
     "Id": "078f91b3-0261-413a-9b38-3007f89666cc",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 16,
     "GridY": 39,
@@ -1993,7 +2033,7 @@
   },
   {
     "Id": "a805dbca-aac4-4369-a0b2-5ccd10d5c6d9",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 18,
     "GridY": 57,
@@ -2073,7 +2113,7 @@
   },
   {
     "Id": "990bbc97-1a51-41e9-9f74-89dbd18cd6cc",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 17,
     "GridY": 39,
@@ -2141,11 +2181,11 @@
     "Name": null,
     "GridX": 18,
     "GridY": 55,
-    "Ocean": null
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "26f87d15-28fc-416f-8ce6-eb34a03ba28b",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 19,
     "GridY": 57,
@@ -2297,7 +2337,7 @@
   },
   {
     "Id": "dddbe4bb-372e-4adf-aee3-41921c799b6d",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 19,
     "GridY": 55,
@@ -2313,7 +2353,7 @@
   },
   {
     "Id": "7e77e738-d1e9-41ea-81b0-7faea63c475a",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 19,
     "GridY": 40,
@@ -2365,7 +2405,7 @@
     "Name": null,
     "GridX": 19,
     "GridY": 54,
-    "Ocean": null
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "e2e0fbfc-1eef-411b-8b37-c25e8ba54a31",
@@ -2377,7 +2417,7 @@
   },
   {
     "Id": "977e34ed-79c9-4166-9efe-5132b8afcfa1",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 56,
@@ -2393,7 +2433,7 @@
   },
   {
     "Id": "df29d910-612f-46a0-999a-9e4754fbe1e7",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 19,
     "GridY": 13,
@@ -2409,8 +2449,8 @@
   },
   {
     "Id": "e1f54bed-fded-4a34-b36f-e084082284dd",
-    "Type": "Small City",
-    "Name": "Bilbao",
+    "Type": "Water",
+    "Name": null,
     "GridX": 19,
     "GridY": 41,
     "Ocean": "Atlantic Ocean"
@@ -2445,7 +2485,7 @@
     "Name": null,
     "GridX": 19,
     "GridY": 53,
-    "Ocean": null
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "a77eee64-ffa8-4dc6-8b12-b38e23cb09f0",
@@ -2465,7 +2505,7 @@
   },
   {
     "Id": "fea5be34-23b1-404b-8c60-33863d2862dd",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 55,
@@ -2529,7 +2569,7 @@
   },
   {
     "Id": "d7d58b0b-e3b9-4100-9913-4dee98cc094b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 54,
@@ -2537,11 +2577,19 @@
   },
   {
     "Id": "4e65fa10-0929-41da-b856-37e79fd88e40",
+    "Type": "Water",
+    "Name": null,
+    "GridX": 19,
+    "GridY": 7,
+    "Ocean": "Atlantic Ocean"
+  },
+  {
+    "Id": "4e65fa10-0929-41da-b856-37e79fd88e40",
     "Type": "Milepost",
     "Name": null,
     "GridX": 20,
     "GridY": 7,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "4f742503-ab69-4951-84df-ca1af1de272b",
@@ -2553,11 +2601,19 @@
   },
   {
     "Id": "f7678649-7494-40a1-94e3-6a583c51fa64",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 13,
     "Ocean": "Atlantic Ocean"
+  },
+  {
+    "Id": "2498080f-3f16-47ff-b1dd-1c24b5a9271b",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 19,
+    "GridY": 9,
+    "Ocean": null
   },
   {
     "Id": "2498082f-3f16-47ff-b1dd-1c24b5a9271b",
@@ -2565,11 +2621,11 @@
     "Name": null,
     "GridX": 20,
     "GridY": 9,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "29735a51-cb04-47d8-bea5-0c2c4a85d5c7",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 41,
@@ -2601,7 +2657,7 @@
   },
   {
     "Id": "e5444638-5375-4c7f-9dda-066c64c644d0",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 20,
     "GridY": 53,
@@ -2665,8 +2721,8 @@
   },
   {
     "Id": "7cd87be2-db4b-4723-b265-d6d91e8e47f4",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Small City",
+    "Name": "Bilbao",
     "GridX": 21,
     "GridY": 42,
     "Ocean": "Atlantic Ocean"
@@ -2701,7 +2757,7 @@
     "Name": null,
     "GridX": 21,
     "GridY": 7,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "a69f0ce9-30d6-4c0e-ac54-58dc86dc5454",
@@ -2721,7 +2777,7 @@
   },
   {
     "Id": "8dd2462a-0bbc-417c-be0f-88abd2096c9a",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 21,
     "GridY": 13,
@@ -2768,12 +2824,28 @@
     "Ocean": "Mediterranean Sea"
   },
   {
-    "Id": "ff324dc2-2771-484d-959c-5122d797c189",
-    "Type": "Milepost",
+    "Id": "ff324de1-2881-484d-959c-5122d797c189",
+    "Type": "Water",
     "Name": null,
     "GridX": 21,
     "GridY": 6,
     "Ocean": "Atlantic Ocean"
+  },
+  {
+    "Id": "ff324dc2-2881-484d-959c-5122d797c189",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 21,
+    "GridY": 6,
+    "Ocean": null
+  },
+  {
+    "Id": "ff324dc2-2771-484d-959c-5122d797c189",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 22,
+    "GridY": 6,
+    "Ocean": null
   },
   {
     "Id": "4a159810-273c-440e-97fe-bdbc26e0441d",
@@ -2798,6 +2870,14 @@
     "GridX": 21,
     "GridY": 10,
     "Ocean": null
+  },
+  {
+    "Id": "0920150f-2f55-42e8-a9a4-055322878624",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 21,
+    "GridY": 25,
+    "Ocean": "Atlantic Ocean"
   },
   {
     "Id": "0920150f-2f55-42e8-a9a4-055322878624",
@@ -2853,7 +2933,7 @@
     "Name": null,
     "GridX": 22,
     "GridY": 7,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "0f06c647-3995-476b-9183-443e9e870134",
@@ -3037,7 +3117,7 @@
     "Name": null,
     "GridX": 23,
     "GridY": 7,
-    "Ocean": "Atlantic Ocean"
+    "Ocean": null
   },
   {
     "Id": "d0be93f9-8b4e-4cc1-befb-234ae55a7d5c",
@@ -3057,7 +3137,7 @@
   },
   {
     "Id": "e109cced-ea93-49c8-b97d-c887454c2d7b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 23,
     "GridY": 13,
@@ -3281,8 +3361,8 @@
   },
   {
     "Id": "9f982cd2-73bf-4aa5-b8f9-710972b1e449",
-    "Type": "Ferry Port",
-    "Name": "Cherbourg",
+    "Type": "Water",
+    "Name": null,
     "GridX": 24,
     "GridY": 25,
     "Ocean": "English Channel"
@@ -3341,7 +3421,7 @@
     "Name": null,
     "GridX": 25,
     "GridY": 49,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "8d86309b-0470-4c6a-8fa6-7dc99fa9f32f",
@@ -3393,7 +3473,7 @@
   },
   {
     "Id": "ae12180f-11cd-4910-8195-34cbe1af2354",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 24,
     "GridY": 12,
@@ -3497,7 +3577,7 @@
   },
   {
     "Id": "83ed0e0c-cec5-472a-b4dc-12c7980effa9",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 25,
     "GridY": 11,
@@ -3513,7 +3593,7 @@
   },
   {
     "Id": "5ab70bb7-f593-472c-a81b-83f554b5de92",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 25,
     "GridY": 9,
@@ -3541,6 +3621,30 @@
     "Name": null,
     "GridX": 25,
     "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "4fe3cefd-3687-4b04-b257-b4d7c989d7c4",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 22,
+    "GridY": 20,
+    "Ocean": null
+  },
+  {
+    "Id": "4fe3cefd-6387-4b04-b257-b4d7c989d7c4",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 22,
+    "GridY": 19,
+    "Ocean": null
+  },
+  {
+    "Id": "4fe3dffd-3666-4b04-b257-b4d7c989d7c4",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 25,
+    "GridY": 17,
     "Ocean": null
   },
   {
@@ -3629,7 +3733,7 @@
     "Name": null,
     "GridX": 26,
     "GridY": 49,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "9231f9e4-8330-431c-a851-4ddc60a1783e",
@@ -3777,7 +3881,7 @@
   },
   {
     "Id": "08eed47d-6ea0-46ee-9a39-ee126e71782c",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 26,
     "GridY": 5,
@@ -3787,9 +3891,17 @@
     "Id": "8db839d0-e0e5-486b-ad22-4f4462b385c3",
     "Type": "Milepost",
     "Name": null,
-    "GridX": 26,
+    "GridX": 27,
     "GridY": 17,
-    "Ocean": "Irish Sea"
+    "Ocean": null
+  },
+  {
+    "Id": "8db729d0-e0e5-486b-ad22-4f4462b385c3",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 24,
+    "GridY": 15,
+    "Ocean": null
   },
   {
     "Id": "fd1f23f7-5e04-4d6a-81c8-54b0e6eca725",
@@ -3845,6 +3957,22 @@
     "Name": null,
     "GridX": 26,
     "GridY": 35,
+    "Ocean": "Mediterranean Sea"
+  },
+  {
+    "Id": "f859ce65-62ed-4dd7-8abd-6127732221ea",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 25,
+    "GridY": 50,
+    "Ocean": "Mediterranean Sea"
+  },
+  {
+    "Id": "f859ce65-42ed-4dd7-8abd-6127732221ea",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 26,
+    "GridY": 50,
     "Ocean": null
   },
   {
@@ -3889,7 +4017,7 @@
   },
   {
     "Id": "59d61c14-c031-45e4-ac76-4263bbca8846",
-    "Type": "Mountain",
+    "Type": "Alpine",
     "Name": null,
     "GridX": 27,
     "GridY": 47,
@@ -4043,7 +4171,7 @@
     "Id": "3bc9d9fd-6cb0-4ff9-b954-d6b712017ec1",
     "Type": "Small City",
     "Name": "Cardiff",
-    "GridX": 27,
+    "GridX": 26,
     "GridY": 17,
     "Ocean": null
   },
@@ -4137,7 +4265,7 @@
   },
   {
     "Id": "f2792a9c-0ba4-4fef-8d67-584be0fc5eba",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 28,
     "GridY": 49,
@@ -4161,7 +4289,7 @@
   },
   {
     "Id": "fe873ec8-0c41-4a1e-b5e7-734ddc3f4d5b",
-    "Type": "Alpine",
+    "Type": "Water",
     "Name": null,
     "GridX": 28,
     "GridY": 47,
@@ -4201,11 +4329,11 @@
   },
   {
     "Id": "1c9aa7af-c097-4f41-86f3-e97bc7908226",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Cherbourg",
     "GridX": 27,
     "GridY": 24,
-    "Ocean": "English Channel"
+    "Ocean": null
   },
   {
     "Id": "cf944fda-a24e-40f1-8667-68ed82b52b2b",
@@ -4281,7 +4409,7 @@
   },
   {
     "Id": "2c83df4a-4fb8-4eab-bfac-99ea21f1c639",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 28,
     "GridY": 5,
@@ -4344,6 +4472,14 @@
     "Ocean": null
   },
   {
+    "Id": "edfc5d15-044c-4621-a197-2e2fbbabc9a5",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 28,
+    "GridY": 2,
+    "Ocean": "Irish Sea"
+  },
+  {
     "Id": "528a5569-bac9-4ed9-8fb0-d03af59ebd16",
     "Type": "Milepost",
     "Name": null,
@@ -4369,7 +4505,7 @@
   },
   {
     "Id": "d4ebdbd8-5b06-423b-b83e-8cddc499acd9",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 28,
     "GridY": 25,
@@ -4457,7 +4593,7 @@
   },
   {
     "Id": "8b1b39fd-a4f1-4a53-8a4e-17ac1e6491dd",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 29,
     "GridY": 47,
@@ -4465,7 +4601,7 @@
   },
   {
     "Id": "ff1d53a7-c017-44a6-9e00-072b9658bb72",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 29,
     "GridY": 49,
@@ -4481,7 +4617,7 @@
   },
   {
     "Id": "0eb20065-6d48-49c4-ac50-4ad1b346081b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 28,
     "GridY": 8,
@@ -4601,7 +4737,7 @@
   },
   {
     "Id": "910cddb2-0828-4a41-83b6-d7a71d9fc932",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 29,
     "GridY": 48,
@@ -4609,7 +4745,7 @@
   },
   {
     "Id": "c67a49fe-d8a2-45da-b792-e0cc3e527070",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 29,
     "GridY": 46,
@@ -4769,7 +4905,7 @@
   },
   {
     "Id": "bf01e237-c9f8-40f4-aba9-421d54521a78",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 29,
     "GridY": 8,
@@ -5529,7 +5665,7 @@
   },
   {
     "Id": "527befec-4862-4e59-b2f6-12180efd6d16",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 31,
     "GridY": 5,
@@ -5665,7 +5801,7 @@
   },
   {
     "Id": "f5e3f4f3-1f39-40cd-b156-6f2a8a71548f",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 32,
     "GridY": 0,
@@ -5793,15 +5929,15 @@
   },
   {
     "Id": "110d2533-0438-4a1d-80cd-1f84311ed659",
-    "Type": "Major City Outpost",
-    "Name": "Paris",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 34,
     "GridY": 28,
     "Ocean": null
   },
   {
     "Id": "3e3a431d-7831-4039-b73e-5205309c103d",
-    "Type": "Major City Outpost",
+    "Type": "Major City",
     "Name": "Paris",
     "GridX": 32,
     "GridY": 29,
@@ -5809,8 +5945,8 @@
   },
   {
     "Id": "a801c70a-bece-481b-87cb-df44ce555e58",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Paris",
     "GridX": 32,
     "GridY": 30,
     "Ocean": null
@@ -5881,7 +6017,7 @@
   },
   {
     "Id": "a244fd3f-f077-477a-9cd0-14c45c2d03bf",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 33,
     "GridY": 7,
@@ -5913,7 +6049,7 @@
   },
   {
     "Id": "3c7ced30-7ae1-456d-a3e6-55bb11be9485",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 33,
     "GridY": 13,
@@ -5929,7 +6065,7 @@
   },
   {
     "Id": "edbbd8d6-1b77-4856-868d-93a8aac285fd",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 33,
     "GridY": 15,
@@ -5945,11 +6081,11 @@
   },
   {
     "Id": "ea601665-3b07-44c2-994e-3f58ff2c7eef",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 33,
     "GridY": 21,
-    "Ocean": null
+    "Ocean": "English Channel"
   },
   {
     "Id": "23314108-3e0b-4d74-853f-89a308fa5c70",
@@ -5985,7 +6121,7 @@
   },
   {
     "Id": "07e1bfc7-45a7-4f03-8821-ae4989930f87",
-    "Type": "Major City",
+    "Type": "Major City Outpost",
     "Name": "Paris",
     "GridX": 33,
     "GridY": 29,
@@ -6041,7 +6177,7 @@
   },
   {
     "Id": "2b56fcc2-3b2f-4a70-9269-244698315c46",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 33,
     "GridY": 4,
@@ -6169,7 +6305,7 @@
   },
   {
     "Id": "97ff768c-f11a-4779-87f0-0d2c97f0d243",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 34,
     "GridY": 3,
@@ -6209,7 +6345,7 @@
   },
   {
     "Id": "505b6c7f-8764-4904-bcb7-c2a9940bdcd2",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 34,
     "GridY": 21,
@@ -6225,16 +6361,16 @@
   },
   {
     "Id": "ff2d5e96-ae66-480a-bd37-639fd0ecaa18",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Ferry Port",
+    "Name": "Harwich",
     "GridX": 34,
     "GridY": 19,
     "Ocean": "English Channel"
   },
   {
     "Id": "ff2d5e96-ae65-480a-bd37-639fd0ecaa18",
-    "Type": "Ferry Port",
-    "Name": "Harwich",
+    "Type": "Water",
+    "Name": null,
     "GridX": 35,
     "GridY": 19,
     "Ocean": "English Channel"
@@ -6281,8 +6417,8 @@
   },
   {
     "Id": "3306b60a-2470-4d60-91e8-4a4f8f0bdb0b",
-    "Type": "Major City Outpost",
-    "Name": "Paris",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 34,
     "GridY": 29,
     "Ocean": null
@@ -6377,16 +6513,16 @@
   },
   {
     "Id": "1491ee80-f819-4e8f-9b73-4460adc46ac3",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Paris",
     "GridX": 32,
     "GridY": 28,
     "Ocean": null
   },
   {
     "Id": "83617006-2d59-43b0-8a6b-926d61bc7ec5",
-    "Type": "Major City Outpost",
-    "Name": "Paris",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 34,
     "GridY": 30,
     "Ocean": null
@@ -6449,7 +6585,7 @@
   },
   {
     "Id": "b37704be-ac46-4f58-a2d5-e718c106c098",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 35,
     "GridY": 17,
@@ -7323,7 +7459,7 @@
     "Id": "ff069f4c-7d39-4c2a-bdfc-fccbf7c68297",
     "Type": "Ferry Port",
     "Name": "Ijmuiden",
-    "GridX": 39,
+    "GridX": 38,
     "GridY": 19,
     "Ocean": "English Channel"
   },
@@ -7513,8 +7649,8 @@
   },
   {
     "Id": "371d8ecb-44a4-4eed-bd0d-884b41adfac1",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
     "GridX": 40,
     "GridY": 25,
     "Ocean": null
@@ -7841,8 +7977,8 @@
   },
   {
     "Id": "a7275ef4-ae4d-4e57-ac65-9f75627b24fa",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
     "GridX": 41,
     "GridY": 26,
     "Ocean": null
@@ -7902,6 +8038,14 @@
     "GridX": 42,
     "GridY": 42,
     "Ocean": null
+  },
+  {
+    "Id": "06c9a490-8d4b-435c-ad2b-358f0254a73c",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 42,
+    "GridY": 49,
+    "Ocean": "Mediterranean Sea"
   },
   {
     "Id": "adcd12eb-d5a0-4f7f-9303-34e195fc73f5",
@@ -8045,7 +8189,7 @@
     "Name": null,
     "GridX": 42,
     "GridY": 47,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "ee336aee-590a-44f8-9d54-d098393a7d0f",
@@ -8057,15 +8201,15 @@
   },
   {
     "Id": "77ee51db-a456-43c9-b304-a1ba7804abad",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Major City Outpost",
+    "Name": "Ruhr",
     "GridX": 41,
     "GridY": 24,
     "Ocean": null
   },
   {
     "Id": "f92c2514-e676-4ee8-b3d5-e8578f11ca0a",
-    "Type": "Major City",
+    "Type": "Major City Outpost",
     "Name": "Ruhr",
     "GridX": 42,
     "GridY": 25,
@@ -8073,7 +8217,7 @@
   },
   {
     "Id": "1d61847c-a71f-4978-9e31-80027a0b3a1e",
-    "Type": "Major City Outpost",
+    "Type": "Major City",
     "Name": "Ruhr",
     "GridX": 41,
     "GridY": 25,
@@ -8105,8 +8249,8 @@
   },
   {
     "Id": "8665a9b6-e668-4dc2-b229-693f9f053e50",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 43,
     "GridY": 26,
     "Ocean": null
@@ -8337,8 +8481,8 @@
   },
   {
     "Id": "696f202e-3139-4e4a-97de-468975ca679f",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 43,
     "GridY": 24,
     "Ocean": null
@@ -8349,7 +8493,7 @@
     "Name": null,
     "GridX": 43,
     "GridY": 49,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "deb4f895-cab0-4cdc-8f4b-83722e54dc8c",
@@ -8373,7 +8517,7 @@
     "Name": null,
     "GridX": 43,
     "GridY": 51,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "914b5db7-16dc-42fa-9e6f-ec5dadae1a0a",
@@ -8493,7 +8637,7 @@
     "Name": null,
     "GridX": 43,
     "GridY": 50,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "c42eb444-316a-4750-8b85-f8f9326cd346",
@@ -8688,6 +8832,14 @@
     "Ocean": null
   },
   {
+    "Id": "e83bf78c-14a2-447d-b2dd-53bc38820030",
+    "Type": "Water",
+    "Name": null,
+    "GridX": 44,
+    "GridY": 55,
+    "Ocean": "Mediterranean Sea"
+  },
+  {
     "Id": "6b9f54b5-a52a-45c6-b8fb-9cffd274b016",
     "Type": "Milepost",
     "Name": null,
@@ -8753,7 +8905,7 @@
   },
   {
     "Id": "8ce2b265-280a-432b-bc16-29a522e2e4f2",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 44,
     "GridY": 0,
@@ -8809,7 +8961,7 @@
   },
   {
     "Id": "1f34fdb4-d34c-4b24-bb8f-b3e429f50f69",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 45,
     "GridY": 4,
@@ -9129,7 +9281,7 @@
   },
   {
     "Id": "bb84400e-5cf1-4e32-8148-fa9a1c39be2b",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 44,
     "GridY": 4,
@@ -9289,7 +9441,7 @@
   },
   {
     "Id": "34828fac-3a0e-4c2c-a8d0-98818c7e11fa",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 46,
     "GridY": 45,
@@ -9305,7 +9457,7 @@
   },
   {
     "Id": "768c4fff-ee4b-4292-8f3c-4e89b72cfb68",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 46,
     "GridY": 47,
@@ -9329,7 +9481,7 @@
   },
   {
     "Id": "7c66ec8a-0f85-4e04-8d53-5aa812c7fdaa",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 46,
     "GridY": 49,
@@ -9397,7 +9549,7 @@
     "Name": null,
     "GridX": 46,
     "GridY": 55,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "a0f66ed4-cf70-4d6c-ace3-a0005ad4dfcc",
@@ -9637,7 +9789,7 @@
     "Name": null,
     "GridX": 46,
     "GridY": 56,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "73902008-caf0-42a9-9cf3-d919a40ecb46",
@@ -9721,7 +9873,7 @@
   },
   {
     "Id": "6fd23199-e091-4d20-89c9-3b860006295b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 47,
     "GridY": 49,
@@ -9745,9 +9897,9 @@
   },
   {
     "Id": "b460cc50-7146-428d-b2ec-03aa6004ea8c",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
-    "GridX": 47,
+    "GridX": 49,
     "GridY": 5,
     "Ocean": "North Sea"
   },
@@ -9993,10 +10145,26 @@
   },
   {
     "Id": "faed1672-748b-4bf3-8876-ec46186d9f86",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 46,
     "GridY": 10,
+    "Ocean": null
+  },
+  {
+    "Id": "faed1672-908b-4bf3-8876-ec46186d9f86",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 50,
+    "GridY": 8,
+    "Ocean": null
+  },
+  {
+    "Id": "faed7612-908b-4bf3-8876-ec46186d9f86",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 50,
+    "GridY": 7,
     "Ocean": null
   },
   {
@@ -10011,9 +10179,9 @@
     "Id": "081ed959-08f9-4427-adce-4bc9f3b9d427",
     "Type": "Milepost",
     "Name": null,
-    "GridX": 47,
+    "GridX": 47,  
     "GridY": 56,
-    "Ocean": "Mediterranean Sea"
+    "Ocean": null
   },
   {
     "Id": "458e4540-c376-4576-84a4-e9847d0f8c48",
@@ -10129,7 +10297,7 @@
   },
   {
     "Id": "71979fdf-525e-4745-be99-75b8b6257751",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 48,
     "GridY": 5,
@@ -10145,7 +10313,7 @@
   },
   {
     "Id": "796d03a6-feb8-4fec-a851-81487eba28e0",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 48,
     "GridY": 51,
@@ -10161,7 +10329,7 @@
   },
   {
     "Id": "b520f364-4e2f-48c4-907d-93eb95664acf",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 48,
     "GridY": 53,
@@ -10427,7 +10595,7 @@
     "Id": "d4d549d7-6c59-4c6e-9642-8538380cff97",
     "Type": "Ferry Port",
     "Name": "Kristiansand",
-    "GridX": 49,
+    "GridX": 47,
     "GridY": 5,
     "Ocean": "North Sea"
   },
@@ -10569,7 +10737,7 @@
   },
   {
     "Id": "edcd9675-762e-4f9f-8e9f-7071a88c26bc",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 49,
     "GridY": 55,
@@ -10745,7 +10913,7 @@
   },
   {
     "Id": "b1d52d09-7da2-4cb2-84f9-99569c84d876",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 48,
     "GridY": 8,
@@ -10769,7 +10937,7 @@
   },
   {
     "Id": "f922782a-a33b-47bc-867b-7cb7f278c45c",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 12,
@@ -10785,7 +10953,7 @@
   },
   {
     "Id": "e4fbd64c-158a-4ac3-a670-79900cac25ba",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 56,
@@ -10913,7 +11081,7 @@
   },
   {
     "Id": "2f98d7ab-575b-4a49-8a74-d6d515f7b9f5",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 17,
@@ -10929,7 +11097,7 @@
   },
   {
     "Id": "2f772379-f928-4d92-a9a4-55483cf141b0",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 56,
@@ -10945,15 +11113,15 @@
   },
   {
     "Id": "2aef4bf9-ade4-4d8b-bff0-df062e752296",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Adriatic Sea"
   },
   {
     "Id": "0cda754a-5369-4237-bd69-e9a89eba66c7",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 56,
@@ -11089,7 +11257,7 @@
   },
   {
     "Id": "d3773677-7d1d-4332-809f-fe2ab2587fc3",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 55,
@@ -11105,7 +11273,7 @@
   },
   {
     "Id": "b4cdc388-3dbb-4dd4-8d8d-0273c5bf2cac",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 55,
@@ -11113,7 +11281,7 @@
   },
   {
     "Id": "5dbcfc51-2788-4711-a50c-6f62d8854c30",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 55,
@@ -11249,15 +11417,15 @@
   },
   {
     "Id": "109d7620-d966-4125-b27f-928fdc96c01b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Adriatic Sea"
   },
   {
     "Id": "f4c7521b-53d0-43f6-918f-93bec9b2c747",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 56,
@@ -11265,7 +11433,7 @@
   },
   {
     "Id": "e54fea35-9265-41b5-a866-57d56000a1ef",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 55,
@@ -11425,7 +11593,7 @@
   },
   {
     "Id": "65429440-b45f-414e-95f7-dd02b19009a9",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 54,
@@ -11441,7 +11609,7 @@
   },
   {
     "Id": "eb7f853b-6e9d-4227-bdc9-95dc8e80d08b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 6,
@@ -11457,7 +11625,7 @@
   },
   {
     "Id": "45ce71c1-fa5d-418b-8be9-f9107294bab1",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 57,
@@ -11465,7 +11633,7 @@
   },
   {
     "Id": "d969074b-6a83-4022-8e29-8bed06e5654a",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 56,
@@ -11641,7 +11809,7 @@
   },
   {
     "Id": "3df83ddb-c549-4c39-9836-1941b998d3b4",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 55,
@@ -11649,11 +11817,11 @@
   },
   {
     "Id": "9956e1bb-23d8-43d7-ab32-5a68ab5a914e",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 55,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Adriatic Sea"
   },
   {
     "Id": "71acdff3-1c1d-48f0-8154-88345188455d",
@@ -11817,7 +11985,7 @@
   },
   {
     "Id": "8d702548-a66a-4485-831e-d1f51f9d74ca",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 4,
@@ -11849,7 +12017,7 @@
   },
   {
     "Id": "bee6341e-ee49-413c-a291-df43161f8818",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 8,
@@ -11857,7 +12025,7 @@
   },
   {
     "Id": "ff20c14c-b9dc-4124-9238-724feeee5b0f",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 55,
     "GridY": 56,
@@ -11865,7 +12033,7 @@
   },
   {
     "Id": "7ebfb26f-dc20-4602-978d-8e2842b5d58a",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 55,
     "GridY": 55,
@@ -11873,7 +12041,7 @@
   },
   {
     "Id": "9d5b70d4-852c-46c8-b45a-973662021518",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 10,
@@ -11881,7 +12049,7 @@
   },
   {
     "Id": "ad6f199d-695a-44de-bfd8-db11281b1193",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 12,
@@ -12073,11 +12241,11 @@
   },
   {
     "Id": "a957b5bc-0b59-4445-bb3f-f60737a808ec",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 56,
     "GridY": 57,
-    "Ocean": null
+    "Ocean": "Adriatic Sea"
   },
   {
     "Id": "18769c74-0929-440c-b834-5330c8c1dab1",
@@ -12217,7 +12385,7 @@
   },
   {
     "Id": "eac7aa16-a20c-44f5-b3bf-f5ce36614ce2",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 52,
@@ -12257,7 +12425,7 @@
   },
   {
     "Id": "6f92de00-ceb2-445c-8bce-6986a9fc286b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 56,
     "GridY": 56,
@@ -13385,7 +13553,7 @@
   },
   {
     "Id": "5b7a2492-96f0-44e3-950b-0f0b8a4e4021",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 56,
     "GridY": 14,
@@ -13904,8 +14072,16 @@
     "Ocean": "Adriatic Sea"
   },
   {
+    "Id": "84aaa609-c0f2-4f27-8f68-634a89362914",
+    "Type": "Milepost",
+    "Name": null,
+    "GridX": 46,
+    "GridY": 57,
+    "Ocean": null
+  },
+  {
     "Id": "5b864c33-647d-4966-97b0-a53bec1fbda4",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 57,
     "GridY": 57,
@@ -14329,7 +14505,7 @@
   },
   {
     "Id": "13394260-b6a2-4284-bd8a-f023b1069bf7",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 57,
     "GridY": 56,
@@ -15059,9 +15235,17 @@
     "Id": "3141b21b-09e3-4329-99f1-914098b438c7",
     "Type": "Medium City",
     "Name": "Stockholm",
+    "GridX": 62,
+    "GridY": 4,
+    "Ocean": "Baltic Sea"
+  },
+  {
+    "Id": "3141b21b-09e3-4329-99f1-914098b438c7",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 60,
     "GridY": 5,
-    "Ocean": "Baltic Sea"
+    "Ocean": null
   },
   {
     "Id": "94fd421b-6515-49ce-b906-ad31abf68556",
@@ -15377,11 +15561,11 @@
   },
   {
     "Id": "9261a6c1-c034-49f8-9c92-63ccce94a272",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 61,
     "GridY": 19,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "9261a6c2-c034-49f8-9c92-63ccce94a272",
@@ -15672,14 +15856,6 @@
     "Ocean": null
   },
   {
-    "Id": "62805809-64d2-4b56-8b77-7500d23bb24c",
-    "Type": "Small City",
-    "Name": "Kaliningrad",
-    "GridX": 62,
-    "GridY": 19,
-    "Ocean": "Baltic Sea"
-  },
-  {
     "Id": "26d9eaab-1cc4-43db-9852-fa2ebb4ecb51",
     "Type": "Milepost",
     "Name": null,
@@ -15721,23 +15897,23 @@
   },
   {
     "Id": "239c0ba9-eb16-49e4-b067-8871d2a2bb66",
-    "Type": "Milepost",
-    "Name": null,
+    "Type": "Small City",
+    "Name": "Kaliningrad",
     "GridX": 63,
     "GridY": 19,
     "Ocean": null
   },
   {
     "Id": "8fd39b9c-89d9-484a-a828-6c1299639d74",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 60,
     "GridY": 19,
-    "Ocean": null
+    "Ocean": "Baltic Sea"
   },
   {
     "Id": "ad3ba18b-8205-40db-b0f9-4b286e14c716",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 56,
     "GridY": 19,
@@ -15753,7 +15929,7 @@
   },
   {
     "Id": "5d8522c6-cb76-48a8-9acc-e18d779db28b",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 48,
     "GridY": 45,
@@ -15817,7 +15993,7 @@
   },
   {
     "Id": "8c13f394-a464-45d4-955d-4fe74c3a0d50",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 63,
     "GridY": 18,
@@ -15833,7 +16009,7 @@
   },
   {
     "Id": "86d568bc-91d9-4bde-931a-1fd628441dd4",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 62,
     "GridY": 18,
@@ -15841,7 +16017,7 @@
   },
   {
     "Id": "0d406a2f-d093-4240-b287-c423238fb646",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 61,
     "GridY": 18,
@@ -15865,7 +16041,7 @@
   },
   {
     "Id": "1e87d505-16e5-4e25-ba92-409c5f6e04fc",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 55,
     "GridY": 19,
@@ -15873,7 +16049,7 @@
   },
   {
     "Id": "01979953-f2be-43c9-949b-ad81de753100",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 19,
@@ -15881,7 +16057,7 @@
   },
   {
     "Id": "106abac8-6586-4398-b98b-5cf28a421687",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 19,
@@ -15897,7 +16073,7 @@
   },
   {
     "Id": "aac651eb-1a38-4788-9123-7e75487ec720",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 60,
     "GridY": 18,
@@ -15969,7 +16145,7 @@
   },
   {
     "Id": "903587c3-7b24-4fca-a251-1d37c5c64a8c",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 63,
     "GridY": 17,
@@ -15977,7 +16153,7 @@
   },
   {
     "Id": "feeef6a4-fbf5-45cb-b60a-549bc6158458",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 59,
     "GridY": 18,
@@ -15985,7 +16161,7 @@
   },
   {
     "Id": "264abeab-2486-4098-a1c8-fd78da0f3a54",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 58,
     "GridY": 18,
@@ -15993,7 +16169,7 @@
   },
   {
     "Id": "630751be-afba-4aa3-bd19-956df9c929ca",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 57,
     "GridY": 18,
@@ -16017,7 +16193,7 @@
   },
   {
     "Id": "724986b9-3b23-4636-b280-e96bcaffa163",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 56,
     "GridY": 18,
@@ -16025,7 +16201,7 @@
   },
   {
     "Id": "4b996052-c044-43f9-8bdf-2b6e486516a3",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 55,
     "GridY": 18,
@@ -16033,7 +16209,7 @@
   },
   {
     "Id": "436f5319-3a72-4aeb-b30a-189d0e401237",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 54,
     "GridY": 18,
@@ -16041,7 +16217,7 @@
   },
   {
     "Id": "1de01418-49f9-4a5a-a416-a43df46b0c66",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 49,
     "GridY": 47,
@@ -16065,7 +16241,7 @@
   },
   {
     "Id": "d361838d-ba93-4e8b-8ae8-be002296077f",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 49,
     "GridY": 48,
@@ -16105,7 +16281,7 @@
   },
   {
     "Id": "3448be85-2aa4-44a4-9995-9924aaa65244",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 53,
     "GridY": 54,
@@ -16121,7 +16297,7 @@
   },
   {
     "Id": "b95d7906-3696-4405-ac06-d70bbdfaa9d1",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 52,
     "GridY": 54,
@@ -16129,7 +16305,7 @@
   },
   {
     "Id": "e83c5cc9-94e5-4632-b511-936c4de5d24e",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 62,
     "GridY": 17,
@@ -16137,7 +16313,7 @@
   },
   {
     "Id": "830beb65-679a-44ea-a5f0-cec0bbdba5aa",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 61,
     "GridY": 17,
@@ -16145,7 +16321,7 @@
   },
   {
     "Id": "883f8522-8661-4cc1-bf12-8e72458b5fdf",
-    "Type": "Milepost",
+    "Type": "Water",
     "Name": null,
     "GridX": 60,
     "GridY": 17,
@@ -16153,7 +16329,7 @@
   },
   {
     "Id": "0858c9c0-30b2-4854-a4c8-8075bfd28fdc",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 51,
     "GridY": 53,
@@ -16161,7 +16337,7 @@
   },
   {
     "Id": "e27eb69f-1a94-4432-8918-8ec1f997da92",
-    "Type": "Mountain",
+    "Type": "Water",
     "Name": null,
     "GridX": 50,
     "GridY": 53,

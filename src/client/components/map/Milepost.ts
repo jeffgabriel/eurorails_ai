@@ -8,11 +8,7 @@ export class Milepost extends MapElement {
   }
 
   draw(graphics: Phaser.GameObjects.Graphics): void {
-    if (this.point.ocean) {
-      graphics.fillStyle(0x0000FF, 1);
-    } else {
-      graphics.fillStyle(0x000000, 1);
-    }
+    graphics.fillStyle(0x000000, 1);
     graphics.beginPath();
     graphics.arc(this.x, this.y, this.POINT_RADIUS, 0, Math.PI * 2);
     graphics.closePath();
