@@ -7,7 +7,7 @@ import {
   TrackSegment,
   PlayerTrackState,
 } from "../../shared/types/GameTypes";
-import { MovementCostCalculator } from "./MovementCostCalculator";
+import { MovementCostCalculator, MovementSegment } from "./MovementCostCalculator";
 import { mapConfig } from "../config/mapConfig";
 import { config } from "../config/apiConfig";
 
@@ -55,74 +55,6 @@ export class TrainMovementManager {
     this.playerTracks = playerTracks;
   }
 
-  private calculateMoveVector(
-    fromPoint: Point,
-    toPoint: Point
-  ): { rowDiff: number; colDiff: number } {
-    return {
-      rowDiff: toPoint.row - fromPoint.row,
-      colDiff: toPoint.col - fromPoint.col,
-    };
-  }
-
-  private getForwardDirection(
-    currentPoint: Point,
-    lastVisitedPoint: Point | null,
-    connectedPoints: Point[]
-  ): Point | null {
-    // If we have a previous point, exclude it from forward options
-    const forwardOptions = lastVisitedPoint
-      ? connectedPoints.filter((p) => p !== lastVisitedPoint)
-      : connectedPoints;
-
-    // If there's only one way to go (or no previous point), that's forward
-    if (forwardOptions.length === 1) {
-      return forwardOptions[0];
-    }
-
-    // At junctions with multiple options, player must choose
-    return null;
-  }
-
-  private canReverseDirection(
-    currentPosition: Point,
-    proposedDirection: { rowDiff: number; colDiff: number },
-    lastDirection: { rowDiff: number; colDiff: number }
-  ): boolean {
-    // Direction is reversed if the dot product is negative
-    const isReversing =
-      proposedDirection.rowDiff * lastDirection.rowDiff +
-        proposedDirection.colDiff * lastDirection.colDiff <
-      0;
-
-    // If trying to reverse, check if we're currently at a city or ferry port
-    // Look up the actual GridPoint at the current position to get authoritative terrain
-    if (isReversing) {
-      const currentGridPoint = this.getGridPointAtPosition(
-        currentPosition.row,
-        currentPosition.col
-      );
-      
-      if (!currentGridPoint) {
-        // If we can't find the GridPoint, fall back to not allowing reversal
-        // This is defensive - shouldn't happen in normal gameplay
-        console.warn(
-          `[TrainMovementManager] Could not find GridPoint at (${currentPosition.row}, ${currentPosition.col})`
-        );
-        return false;
-      }
-      
-      const currentTerrain = currentGridPoint.terrain;
-      const canReverse = this.isTerrainCityOrFerry(currentTerrain);
-      if (!canReverse) {
-        // console.log("Cannot reverse direction - not at a city or ferry port. Current terrain:", currentTerrain);
-      }
-      return canReverse;
-    }
-
-    return true;
-  }
-
   private isTerrainCityOrFerry(terrain: TerrainType): boolean {
     return [
       TerrainType.MajorCity,
@@ -132,22 +64,51 @@ export class TrainMovementManager {
     ].includes(terrain);
   }
 
-  private getLastDirection(movementHistory: TrackSegment[]): {
-    rowDiff: number;
-    colDiff: number;
-  } {
-    if (movementHistory.length < 1) return { rowDiff: 0, colDiff: 0 };
-
-    const last = movementHistory[movementHistory.length - 1];
-    return {
-      rowDiff: last.to.row - last.from.row,
-      colDiff: last.to.col - last.from.col,
-    };
+  private sameGridPosition(a: Point, b: Point): boolean {
+    return a.row === b.row && a.col === b.col;
   }
 
+  /**
+   * Best-effort reversal detection when we can't compute path segments.
+   *
+   * We approximate reversal as "moving opposite to the direction of the last move"
+   * using a dot product against the overall last-move vector (from -> to).
+   */
+  private isReversalByDirectionFallback(
+    priorPosition: Point,
+    proposedTarget: Point,
+    lastMove: TrackSegment
+  ): boolean {
+    const lastVecRow = lastMove.to.row - lastMove.from.row;
+    const lastVecCol = lastMove.to.col - lastMove.from.col;
+    const proposedVecRow = proposedTarget.row - priorPosition.row;
+    const proposedVecCol = proposedTarget.col - priorPosition.col;
+
+    // If the last move has no direction, don't treat anything as a reversal.
+    if (lastVecRow === 0 && lastVecCol === 0) return false;
+
+    const dot = proposedVecRow * lastVecRow + proposedVecCol * lastVecCol;
+    return dot < 0;
+  }
+
+  private getMovementCostSegments(from: Point, to: Point, playerId: string): MovementSegment[] | null {
+    const playerTrackState = this.playerTracks.get(playerId);
+    const result = this.movementCalculator.calculateMovementCost(
+      from,
+      to,
+      playerTrackState || null,
+      mapConfig.points
+    );
+    if (!result.isValid) return null;
+    return result.segments;
+  }
+
+  /**
+   * Movement points cost for a move. If track data is missing/invalid, falls back to direct distance.
+   */
   private calculateDistance(from: Point, to: Point): number {
     // Defensive fallback for basic distance when no game state available
-    if (!this.gameState.players || this.gameState.players.length === 0 || 
+    if (!this.gameState.players || this.gameState.players.length === 0 ||
         this.gameState.currentPlayerIndex >= this.gameState.players.length) {
       console.warn("[TrainMovementManager] No players available, using direct distance");
       const dx = Math.abs(to.col - from.col);
@@ -165,21 +126,21 @@ export class TrainMovementManager {
     }
 
     const playerTrackState = this.playerTracks.get(currentPlayer.id);
-    
-    // Use the movement calculator to get the proper cost
+
     const result = this.movementCalculator.calculateMovementCost(
       from,
       to,
       playerTrackState || null,
       mapConfig.points
     );
+
     if (!result.isValid) {
       console.warn(`[TrainMovementManager] Invalid movement: ${result.errorMessage}, using direct distance`);
       const dx = Math.abs(to.col - from.col);
       const dy = Math.abs(to.row - from.row);
       return Math.max(dx, dy);
     }
-    
+
     return result.totalCost;
   }
 
@@ -239,14 +200,6 @@ export class TrainMovementManager {
     // Convert current position to GridPoint
     const priorPosition = currentPlayer.trainState.position;
 
-    // Calculate proposed direction
-    const proposedDirection = this.calculateMoveVector(priorPosition, point);
-
-    // Get last direction from movement history
-    const lastDirection = this.getLastDirection(
-      currentPlayer.trainState.movementHistory
-    );
-
     // Calculate distance for this move
     const distance = this.calculateDistance(
       currentPlayer.trainState.position,
@@ -269,22 +222,46 @@ export class TrainMovementManager {
         : null;
     // console.debug("lastTrackSegment", lastTrackSegment);
 
-    // Check reversal rules
-    // Only check reversal if we have movement history (not first move)
-    // and the proposed direction would reverse the last direction
+    // Check reversal rules:
+    // If the first segment of the proposed path traverses the most recently-traversed edge backwards,
+    // then this is a reversal and is only allowed at a city or ferry port.
     if (lastTrackSegment) {
-      // Use the actual current position to look up terrain, not the stored segment
-      if (
-        !this.canReverseDirection(
-          priorPosition,
-          proposedDirection,
-          lastDirection
-        )
-      ) {
-        // console.log(
-        //   "Invalid direction change - can only reverse at cities or ferry ports"
-        // );
-        return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+      const proposedSegments = this.getMovementCostSegments(priorPosition, point, currentPlayer.id);
+      const lastMoveSegments = this.getMovementCostSegments(
+        lastTrackSegment.from,
+        lastTrackSegment.to,
+        currentPlayer.id
+      );
+
+      const proposedFirst = proposedSegments && proposedSegments.length > 0 ? proposedSegments[0] : null;
+      const lastTraversed = lastMoveSegments && lastMoveSegments.length > 0 ? lastMoveSegments[lastMoveSegments.length - 1] : null;
+
+      // Preferred: path-based reversal (works for multi-milepost moves).
+      // Fallback: if we can't compute path segments, approximate reversal by comparing the
+      // proposed direction vs the last move's overall direction.
+      const isReversal =
+        (proposedFirst && lastTraversed)
+          ? (this.sameGridPosition(proposedFirst.from, lastTraversed.to) &&
+             this.sameGridPosition(proposedFirst.to, lastTraversed.from))
+          : this.isReversalByDirectionFallback(priorPosition, point, lastTrackSegment);
+
+      if (isReversal) {
+        const currentGridPoint = this.getGridPointAtPosition(
+          priorPosition.row,
+          priorPosition.col
+        );
+
+        if (!currentGridPoint) {
+          console.warn(
+            `[TrainMovementManager] Could not find GridPoint at (${priorPosition.row}, ${priorPosition.col})`
+          );
+          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+        }
+
+        const canReverse = this.isTerrainCityOrFerry(currentGridPoint.terrain);
+        if (!canReverse) {
+          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+        }
       }
     }
 
