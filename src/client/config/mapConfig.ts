@@ -214,10 +214,11 @@ export { majorCityGroups };
 // Calibration knobs for the `public/assets/map.png` world background.
 // These are in world units (same coordinate space as GridPoint.x/y).
 export const MAP_BACKGROUND_CALIBRATION = {
-  offsetX: -55,
-  offsetY: 95,
-  scaleX: 0.995,
-  scaleY: 0.995,
+  // Background transform with board calibration baked in (so board can stay untransformed for input hit-testing)
+  offsetX: 133.333333,
+  offsetY: 114.285714,
+  scaleX: 0.947619048,
+  scaleY: 0.947619048,
   alpha: .8,
 } satisfies {
   offsetX: number;
@@ -231,10 +232,12 @@ export const MAP_BACKGROUND_CALIBRATION = {
 // relative to the map background image.
 // This is useful when the image is close but the point-space needs a small alignment tweak.
 export const MAP_BOARD_CALIBRATION = {
-  offsetX: -195,
-  offsetY: -25,
-  scaleX: 1.05,
-  scaleY: 1.05,
+  // IMPORTANT: Keep board untransformed so clicks (camera world coords) match GridPoint.x/y.
+  // If you need to align the grid to the image, adjust MAP_BACKGROUND_CALIBRATION instead.
+  offsetX: 0,
+  offsetY: 0,
+  scaleX: 1,
+  scaleY: 1,
 } satisfies {
   offsetX: number;
   offsetY: number;
