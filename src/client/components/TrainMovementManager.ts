@@ -55,25 +55,6 @@ export class TrainMovementManager {
     this.playerTracks = playerTracks;
   }
 
-  private getForwardDirection(
-    currentPoint: Point,
-    lastVisitedPoint: Point | null,
-    connectedPoints: Point[]
-  ): Point | null {
-    // If we have a previous point, exclude it from forward options
-    const forwardOptions = lastVisitedPoint
-      ? connectedPoints.filter((p) => p !== lastVisitedPoint)
-      : connectedPoints;
-
-    // If there's only one way to go (or no previous point), that's forward
-    if (forwardOptions.length === 1) {
-      return forwardOptions[0];
-    }
-
-    // At junctions with multiple options, player must choose
-    return null;
-  }
-
   private isTerrainCityOrFerry(terrain: TerrainType): boolean {
     return [
       TerrainType.MajorCity,
@@ -85,6 +66,29 @@ export class TrainMovementManager {
 
   private sameGridPosition(a: Point, b: Point): boolean {
     return a.row === b.row && a.col === b.col;
+  }
+
+  /**
+   * Best-effort reversal detection when we can't compute path segments.
+   *
+   * We approximate reversal as "moving opposite to the direction of the last move"
+   * using a dot product against the overall last-move vector (from -> to).
+   */
+  private isReversalByDirectionFallback(
+    priorPosition: Point,
+    proposedTarget: Point,
+    lastMove: TrackSegment
+  ): boolean {
+    const lastVecRow = lastMove.to.row - lastMove.from.row;
+    const lastVecCol = lastMove.to.col - lastMove.from.col;
+    const proposedVecRow = proposedTarget.row - priorPosition.row;
+    const proposedVecCol = proposedTarget.col - priorPosition.col;
+
+    // If the last move has no direction, don't treat anything as a reversal.
+    if (lastVecRow === 0 && lastVecCol === 0) return false;
+
+    const dot = proposedVecRow * lastVecRow + proposedVecCol * lastVecCol;
+    return dot < 0;
   }
 
   private getMovementCostSegments(from: Point, to: Point, playerId: string): MovementSegment[] | null {
@@ -233,12 +237,13 @@ export class TrainMovementManager {
       const lastTraversed = lastMoveSegments && lastMoveSegments.length > 0 ? lastMoveSegments[lastMoveSegments.length - 1] : null;
 
       // Preferred: path-based reversal (works for multi-milepost moves).
-      // Fallback: if we can't compute a path, treat "move back to the origin of the last move" as a reversal attempt.
+      // Fallback: if we can't compute path segments, approximate reversal by comparing the
+      // proposed direction vs the last move's overall direction.
       const isReversal =
         (proposedFirst && lastTraversed)
           ? (this.sameGridPosition(proposedFirst.from, lastTraversed.to) &&
              this.sameGridPosition(proposedFirst.to, lastTraversed.from))
-          : this.sameGridPosition(point, lastTrackSegment.from);
+          : this.isReversalByDirectionFallback(priorPosition, point, lastTrackSegment);
 
       if (isReversal) {
         const currentGridPoint = this.getGridPointAtPosition(

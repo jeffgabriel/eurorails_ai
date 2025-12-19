@@ -851,6 +851,33 @@ describe('TrainMovementManager City Direction Reversal', () => {
     expect(result.message).toContain('can only reverse at cities or ferry ports');
   });
 
+  it('prevents reversal to an intermediate point when track data is missing (fallback logic)', () => {
+    // A -- B -- C (player previously moved from A to C in one click)
+    // With no track data, the path-based reversal check can't run; we still want to block "backward" moves.
+    const A = { row: 2, col: 2, x: 0, y: 0, terrain: TerrainType.Clear, id: 'A' } as GridPoint;
+    const B = { row: 2, col: 3, x: 0, y: 0, terrain: TerrainType.Clear, id: 'B' } as GridPoint;
+    const C = { row: 2, col: 4, x: 0, y: 0, terrain: TerrainType.Clear, id: 'C' } as GridPoint;
+
+    player.trainState.position = { ...C };
+    player.trainState.remainingMovement = 9;
+    player.trainState.movementHistory = [{ from: { ...A }, to: { ...C }, cost: 0 }];
+
+    // No updateTrackData call: this simulates missing/empty track state (MovementCostCalculator returns invalid).
+
+    // Mock terrain lookup: current position is Clear, so reversal should be blocked.
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === C.row && col === C.col) return C;
+      if (row === B.row && col === B.col) return B;
+      if (row === A.row && col === A.col) return A;
+      return null;
+    }) as any);
+
+    // Proposed move from C to B is a backward move relative to the last move's direction (A -> C).
+    const result = manager.canMoveTo(B);
+    expect(result.canMove).toBe(false);
+    expect(result.message).toContain('can only reverse at cities or ferry ports');
+  });
+
   it('allows reversal when movement history is empty (turn boundary scenario)', () => {
     // Simulate the bug scenario: player ended turn in city, movement history cleared
     player.trainState.position = { ...majorCity };
