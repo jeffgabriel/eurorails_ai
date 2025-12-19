@@ -20,7 +20,7 @@
       "Name": "Plymouth_Cherbourg",
       "connections": [
         "5c6e1c2a-a0c8-438c-8863-32c50034921f",
-        "9f982cd2-73bf-4aa5-b8f9-710972b1e449"
+        "1c9aa7af-c097-4f41-86f3-e97bc7908226"
       ],
       "cost": 4
     },
@@ -43,7 +43,7 @@
     {
       "Name": "Harwich_Ijmuiden",
       "connections": [
-        "ff2d5e96-ae65-480a-bd37-639fd0ecaa18",
+        "ff2d5e96-ae66-480a-bd37-639fd0ecaa18",
         "ff069f4c-7d39-4c2a-bdfc-fccbf7c68297"
       ],
       "cost": 4

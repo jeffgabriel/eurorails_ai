@@ -3,9 +3,9 @@ import mileposts from "../../../configuration/gridPoints.json";
 import ferryPoints from "../../../configuration/ferryPoints.json";
 
 // Define spacing constants directly here to avoid circular dependency with MapRenderer
-export const HORIZONTAL_SPACING = 45;
-export const VERTICAL_SPACING = 40;
-export const GRID_MARGIN = 100;
+export const HORIZONTAL_SPACING = 50;
+export const VERTICAL_SPACING = 45;
+export const GRID_MARGIN = 120;
 
 const gridRows = 58;
 const gridCols = 64;
@@ -210,3 +210,34 @@ export const mapConfig: MapConfig = {
 };
 
 export { majorCityGroups };
+
+// Calibration knobs for the `public/assets/map.png` world background.
+// These are in world units (same coordinate space as GridPoint.x/y).
+export const MAP_BACKGROUND_CALIBRATION = {
+  offsetX: -55,
+  offsetY: 95,
+  scaleX: 0.995,
+  scaleY: 0.995,
+  alpha: .8,
+} satisfies {
+  offsetX: number;
+  offsetY: number;
+  scaleX: number;
+  scaleY: number;
+  alpha: number;
+};
+
+// Calibration knobs for shifting/scaling the *board layer* (grid, tracks, trains, etc)
+// relative to the map background image.
+// This is useful when the image is close but the point-space needs a small alignment tweak.
+export const MAP_BOARD_CALIBRATION = {
+  offsetX: -195,
+  offsetY: -25,
+  scaleX: 1.05,
+  scaleY: 1.05,
+} satisfies {
+  offsetX: number;
+  offsetY: number;
+  scaleX: number;
+  scaleY: number;
+};

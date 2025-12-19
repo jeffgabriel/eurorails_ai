@@ -12,6 +12,7 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -25,6 +26,7 @@ declare module "phaser" {
 export class GameScene extends Phaser.Scene {
   // Main containers
   private mapContainer!: Phaser.GameObjects.Container;
+  private boardContainer!: Phaser.GameObjects.Container;
   private uiContainer!: Phaser.GameObjects.Container;
   private playerHandContainer!: Phaser.GameObjects.Container;
 
@@ -87,6 +89,7 @@ export class GameScene extends Phaser.Scene {
   preload() {
     this.load.svg("ferry-port", "/assets/ferry-port.svg", { scale: 0.05 });
     this.load.image("demand-template", "/assets/demand.png");
+    this.load.image("world-map", "/assets/map.png");
     // Static "loads at cities" reference pages (slideout UI)
     this.load.image("loads-reference-page-1", "/assets/rules_loads_1.png");
     this.load.image("loads-reference-page-2", "/assets/load_rules_2.png");
@@ -293,6 +296,13 @@ export class GameScene extends Phaser.Scene {
 
     // Create containers in the right order
     this.mapContainer = this.add.container(0, 0);
+    // Board layer holds all gameplay visuals (grid, tracks, trains, etc).
+    // We can offset/scale this container to align point-space to the background image.
+    const boardCalibration = MAP_BOARD_CALIBRATION;
+    this.boardContainer = this.add
+      .container(boardCalibration.offsetX, boardCalibration.offsetY)
+      .setScale(boardCalibration.scaleX, boardCalibration.scaleY);
+
     this.uiContainer = this.add.container(0, 0);
     const buttonContainer = this.createSettingsButton();
 
@@ -301,7 +311,7 @@ export class GameScene extends Phaser.Scene {
     // Create track manager first since it's a dependency for MapRenderer
     this.trackManager = new TrackDrawingManager(
       this,
-      this.mapContainer,
+      this.boardContainer,
       this.gameState,
       [], // Empty array initially, will be set after grid creation
       this.gameStateService
@@ -310,10 +320,24 @@ export class GameScene extends Phaser.Scene {
     // Initialize component managers
     this.mapRenderer = new MapRenderer(
       this,
-      this.mapContainer,
+      this.boardContainer,
       this.gameState,
       this.trackManager
     );
+
+    // World background image (pans/zooms with the main camera)
+    // Keep this in the same world coordinate space as all map elements.
+    const { width: mapWorldWidth, height: mapWorldHeight } =
+      this.mapRenderer.calculateMapDimensions();
+    const calibration = MAP_BACKGROUND_CALIBRATION;
+
+    const mapBackground = this.add
+      .image(calibration.offsetX, calibration.offsetY, "world-map")
+      .setOrigin(0, 0)
+      .setAlpha(calibration.alpha);
+    mapBackground.setDisplaySize(mapWorldWidth * calibration.scaleX, mapWorldHeight * calibration.scaleY);
+    this.mapContainer.addAt(mapBackground, 0);
+    this.mapContainer.add(this.boardContainer);
 
     // Create the map
     this.mapRenderer.createHexagonalGrid();
@@ -364,8 +388,8 @@ export class GameScene extends Phaser.Scene {
     this.uiContainer = containers.uiContainer;
     this.playerHandContainer = containers.playerHandContainer;
 
-    // Add train container to map container
-    this.mapContainer.add(containers.trainContainer);
+    // Add train container to the board layer (so it stays aligned with grid/track)
+    this.boardContainer.add(containers.trainContainer);
 
     // Register for track cost updates
     this.trackManager.onCostUpdate((cost) => {

@@ -138,7 +138,7 @@ export class MapRenderer {
 
         const terrain = config.terrain;
         const city = config.city;
-        // this.writeGridPointLabel(config, isOffsetRow);
+        //this.writeGridPointLabel(config, isOffsetRow);
         //this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
@@ -227,7 +227,7 @@ export class MapRenderer {
     row: number
   ) {
     // Add coordinate label for each point
-    const coordLabel = this.scene.add.text(x + 93, y + 118, `${col},${row}`, {
+    const coordLabel = this.scene.add.text(x + 98, y + 123, `${col},${row}`, {
       color: "#000000",
       fontSize: "6px",
       backgroundColor: "#ffffff80", // Semi-transparent white background
