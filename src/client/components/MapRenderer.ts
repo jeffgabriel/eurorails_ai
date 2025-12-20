@@ -4,6 +4,7 @@ import {
   HORIZONTAL_SPACING,
   VERTICAL_SPACING,
   GRID_MARGIN,
+  DEBUG_OVERLAYS,
 } from "../config/mapConfig";
 import { TerrainType, GridPoint } from "../../shared/types/GameTypes";
 import { GameState } from "../../shared/types/GameTypes";
@@ -11,6 +12,10 @@ import { TrackDrawingManager } from "../components/TrackDrawingManager";
 import { MapElement } from "./map/MapElement";
 import { MapElementFactory } from "./map/MapElementFactory";
 import { FerryConnectionElement } from "./map/FerryConnection";
+import {
+  getNonRiverWaterCrossingEdgeKeys,
+  getRiverCrossingEdgeKeys,
+} from "../../shared/config/waterCrossings";
 
 // All coordinates in configuration and rendering are zero-based. Do not add or subtract 1 from row/col anywhere in this file.
 
@@ -28,6 +33,9 @@ export class MapRenderer {
   private trackDrawingManager: TrackDrawingManager;
   private backgroundGraphics: Phaser.GameObjects.Graphics;
   private mapElements: MapElement[][] = [];
+  private riverCrossingsDebugGraphics: Phaser.GameObjects.Graphics | null = null;
+  private nonRiverWaterCrossingsDebugGraphics: Phaser.GameObjects.Graphics | null =
+    null;
 
   constructor(
     scene: Phaser.Scene,
@@ -139,7 +147,7 @@ export class MapRenderer {
         const terrain = config.terrain;
         const city = config.city;
         //this.writeGridPointLabel(config, isOffsetRow);
-        //this.writeGridPointCoordinates(x, y, col, row);
+        this.writeGridPointCoordinates(x, y, col, row);
         if (terrain !== TerrainType.Water && config) {
           // Create and store the map element
           const mapElement = MapElementFactory.createMapElement(
@@ -208,6 +216,75 @@ export class MapRenderer {
       portNames,
       ferryPortIcons,
     ]);
+
+    if (DEBUG_OVERLAYS.riverCrossings) this.drawRiverCrossingsDebugOverlay();
+    if (DEBUG_OVERLAYS.nonRiverWaterCrossings)
+      this.drawNonRiverWaterCrossingsDebugOverlay();
+  }
+
+  private drawRiverCrossingsDebugOverlay(): void {
+    // Draw bright red overlay lines for every edge classified as a river crossing.
+    // This is intended for spot-checking and calibration.
+    if (this.riverCrossingsDebugGraphics) {
+      this.riverCrossingsDebugGraphics.clear();
+    } else {
+      this.riverCrossingsDebugGraphics = this.scene.add.graphics();
+      this.riverCrossingsDebugGraphics.setDepth(10_000); // above tracks/UI board elements
+      this.mapContainer.add(this.riverCrossingsDebugGraphics);
+    }
+
+    const g = this.riverCrossingsDebugGraphics;
+    g.lineStyle(4, 0xff0000, 0.9);
+
+    const edgeKeys = getRiverCrossingEdgeKeys();
+    for (const key of edgeKeys) {
+      const [a, b] = key.split("|");
+      if (!a || !b) continue;
+      const [ar, ac] = a.split(",").map((v) => Number(v.trim()));
+      const [br, bc] = b.split(",").map((v) => Number(v.trim()));
+      if (![ar, ac, br, bc].every(Number.isFinite)) continue;
+
+      const p1 = this.gridPoints[ar]?.[ac];
+      const p2 = this.gridPoints[br]?.[bc];
+      if (!p1 || !p2) continue;
+
+      g.beginPath();
+      g.moveTo(p1.x, p1.y);
+      g.lineTo(p2.x, p2.y);
+      g.strokePath();
+    }
+  }
+
+  private drawNonRiverWaterCrossingsDebugOverlay(): void {
+    // Draw bright yellow overlay lines for every edge classified as a non-river water crossing.
+    if (this.nonRiverWaterCrossingsDebugGraphics) {
+      this.nonRiverWaterCrossingsDebugGraphics.clear();
+    } else {
+      this.nonRiverWaterCrossingsDebugGraphics = this.scene.add.graphics();
+      this.nonRiverWaterCrossingsDebugGraphics.setDepth(9_999); // just under river overlay
+      this.mapContainer.add(this.nonRiverWaterCrossingsDebugGraphics);
+    }
+
+    const g = this.nonRiverWaterCrossingsDebugGraphics;
+    g.lineStyle(4, 0xffff00, 0.9);
+
+    const edgeKeys = getNonRiverWaterCrossingEdgeKeys();
+    for (const key of edgeKeys) {
+      const [a, b] = key.split("|");
+      if (!a || !b) continue;
+      const [ar, ac] = a.split(",").map((v) => Number(v.trim()));
+      const [br, bc] = b.split(",").map((v) => Number(v.trim()));
+      if (![ar, ac, br, bc].every(Number.isFinite)) continue;
+
+      const p1 = this.gridPoints[ar]?.[ac];
+      const p2 = this.gridPoints[br]?.[bc];
+      if (!p1 || !p2) continue;
+
+      g.beginPath();
+      g.moveTo(p1.x, p1.y);
+      g.lineTo(p2.x, p2.y);
+      g.strokePath();
+    }
   }
 
   private getGraphicsForTerrain(
@@ -227,11 +304,13 @@ export class MapRenderer {
     row: number
   ) {
     // Add coordinate label for each point
-    const coordLabel = this.scene.add.text(x + 98, y + 123, `${col},${row}`, {
+    // Use explicit axis labels to avoid row/col vs x/y confusion.
+    const coordLabel = this.scene.add.text(x + 110, y + 140, `${row}, ${col}`, {
       color: "#000000",
-      fontSize: "6px",
-      backgroundColor: "#ffffff80", // Semi-transparent white background
+      fontSize: "7px",
+      //backgroundColor: "#ffffff80", // Semi-transparent white background
     });
+    coordLabel.setDepth(10000);
     coordLabel.setOrigin(0, 1);
     this.mapContainer.add(coordLabel);
   }

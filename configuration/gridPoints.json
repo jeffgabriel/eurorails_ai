@@ -10339,9 +10339,9 @@
     "Id": "b5202b34-cffd-4687-ac95-c70d474911a6",
     "Type": "Milepost",
     "Name": null,
-    "GridX": 48,
-    "GridY": 9,
-    "Ocean": "North Sea"
+    "GridX": 49,
+    "GridY": 10,
+    "Ocean": null
   },
   {
     "Id": "6f3123be-2502-409b-8c8a-4a6e0344d21e",
@@ -13096,14 +13096,6 @@
     "Ocean": null
   },
   {
-    "Id": "c201cc02-745f-436c-9c8a-3b5c8dd9dc31",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 55,
-    "GridY": 4,
-    "Ocean": null
-  },
-  {
     "Id": "3c7a8847-fff9-4554-8146-3073fb076d29",
     "Type": "Mountain",
     "Name": null,
@@ -14134,14 +14126,6 @@
     "GridX": 58,
     "GridY": 9,
     "Ocean": "Baltic Sea"
-  },
-  {
-    "Id": "a954e6a4-088b-4d89-8d18-e7b14d6f445a",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 58,
-    "GridY": 5,
-    "Ocean": null
   },
   {
     "Id": "56f55efa-4918-40b3-9208-c173daf40ad6",
@@ -16421,14 +16405,6 @@
     "Name": null,
     "GridX": 54,
     "GridY": 38,
-    "Ocean": null
-  },
-  {
-    "Id": "2fa564e5-15b2-439b-9c86-f800685b4637",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 49,
-    "GridY": 15,
     "Ocean": null
   },
   {
