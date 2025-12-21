@@ -52,11 +52,21 @@ type WaterCrossingsConfig = {
   nonRiverWaterEdges: string[];
 };
 
+type RiverCrossingsConfig = {
+  version: number;
+  generatedAt: string;
+  rivers: Array<{ name: string; edges: string[] }>;
+  // River edges detected as "river water" but whose underlying water component
+  // was seeded by more than one river name (cannot uniquely assign).
+  ambiguousEdges: string[];
+};
+
 const REPO_ROOT = path.resolve(__dirname, "..");
 
 const MAP_PNG_PATH = path.join(REPO_ROOT, "public", "assets", "map.png");
 const RIVERS_JSON_PATH = path.join(REPO_ROOT, "configuration", "rivers.json");
 const OUT_PATH = path.join(REPO_ROOT, "configuration", "waterCrossings.json");
+const RIVER_GROUPS_OUT_PATH = path.join(REPO_ROOT, "configuration", "riverCrossings.json");
 
 // Tune these once if needed.
 const WATER_PIXEL = {
@@ -75,6 +85,10 @@ const SAMPLE = {
   // Also try a small perpendicular offset corridor (helps when the exact segment is fully occluded).
   perpendicularOffsetsPx: [-12, -8, -4, 0, 4, 8, 12],
 } as const;
+
+// Heuristic used only for water *fill* components if needed; river detection uses the ink mask.
+// Left here as a tuning knob, but currently not applied to river-ink components.
+const MAX_WATER_FILL_COMPONENT_PIXELS = 50_000;
 
 function readExistingOverrides(): WaterCrossingsConfig["overrides"] {
   try {
@@ -147,35 +161,58 @@ function isWaterPixel(r: number, g: number, b: number): boolean {
   return b - maxRG >= WATER_PIXEL.minBlueMinusMaxRG;
 }
 
+// Detect the water *fill* (sea/lake) which is a very consistent color on the base map.
+// Keep this strict so coastline/rivers (ink) don't match.
+function isWaterFillPixel(r: number, g: number, b: number): boolean {
+  // Observed fill is ~[1,117,176] in map.png
+  return Math.abs(r - 1) <= 6 && Math.abs(g - 117) <= 6 && Math.abs(b - 176) <= 6;
+}
+
+// Detect the *river stroke ink* (dark blue line), distinct from sea/lake fill.
+// The sea fill is ~[1,117,176]; river ink tends to be darker (lower luminance) and slightly less green.
+function isRiverInkPixel(r: number, g: number, b: number): boolean {
+  if (b < 50) return false;
+  const maxRG = Math.max(r, g);
+  if (b - maxRG < 10) return false;
+  const lum = r + g + b; // 0..765
+  // Sea fill fails g<116 and lum<285, river ink typically passes.
+  return g < 116 && lum < 285;
+}
+
 function idxOf(x: number, y: number, width: number): number {
   return y * width + x;
 }
 
-class LazyWaterComponents {
-  private readonly width: number;
-  private readonly height: number;
-  private readonly waterMask: Uint8Array; // 1=water
-  private readonly compIds: Int32Array; // -1 unknown, otherwise component id
-  private nextId = 0;
-
-  constructor(png: PNG) {
-    this.width = png.width;
-    this.height = png.height;
-    this.waterMask = new Uint8Array(this.width * this.height);
-    this.compIds = new Int32Array(this.width * this.height);
-    this.compIds.fill(-1);
-
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const i = (y * this.width + x) * 4;
-        const r = png.data[i]!;
-        const g = png.data[i + 1]!;
-        const b = png.data[i + 2]!;
-        if (isWaterPixel(r, g, b)) {
-          this.waterMask[idxOf(x, y, this.width)] = 1;
-        }
+function buildMask(png: PNG, predicate: (r: number, g: number, b: number) => boolean): Uint8Array {
+  const mask = new Uint8Array(png.width * png.height);
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const i = (y * png.width + x) * 4;
+      const r = png.data[i]!;
+      const g = png.data[i + 1]!;
+      const b = png.data[i + 2]!;
+      if (predicate(r, g, b)) {
+        mask[idxOf(x, y, png.width)] = 1;
       }
     }
+  }
+  return mask;
+}
+
+class LazyComponents {
+  private readonly width: number;
+  private readonly height: number;
+  private readonly mask: Uint8Array; // 1=hit
+  private readonly compIds: Int32Array; // -1 unknown, otherwise component id
+  private readonly compSizes: Map<number, number> = new Map();
+  private nextId = 0;
+
+  constructor(png: PNG, mask: Uint8Array) {
+    this.width = png.width;
+    this.height = png.height;
+    this.mask = mask;
+    this.compIds = new Int32Array(this.width * this.height);
+    this.compIds.fill(-1);
   }
 
   public getComponentIdNear(x0: number, y0: number, radius: number): number | null {
@@ -186,11 +223,15 @@ class LazyWaterComponents {
     for (let y = yMin; y <= yMax; y++) {
       for (let x = xMin; x <= xMax; x++) {
         const idx = idxOf(x, y, this.width);
-        if (this.waterMask[idx] !== 1) continue;
+        if (this.mask[idx] !== 1) continue;
         return this.getComponentIdAt(x, y);
       }
     }
     return null;
+  }
+
+  public getComponentSize(compId: number): number | null {
+    return this.compSizes.get(compId) ?? null;
   }
 
   private getComponentIdAt(x: number, y: number): number {
@@ -205,6 +246,7 @@ class LazyWaterComponents {
     let qt = 0;
     queue[qt++] = startIdx;
     this.compIds[startIdx] = id;
+    let size = 1;
 
     while (qh < qt) {
       const cur = queue[qh++]!;
@@ -221,13 +263,15 @@ class LazyWaterComponents {
       for (const [nx, ny] of n) {
         if (nx < 0 || nx >= this.width || ny < 0 || ny >= this.height) continue;
         const ni = idxOf(nx, ny, this.width);
-        if (this.waterMask[ni] !== 1) continue;
+        if (this.mask[ni] !== 1) continue;
         if (this.compIds[ni] !== -1) continue;
         this.compIds[ni] = id;
         queue[qt++] = ni;
+        size++;
       }
     }
 
+    this.compSizes.set(id, size);
     return id;
   }
 }
@@ -279,15 +323,17 @@ function worldToImagePx(
   };
 }
 
-function firstWaterComponentAlongSegment(
-  comps: LazyWaterComponents,
+type SegmentHit = { compId: number; x: number; y: number; offset: number };
+
+function firstComponentHitAlongSegment(
+  comps: LazyComponents,
   png: PNG,
   ax: number,
   ay: number,
   bx: number,
   by: number,
   radius: number
-): number | null {
+): SegmentHit | null {
   const dx = bx - ax;
   const dy = by - ay;
   const len = Math.max(1, Math.hypot(dx, dy));
@@ -305,11 +351,33 @@ function firstWaterComponentAlongSegment(
       const sx = clampInt(sx0 + px * off, 0, png.width - 1);
       const sy = clampInt(sy0 + py * off, 0, png.height - 1);
       const compId = comps.getComponentIdNear(sx, sy, radius);
-      if (compId !== null) return compId;
+      if (compId !== null) return { compId, x: sx, y: sy, offset: off };
     }
   }
 
   return null;
+}
+
+function isCoastlineInkAt(
+  waterFillMask: Uint8Array,
+  png: PNG,
+  x: number,
+  y: number,
+  // A bit beyond ink thickness
+  distPx: number = 10
+): boolean {
+  const w = png.width;
+  // Approximate normal directions: check left/right by sampling a small cross.
+  // We'll treat "water on exactly one side" as coastline.
+  const sample = (sx: number, sy: number): boolean => {
+    const cx = clampInt(sx, 0, png.width - 1);
+    const cy = clampInt(sy, 0, png.height - 1);
+    return waterFillMask[idxOf(cx, cy, w)] === 1;
+  };
+
+  const left = sample(x - distPx, y) || sample(x - distPx, y - 2) || sample(x - distPx, y + 2);
+  const right = sample(x + distPx, y) || sample(x + distPx, y - 2) || sample(x + distPx, y + 2);
+  return left !== right;
 }
 
 function parseEdgeKey(input: string): { a: GridRef; b: GridRef } | null {
@@ -361,13 +429,19 @@ function normalizeSeedEdge(
 
 function main(): void {
   const png = loadPng(MAP_PNG_PATH);
+  const waterMask = buildMask(png, isWaterPixel);
+  const waterFillMask = buildMask(png, isWaterFillPixel);
+  const riverInkMask = buildMask(png, isRiverInkPixel);
   const { grid, rows, cols } = buildGrid();
-  const comps = new LazyWaterComponents(png);
+  const waterComps = new LazyComponents(png, waterMask);
+  const waterFillComps = new LazyComponents(png, waterFillMask);
+  const riverInkComps = new LazyComponents(png, riverInkMask);
   const { displayW, displayH } = getMapDisplaySizeWorld();
   const overrides = readExistingOverrides();
 
   const riversRaw = JSON.parse(fs.readFileSync(RIVERS_JSON_PATH, "utf-8")) as RiverConfig;
-  const riverComponentIds = new Set<number>();
+  // Map water component id -> set of river names that seeded it.
+  const riverComponentsToNames = new Map<number, Set<string>>();
 
   // Seed river components.
   for (const river of riversRaw) {
@@ -388,19 +462,19 @@ function main(): void {
 
       // Use the same sampling logic as edge detection, but with a larger neighborhood so that
       // thin rivers or anti-aliased edges still get picked up for seeding.
-      let hit: number | null = null;
-      for (let t = 0; t <= 1; t += step) {
-        const sx = clampInt(aPx.x + dx * t, 0, png.width - 1);
-        const sy = clampInt(aPx.y + dy * t, 0, png.height - 1);
-        const compId = comps.getComponentIdNear(sx, sy, 3);
-        if (compId !== null) {
-          hit = compId;
-          break;
-        }
-      }
+      const hit = firstComponentHitAlongSegment(
+        riverInkComps,
+        png,
+        aPx.x,
+        aPx.y,
+        bPx.x,
+        bPx.y,
+        SAMPLE.neighborhoodRadiusPx
+      );
 
       if (hit !== null) {
-        riverComponentIds.add(hit);
+        if (!riverComponentsToNames.has(hit.compId)) riverComponentsToNames.set(hit.compId, new Set());
+        riverComponentsToNames.get(hit.compId)!.add(river.Name);
       } else {
         // Keep this quiet by default; if needed we can add a verbose flag.
         // console.warn(`No water pixels found for river seed edge: ${river.Name} ${norm.start.row},${norm.start.col}|${norm.end.row},${norm.end.col}`);
@@ -410,6 +484,8 @@ function main(): void {
 
   const riverEdges = new Set<string>();
   const nonRiverWaterEdges = new Set<string>();
+  const ambiguousRiverEdges = new Set<string>();
+  const riverEdgesByName = new Map<string, Set<string>>();
 
   // Optional debug: DEBUG_EDGE="43,18|44,18" (row,col|row,col)
   const debugEdgeRaw = process.env.DEBUG_EDGE;
@@ -429,8 +505,26 @@ function main(): void {
     }
     const aPx = worldToImagePx(a.x, a.y, png, displayW, displayH);
     const bPx = worldToImagePx(b.x, b.y, png, displayW, displayH);
-    const hitComp = firstWaterComponentAlongSegment(
-      comps,
+    const hitRiverInk = firstComponentHitAlongSegment(
+      riverInkComps,
+      png,
+      aPx.x,
+      aPx.y,
+      bPx.x,
+      bPx.y,
+      SAMPLE.neighborhoodRadiusPx
+    );
+    const hitWaterFill = firstComponentHitAlongSegment(
+      waterFillComps,
+      png,
+      aPx.x,
+      aPx.y,
+      bPx.x,
+      bPx.y,
+      SAMPLE.neighborhoodRadiusPx
+    );
+    const hitWater = firstComponentHitAlongSegment(
+      waterComps,
       png,
       aPx.x,
       aPx.y,
@@ -443,9 +537,18 @@ function main(): void {
     console.log(" terrains:", a.terrain, b.terrain);
     console.log(" world:", { ax: a.x, ay: a.y, bx: b.x, by: b.y });
     console.log(" imagePx:", { ax: aPx, bx: bPx });
-    console.log(" firstWaterComp:", hitComp);
-    if (hitComp !== null) {
-      console.log(" classifiedAsRiverComponent:", riverComponentIds.has(hitComp));
+    console.log(" firstRiverInkHit:", hitRiverInk);
+    console.log(" firstWaterFillHit:", hitWaterFill);
+    console.log(" firstWaterAnyHit:", hitWater);
+    if (hitRiverInk !== null) {
+      console.log(
+        " riverNamesForRiverInkComponent:",
+        Array.from(riverComponentsToNames.get(hitRiverInk.compId) || [])
+      );
+      console.log(
+        " coastlineInkHeuristic:",
+        isCoastlineInkAt(waterFillMask, png, hitRiverInk.x, hitRiverInk.y)
+      );
     }
     return;
   }
@@ -468,8 +571,8 @@ function main(): void {
 
         const pPx = worldToImagePx(p.x, p.y, png, displayW, displayH);
         const qPx = worldToImagePx(q.x, q.y, png, displayW, displayH);
-        const hitComp = firstWaterComponentAlongSegment(
-          comps,
+        const hitRiverInk = firstComponentHitAlongSegment(
+          riverInkComps,
           png,
           pPx.x,
           pPx.y,
@@ -477,14 +580,34 @@ function main(): void {
           qPx.y,
           SAMPLE.neighborhoodRadiusPx
         );
-
-        if (hitComp === null) continue;
-
-        if (riverComponentIds.has(hitComp)) {
+        if (
+          hitRiverInk !== null &&
+          riverComponentsToNames.has(hitRiverInk.compId) &&
+          !isCoastlineInkAt(waterFillMask, png, hitRiverInk.x, hitRiverInk.y)
+        ) {
           riverEdges.add(key);
-        } else {
-          nonRiverWaterEdges.add(key);
+          const names = riverComponentsToNames.get(hitRiverInk.compId)!;
+          if (names.size === 1) {
+            const name = Array.from(names)[0]!;
+            if (!riverEdgesByName.has(name)) riverEdgesByName.set(name, new Set());
+            riverEdgesByName.get(name)!.add(key);
+          } else {
+            ambiguousRiverEdges.add(key);
+          }
+          continue;
         }
+
+        const hitWaterFill = firstComponentHitAlongSegment(
+          waterFillComps,
+          png,
+          pPx.x,
+          pPx.y,
+          qPx.x,
+          qPx.y,
+          SAMPLE.neighborhoodRadiusPx
+        );
+        if (hitWaterFill === null) continue;
+        nonRiverWaterEdges.add(key);
       }
     }
   }
@@ -503,6 +626,8 @@ function main(): void {
   for (const k of overrides.excludeEdges) {
     riverEdges.delete(k);
     nonRiverWaterEdges.delete(k);
+    ambiguousRiverEdges.delete(k);
+    for (const set of riverEdgesByName.values()) set.delete(k);
   }
 
   // Apply overrides (optional; left empty initially)
@@ -524,9 +649,29 @@ function main(): void {
 
   fs.writeFileSync(OUT_PATH, JSON.stringify(output, null, 2) + "\n", "utf-8");
 
+  const riversGrouped: RiverCrossingsConfig["rivers"] = Array.from(riverEdgesByName.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, edges]) => ({ name, edges: Array.from(edges).sort() }));
+
+  const riverGroupsOut: RiverCrossingsConfig = {
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    rivers: riversGrouped,
+    ambiguousEdges: Array.from(ambiguousRiverEdges).sort(),
+  };
+
+  fs.writeFileSync(
+    RIVER_GROUPS_OUT_PATH,
+    JSON.stringify(riverGroupsOut, null, 2) + "\n",
+    "utf-8"
+  );
+
   console.log(`Wrote ${path.relative(REPO_ROOT, OUT_PATH)}`);
   console.log(`River edges: ${output.riverEdges.length}`);
   console.log(`Non-river water edges: ${output.nonRiverWaterEdges.length}`);
+  console.log(`Wrote ${path.relative(REPO_ROOT, RIVER_GROUPS_OUT_PATH)}`);
+  console.log(`Rivers with unique assignments: ${riversGrouped.length}`);
+  console.log(`Ambiguous river edges: ${riverGroupsOut.ambiguousEdges.length}`);
   console.log(
     `Costs: river=${WaterCrossingType.River} nonRiverWater=${WaterCrossingType.Lake} (lake/ocean-inlet)`
   );

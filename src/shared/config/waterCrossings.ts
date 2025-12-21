@@ -7,6 +7,7 @@ type WaterCrossingsJson = {
   overrides?: {
     forceRiverEdges?: string[];
     forceNonRiverWaterEdges?: string[];
+    // Keys look like: "43,18|44,18" (row,col|row,col) - add in waterCrossings.json
     excludeEdges?: string[];
   };
 };

@@ -17,7 +17,7 @@ export abstract class City extends MapElement {
     [TerrainType.SmallCity]: 12,
   };
 
-  protected readonly POINT_RADIUS = 3; // Radius for the milepost dot
+  protected readonly POINT_RADIUS = 4; // Radius for the milepost dot
   private loadService: LoadService;
   protected cityData: CityData;
 

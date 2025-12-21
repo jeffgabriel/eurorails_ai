@@ -229,7 +229,7 @@ export class MapRenderer {
       this.riverCrossingsDebugGraphics.clear();
     } else {
       this.riverCrossingsDebugGraphics = this.scene.add.graphics();
-      this.riverCrossingsDebugGraphics.setDepth(10_000); // above tracks/UI board elements
+      this.riverCrossingsDebugGraphics.setDepth(9_000); // above tracks/UI board elements
       this.mapContainer.add(this.riverCrossingsDebugGraphics);
     }
 
@@ -261,7 +261,7 @@ export class MapRenderer {
       this.nonRiverWaterCrossingsDebugGraphics.clear();
     } else {
       this.nonRiverWaterCrossingsDebugGraphics = this.scene.add.graphics();
-      this.nonRiverWaterCrossingsDebugGraphics.setDepth(9_999); // just under river overlay
+      this.nonRiverWaterCrossingsDebugGraphics.setDepth(8_099); // just under river overlay
       this.mapContainer.add(this.nonRiverWaterCrossingsDebugGraphics);
     }
 
