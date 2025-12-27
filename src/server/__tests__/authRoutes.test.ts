@@ -50,7 +50,6 @@ describe('AuthRoutes', () => {
   afterAll(async () => {
     // Final cleanup
     await cleanupTestUsers(testUserIds);
-    await db.end();
   });
 
   describe('POST /api/auth/register', () => {

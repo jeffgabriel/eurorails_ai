@@ -227,11 +227,13 @@ export class MapRenderer {
     row: number
   ) {
     // Add coordinate label for each point
-    const coordLabel = this.scene.add.text(x + 98, y + 123, `${col},${row}`, {
+    // Use explicit axis labels to avoid row/col vs x/y confusion.
+    const coordLabel = this.scene.add.text(x + 110, y + 140, `${row}, ${col}`, {
       color: "#000000",
-      fontSize: "6px",
-      backgroundColor: "#ffffff80", // Semi-transparent white background
+      fontSize: "7px",
+      //backgroundColor: "#ffffff80", // Semi-transparent white background
     });
+    coordLabel.setDepth(10000);
     coordLabel.setOrigin(0, 1);
     this.mapContainer.add(coordLabel);
   }

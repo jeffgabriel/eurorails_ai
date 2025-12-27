@@ -1,0 +1,946 @@
+[
+  {
+    "Name": "Elbe",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 52,
+          "Row": 30
+        },
+        "End": {
+          "Row": 53,
+          "Col": 30
+        }
+      },
+      {
+        "Start": {
+          "Col": 51,
+          "Row": 29
+        },
+        "End": {
+          "Row": 52,
+          "Col": 29
+        }
+      },
+      {
+        "Start": {
+          "Col": 51,
+          "Row": 28
+        },
+        "End": {
+          "Row": 52,
+          "Col": 28
+        }
+      },
+      {
+        "Start": {
+          "Col": 50,
+          "Row": 27
+        },
+        "End": {
+          "Row": 51,
+          "Col": 27
+        }
+      },
+      {
+        "Start": {
+          "Col": 50,
+          "Row": 26
+        },
+        "End": {
+          "Row": 51,
+          "Col": 26
+        }
+      },
+      {
+        "Start": {
+          "Col": 48,
+          "Row": 25
+        },
+        "End": {
+          "Row": 49,
+          "Col": 25
+        }
+      },
+      {
+        "Start": {
+          "Col": 48,
+          "Row": 24
+        },
+        "End": {
+          "Row": 49,
+          "Col": 24
+        }
+      },
+      {
+        "Start": {
+          "Col": 49,
+          "Row": 23
+        },
+        "End": {
+          "Row": 50,
+          "Col": 23
+        }
+      },
+      {
+        "Start": {
+          "Col": 49,
+          "Row": 22
+        },
+        "End": {
+          "Row": 50,
+          "Col": 22
+        }
+      },
+      {
+        "Start": {
+          "Col": 47,
+          "Row": 21
+        },
+        "End": {
+          "Row": 48,
+          "Col": 21
+        }
+      },
+      {
+        "Start": {
+          "Col": 46,
+          "Row": 20
+        },
+        "End": {
+          "Row": 47,
+          "Col": 20
+        }
+      },
+      {
+        "Start": {
+          "Col": 45,
+          "Row": 19
+        },
+        "End": {
+          "Row": 46,
+          "Col": 19
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Oder",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 53,
+          "Row": 21
+        },
+        "End": {
+          "Row": 54,
+          "Col": 21
+        }
+      },
+      {
+        "Start": {
+          "Col": 55,
+          "Row": 26
+        },
+        "End": {
+          "Row": 56,
+          "Col": 26
+        }
+      },
+      {
+        "Start": {
+          "Col": 58,
+          "Row": 32
+        },
+        "End": {
+          "Row": 59,
+          "Col": 32
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Vistula",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 40,
+          "Row": 20
+        },
+        "End": {
+          "Row": 41,
+          "Col": 20
+        }
+      },
+      {
+        "Start": {
+          "Col": 42,
+          "Row": 25
+        },
+        "End": {
+          "Row": 43,
+          "Col": 26
+        }
+      }]
+  },
+  {
+    "Name": "Donau",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 43,
+          "Row": 35
+        },
+        "End": {
+          "Row": 44,
+          "Col": 35
+        }
+      },
+      {
+        "Start": {
+          "Col": 58,
+          "Row": 40
+        },
+        "End": {
+          "Row": 59,
+          "Col": 40
+        }
+      },
+      {
+        "Start": {
+          "Col": 61,
+          "Row": 48
+        },
+        "End": {
+          "Row": 62,
+          "Col": 48
+        }
+      },
+      {
+        "Start": {
+          "Col": 46,
+          "Row": 35
+        },
+        "End": {
+          "Row": 46,
+          "Col": 34
+        }
+      },
+      {
+        "Start": {
+          "Col": 48,
+          "Row": 35
+        },
+        "End": {
+          "Row": 49,
+          "Col": 35
+        }
+      },
+      {
+        "Start": {
+          "Col": 50,
+          "Row": 37
+        },
+        "End": {
+          "Row": 51,
+          "Col": 36
+        }
+      },
+      {
+        "Start": {
+          "Col": 53,
+          "Row": 37
+        },
+        "End": {
+          "Row": 53,
+          "Col": 38
+        }
+      },
+      {
+        "Start": {
+          "Col": 58,
+          "Row": 39
+        },
+        "End": {
+          "Row": 58,
+          "Col": 40
+        }
+      },
+      {
+        "Start": {
+          "Col": 59,
+          "Row": 42
+        },
+        "End": {
+          "Row": 58,
+          "Col": 42
+        }
+      },
+      {
+        "Start": {
+          "Col": 58,
+          "Row": 45
+        },
+        "End": {
+          "Row": 57,
+          "Col": 45
+        }
+      },
+      {
+        "Start": {
+          "Col": 55,
+          "Row": 39
+        },
+        "End": {
+          "Row": 56,
+          "Col": 38
+        }
+      },
+      {
+        "Start": {
+          "Col": 57,
+          "Row": 45
+        },
+        "End": {
+          "Row": 58,
+          "Col": 45
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Sava",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 49,
+          "Row": 43
+        },
+        "End": {
+          "Row": 50,
+          "Col": 43
+        }
+      },
+      {
+        "Start": {
+          "Col": 54,
+          "Row": 47
+        },
+        "End": {
+          "Row": 55,
+          "Col": 47
+        }
+      },
+      {
+        "Start": {
+          "Col": 61,
+          "Row": 48
+        },
+        "End": {
+          "Row": 61,
+          "Col": 49
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Po",
+    "Edges": [
+      {  
+        "Start": {
+          "Col": 38,
+          "Row": 43
+        },
+        "End": {
+          "Row": 39,
+          "Col": 43
+        }
+      },
+      {
+        "Start": {
+          "Col": 42,
+          "Row": 45
+        },
+        "End": {
+          "Row": 43,
+          "Col": 45
+        }
+      },
+      {
+        "Start": {
+          "Col": 46,
+          "Row": 46
+        },
+        "End": {
+          "Row": 47,
+          "Col": 46
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Rhône",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 32,
+          "Row": 46
+        },
+        "End": {
+          "Row": 33,
+          "Col": 46
+        }
+      },
+      {
+        "Start": {
+          "Col": 33,
+          "Row": 40
+        },
+        "End": {
+          "Row": 34,
+          "Col": 40
+        }
+      },
+      {
+        "Start": {
+          "Col": 35,
+          "Row": 39
+        },
+        "End": {
+          "Row": 36,
+          "Col": 39
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Garonne",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 23,
+          "Row": 37
+        },
+        "End": {
+          "Row": 24,
+          "Col": 37
+        }
+      },
+      {
+        "Start": {
+          "Col": 24,
+          "Row": 41
+        },
+        "End": {
+          "Row": 25,
+          "Col": 41
+        }
+      },
+      {
+        "Start": {
+          "Col": 25,
+          "Row": 44
+        },
+        "End": {
+          "Row": 26,
+          "Col": 44
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Loire",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 24,
+          "Row": 32
+        },
+        "End": {
+          "Row": 24,
+          "Col": 31
+        }
+      },
+      {
+        "Start": {
+          "Col": 31,
+          "Row": 32
+        },
+        "End": {
+          "Row": 32,
+          "Col": 32
+        }
+      },
+      {
+        "Start": {
+          "Col": 32,
+          "Row": 39
+        },
+        "End": {
+          "Row": 33,
+          "Col": 39
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Siene",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 29,
+          "Row": 26
+        },
+        "End": {
+          "Row": 30,
+          "Col": 26
+        }
+      },
+      {
+        "Start": {
+          "Col": 31,
+          "Row": 29
+        },
+        "End": {
+          "Row": 33,
+          "Col": 29
+        }
+      },
+      {
+        "Start": {
+          "Col": 34,
+          "Row": 32
+        },
+        "End": {
+          "Row": 35,
+          "Col": 32
+        }
+      },
+      {
+        "Start": {
+          "Col": 34,
+          "Row": 31
+        },
+        "End": {
+          "Row": 33,
+          "Col": 31
+        }
+      },
+      {
+        "Start": {
+          "Col": 31,
+          "Row": 29
+        },
+        "End": {
+          "Row": 32,
+          "Col": 29
+        }
+      },
+      {
+        "Start": {
+          "Col": 32,
+          "Row": 30
+        },
+        "End": {
+          "Row": 33,
+          "Col": 30
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Meuse",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 39,
+          "Row": 23
+        },
+        "End": {
+          "Row": 40,
+          "Col": 23
+        }
+      },
+      {
+        "Start": {
+          "Col": 38,
+          "Row": 24
+        },
+        "End": {
+          "Row": 40,
+          "Col": 24
+        }
+      },
+      {
+        "Start": {
+          "Col": 37,
+          "Row": 26
+        },
+        "End": {
+          "Row": 37,
+          "Col": 27
+        }
+      },
+      {
+        "Start": {
+          "Col": 37,
+          "Row": 32
+        },
+        "End": {
+          "Row": 38,
+          "Col": 32
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Rhein",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 37,
+          "Row": 21
+        },
+        "End": {
+          "Row": 38,
+          "Col": 22
+        }
+      },
+      {
+        "Start": {
+          "Col": 40,
+          "Row": 24
+        },
+        "End": {
+          "Row": 41,
+          "Col": 24
+        }
+      },
+      {
+        "Start": {
+          "Col": 42,
+          "Row": 29
+        },
+        "End": {
+          "Row": 43,
+          "Col": 29
+        }
+      },
+      {
+        "Start": {
+          "Col": 42,
+          "Row": 38
+        },
+        "End": {
+          "Row": 43,
+          "Col": 38
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Tevere",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 44,
+          "Row": 53
+        },
+        "End": {
+          "Row": 45,
+          "Col": 53
+        }
+      },
+      {
+        "Start": {
+          "Col": 44,
+          "Row": 55
+        },
+        "End": {
+          "Row": 45,
+          "Col": 56
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Ebro",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 17,
+          "Row": 43
+        },
+        "End": {
+          "Row": 18,
+          "Col": 43
+        }
+      },
+      {
+        "Start": {
+          "Col": 20,
+          "Row": 48
+        },
+        "End": {
+          "Row": 21,
+          "Col": 48
+        }
+      },
+      {
+        "Start": {
+          "Col": 21,
+          "Row": 51
+        },
+        "End": {
+          "Row": 22,
+          "Col": 51
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Duero",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 6,
+          "Row": 41
+        },
+        "End": {
+          "Row": 6,
+          "Col": 42
+        }
+      },
+      {
+        "Start": {
+          "Col": 11,
+          "Row": 43
+        },
+        "End": {
+          "Row": 12,
+          "Col": 43
+        }
+      },
+      {
+        "Start": {
+          "Col": 17,
+          "Row": 46
+        },
+        "End": {
+          "Row": 18,
+          "Col": 46
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Tajo",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 3,
+          "Row": 46
+        },
+        "End": {
+          "Row": 3,
+          "Col": 47
+        }
+      },
+      {
+        "Start": {
+          "Col": 8,
+          "Row": 47
+        },
+        "End": {
+          "Row": 9,
+          "Col": 47
+        }
+      },
+      {
+        "Start": {
+          "Col": 13,
+          "Row": 49
+        },
+        "End": {
+          "Row": 14,
+          "Col": 49
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Guadalquivir",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 6,
+          "Row": 54
+        },
+        "End": {
+          "Row": 6,
+          "Col": 55
+        }
+      },
+      {
+        "Start": {
+          "Col": 11,
+          "Row": 55
+        },
+        "End": {
+          "Row": 12,
+          "Col": 55
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Thames",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 29,
+          "Row": 19
+        },
+        "End": {
+          "Row": 30,
+          "Col": 19
+        }
+      },
+      {
+        "Start": {
+          "Col": 31,
+          "Row": 21
+        },
+        "End": {
+          "Row": 32,
+          "Col": 20
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Severn",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 28,
+          "Row": 15
+        },
+        "End": {
+          "Row": 29,
+          "Col": 15
+        }
+      },
+      {
+        "Start": {
+          "Col": 27,
+          "Row": 17
+        },
+        "End": {
+          "Row": 27,
+          "Col": 18
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Trent",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 31,
+          "Row": 15
+        },
+        "End": {
+          "Row": 31,
+          "Col": 14
+        }
+      },
+      {
+        "Start": {
+          "Col": 33,
+          "Row": 14
+        },
+        "End": {
+          "Row": 33,
+          "Col": 13
+        }
+      }
+    ]
+  },
+  {
+    "Name": "Shannon",
+    "Edges": [
+      {
+        "Start": {
+          "Col": 22,
+          "Row": 7
+        },
+        "End": {
+          "Row": 23,
+          "Col": 7  
+        }
+      },
+      {
+        "Start": {
+          "Col": 19,
+          "Row": 10
+        },
+        "End": {
+          "Row": 19,
+          "Col": 9 
+        }
+      },
+      {
+        "Start": {
+          "Col": 23,
+          "Row": 8
+        },
+        "End": {
+          "Row": 22,
+          "Col": 8 
+        } 
+      },
+      {
+        "Start": {
+          "Col": 23,
+          "Row": 8
+        },
+        "End": {
+          "Row": 22,
+          "Col": 7
+        }
+      },
+      {
+        "Start": {
+          "Col": 23,
+          "Row": 6
+        },
+        "End": {
+          "Row": 22,
+          "Col": 7
+        }
+      },
+      {
+        "Start": {
+          "Col": 22,
+          "Row": 7
+        },
+        "End": {
+          "Row": 23,
+          "Col": 6
+        }
+      },
+      {
+        "Start": {
+          "Col": 21,
+          "Row": 10
+        },
+        "End": {
+          "Row": 20,
+          "Col": 9
+        }
+      }
+    ]
+  }
+]

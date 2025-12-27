@@ -33,3 +33,5 @@ coverage/
 
 # Test results
 test-results/
+
+.npm-cache/

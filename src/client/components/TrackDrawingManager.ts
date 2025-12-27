@@ -3,6 +3,7 @@ import { GameState, TerrainType, GridPoint } from '../../shared/types/GameTypes'
 import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
+import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -1163,6 +1164,10 @@ export class TrackDrawingManager {
                 cost = 0;
             }
         }
+
+        // Additional cost for water crossings (river/lake/ocean inlet) based on the map image-derived lookup.
+        // This is independent of direction; the lookup normalizes the edge key.
+        cost += getWaterCrossingExtraCost(from, to);
 
         return cost;
     }

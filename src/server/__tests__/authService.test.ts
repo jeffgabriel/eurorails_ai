@@ -38,7 +38,6 @@ describe('AuthService', () => {
   afterAll(async () => {
     // Final cleanup
     await cleanupTestUsers(testUserIds);
-    await db.end();
   });
 
   describe('register', () => {
