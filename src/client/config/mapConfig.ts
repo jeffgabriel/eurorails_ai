@@ -244,10 +244,3 @@ export const MAP_BOARD_CALIBRATION = {
   scaleX: number;
   scaleY: number;
 };
-
-// Debug overlays (client-side). Safe to leave committed as false.
-export const DEBUG_OVERLAYS = {
-  riverCrossings: true,
-  nonRiverWaterCrossings: true,
-  edgeOverridePicker: true,
-} as const;
