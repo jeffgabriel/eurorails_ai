@@ -40,7 +40,7 @@ function buildPointLookup(): Map<string, GridPoint> {
 
 function findEdge(
   edgeKeys: string[],
-  predicate: (p1: GridPoint, p2: GridPoint) => boolean
+  predicate: (from: GridPoint, to: GridPoint) => boolean
 ): { from: GridPoint; to: GridPoint; key: string } {
   const lookup = buildPointLookup();
   for (const key of edgeKeys) {
@@ -66,7 +66,6 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-
     expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Clear] + 2);
   });
 
@@ -78,19 +77,14 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-
     expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[edge.to.terrain] + 2);
   });
 
   it("crossing a non-river body of water adds +3 on clear terrain", () => {
-    const edge = findEdge(
-      json.nonRiverWaterEdges,
-      (_from, to) => to.terrain === TerrainType.Clear
-    );
+    const edge = findEdge(json.nonRiverWaterEdges, (_from, to) => to.terrain === TerrainType.Clear);
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.Lake);
-
     expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Clear] + 3);
   });
 
@@ -99,7 +93,6 @@ describe("water crossing costs (from generated configuration)", () => {
 
     const extra = getWaterCrossingExtraCost(edge.from, edge.to);
     expect(extra).toBe(WaterCrossingType.River);
-
     expect(segmentTotalCost(edge.from, edge.to)).toBe(TERRAIN_COSTS[TerrainType.Mountain] + 2);
   });
 });

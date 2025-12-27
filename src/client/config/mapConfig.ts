@@ -249,4 +249,5 @@ export const MAP_BOARD_CALIBRATION = {
 export const DEBUG_OVERLAYS = {
   riverCrossings: true,
   nonRiverWaterCrossings: true,
+  edgeOverridePicker: true,
 } as const;

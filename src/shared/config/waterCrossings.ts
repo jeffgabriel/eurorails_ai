@@ -33,6 +33,31 @@ const nonRiverSet = new Set<string>([
 
 const excludedSet = new Set<string>(json.overrides?.excludeEdges || []);
 
+export function getOverrideSnapshot(): {
+  forceRiverEdges: string[];
+  forceNonRiverWaterEdges: string[];
+  excludeEdges: string[];
+} {
+  return {
+    forceRiverEdges: [...(json.overrides?.forceRiverEdges || [])],
+    forceNonRiverWaterEdges: [...(json.overrides?.forceNonRiverWaterEdges || [])],
+    excludeEdges: [...(json.overrides?.excludeEdges || [])],
+  };
+}
+
+// Includes excluded edges; intended for debug tooling / pickers.
+export function getAllWaterCrossingEdgeKeysUnfiltered(): string[] {
+  return Array.from(
+    new Set<string>([
+      ...(json.riverEdges || []),
+      ...(json.nonRiverWaterEdges || []),
+      ...(json.overrides?.forceRiverEdges || []),
+      ...(json.overrides?.forceNonRiverWaterEdges || []),
+      ...(json.overrides?.excludeEdges || []),
+    ])
+  );
+}
+
 // If an edge is in both due to overrides, force river (cheaper and matches game rules intent).
 export function getWaterCrossingExtraCost(from: GridPoint, to: GridPoint): number {
   const key = edgeKey(from, to);
