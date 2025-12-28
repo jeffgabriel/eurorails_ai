@@ -12,6 +12,22 @@ export class PlayerStateService {
     private localPlayer: Player | null = null;
 
     /**
+     * Create a copy of a Player object but omit trainState.position.
+     * This prevents accidental position overwrites when updating unrelated fields.
+     */
+    private createPlayerWithoutPosition(player: Player): Player {
+        const playerCopy: Player = { ...player };
+        if (playerCopy.trainState) {
+            const trainStateWithoutPosition = {
+                ...playerCopy.trainState
+            };
+            delete (trainStateWithoutPosition as any).position;
+            playerCopy.trainState = trainStateWithoutPosition as any;
+        }
+        return playerCopy;
+    }
+
+    /**
      * Identifies and stores the local player based on authenticated user
      * @param players - Array of all players in the game
      * @returns true if local player was successfully identified
@@ -119,17 +135,7 @@ export class PlayerStateService {
         // Server-authoritative: Make API call first
         // IMPORTANT: Don't send position when updating money - position is managed separately
         try {
-            // Create player object without trainState.position to preserve current position
-            const playerWithoutPosition = {
-                ...this.localPlayer
-            };
-            if (playerWithoutPosition.trainState) {
-                const trainStateWithoutPosition = {
-                    ...playerWithoutPosition.trainState
-                };
-                delete (trainStateWithoutPosition as any).position;
-                playerWithoutPosition.trainState = trainStateWithoutPosition;
-            }
+            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
             
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
@@ -240,20 +246,18 @@ export class PlayerStateService {
         // this.localPlayer is outdated (from server, not current local position)
         // We create a player object without position to avoid overwriting it
         try {
-            // Create trainState without position to preserve current position in database
+            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
             const trainStateWithoutPosition = {
-                ...this.localPlayer.trainState,
+                ...(playerWithoutPosition.trainState as any),
                 loads: loads
             };
-            // Remove position from trainState to prevent it from being sent
-            delete (trainStateWithoutPosition as any).position;
             
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
                 body: JSON.stringify({
                     gameId: gameId,
                     player: {
-                        ...this.localPlayer,
+                        ...playerWithoutPosition,
                         trainState: trainStateWithoutPosition
                     }
                 })
@@ -287,17 +291,7 @@ export class PlayerStateService {
         }
 
         try {
-            // Create player object without trainState.position to preserve current position
-            const playerWithoutPosition = {
-                ...this.localPlayer
-            };
-            if (playerWithoutPosition.trainState) {
-                const trainStateWithoutPosition = {
-                    ...playerWithoutPosition.trainState
-                };
-                delete (trainStateWithoutPosition as any).position;
-                playerWithoutPosition.trainState = trainStateWithoutPosition;
-            }
+            const playerWithoutPosition = this.createPlayerWithoutPosition(this.localPlayer);
 
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
                 method: 'POST',
