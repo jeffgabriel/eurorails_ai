@@ -1,4 +1,17 @@
 import { TrackSegment } from '../../shared/types/TrackTypes';
+import { TerrainType } from '../../shared/types/GameTypes';
+
+/**
+ * Helper to create a TrackSegment with all required fields.
+ * VictoryService only uses row/col, so we provide dummy values for x/y/terrain/cost.
+ */
+function createSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
+  return {
+    from: { x: 0, y: 0, row: fromRow, col: fromCol, terrain: TerrainType.Clear },
+    to: { x: 0, y: 0, row: toRow, col: toCol, terrain: TerrainType.Clear },
+    cost: 1,
+  };
+}
 
 // Mock majorCityGroups before importing VictoryService
 const mockMajorCityGroups: { [name: string]: Array<{ GridX: number; GridY: number }> } = {
@@ -90,7 +103,7 @@ describe('VictoryService', () => {
 
     it('should find a single connected city', () => {
       const segments: TrackSegment[] = [
-        { from: { row: 20, col: 10 }, to: { row: 20, col: 9 } }, // Paris center to adjacent
+        createSegment(20, 10, 20, 9), // Paris center to adjacent
       ];
 
       const result = service.getConnectedMajorCities(segments);
@@ -101,10 +114,10 @@ describe('VictoryService', () => {
     it('should find two connected cities', () => {
       // Connect Paris to Berlin via intermediate points
       const segments: TrackSegment[] = [
-        { from: { row: 20, col: 10 }, to: { row: 18, col: 15 } }, // Paris to intermediate
-        { from: { row: 18, col: 15 }, to: { row: 15, col: 20 } }, // intermediate
-        { from: { row: 15, col: 20 }, to: { row: 15, col: 25 } }, // intermediate
-        { from: { row: 15, col: 25 }, to: { row: 15, col: 30 } }, // intermediate to Berlin
+        createSegment(20, 10, 18, 15), // Paris to intermediate
+        createSegment(18, 15, 15, 20), // intermediate
+        createSegment(15, 20, 15, 25), // intermediate
+        createSegment(15, 25, 15, 30), // intermediate to Berlin
       ];
 
       const result = service.getConnectedMajorCities(segments);
@@ -116,18 +129,12 @@ describe('VictoryService', () => {
     it('should connect cities via outposts (implicit edges within major city)', () => {
       // Track enters Paris at one outpost and exits at another
       // The outposts should be implicitly connected within the city
-      const segments: TrackSegment[] = [
-        { from: { row: 19, col: 11 }, to: { row: 20, col: 11 } }, // Enter Paris at outpost 1
-        { from: { row: 10, col: 21 }, to: { row: 10, col: 22 } }, // Something connected to outpost 2 (col 10, row 21)
-        // Note: Without implicit edges, these would be disconnected
-      ];
-
       // This tests that outposts within a city get connected
       // The segments include row 20, col 11 (Paris outpost 1)
       // If we also add segment touching row 21, col 10 (Paris outpost 2), they should connect
       const segmentsWithBothOutposts: TrackSegment[] = [
-        { from: { row: 19, col: 11 }, to: { row: 20, col: 11 } }, // Connects to Paris outpost 1
-        { from: { row: 21, col: 10 }, to: { row: 22, col: 10 } }, // Connects to Paris outpost 2
+        createSegment(19, 11, 20, 11), // Connects to Paris outpost 1
+        createSegment(21, 10, 22, 10), // Connects to Paris outpost 2
       ];
 
       const result = service.getConnectedMajorCities(segmentsWithBothOutposts);
@@ -140,10 +147,10 @@ describe('VictoryService', () => {
       // Two separate networks: one with 2 cities, one with 1 city
       const segments: TrackSegment[] = [
         // Network 1: Paris to Berlin
-        { from: { row: 20, col: 10 }, to: { row: 18, col: 15 } },
-        { from: { row: 18, col: 15 }, to: { row: 15, col: 30 } },
+        createSegment(20, 10, 18, 15),
+        createSegment(18, 15, 15, 30),
         // Network 2: London alone (disconnected)
-        { from: { row: 10, col: 5 }, to: { row: 10, col: 4 } },
+        createSegment(10, 5, 10, 4),
       ];
 
       const result = service.getConnectedMajorCities(segments);
@@ -157,7 +164,7 @@ describe('VictoryService', () => {
   describe('hasSevenConnectedCities', () => {
     it('should return false with fewer than 7 connected cities', () => {
       const segments: TrackSegment[] = [
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } }, // Paris to Berlin
+        createSegment(20, 10, 15, 30), // Paris to Berlin
       ];
 
       const result = service.hasSevenConnectedCities(segments);
@@ -168,19 +175,19 @@ describe('VictoryService', () => {
       // Create a network connecting 7 cities
       const segments: TrackSegment[] = [
         // Paris (10, 20) -> Berlin (30, 15)
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } },
+        createSegment(20, 10, 15, 30),
         // Berlin -> London (5, 10)
-        { from: { row: 15, col: 30 }, to: { row: 10, col: 5 } },
+        createSegment(15, 30, 10, 5),
         // London -> Madrid (8, 40)
-        { from: { row: 10, col: 5 }, to: { row: 40, col: 8 } },
+        createSegment(10, 5, 40, 8),
         // Madrid -> Rome (25, 35)
-        { from: { row: 40, col: 8 }, to: { row: 35, col: 25 } },
+        createSegment(40, 8, 35, 25),
         // Rome -> Vienna (35, 25)
-        { from: { row: 35, col: 25 }, to: { row: 25, col: 35 } },
+        createSegment(35, 25, 25, 35),
         // Vienna -> Amsterdam (15, 8)
-        { from: { row: 25, col: 35 }, to: { row: 8, col: 15 } },
+        createSegment(25, 35, 8, 15),
         // Amsterdam -> Brussels (12, 12)
-        { from: { row: 8, col: 15 }, to: { row: 12, col: 12 } },
+        createSegment(8, 15, 12, 12),
       ];
 
       const result = service.hasSevenConnectedCities(segments);
@@ -190,15 +197,15 @@ describe('VictoryService', () => {
     it('should return true with more than 7 connected cities', () => {
       // Create a network connecting all 10 mock cities
       const segments: TrackSegment[] = [
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } }, // Paris -> Berlin
-        { from: { row: 15, col: 30 }, to: { row: 10, col: 5 } },  // Berlin -> London
-        { from: { row: 10, col: 5 }, to: { row: 40, col: 8 } },   // London -> Madrid
-        { from: { row: 40, col: 8 }, to: { row: 35, col: 25 } },  // Madrid -> Rome
-        { from: { row: 35, col: 25 }, to: { row: 25, col: 35 } }, // Rome -> Vienna
-        { from: { row: 25, col: 35 }, to: { row: 8, col: 15 } },  // Vienna -> Amsterdam
-        { from: { row: 8, col: 15 }, to: { row: 12, col: 12 } },  // Amsterdam -> Brussels
-        { from: { row: 12, col: 12 }, to: { row: 30, col: 22 } }, // Brussels -> Milan
-        { from: { row: 30, col: 22 }, to: { row: 22, col: 28 } }, // Milan -> Munich
+        createSegment(20, 10, 15, 30), // Paris -> Berlin
+        createSegment(15, 30, 10, 5),  // Berlin -> London
+        createSegment(10, 5, 40, 8),   // London -> Madrid
+        createSegment(40, 8, 35, 25),  // Madrid -> Rome
+        createSegment(35, 25, 25, 35), // Rome -> Vienna
+        createSegment(25, 35, 8, 15),  // Vienna -> Amsterdam
+        createSegment(8, 15, 12, 12),  // Amsterdam -> Brussels
+        createSegment(12, 12, 30, 22), // Brussels -> Milan
+        createSegment(30, 22, 22, 28), // Milan -> Munich
       ];
 
       const result = service.hasSevenConnectedCities(segments);
@@ -209,13 +216,13 @@ describe('VictoryService', () => {
   describe('checkVictoryConditions', () => {
     // Helper to create 7-city connected network
     const sevenCityNetwork: TrackSegment[] = [
-      { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } },
-      { from: { row: 15, col: 30 }, to: { row: 10, col: 5 } },
-      { from: { row: 10, col: 5 }, to: { row: 40, col: 8 } },
-      { from: { row: 40, col: 8 }, to: { row: 35, col: 25 } },
-      { from: { row: 35, col: 25 }, to: { row: 25, col: 35 } },
-      { from: { row: 25, col: 35 }, to: { row: 8, col: 15 } },
-      { from: { row: 8, col: 15 }, to: { row: 12, col: 12 } },
+      createSegment(20, 10, 15, 30),
+      createSegment(15, 30, 10, 5),
+      createSegment(10, 5, 40, 8),
+      createSegment(40, 8, 35, 25),
+      createSegment(35, 25, 25, 35),
+      createSegment(25, 35, 8, 15),
+      createSegment(8, 15, 12, 12),
     ];
 
     it('should return eligible=false with insufficient money', () => {
@@ -227,7 +234,7 @@ describe('VictoryService', () => {
 
     it('should return eligible=false with insufficient cities', () => {
       const fewCities: TrackSegment[] = [
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } },
+        createSegment(20, 10, 15, 30),
       ];
       const result = service.checkVictoryConditions(300, fewCities, 250);
       expect(result.eligible).toBe(false);
@@ -261,11 +268,11 @@ describe('VictoryService', () => {
       // They should be connected via Paris's internal network
       const segments: TrackSegment[] = [
         // Track 1: enters Paris center from west, continues to Berlin
-        { from: { row: 20, col: 9 }, to: { row: 20, col: 10 } },  // west -> Paris center
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } }, // Paris center -> Berlin
+        createSegment(20, 9, 20, 10),  // west -> Paris center
+        createSegment(20, 10, 15, 30), // Paris center -> Berlin
         // Track 2: enters Paris outpost 2 from south, continues to Madrid
-        { from: { row: 22, col: 10 }, to: { row: 21, col: 10 } }, // south -> Paris outpost 2
-        { from: { row: 21, col: 10 }, to: { row: 40, col: 8 } },  // Paris outpost 2 -> Madrid
+        createSegment(22, 10, 21, 10), // south -> Paris outpost 2
+        createSegment(21, 10, 40, 8),  // Paris outpost 2 -> Madrid
       ];
 
       const result = service.getConnectedMajorCities(segments);
@@ -280,9 +287,9 @@ describe('VictoryService', () => {
       // Two completely separate networks with no shared city
       const segments: TrackSegment[] = [
         // Network 1: Paris to Berlin
-        { from: { row: 20, col: 10 }, to: { row: 15, col: 30 } },
+        createSegment(20, 10, 15, 30),
         // Network 2: Rome to Vienna (completely separate)
-        { from: { row: 35, col: 25 }, to: { row: 25, col: 35 } },
+        createSegment(35, 25, 25, 35),
       ];
 
       const result = service.getConnectedMajorCities(segments);

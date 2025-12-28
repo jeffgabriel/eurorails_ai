@@ -3,8 +3,20 @@ import { VictoryService, MajorCityCoordinate } from '../services/victoryService'
 import { TrackService } from '../services/trackService';
 import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
-import { VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD } from '../../shared/types/GameTypes';
+import { VICTORY_INITIAL_THRESHOLD, VICTORY_TIE_THRESHOLD, TerrainType } from '../../shared/types/GameTypes';
 import { TrackSegment } from '../../shared/types/TrackTypes';
+
+/**
+ * Helper to create a TrackSegment with all required fields.
+ * Server validation only uses row/col, so we provide dummy values for x/y/terrain/cost.
+ */
+function createSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
+  return {
+    from: { x: 0, y: 0, row: fromRow, col: fromCol, terrain: TerrainType.Clear },
+    to: { x: 0, y: 0, row: toRow, col: toCol, terrain: TerrainType.Clear },
+    cost: 1,
+  };
+}
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -110,8 +122,8 @@ describe('VictoryService Integration Tests', () => {
   describe('validateCitiesInTrack', () => {
     it('should return true when all claimed cities exist in track', () => {
       const segments: TrackSegment[] = [
-        { from: { row: 10, col: 20 }, to: { row: 10, col: 21 } },
-        { from: { row: 10, col: 21 }, to: { row: 15, col: 25 } },
+        createSegment(10, 20, 10, 21),
+        createSegment(10, 21, 15, 25),
       ];
       const claimedCities: MajorCityCoordinate[] = [
         { name: 'Paris', row: 10, col: 20 },
@@ -124,7 +136,7 @@ describe('VictoryService Integration Tests', () => {
 
     it('should return false when a claimed city is not in track', () => {
       const segments: TrackSegment[] = [
-        { from: { row: 10, col: 20 }, to: { row: 10, col: 21 } },
+        createSegment(10, 20, 10, 21),
       ];
       const claimedCities: MajorCityCoordinate[] = [
         { name: 'Paris', row: 10, col: 20 },
@@ -146,7 +158,7 @@ describe('VictoryService Integration Tests', () => {
 
     it('should handle empty claimed cities', () => {
       const segments: TrackSegment[] = [
-        { from: { row: 10, col: 20 }, to: { row: 10, col: 21 } },
+        createSegment(10, 20, 10, 21),
       ];
 
       const result = VictoryService.validateCitiesInTrack(segments, []);
@@ -157,7 +169,6 @@ describe('VictoryService Integration Tests', () => {
   describe('declareVictory', () => {
     beforeEach(async () => {
       // Create track for player1 with 7 cities
-      const segments: TrackSegment[] = [];
       const cityCoords = [
         { row: 10, col: 20 },
         { row: 15, col: 25 },
@@ -168,21 +179,26 @@ describe('VictoryService Integration Tests', () => {
         { row: 40, col: 50 },
       ];
 
-      // Connect cities linearly
+      // Connect cities linearly using helper
+      const segments: TrackSegment[] = [];
       for (let i = 0; i < cityCoords.length - 1; i++) {
-        segments.push({
-          from: cityCoords[i],
-          to: cityCoords[i + 1],
-        });
+        segments.push(createSegment(
+          cityCoords[i].row,
+          cityCoords[i].col,
+          cityCoords[i + 1].row,
+          cityCoords[i + 1].col
+        ));
       }
 
       // TrackService.saveTrackState expects a PlayerTrackState object
       // The lastBuildTimestamp is a TIMESTAMP in PostgreSQL, so pass a Date object or ISO string
       await TrackService.saveTrackState(gameId, playerId1, {
+        playerId: playerId1,
+        gameId: gameId,
         segments,
         totalCost: 0,
         turnBuildCost: 0,
-        lastBuildTimestamp: new Date().toISOString() as any,
+        lastBuildTimestamp: new Date(),
       });
     });
 
