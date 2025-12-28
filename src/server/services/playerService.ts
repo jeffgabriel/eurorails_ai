@@ -4,6 +4,8 @@ import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
 import { TrackService } from "./trackService";
+import { DemandCard } from "../../shared/types/DemandCard";
+import { LoadType } from "../../shared/types/LoadTypes";
 
 interface PlayerRow {
   id: string;
@@ -737,6 +739,116 @@ export class PlayerService {
       return { newCard };
     } catch (error) {
       await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Deliver a load for the authenticated user's player.
+   *
+   * Server-authoritative:
+   * - Validate it's the player's turn
+   * - Validate the specified card is in the player's hand and matches the delivery (city + loadType)
+   * - Validate the load is currently being carried
+   * - Compute payment from server demand card data (do not trust client payment)
+   * - Update money, loads, and hand atomically (transaction)
+   */
+  static async deliverLoadForUser(
+    gameId: string,
+    userId: string,
+    city: string,
+    loadType: LoadType,
+    cardId: number
+  ): Promise<{ payment: number; newCard: DemandCard }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const playerRowResult = await client.query(
+        `SELECT id, money, hand, loads
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentMoney: number = playerRowResult.rows[0].money as number;
+      const currentHand: unknown = playerRowResult.rows[0].hand;
+      const currentLoads: unknown = playerRowResult.rows[0].loads;
+
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+      const loads: LoadType[] = Array.isArray(currentLoads)
+        ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
+        : [];
+
+      const gameState = await this.getGameState(gameId);
+      const currentPlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, gameState.currentPlayerIndex]
+      );
+      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      if (!handIds.includes(cardId)) {
+        throw new Error("Demand card not in hand");
+      }
+
+      const demandCard = demandDeckService.getCard(cardId);
+      if (!demandCard) {
+        throw new Error("Invalid demand card");
+      }
+
+      const matchingDemand = demandCard.demands.find(
+        (d) => d.city === city && d.resource === loadType
+      );
+      if (!matchingDemand) {
+        throw new Error("Demand does not match delivery");
+      }
+
+      const loadIndex = loads.indexOf(loadType);
+      if (loadIndex === -1) {
+        throw new Error("Load not on train");
+      }
+      const updatedLoads = [...loads];
+      updatedLoads.splice(loadIndex, 1);
+
+      const payment = matchingDemand.payment;
+      if (typeof payment !== "number" || !Number.isFinite(payment) || payment < 0) {
+        throw new Error("Invalid payment");
+      }
+
+      const newCard = demandDeckService.drawCard();
+      if (!newCard) {
+        throw new Error("Failed to draw new card");
+      }
+
+      const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
+      const updatedMoney = currentMoney + payment;
+
+      await client.query(
+        `UPDATE players
+         SET money = $1, hand = $2, loads = $3
+         WHERE game_id = $4 AND id = $5`,
+        [updatedMoney, updatedHandIds, updatedLoads, gameId, playerId]
+      );
+
+      await client.query("COMMIT");
+      return { payment, newCard };
+    } catch (error) {
+      await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();
