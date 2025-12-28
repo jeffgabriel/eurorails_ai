@@ -114,6 +114,13 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
       });
     }
     
+    if (city === undefined || city === null || city === '') {
+      console.warn('[loadRoutes.return] Missing city in return request; dropped-load cleanup may be skipped', {
+        gameId,
+        loadType
+      });
+    }
+    
     const result = await loadService.returnLoad(city, loadType, gameId);
     
     // Emit socket update with load state and dropped loads

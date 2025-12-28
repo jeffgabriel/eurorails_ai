@@ -5,6 +5,7 @@ import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { emitStatePatch, emitTurnChange } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
+import { LoadType } from '../../shared/types/LoadTypes';
 
 const router = express.Router();
 
@@ -536,6 +537,82 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
         return res.status(500).json({ 
             error: 'Server error',
             details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Deliver a load (authenticated, server-authoritative)
+router.post('/deliver-load', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, city, loadType, cardId } = req.body as {
+            gameId?: string;
+            city?: string;
+            loadType?: LoadType;
+            cardId?: number;
+        };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId || !city || !loadType || typeof cardId !== 'number') {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId, city, loadType, and cardId are required'
+            });
+        }
+
+        if (!Object.values(LoadType).includes(loadType)) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Invalid loadType'
+            });
+        }
+
+        const result = await PlayerService.deliverLoadForUser(
+            gameId,
+            userId,
+            city,
+            loadType,
+            cardId
+        );
+
+        // Broadcast updated public player state (do not leak hand to other players)
+        const publicPlayers = await PlayerService.getPlayers(gameId, '');
+        const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+        if (updatedPlayer) {
+            emitStatePatch(gameId, { players: [updatedPlayer] });
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'UNAUTHORIZED') {
+            return res.status(401).json({ error: 'UNAUTHORIZED', details: message });
+        }
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (
+            message.includes('Demand') ||
+            message.includes('Load') ||
+            message.includes('Invalid') ||
+            message.includes('Failed to draw')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({
+            error: 'Server error',
+            details: message
         });
     }
 });

@@ -179,7 +179,7 @@ export class LoadService {
    * Return a load to the global availability pool
    * Server-authoritative: API call first, update local state only after success
    */
-  public async returnLoad(loadType: LoadType, gameIdOverride?: string): Promise<boolean> {
+  public async returnLoad(loadType: LoadType, gameIdOverride?: string, city?: string): Promise<boolean> {
     try {
       // Get gameId from localStorage
       const gameId = gameIdOverride || this.getGameIdFromStorage();
@@ -189,7 +189,7 @@ export class LoadService {
       }
       
       // Server-authoritative: Make API call first
-      const result = await api.returnLoad({ loadType, gameId });
+      const result = await api.returnLoad({ loadType, gameId, city });
 
       // Only update local state after API succeeds
       const state = this.loadStates.get(loadType);
