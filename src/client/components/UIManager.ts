@@ -8,6 +8,7 @@ import { LeaderboardManager } from "./LeaderboardManager";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { CitySelectionManager } from "./CitySelectionManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 export class UIManager {
   private scene: Phaser.Scene;
@@ -27,6 +28,7 @@ export class UIManager {
   private playerHandDisplay!: PlayerHandDisplay;
   //private citySelectionManager!: CitySelectionManager;
   private isDrawingMode: boolean = false;
+  private handToastContainer: Phaser.GameObjects.Container | null = null;
 
   constructor(
     scene: Phaser.Scene,
@@ -64,6 +66,91 @@ export class UIManager {
     this.trainInteractionManager.updateTrainZOrders();
     this.trainInteractionManager.refreshTrainSpriteTextures();
     this.trainInteractionManager.updateTrainInteractivity();
+  }
+
+  /**
+   * Show a bottom-center toast near the player's hand area.
+   * Prefers `PlayerHandScene`'s toast styling if that scene is active; otherwise
+   * falls back to rendering a similar toast directly on the main scene.
+   */
+  public showHandToast(message: string): void {
+    try {
+      const playerHandScene = this.scene.scene.get("PlayerHandScene") as any;
+      if (playerHandScene && playerHandScene.scene?.isActive?.() && typeof playerHandScene.showHandToast === "function") {
+        playerHandScene.showHandToast(message);
+        return;
+      }
+    } catch (e) {
+      // Ignore and fall back
+    }
+
+    // Fallback: render on the main scene (so it still appears even when the hand is collapsed)
+    try {
+      if (this.handToastContainer) {
+        this.handToastContainer.destroy(true);
+        this.handToastContainer = null;
+      }
+
+      const paddingX = 16;
+      const paddingY = 10;
+      const maxWidth = Math.min(520, this.scene.scale.width - 40);
+
+      const text = this.scene.add.text(0, 0, message, {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        wordWrap: { width: maxWidth - paddingX * 2, useAdvancedWrap: true },
+        align: "center",
+      }).setOrigin(0.5);
+
+      const bgW = Math.min(maxWidth, text.width + paddingX * 2);
+      const bgH = text.height + paddingY * 2;
+
+      // Prefer RexUI rounded rectangle if available; otherwise use a plain rectangle.
+      let bg: Phaser.GameObjects.GameObject;
+      const rexUI = (this.scene as any).rexUI;
+      if (rexUI?.add?.roundRectangle) {
+        bg = rexUI.add.roundRectangle({
+          width: bgW,
+          height: bgH,
+          color: 0x111111,
+          alpha: 0.92,
+          radius: 10,
+        });
+      } else {
+        bg = this.scene.add.rectangle(0, 0, bgW, bgH, 0x111111, 0.92).setOrigin(0.5);
+      }
+
+      // Match PlayerHandScene positioning: centered, just above the hand UI area.
+      const HAND_HEIGHT_BASE = 280;
+      const container = this.scene.add.container(
+        this.scene.scale.width / 2,
+        this.scene.scale.height - HAND_HEIGHT_BASE - 24
+      );
+      container.setDepth(2500);
+      container.add([bg as any, text]);
+      (text as any).setPosition(0, 0);
+      (bg as any).setPosition(0, 0);
+
+      this.handToastContainer = container;
+
+      this.scene.tweens.add({
+        targets: container,
+        alpha: 0,
+        duration: 1200,
+        delay: 1600,
+        ease: "Power2",
+        onComplete: () => {
+          container.destroy(true);
+          if (this.handToastContainer === container) {
+            this.handToastContainer = null;
+          }
+        },
+      });
+    } catch (e) {
+      // Toast is non-critical
+    }
   }
 
   private initializeComponentManagers(nextPlayerCallback: () => void): void {

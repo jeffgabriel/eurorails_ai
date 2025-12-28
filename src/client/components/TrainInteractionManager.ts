@@ -584,17 +584,41 @@ export class TrainInteractionManager {
       // Only allow interaction if:
       // 1. This is the local player's train
       // 2. It is the local player's turn
-      // 3. Not in drawing mode
-      // 4. Player has track
       const localPlayerId = this.playerStateService.getLocalPlayerId();
       const isLocalPlayerTrain = localPlayerId === playerId;
       const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
         this.gameState.currentPlayerIndex,
         this.gameState.players
       );
-      const hasTrack = this.playerHasTrack(playerId);
 
-      if (isLocalPlayerTrain && isLocalPlayerTurn && hasTrack && !this.isDrawingMode) {
+      if (isLocalPlayerTrain && isLocalPlayerTurn) {
+        const activePlayer =
+          this.gameState.players[this.gameState.currentPlayerIndex];
+
+        // Per rules: players get 2 full track-drawing turns before any movement.
+        // Since movement comes first in a turn, movement is only allowed starting on turn 3.
+        if ((activePlayer?.turnNumber ?? 1) < 3) {
+          this.uiManager?.showHandToast?.(
+            "You must build track for 2 turns before moving."
+          );
+          return;
+        }
+
+        if (this.isDrawingMode) {
+          this.uiManager?.showHandToast?.(
+            "Exit track drawing mode before moving."
+          );
+          return;
+        }
+
+        const hasTrack = this.playerHasTrack(playerId);
+        if (!hasTrack) {
+          this.uiManager?.showHandToast?.(
+            "Build at least 1 track segment before moving."
+          );
+          return;
+        }
+
         // First stop event propagation to prevent it from being handled by the scene
         if (pointer.event) {
           pointer.event.stopPropagation();
@@ -714,11 +738,9 @@ export class TrainInteractionManager {
       // Only enable interactivity if:
       // 1. It's the local player's train
       // 2. It's the local player's turn
-      // 3. Player has track
       const shouldBeInteractive = 
         isLocalPlayerTrain && 
-        isLocalPlayerTurn && 
-        this.playerHasTrack(playerId);
+        isLocalPlayerTurn;
 
       if (shouldBeInteractive) {
         // Make sprite interactive with hand cursor and set up the click handler

@@ -170,28 +170,31 @@ export class GameScene extends Phaser.Scene {
       } else if (socketService.isConnected()) {
         shouldPoll = false;
       } else {
-        // Try to connect if we have a token
+        // If the socket was already created elsewhere (e.g., lobby), it may simply still be handshaking.
+        // Only warn if we truly fail to connect and must fall back to polling.
         const token = localStorage.getItem('eurorails.jwt');
-        if (token) {
-          console.warn('⚠️ Socket.IO service found but not connected. Attempting to connect...');
-          try {
-            socketService.connect(token);
-            // Give it a moment to connect
-            await new Promise(resolve => setTimeout(resolve, 500));
-            if (socketService.isConnected()) {
-              shouldPoll = false;
-            } else {
-              console.warn('⚠️ Socket.IO connection attempt failed or still connecting. Will use polling fallback.');
+        try {
+          if (!socketService.hasSocket()) {
+            if (!token) {
+              console.warn('⚠️ Socket.IO service found but not connected, and no auth token available.');
+              console.warn('   Cannot connect Socket.IO without token. Will use polling fallback.');
               shouldPoll = true;
+            } else {
+              socketService.connect(token);
             }
-          } catch (connectError) {
-            console.error('❌ Error connecting Socket.IO:', connectError);
-            console.warn('⚠️ Will use polling fallback.');
+          }
+
+          // Wait a bit longer for the initial handshake instead of assuming failure after 500ms.
+          const connected = await socketService.waitForConnection(2500);
+          if (connected && socketService.isConnected()) {
+            shouldPoll = false;
+          } else {
+            console.warn('⚠️ Socket.IO not connected after waiting. Will use polling fallback.');
             shouldPoll = true;
           }
-        } else {
-          console.warn('⚠️ Socket.IO service found but not connected, and no auth token available.');
-          console.warn('   Cannot connect Socket.IO without token. Will use polling fallback.');
+        } catch (connectError) {
+          console.error('❌ Error connecting Socket.IO:', connectError);
+          console.warn('⚠️ Will use polling fallback.');
           shouldPoll = true;
         }
       }
@@ -568,13 +571,26 @@ export class GameScene extends Phaser.Scene {
     // and undo state doesn't leak across turns (e.g., 0-cost ferry builds).
     await this.trackManager.endTurnCleanup(currentPlayer.id);
 
+    // Increment per-player turn count at END of the active player's turn.
+    // Do NOT increment the next active player; that incorrectly advances players on their first activation.
+    try {
+      currentPlayer.turnNumber = (currentPlayer.turnNumber ?? 1) + 1;
+      if (this.playerStateService.getLocalPlayerId() === currentPlayer.id) {
+        await this.playerStateService.updatePlayerTurnNumber(
+          currentPlayer.turnNumber,
+          this.gameState.id
+        );
+      }
+    } catch (e) {
+      // Non-fatal: if persistence fails, the server will retain the old value.
+    }
+
     // Use the game state service to handle player turn changes
     await this.gameStateService.nextPlayerTurn();
 
     // Get the new current player after the turn change
     const newCurrentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
-    newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
 
     // Handle ferry state transitions and teleportation at turn start
     await this.handleFerryTurnTransition(newCurrentPlayer);
@@ -688,10 +704,6 @@ export class GameScene extends Phaser.Scene {
     this.trackManager.resetTurnBuildLimit();
     
     if (newCurrentPlayer) {
-      // Increment turn number for the new current player
-      // Note: This is client-side UI state. Ideally should come from server.
-      newCurrentPlayer.turnNumber = newCurrentPlayer.turnNumber + 1;
-
       // Handle ferry state transitions and teleportation at turn start FIRST
       // This must happen before movement reset so that justCrossedFerry can be properly set
       await this.handleFerryTurnTransition(newCurrentPlayer);

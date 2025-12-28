@@ -105,6 +105,14 @@ export class PlayerHandScene extends Phaser.Scene {
     this.cameras.main.setScroll(0, 0);
   }
 
+  /**
+   * Public toast API so other systems (e.g., train click gating) can show a
+   * bottom-center toast near the hand UI using the same style.
+   */
+  public showHandToast(message: string): void {
+    this.showToast(message);
+  }
+
   public updateTrainCardLoads(): void {
     if (!this.trainCard) return;
     this.trainCard.updateLoads();
