@@ -761,7 +761,7 @@ export class PlayerService {
     city: string,
     loadType: LoadType,
     cardId: number
-  ): Promise<{ payment: number; newCard: DemandCard }> {
+  ): Promise<{ payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard }> {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -846,7 +846,7 @@ export class PlayerService {
       );
 
       await client.query("COMMIT");
-      return { payment, newCard };
+      return { payment, updatedMoney, updatedLoads, newCard };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

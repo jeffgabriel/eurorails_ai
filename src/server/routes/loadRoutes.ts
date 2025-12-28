@@ -4,6 +4,7 @@ import { loadService } from '../services/loadService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { PlayerService } from '../services/playerService';
 import { emitStatePatch } from '../services/socketService';
+import { db } from '../db';
 
 const router = express.Router();
 
@@ -115,7 +116,19 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
     }
     
     if (city === undefined || city === null || city === '') {
-      console.warn('[loadRoutes.return] Missing city in return request; dropped-load cleanup may be skipped', {
+      // If this game currently has a dropped load chip of this type, we must have a city to clear it.
+      // Otherwise we'd risk incrementing availability while leaving the dropped chip visible.
+      const droppedExists = await db.query(
+        'SELECT 1 FROM load_chips WHERE game_id = $1 AND type = $2 AND is_dropped = true LIMIT 1',
+        [gameId, loadType]
+      );
+      if (droppedExists.rows.length > 0) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: 'city is required to return a dropped load'
+        });
+      }
+      console.warn('[loadRoutes.return] Missing city in return request; proceeding because no dropped chip exists for this type', {
         gameId,
         loadType
       });

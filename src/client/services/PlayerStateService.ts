@@ -402,13 +402,18 @@ export class PlayerStateService {
                 return false;
             }
 
-            const result: { payment: number; newCard: DemandCard } = await response.json();
-            if (!result?.newCard || typeof result.payment !== 'number') {
+            const result: { payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard } = await response.json();
+            if (
+                !result?.newCard ||
+                typeof result.payment !== 'number' ||
+                typeof result.updatedMoney !== 'number' ||
+                !Array.isArray(result.updatedLoads)
+            ) {
                 console.error('Invalid deliver-load response from server');
                 return false;
             }
 
-            // Update loads (remove one instance)
+            // Update loads (server-authoritative)
             if (!this.localPlayer.trainState) {
                 this.localPlayer.trainState = {
                     position: null,
@@ -417,16 +422,10 @@ export class PlayerStateService {
                     loads: []
                 };
             }
-            const currentLoads = this.localPlayer.trainState.loads || [];
-            const loadIndex = currentLoads.indexOf(loadType);
-            const updatedLoads = [...currentLoads];
-            if (loadIndex !== -1) {
-                updatedLoads.splice(loadIndex, 1);
-            }
-            this.localPlayer.trainState.loads = updatedLoads;
+            this.localPlayer.trainState.loads = result.updatedLoads;
 
-            // Update money
-            this.localPlayer.money = (this.localPlayer.money || 0) + result.payment;
+            // Update money (server-authoritative)
+            this.localPlayer.money = result.updatedMoney;
 
             // Replace demand card in hand
             this.localPlayer.hand = (this.localPlayer.hand || []).filter(card => card.id !== cardId);

@@ -476,6 +476,8 @@ describe('PlayerService Integration Tests', () => {
 
             expect(result.payment).toBe(demand.payment);
             expect(result.newCard.id).toBeDefined();
+            expect(result.updatedLoads).toEqual([]);
+            expect(result.updatedMoney).toBe(50 + demand.payment);
 
             const after = await db.query('SELECT money, loads, hand FROM players WHERE id = $1', [playerId]);
             expect(after.rows[0].money).toBe(50 + demand.payment);

@@ -175,10 +175,11 @@ router.post('/update', async (req, res) => {
         const updatedPlayer = updatedPlayers.find(p => p.id === player.id);
         
         if (updatedPlayer) {
-            // Emit socket update with updated player
+            // Emit socket update with updated player (do not broadcast private hand data)
+            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
             emitStatePatch(gameId, {
-                players: [updatedPlayer]
-            });
+                players: [playerWithoutHand]
+            } as any);
         }
 
         return res.status(200).json({ message: 'Player updated successfully' });
@@ -504,15 +505,15 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
         // Call the service to handle the demand fulfillment
         const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
-        // Get updated player data with new hand for socket broadcast
-        const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+        // Get updated player data for socket broadcast (do not broadcast private hand data)
+        const updatedPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = updatedPlayers.find(p => p.id === playerId);
         
         if (updatedPlayer) {
-            // Emit socket update with updated player (includes new hand)
+            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
             emitStatePatch(gameId, {
-                players: [updatedPlayer]
-            });
+                players: [playerWithoutHand]
+            } as any);
         }
 
         return res.status(200).json(result);
@@ -585,7 +586,8 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
         const publicPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
         if (updatedPlayer) {
-            emitStatePatch(gameId, { players: [updatedPlayer] });
+            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
+            emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
         }
 
         return res.status(200).json(result);
