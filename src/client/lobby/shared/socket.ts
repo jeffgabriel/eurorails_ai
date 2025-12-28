@@ -91,11 +91,14 @@ class SocketService {
 
     return new Promise((resolve) => {
       const socketRef = this.socket;
+      if (!socketRef) {
+        resolve(false);
+        return;
+      }
       let done = false;
       let timer: number | undefined;
 
       const cleanup = () => {
-        if (!socketRef) return;
         socketRef.off('connect', onConnect);
         socketRef.off('connect_error', onConnectError);
         if (timer !== undefined) {

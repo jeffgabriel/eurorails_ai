@@ -8,6 +8,7 @@ import { LeaderboardManager } from "./LeaderboardManager";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { CitySelectionManager } from "./CitySelectionManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { UI_FONT_FAMILY } from "../config/uiFont";
 
 export class UIManager {
   private scene: Phaser.Scene;
