@@ -116,7 +116,7 @@ export class LoadService {
     }
   }
 
-  public async returnLoad(city: string, loadType: LoadType, gameId: string): Promise<{
+  public async returnLoad(city: string | undefined, loadType: LoadType, gameId: string): Promise<{
     loadState: LoadState;
     droppedLoads: Array<{ city_name: string; type: LoadType }>;
   }> {
@@ -125,10 +125,13 @@ export class LoadService {
       await client.query('BEGIN');
 
       // If this was a dropped load, mark it as no longer dropped
-      await client.query(
-        'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
-        [city, loadType, gameId]
-      );
+      // NOTE: city may be omitted by older clients; in that case we cannot clear a specific dropped record.
+      if (typeof city === 'string' && city.length > 0) {
+        await client.query(
+          'UPDATE load_chips SET is_dropped = false WHERE city_name = $1 AND type = $2 AND game_id = $3 AND is_dropped = true',
+          [city, loadType, gameId]
+        );
+      }
 
       // Get updated dropped loads for this game
       const droppedLoadsResult = await client.query(
