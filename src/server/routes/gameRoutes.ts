@@ -1,7 +1,9 @@
 import express from 'express';
 import { GameService } from '../services/gameService';
+import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
+import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
 
 const router = express.Router();
 
@@ -116,8 +118,160 @@ router.post('/updateCameraState', authenticateToken, async (req, res) => {
         return res.status(200).json({ message: 'Camera state updated successfully' });
     } catch (error: any) {
         console.error('Error in /updateCameraState route:', error);
-        return res.status(500).json({ 
+        return res.status(500).json({
             error: 'Server error',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Declare victory - called when a player believes they've met win conditions
+router.post('/:gameId/declare-victory', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const { playerId, connectedCities } = req.body as {
+            playerId: string;
+            connectedCities: MajorCityCoordinate[];
+        };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!playerId || !connectedCities || !Array.isArray(connectedCities)) {
+            return res.status(400).json({
+                error: 'VALIDATION_ERROR',
+                details: 'Player ID and connected cities array are required'
+            });
+        }
+
+        // Validate player belongs to user
+        const playerCheck = await db.query(
+            'SELECT id, name, user_id FROM players WHERE id = $1 AND game_id = $2',
+            [playerId, gameId]
+        );
+
+        if (playerCheck.rows.length === 0) {
+            return res.status(404).json({
+                error: 'NOT_FOUND',
+                details: 'Player not found in game'
+            });
+        }
+
+        if (playerCheck.rows[0].user_id !== userId) {
+            return res.status(403).json({
+                error: 'FORBIDDEN',
+                details: 'Cannot declare victory for another player'
+            });
+        }
+
+        const playerName = playerCheck.rows[0].name;
+
+        // Attempt to declare victory
+        const result = await VictoryService.declareVictory(gameId, playerId, connectedCities);
+
+        if (!result.success) {
+            return res.status(400).json({
+                error: 'VICTORY_INVALID',
+                details: result.error
+            });
+        }
+
+        // Emit victory triggered event to all players
+        if (result.victoryState) {
+            emitVictoryTriggered(
+                gameId,
+                result.victoryState.triggerPlayerIndex,
+                playerName,
+                result.victoryState.finalTurnPlayerIndex,
+                result.victoryState.victoryThreshold
+            );
+        }
+
+        return res.status(200).json({
+            success: true,
+            victoryState: result.victoryState
+        });
+    } catch (error: any) {
+        console.error('Error in /:gameId/declare-victory route:', error);
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Resolve victory - called after final turn to determine winner
+router.post('/:gameId/resolve-victory', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        // Check if this is actually the final turn
+        const isFinal = await VictoryService.isFinalTurn(gameId);
+        if (!isFinal) {
+            return res.status(400).json({
+                error: 'NOT_FINAL_TURN',
+                details: 'Victory can only be resolved after the final turn'
+            });
+        }
+
+        const result = await VictoryService.resolveVictory(gameId);
+
+        if (result.gameOver && result.winnerId && result.winnerName) {
+            emitGameOver(gameId, result.winnerId, result.winnerName);
+        } else if (result.tieExtended && result.newThreshold) {
+            emitTieExtended(gameId, result.newThreshold);
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        console.error('Error in /:gameId/resolve-victory route:', error);
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+// Get victory state for a game
+router.get('/:gameId/victory-state', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        const victoryState = await VictoryService.getVictoryState(gameId);
+
+        return res.status(200).json({
+            victoryState: victoryState || {
+                triggered: false,
+                triggerPlayerIndex: -1,
+                victoryThreshold: 250,
+                finalTurnPlayerIndex: -1
+            }
+        });
+    } catch (error: any) {
+        console.error('Error in /:gameId/victory-state route:', error);
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
             details: error.message || 'An unexpected error occurred'
         });
     }

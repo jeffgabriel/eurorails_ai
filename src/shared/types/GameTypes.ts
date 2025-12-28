@@ -77,6 +77,16 @@ export interface TrainState {
 
 export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';
 
+export const VICTORY_INITIAL_THRESHOLD = 250; // 250M ECU to win
+export const VICTORY_TIE_THRESHOLD = 300; // 300M ECU after a tie
+
+export interface VictoryState {
+    triggered: boolean;              // Has someone declared victory?
+    triggerPlayerIndex: number;      // Who triggered it? (-1 if not triggered)
+    victoryThreshold: number;        // 250M initially, 300M after tie
+    finalTurnPlayerIndex: number;    // Last player who gets a turn (-1 if not triggered)
+}
+
 export interface Game {
     id: string;
     status: GameStatus;
@@ -85,6 +95,7 @@ export interface Game {
     winnerId?: string;
     createdAt: Date;
     updatedAt: Date;
+    victoryState?: VictoryState;
 }
 
 export interface GameState {
@@ -96,6 +107,7 @@ export interface GameState {
     /** @deprecated Camera state is now stored per-player in Player.cameraState. This field is kept for backwards compatibility during migration. */
     cameraState?: CameraState;
     trainSprites?: Map<string, any>; // Map of player ID to train sprite (client-side only)
+    victoryState?: VictoryState;
 }
 
 export const INITIAL_PLAYER_MONEY = 50; // 50M ECU starting money

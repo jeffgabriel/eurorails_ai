@@ -299,12 +299,103 @@ export class UIManager {
 
     // Clear UI container
     this.uiContainer.removeAll(true);
-    
+
     // Update leaderboard directly on UI container
     this.leaderboardManager.update(this.uiContainer);
-    
+
+    // Add Final Round banner if victory has been triggered
+    this.createFinalRoundBanner();
+
     // Update gameState in playerHandDisplay
     this.playerHandDisplay.updateGameState(this.gameState);
+  }
+
+  /**
+   * Create a persistent Final Round banner at the top center of the screen
+   * Only displayed when victory has been triggered
+   */
+  private createFinalRoundBanner(): void {
+    if (!this.gameState.victoryState?.triggered) {
+      return;
+    }
+
+    const triggerPlayerIndex = this.gameState.victoryState.triggerPlayerIndex;
+    const finalTurnPlayerIndex = this.gameState.victoryState.finalTurnPlayerIndex;
+    const currentPlayerIndex = this.gameState.currentPlayerIndex;
+    const playerCount = this.gameState.players.length;
+
+    // Calculate turns remaining
+    let turnsRemaining = 0;
+    if (finalTurnPlayerIndex >= 0) {
+      if (currentPlayerIndex === triggerPlayerIndex) {
+        // We've cycled back to trigger player - game should have ended
+        turnsRemaining = 0;
+      } else {
+        // Count forward from current player to final turn player (inclusive)
+        let idx = currentPlayerIndex;
+        while (idx !== finalTurnPlayerIndex) {
+          turnsRemaining++;
+          idx = (idx + 1) % playerCount;
+        }
+        turnsRemaining++; // Include the final turn itself
+      }
+    }
+
+    // Determine the detail message
+    let detailMessage: string;
+    if (turnsRemaining === 0) {
+      detailMessage = "Game ending...";
+    } else if (turnsRemaining === 1) {
+      detailMessage = "This is the last turn!";
+    } else {
+      detailMessage = `${turnsRemaining} turns remaining`;
+    }
+
+    // Position at top center of the screen
+    const centerX = this.scene.scale.width / 2;
+    const bannerY = 15;
+
+    // Create banner container
+    const bannerContainer = this.scene.add.container(centerX, bannerY);
+
+    // Create text first to measure width
+    const titleText = this.scene.add.text(0, 0, "⚠️ FINAL ROUND ⚠️", {
+      color: "#ffffff",
+      fontSize: "18px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+      align: "center",
+    }).setOrigin(0.5, 0);
+
+    const detailText = this.scene.add.text(0, 22, detailMessage, {
+      color: "#ffeeaa",
+      fontSize: "14px",
+      fontFamily: UI_FONT_FAMILY,
+      align: "center",
+    }).setOrigin(0.5, 0);
+
+    // Calculate banner size based on text
+    const maxTextWidth = Math.max(titleText.width, detailText.width);
+    const bannerWidth = maxTextWidth + 40;
+    const bannerHeight = 50;
+
+    // Border (drawn first, behind everything)
+    const border = this.scene.add.rectangle(0, bannerHeight / 2, bannerWidth + 4, bannerHeight + 4, 0xffaa00, 1)
+      .setOrigin(0.5, 0.5);
+
+    // Background
+    const bg = this.scene.add.rectangle(0, bannerHeight / 2, bannerWidth, bannerHeight, 0xcc3300, 0.95)
+      .setOrigin(0.5, 0.5);
+
+    // Add elements to container (order matters for layering)
+    bannerContainer.add([border, bg, titleText, detailText]);
+
+    // Adjust text positions within the banner
+    titleText.setY(6);
+    detailText.setY(28);
+
+    // Add to UI container so it's part of the fixed UI layer
+    this.uiContainer.add(bannerContainer);
   }
 
   public async setupPlayerHand(
