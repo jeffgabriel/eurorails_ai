@@ -651,8 +651,11 @@ export class GameScene extends Phaser.Scene {
       this.playerStateService.getLocalPlayerId() === currentPlayer.id &&
       this.gameState.currentPlayerIndex === this.gameState.victoryState.finalTurnPlayerIndex
     ) {
-      await this.resolveVictory();
-      return; // Don't advance turn - game is ending
+      const gameOver = await this.resolveVictory();
+      if (gameOver) {
+        return; // Don't advance turn - game is ending
+      }
+      // If tie extended, game continues - fall through to advance turn
     }
 
     // Use the game state service to handle player turn changes
@@ -815,10 +818,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Resolve victory after the final turn completes
-   * Called by the final turn player's client to determine winner
+   * Resolve victory at the end of the final round.
+   * Called by the final turn player's client to determine winner.
+   * Returns true if the game is over, false if it continues (e.g., tie extension).
    */
-  private async resolveVictory(): Promise<void> {
+  private async resolveVictory(): Promise<boolean> {
     try {
       const { authenticatedFetch } = await import('../services/authenticatedFetch');
       const response = await authenticatedFetch(
@@ -834,8 +838,10 @@ export class GameScene extends Phaser.Scene {
         // Those handlers will update state and show appropriate UI
         if (result.gameOver) {
           console.log('Victory resolved - game over');
+          return true;
         } else if (result.tieExtended) {
           console.log('Victory resulted in tie - threshold extended');
+          return false; // Game continues with higher threshold
         }
       } else {
         const error = await response.json();
@@ -844,6 +850,7 @@ export class GameScene extends Phaser.Scene {
     } catch (error) {
       console.error('Error resolving victory:', error);
     }
+    return false; // On error, allow game to continue
   }
 
   private async openSettings() {
