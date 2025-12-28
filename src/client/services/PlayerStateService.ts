@@ -1,5 +1,6 @@
 import { Player, TrainState } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
+import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
 import { authenticatedFetch } from './authenticatedFetch';
 
@@ -364,6 +365,75 @@ export class PlayerStateService {
             return true;
         } catch (error) {
             console.error('Error fulfilling demand:', error);
+            return false;
+        }
+    }
+
+    /**
+     * Deliver a load:
+     * - Server-authoritative: compute payment + validate demand server-side
+     * - Updates local state only after success
+     */
+    public async deliverLoad(
+        city: string,
+        loadType: LoadType,
+        cardId: number,
+        gameId: string
+    ): Promise<boolean> {
+        if (!this.localPlayer || !this.localPlayerId) {
+            console.error('Cannot deliver load: no local player');
+            return false;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/deliver-load`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: gameId,
+                    city: city,
+                    loadType: loadType,
+                    cardId: cardId
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to deliver load:', errorData);
+                return false;
+            }
+
+            const result: { payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard } = await response.json();
+            if (
+                !result?.newCard ||
+                typeof result.payment !== 'number' ||
+                typeof result.updatedMoney !== 'number' ||
+                !Array.isArray(result.updatedLoads)
+            ) {
+                console.error('Invalid deliver-load response from server');
+                return false;
+            }
+
+            // Update loads (server-authoritative)
+            if (!this.localPlayer.trainState) {
+                this.localPlayer.trainState = {
+                    position: null,
+                    remainingMovement: 0,
+                    movementHistory: [],
+                    loads: []
+                };
+            }
+            this.localPlayer.trainState.loads = result.updatedLoads;
+
+            // Update money (server-authoritative)
+            this.localPlayer.money = result.updatedMoney;
+
+            // Replace demand card in hand
+            this.localPlayer.hand = (this.localPlayer.hand || []).filter(card => card.id !== cardId);
+            this.localPlayer.hand.push(result.newCard);
+
+            return true;
+        } catch (error) {
+            console.error('Error delivering load:', error);
             return false;
         }
     }

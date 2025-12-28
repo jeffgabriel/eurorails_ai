@@ -5,6 +5,7 @@ import '@jest/globals';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { cleanDatabase } from '../db/index';
 import { TrainType } from '../../shared/types/GameTypes';
+import { demandDeckService } from '../services/demandDeckService';
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -418,6 +419,77 @@ describe('PlayerService Integration Tests', () => {
             const result = await db.query('SELECT * FROM games WHERE id = $1', [defaultGameId]);
             expect(result.rows.length).toBe(1);
             expect(result.rows[0].status).toBe('setup');
+        });
+    });
+
+    describe('Load Delivery', () => {
+        it('should deliver a load immediately server-side and prevent double delivery', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            const player = {
+                id: playerId,
+                userId,
+                name: 'Deliverer',
+                color: '#123456',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            expect(card).toBeTruthy();
+            if (!card) {
+                throw new Error('Expected demand card to exist');
+            }
+            const demand = card.demands[0];
+
+            // Ensure the player is carrying the required load and has baseline money
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const result = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            expect(result.payment).toBe(demand.payment);
+            expect(result.newCard.id).toBeDefined();
+            expect(result.updatedLoads).toEqual([]);
+            expect(result.updatedMoney).toBe(50 + demand.payment);
+
+            const after = await db.query('SELECT money, loads, hand FROM players WHERE id = $1', [playerId]);
+            expect(after.rows[0].money).toBe(50 + demand.payment);
+            expect(after.rows[0].loads).toEqual([]);
+            expect(after.rows[0].hand).toHaveLength(3);
+            expect(after.rows[0].hand).not.toContain(cardId);
+            expect(after.rows[0].hand).toContain(result.newCard.id);
+
+            // Second attempt should fail because the demand card has already been replaced
+            await expect(
+                PlayerService.deliverLoadForUser(gameId, userId, demand.city, demand.resource, cardId)
+            ).rejects.toThrow('Demand card not in hand');
         });
     });
 }); 

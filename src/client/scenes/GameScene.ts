@@ -251,10 +251,15 @@ export class GameScene extends Phaser.Scene {
                     // This prevents train from jumping backward when server sends outdated position
                     const preservedPosition = existingPlayer.trainState?.position || null;
                     const preservedHistory = existingPlayer.trainState?.movementHistory || [];
+                    const preservedHand = existingPlayer.hand;
 
                     this.gameState.players[index] = {
                       ...existingPlayer,
                       ...updatedPlayer,
+                      // Preserve private hand if server patch doesn't include it (or includes empty for privacy)
+                      hand: Array.isArray(updatedPlayer.hand) && updatedPlayer.hand.length > 0
+                        ? updatedPlayer.hand
+                        : preservedHand,
                       // Preserve local position if it exists (server position might be outdated)
                       trainState: updatedPlayer.trainState ? {
                         ...updatedPlayer.trainState,
