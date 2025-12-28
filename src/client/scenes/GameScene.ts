@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
+import { GameState, Player, TrainType, TRAIN_PROPERTIES, VICTORY_INITIAL_THRESHOLD } from "../../shared/types/GameTypes";
 import { MapRenderer } from "../components/MapRenderer";
 import { CameraController } from "../components/CameraController";
 import { TrackDrawingManager } from "../components/TrackDrawingManager";
@@ -7,6 +7,7 @@ import { UIManager } from "../components/UIManager";
 import { TurnNotification } from "../components/TurnNotification";
 import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
+import { VictoryService } from "../services/VictoryService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
@@ -233,24 +234,24 @@ export class GameScene extends Phaser.Scene {
           // Listen for state patches to sync game state across clients
           socketService.onPatch((data: { patch: any; serverSeq: number }) => {
             const { patch } = data;
-            
+
             // Update this.gameState with the patch
             if (patch.players && patch.players.length > 0) {
               const localPlayerId = this.playerStateService.getLocalPlayerId();
-              
+
               // Merge updated players into existing players array
               patch.players.forEach((updatedPlayer: any) => {
                 const index = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
                 if (index >= 0) {
                   const existingPlayer = this.gameState.players[index];
                   const isLocalPlayer = localPlayerId === updatedPlayer.id;
-                  
+
                   if (isLocalPlayer) {
                     // For local player: preserve local position and movementHistory
                     // This prevents train from jumping backward when server sends outdated position
                     const preservedPosition = existingPlayer.trainState?.position || null;
                     const preservedHistory = existingPlayer.trainState?.movementHistory || [];
-                    
+
                     this.gameState.players[index] = {
                       ...existingPlayer,
                       ...updatedPlayer,
@@ -259,8 +260,8 @@ export class GameScene extends Phaser.Scene {
                         ...updatedPlayer.trainState,
                         position: preservedPosition || updatedPlayer.trainState.position,
                         // Preserve movementHistory to maintain direction
-                        movementHistory: preservedHistory.length > 0 
-                          ? preservedHistory 
+                        movementHistory: preservedHistory.length > 0
+                          ? preservedHistory
                           : (updatedPlayer.trainState.movementHistory || [])
                       } : existingPlayer.trainState
                     };
@@ -274,20 +275,69 @@ export class GameScene extends Phaser.Scene {
                 }
               });
             }
-            
+
             // Update other patch fields
             if (patch.currentPlayerIndex !== undefined) {
               this.gameState.currentPlayerIndex = patch.currentPlayerIndex;
             }
-            
+
             if (patch.status !== undefined) {
               this.gameState.status = patch.status;
             }
-            
+
             // Update services with new state
             this.gameStateService.updateGameState(this.gameState);
             this.playerStateService.updateLocalPlayer(this.gameState.players);
-            
+
+            // Refresh UI
+            this.uiManager.setupUIOverlay();
+          });
+
+          // Listen for victory triggered event
+          socketService.onVictoryTriggered((data) => {
+            if (data.gameId !== this.gameState.id) return;
+
+            // Update local victory state
+            this.gameState.victoryState = {
+              triggered: true,
+              triggerPlayerIndex: data.triggerPlayerIndex,
+              victoryThreshold: data.victoryThreshold,
+              finalTurnPlayerIndex: data.finalTurnPlayerIndex,
+            };
+
+            // Refresh UI to show final round indicator
+            this.uiManager.setupUIOverlay();
+          });
+
+          // Listen for game over event
+          socketService.onGameOver((data) => {
+            if (data.gameId !== this.gameState.id) return;
+
+            // Update game status
+            this.gameState.status = 'completed';
+
+            // Launch winner scene
+            this.launchWinnerScene(data.winnerId, data.winnerName);
+          });
+
+          // Listen for tie extended event
+          socketService.onTieExtended((data) => {
+            if (data.gameId !== this.gameState.id) return;
+
+            // Reset victory state with new threshold
+            this.gameState.victoryState = {
+              triggered: false,
+              triggerPlayerIndex: -1,
+              victoryThreshold: data.newThreshold,
+              finalTurnPlayerIndex: -1,
+            };
+
+            // Show notification
+            this.turnNotification.show(
+              `Tie! Victory threshold increased to ${data.newThreshold}M ECU. Game continues.`,
+              5000
+            );
+
             // Refresh UI
             this.uiManager.setupUIOverlay();
           });
@@ -585,6 +635,29 @@ export class GameScene extends Phaser.Scene {
       // Non-fatal: if persistence fails, the server will retain the old value.
     }
 
+    // Check victory conditions for local player ending their turn
+    // Only check if victory hasn't been triggered yet
+    if (
+      this.playerStateService.getLocalPlayerId() === currentPlayer.id &&
+      !this.gameState.victoryState?.triggered
+    ) {
+      await this.checkAndDeclareVictory(currentPlayer);
+    }
+
+    // Check if this is the final turn and we need to resolve victory
+    // Only the final turn player's client should trigger resolution
+    if (
+      this.gameState.victoryState?.triggered &&
+      this.playerStateService.getLocalPlayerId() === currentPlayer.id &&
+      this.gameState.currentPlayerIndex === this.gameState.victoryState.finalTurnPlayerIndex
+    ) {
+      const gameOver = await this.resolveVictory();
+      if (gameOver) {
+        return; // Don't advance turn - game is ending
+      }
+      // If tie extended, game continues - fall through to advance turn
+    }
+
     // Use the game state service to handle player turn changes
     await this.gameStateService.nextPlayerTurn();
 
@@ -657,6 +730,127 @@ export class GameScene extends Phaser.Scene {
     if (player.trainState.ferryState?.status === 'ready_to_cross') {
       player.trainState.ferryState = undefined;
     }
+  }
+
+  /**
+   * Launch the winner scene to display game results
+   */
+  private async launchWinnerScene(winnerId: string, winnerName: string): Promise<void> {
+    console.log(`Game over! Winner: ${winnerName} (${winnerId})`);
+
+    // Dynamically import and add the WinnerScene
+    const { WinnerScene } = await import('./WinnerScene');
+
+    // Add the scene if it doesn't exist yet
+    if (!this.scene.get('WinnerScene')) {
+      this.scene.add('WinnerScene', WinnerScene, false);
+    }
+
+    // Launch the WinnerScene as an overlay
+    this.scene.launch('WinnerScene', {
+      gameState: this.gameState,
+      winnerId,
+      winnerName,
+    });
+
+    // Bring the WinnerScene to the top
+    this.scene.bringToTop('WinnerScene');
+  }
+
+  /**
+   * Check if player meets victory conditions and declare victory if so
+   * Victory requires: 250M+ ECU AND 7+ connected major cities
+   */
+  private async checkAndDeclareVictory(player: Player): Promise<void> {
+    const threshold = this.gameState.victoryState?.victoryThreshold ?? VICTORY_INITIAL_THRESHOLD;
+
+    // Quick check: does player have enough money?
+    if (player.money < threshold) {
+      return; // Not enough money, skip expensive connectivity check
+    }
+
+    // Get player's track segments
+    const trackState = this.trackManager.getPlayerTrackState(player.id);
+    if (!trackState || trackState.segments.length === 0) {
+      return; // No track built
+    }
+
+    // Check if 7+ major cities are connected
+    const victoryService = VictoryService.getInstance();
+    const { eligible, connectedCities } = victoryService.checkVictoryConditions(
+      player.money,
+      trackState.segments,
+      threshold
+    );
+
+    if (!eligible) {
+      return; // Victory conditions not met
+    }
+
+    // Declare victory to the server
+    try {
+      const { authenticatedFetch } = await import('../services/authenticatedFetch');
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${this.gameState.id}/declare-victory`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            playerId: player.id,
+            connectedCities,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.victoryState) {
+          // Update local game state with victory state
+          this.gameState.victoryState = result.victoryState;
+          // Note: Socket event handler (onVictoryTriggered) will show the notification to all players
+        }
+      } else {
+        const error = await response.json();
+        console.warn('Victory declaration rejected:', error.details);
+      }
+    } catch (error) {
+      console.error('Error declaring victory:', error);
+    }
+  }
+
+  /**
+   * Resolve victory at the end of the final round.
+   * Called by the final turn player's client to determine winner.
+   * Returns true if the game is over, false if it continues (e.g., tie extension).
+   */
+  private async resolveVictory(): Promise<boolean> {
+    try {
+      const { authenticatedFetch } = await import('../services/authenticatedFetch');
+      const response = await authenticatedFetch(
+        `${config.apiBaseUrl}/api/game/${this.gameState.id}/resolve-victory`,
+        {
+          method: 'POST',
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        // The server will emit game:over or victory:tie-extended via socket
+        // Those handlers will update state and show appropriate UI
+        if (result.gameOver) {
+          console.log('Victory resolved - game over');
+          return true;
+        } else if (result.tieExtended) {
+          console.log('Victory resulted in tie - threshold extended');
+          return false; // Game continues with higher threshold
+        }
+      } else {
+        const error = await response.json();
+        console.warn('Victory resolution failed:', error.details);
+      }
+    } catch (error) {
+      console.error('Error resolving victory:', error);
+    }
+    return false; // On error, allow game to continue
   }
 
   private async openSettings() {

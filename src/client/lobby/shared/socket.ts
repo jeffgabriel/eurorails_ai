@@ -224,6 +224,40 @@ class SocketService {
     this.socket.on('track:updated', callback);
   }
 
+  onVictoryTriggered(callback: (data: {
+    gameId: ID;
+    triggerPlayerIndex: number;
+    triggerPlayerName: string;
+    finalTurnPlayerIndex: number;
+    victoryThreshold: number;
+    timestamp: number;
+  }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('victory:triggered');
+    this.socket.on('victory:triggered', callback);
+  }
+
+  onGameOver(callback: (data: {
+    gameId: ID;
+    winnerId: ID;
+    winnerName: string;
+    timestamp: number;
+  }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('game:over');
+    this.socket.on('game:over', callback);
+  }
+
+  onTieExtended(callback: (data: {
+    gameId: ID;
+    newThreshold: number;
+    timestamp: number;
+  }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('victory:tie-extended');
+    this.socket.on('victory:tie-extended', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }

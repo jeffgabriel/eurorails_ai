@@ -1,5 +1,5 @@
 import { db } from '../db';
-import { GameState, CameraState } from '../../shared/types/GameTypes';
+import { GameState, CameraState, VictoryState, VICTORY_INITIAL_THRESHOLD } from '../../shared/types/GameTypes';
 import { PlayerService } from './playerService';
 
 export class GameService {
@@ -58,6 +58,14 @@ export class GameService {
         // Camera state is now included in player objects
         const players = await PlayerService.getPlayers(gameId, userId);
 
+        // Build victory state from database columns
+        const victoryState: VictoryState = {
+            triggered: row.victory_triggered ?? false,
+            triggerPlayerIndex: row.victory_trigger_player_index ?? -1,
+            victoryThreshold: row.victory_threshold ?? VICTORY_INITIAL_THRESHOLD,
+            finalTurnPlayerIndex: row.final_turn_player_index ?? -1,
+        };
+
         return {
             id: row.id,
             players: players,
@@ -65,7 +73,8 @@ export class GameService {
             status: row.status,
             maxPlayers: row.max_players,
             // Camera state is deprecated - now stored per-player
-            cameraState: row.camera_state ? row.camera_state : undefined
+            cameraState: row.camera_state ? row.camera_state : undefined,
+            victoryState,
         };
     }
 } 

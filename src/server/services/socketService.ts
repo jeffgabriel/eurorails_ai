@@ -274,3 +274,65 @@ export function emitStatePatch(gameId: string, patch: Partial<GameState>): void 
   });
 }
 
+/**
+ * Emit victory triggered event to all clients in a game
+ */
+export function emitVictoryTriggered(
+  gameId: string,
+  triggerPlayerIndex: number,
+  triggerPlayerName: string,
+  finalTurnPlayerIndex: number,
+  victoryThreshold: number
+): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit victory triggered');
+    return;
+  }
+  io.to(gameId).emit('victory:triggered', {
+    gameId,
+    triggerPlayerIndex,
+    triggerPlayerName,
+    finalTurnPlayerIndex,
+    victoryThreshold,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Emit game over event to all clients in a game
+ */
+export function emitGameOver(
+  gameId: string,
+  winnerId: string,
+  winnerName: string
+): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit game over');
+    return;
+  }
+  io.to(gameId).emit('game:over', {
+    gameId,
+    winnerId,
+    winnerName,
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Emit tie extended event when victory threshold increases to 300M
+ */
+export function emitTieExtended(
+  gameId: string,
+  newThreshold: number
+): void {
+  if (!io) {
+    console.warn('Socket.IO not initialized, cannot emit tie extended');
+    return;
+  }
+  io.to(gameId).emit('victory:tie-extended', {
+    gameId,
+    newThreshold,
+    timestamp: Date.now(),
+  });
+}
+

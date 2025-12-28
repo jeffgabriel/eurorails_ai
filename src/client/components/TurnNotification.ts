@@ -34,15 +34,39 @@ export class TurnNotification {
       this.hideTimer = null;
     }
 
-    const width = 300;
-    const height = 60;
     const padding = 20;
+    const paddingX = 24;
+    const paddingY = 16;
+    const maxWidth = Math.min(500, this.scene.scale.width - padding * 2);
+
+    // Create notification text first to measure its size
+    const text = this.scene.add
+      .text(
+        0,
+        0,
+        message,
+        {
+          color: "#ffffff",
+          fontSize: "18px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+          align: "center",
+          wordWrap: { width: maxWidth - paddingX * 2, useAdvancedWrap: true },
+        }
+      )
+      .setOrigin(0.5, 0.5);
+
+    // Calculate dynamic width and height based on text
+    const width = Math.min(maxWidth, text.width + paddingX * 2);
+    const height = text.height + paddingY * 2;
+
+    // Position at top-right
     const x = this.scene.scale.width - width - padding;
     const y = padding;
 
     // Create container for notification positioned at target location
     this.container = this.scene.add.container(x, y);
-    
+
     // Create semi-transparent dark background (relative to container)
     const bg = this.scene.add
       .rectangle(
@@ -51,30 +75,17 @@ export class TurnNotification {
         width,
         height,
         0x000000,
-        0.8
+        0.85
       )
       .setOrigin(0.5, 0.5)
       .setStrokeStyle(2, 0xffffff, 0.5);
 
-    // Create notification text (relative to container)
-    const text = this.scene.add
-      .text(
-        width / 2,
-        height / 2,
-        message,
-        {
-          color: "#ffffff",
-          fontSize: "20px",
-          fontStyle: "bold",
-          fontFamily: UI_FONT_FAMILY,
-          align: "center",
-        }
-      )
-      .setOrigin(0.5, 0.5);
+    // Position text in center of background
+    text.setPosition(width / 2, height / 2);
 
     // Add elements to container
     this.container.add([bg, text]);
-    
+
     // Add container to scene (ensure it's on top)
     this.scene.add.existing(this.container);
     this.container.setDepth(10000); // Very high depth to ensure it's on top

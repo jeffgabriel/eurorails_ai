@@ -92,6 +92,25 @@ export interface ServerToClientEvents {
   'lobby-updated': (data: { gameId: ID; players: Player[]; action: 'player-joined' | 'player-left'; timestamp: number }) => void;
   'game-started': (data: { gameId: ID; timestamp: number }) => void;
   'track:updated': (data: { gameId: ID; playerId: ID; timestamp: number }) => void;
+  'victory:triggered': (data: {
+    gameId: ID;
+    triggerPlayerIndex: number;
+    triggerPlayerName: string;
+    finalTurnPlayerIndex: number;
+    victoryThreshold: number;
+    timestamp: number;
+  }) => void;
+  'game:over': (data: {
+    gameId: ID;
+    winnerId: ID;
+    winnerName: string;
+    timestamp: number;
+  }) => void;
+  'victory:tie-extended': (data: {
+    gameId: ID;
+    newThreshold: number;
+    timestamp: number;
+  }) => void;
 }
 
 // Form validation types
