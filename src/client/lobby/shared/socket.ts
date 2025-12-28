@@ -8,6 +8,7 @@ class SocketService {
   private serverSeq = 0;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
+  private connecting = false;
 
   connect(token: string): void {
     if (this.socket) {
@@ -15,6 +16,7 @@ class SocketService {
     }
 
     debug.log('Connecting to socket server:', config.socketUrl);
+    this.connecting = true;
     
     this.socket = io(config.socketUrl, {
       auth: { token },
@@ -32,15 +34,18 @@ class SocketService {
 
     this.socket.on('connect', () => {
       debug.log('Socket connected');
+      this.connecting = false;
       this.reconnectAttempts = 0;
     });
 
     this.socket.on('disconnect', (reason) => {
       debug.log('Socket disconnected:', reason);
+      this.connecting = false;
     });
 
     this.socket.on('connect_error', (error) => {
       debug.error('Socket connection error:', error);
+      this.connecting = false;
       this.reconnectAttempts++;
       
       if (this.reconnectAttempts >= this.maxReconnectAttempts) {
@@ -55,11 +60,66 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.serverSeq = 0;
+      this.connecting = false;
     }
+  }
+
+  hasSocket(): boolean {
+    return this.socket !== null;
   }
 
   isConnected(): boolean {
     return this.socket?.connected ?? false;
+  }
+
+  isConnecting(): boolean {
+    return this.connecting && !this.isConnected();
+  }
+
+  /**
+   * Wait for the current socket to become connected.
+   * Returns true if connected, false if timed out or if no socket exists.
+   */
+  waitForConnection(timeoutMs: number = 2000): Promise<boolean> {
+    if (!this.socket) {
+      return Promise.resolve(false);
+    }
+
+    if (this.socket.connected) {
+      return Promise.resolve(true);
+    }
+
+    return new Promise((resolve) => {
+      const socketRef = this.socket;
+      let done = false;
+      let timer: number | undefined;
+
+      const cleanup = () => {
+        if (!socketRef) return;
+        socketRef.off('connect', onConnect);
+        socketRef.off('connect_error', onConnectError);
+        if (timer !== undefined) {
+          window.clearTimeout(timer);
+        }
+      };
+
+      const finish = (ok: boolean) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve(ok);
+      };
+
+      const onConnect = () => finish(true);
+      const onConnectError = () => finish(false);
+
+      socketRef.on('connect', onConnect);
+      socketRef.on('connect_error', onConnectError);
+
+      timer = window.setTimeout(() => {
+        finish(socketRef.connected);
+      }, timeoutMs);
+    });
   }
 
   join(gameId: ID): void {

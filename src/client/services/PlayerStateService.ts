@@ -275,6 +275,56 @@ export class PlayerStateService {
     }
 
     /**
+     * Update local player's turn number (per-player turns taken).
+     * Server-authoritative: API call first, update local state only after success.
+     *
+     * IMPORTANT: Don't send trainState.position here; position is managed separately.
+     */
+    public async updatePlayerTurnNumber(newTurnNumber: number, gameId: string): Promise<boolean> {
+        if (!this.localPlayer) {
+            console.error('Cannot update turn number: no local player');
+            return false;
+        }
+
+        try {
+            // Create player object without trainState.position to preserve current position
+            const playerWithoutPosition = {
+                ...this.localPlayer
+            };
+            if (playerWithoutPosition.trainState) {
+                const trainStateWithoutPosition = {
+                    ...playerWithoutPosition.trainState
+                };
+                delete (trainStateWithoutPosition as any).position;
+                playerWithoutPosition.trainState = trainStateWithoutPosition;
+            }
+
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/update`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: gameId,
+                    player: {
+                        ...playerWithoutPosition,
+                        turnNumber: newTurnNumber
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to update player turn number:', errorData);
+                return false;
+            }
+
+            this.localPlayer.turnNumber = newTurnNumber;
+            return true;
+        } catch (error) {
+            console.error('Error updating player turn number:', error);
+            return false;
+        }
+    }
+
+    /**
      * Fulfill a demand card for the local player
      */
     public async fulfillDemandCard(
