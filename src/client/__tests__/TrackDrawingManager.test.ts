@@ -1023,3 +1023,212 @@ describe('State consistency on backend failure', () => {
     // it('should attempt rollback if updatePlayerMoney fails after saveTrackState succeeds', async () => { ... });
     // it('should log an error if rollback fails after updatePlayerMoney failure', async () => { ... });
 });
+
+describe('TrackDrawingManager - Shift+Click Mode', () => {
+    let scene: any;
+    let mapContainer: any;
+    let gameState: GameState;
+    let gridPoints: GridPoint[][];
+    let trackDrawingManager: TrackDrawingManager;
+
+    beforeEach(() => {
+        // Set up mocks
+        const mockGraphics1 = {
+            setDepth: jest.fn(),
+            lineStyle: jest.fn(),
+            beginPath: jest.fn(),
+            moveTo: jest.fn(),
+            lineTo: jest.fn(),
+            strokePath: jest.fn(),
+            clear: jest.fn()
+        };
+
+        scene = {
+            add: {
+                graphics: () => mockGraphics1
+            },
+            events: {
+                on: jest.fn(),
+                emit: jest.fn()
+            },
+            input: {
+                on: jest.fn(),
+                off: jest.fn(),
+                keyboard: {
+                    on: jest.fn(),
+                    off: jest.fn()
+                }
+            },
+            cameras: {
+                main: {
+                    getWorldPoint: jest.fn((x, y) => ({ x, y }))
+                }
+            },
+            scale: {
+                width: 1024,
+                height: 768
+            }
+        };
+
+        mapContainer = { add: jest.fn() };
+
+        gameState = {
+            id: 'test-game-id',
+            players: [{
+                id: 'player1',
+                name: 'Player 1',
+                color: '#FF0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: []
+                },
+                hand: []
+            }],
+            currentPlayerIndex: 0,
+            status: 'active',
+            maxPlayers: 6
+        };
+
+        // Create a simple 3x3 grid for testing
+        gridPoints = [];
+        for (let row = 0; row < 3; row++) {
+            gridPoints[row] = [];
+            for (let col = 0; col < 3; col++) {
+                gridPoints[row][col] = {
+                    id: `point-${row}-${col}`,
+                    x: col * 50,
+                    y: row * 50,
+                    row: row,
+                    col: col,
+                    terrain: TerrainType.Clear
+                };
+            }
+        }
+
+        trackDrawingManager = new TrackDrawingManager(scene, mapContainer, gameState, gridPoints);
+    });
+
+    describe('Keyboard event listeners', () => {
+        it('should register shift key listeners on initialization', () => {
+            (trackDrawingManager as any).initializeDrawingMode();
+
+            // Keyboard listeners should be registered
+            expect(scene.input.keyboard.on).toHaveBeenCalledWith('keydown-SHIFT', expect.any(Function));
+            expect(scene.input.keyboard.on).toHaveBeenCalledWith('keyup-SHIFT', expect.any(Function));
+        });
+
+        it('should remove shift key listeners on cleanup', () => {
+            (trackDrawingManager as any).initializeDrawingMode();
+            jest.clearAllMocks(); // Clear previous calls
+            (trackDrawingManager as any).cleanupDrawingMode();
+
+            // Keyboard listeners should be removed
+            expect(scene.input.keyboard.off).toHaveBeenCalledWith('keydown-SHIFT');
+            expect(scene.input.keyboard.off).toHaveBeenCalledWith('keyup-SHIFT');
+        });
+
+        it('should reset shift mode state on cleanup', () => {
+            (trackDrawingManager as any).initializeDrawingMode();
+            (trackDrawingManager as any).isShiftModeActive = true;
+
+            (trackDrawingManager as any).cleanupDrawingMode();
+
+            expect((trackDrawingManager as any).isShiftModeActive).toBe(false);
+        });
+    });
+
+    describe('Direct path generation in shift mode', () => {
+        beforeEach(() => {
+            (trackDrawingManager as any).initializeDrawingMode();
+            // Set up a starting point
+            (trackDrawingManager as any).lastClickedPoint = gridPoints[1][1]; // Center point
+        });
+
+        it('should create direct path when shift mode active and points are adjacent', () => {
+            (trackDrawingManager as any).isShiftModeActive = true;
+            const targetPoint = gridPoints[1][2]; // Adjacent to [1][1]
+
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
+
+            const previewPath = (trackDrawingManager as any).previewPath;
+            expect(previewPath).toHaveLength(2);
+            expect(previewPath[0]).toBe(gridPoints[1][1]);
+            expect(previewPath[1]).toBe(gridPoints[1][2]);
+        });
+
+        it('should not create path when shift mode active but points are not adjacent', () => {
+            (trackDrawingManager as any).isShiftModeActive = true;
+            const targetPoint = gridPoints[0][0]; // Not adjacent to [1][1]
+
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
+
+            const previewPath = (trackDrawingManager as any).previewPath;
+            expect(previewPath).toHaveLength(0);
+        });
+
+        it('should use pathfinding when shift mode is not active', () => {
+            (trackDrawingManager as any).isShiftModeActive = false;
+            const targetPoint = gridPoints[1][2];
+
+            // Mock findPreviewPath to return a specific path
+            const mockPath = [gridPoints[1][1], gridPoints[1][2]];
+            jest.spyOn(trackDrawingManager as any, 'findPreviewPath').mockReturnValue(mockPath);
+
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
+
+            expect((trackDrawingManager as any).findPreviewPath).toHaveBeenCalledWith(targetPoint);
+            expect((trackDrawingManager as any).previewPath).toBe(mockPath);
+        });
+    });
+
+    describe('Preview color selection', () => {
+        beforeEach(() => {
+            (trackDrawingManager as any).initializeDrawingMode();
+        });
+
+        it('should return orange color for valid path in shift mode', () => {
+            const path = [gridPoints[0][0], gridPoints[0][1]];
+            const color = (trackDrawingManager as any).getPreviewLineColor(path, true);
+
+            expect(color).toBe(0xffa500); // Orange
+        });
+
+        it('should return green color for valid path in normal mode', () => {
+            const path = [gridPoints[0][0], gridPoints[0][1]];
+            const color = (trackDrawingManager as any).getPreviewLineColor(path, false);
+
+            expect(color).toBe(0x00ff00); // Green
+        });
+
+        it('should return red color for path with water points', () => {
+            gridPoints[0][1].terrain = TerrainType.Water;
+            const path = [gridPoints[0][0], gridPoints[0][1]];
+
+            const colorShift = (trackDrawingManager as any).getPreviewLineColor(path, true);
+            const colorNormal = (trackDrawingManager as any).getPreviewLineColor(path, false);
+
+            expect(colorShift).toBe(0xff0000); // Red
+            expect(colorNormal).toBe(0xff0000); // Red
+        });
+
+        it('should return red color when cost exceeds budget', () => {
+            // Set up points with high cost (Alpine terrain)
+            gridPoints[0][1].terrain = TerrainType.Alpine;
+            const path = [gridPoints[0][0], gridPoints[0][1]];
+
+            // Set turn build cost high to exceed limit
+            (trackDrawingManager as any).turnBuildCost = 19; // Alpine costs 5, 19 + 5 > 20 limit
+
+            const colorShift = (trackDrawingManager as any).getPreviewLineColor(path, true);
+            const colorNormal = (trackDrawingManager as any).getPreviewLineColor(path, false);
+
+            expect(colorShift).toBe(0xff0000); // Red
+            expect(colorNormal).toBe(0xff0000); // Red
+        });
+    });
+});
