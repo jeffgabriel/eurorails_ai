@@ -69,7 +69,8 @@ export class TrackDrawingManager {
     private updateEventHandler: (() => void) | null = null;
     
     public segmentsDrawnThisTurn: TrackSegment[] = [];
-    private onTrackSegmentCommitted: ((segment: TrackSegment) => void) | null = null;
+    private onTrackSegmentAdded: ((segment: TrackSegment) => void) | null = null;
+    private onTrackSegmentsCommitted: ((segments: TrackSegment[]) => void) | null = null;
 
     // When true, player may not enter drawing mode for the rest of the turn (e.g., after a full upgrade)
     private drawingDisabledForTurn: boolean = false;
@@ -105,11 +106,68 @@ export class TrackDrawingManager {
     }
 
     /**
-     * Register a callback invoked once per track segment successfully committed to the server.
-     * This is used to integrate track-building into the unified per-turn undo stack.
+     * Called immediately when a new segment is added during drawing mode (uncommitted).
+     * Used to push each user action onto the unified undo stack in strict order.
      */
-    public setOnTrackSegmentCommitted(callback: ((segment: TrackSegment) => void) | null): void {
-        this.onTrackSegmentCommitted = callback;
+    public setOnTrackSegmentAdded(callback: ((segment: TrackSegment) => void) | null): void {
+        this.onTrackSegmentAdded = callback;
+    }
+
+    /**
+     * Called once after a successful save when drawing mode is exited, with all segments
+     * that were just committed to the server.
+     */
+    public setOnTrackSegmentsCommitted(callback: ((segments: TrackSegment[]) => void) | null): void {
+        this.onTrackSegmentsCommitted = callback;
+    }
+
+    /**
+     * Uncommitted (in-drawing) segments are stored in `currentSegments` until drawing mode is exited.
+     * These must be undoable before we start undoing other turn actions (e.g., train movement),
+     * otherwise users see movement undo occur "before all track is undone".
+     */
+    public getUncommittedSegmentCount(): number {
+        return this.currentSegments.length;
+    }
+
+    /**
+     * Undo the most recently added uncommitted segment (does not persist to server).
+     * Returns true if a segment was undone.
+     */
+    public undoLastUncommittedSegment(): boolean {
+        if (this.currentSegments.length === 0) {
+            return false;
+        }
+
+        const last = this.currentSegments.pop();
+        if (!last) return false;
+
+        // Adjust current-session cost (defensive clamp)
+        this.turnBuildCost = Math.max(0, this.turnBuildCost - (last.cost || 0));
+
+        // Redraw: committed tracks + remaining uncommitted segments
+        this.drawingGraphics.clear();
+        this.previewGraphics.clear();
+        this.previewPath = [];
+        this.drawAllTracks();
+        this.currentSegments.forEach((seg) => this.drawTrackSegment(seg));
+
+        // Clear caches and recompute valid connection points
+        this.networkNodesCache.clear();
+        this.pathCache.clear();
+        this.updateValidConnectionPoints();
+
+        // Clear click anchor so next build starts cleanly
+        this.lastClickedPoint = null;
+
+        // Update cost display (include any previously committed cost this turn)
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+        const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+        const totalTurnCost = previousSessionsCost + this.turnBuildCost;
+        this.onCostUpdateCallback?.(totalTurnCost);
+
+        return true;
     }
     
     private setupCostUpdateHandler(): void {
@@ -376,15 +434,11 @@ export class TrackDrawingManager {
                 playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
                 this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
 
-                // Notify per-segment commit (for unified undo stack)
-                if (this.onTrackSegmentCommitted) {
-                    committedSegments.forEach((seg) => {
-                        try {
-                            this.onTrackSegmentCommitted?.(seg);
-                        } catch (e) {
-                            // Non-fatal: track commit succeeded even if recording failed
-                        }
-                    });
+                // Notify commit as a batch so the action stack can mark those entries committed.
+                try {
+                    this.onTrackSegmentsCommitted?.(committedSegments);
+                } catch (e) {
+                    // Non-fatal
                 }
                 
                 // Check if we need to move the train to the track when first track is drawn from major city
@@ -590,6 +644,13 @@ export class TrackDrawingManager {
                 this.currentSegments.push(segment);
                 this.drawTrackSegment(segment);
                 this.turnBuildCost += segmentCost;
+
+                // Notify immediately (uncommitted) so the unified undo stack stays in correct order.
+                try {
+                    this.onTrackSegmentAdded?.(segment);
+                } catch (e) {
+                    // Non-fatal
+                }
                 
                 // Clear network cache since we added a segment
                 this.networkNodesCache.clear();

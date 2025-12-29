@@ -67,6 +67,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private lastIsLocalPlayerActive: boolean | null = null;
   private lastCanUndo: boolean | null = null;
   private lastHandSignature: string | null = null;
+  private lastLoadsSignature: string | null = null;
   private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
 
@@ -146,6 +147,9 @@ export class PlayerHandScene extends Phaser.Scene {
     const handSignature = Array.isArray(localPlayer?.hand)
       ? localPlayer!.hand.map((c) => c.id).join(",")
       : "";
+    const loadsSignature = Array.isArray(localPlayer?.trainState?.loads)
+      ? localPlayer!.trainState!.loads.join(",")
+      : "";
 
     const needsFullRefresh =
       !this.rootSizer ||
@@ -153,10 +157,12 @@ export class PlayerHandScene extends Phaser.Scene {
       this.lastIsLocalPlayerActive === null ||
       this.lastCanUndo === null ||
       this.lastHandSignature === null ||
+      this.lastLoadsSignature === null ||
       this.lastCurrentPlayerIndex !== currentPlayerIndex ||
       this.lastIsLocalPlayerActive !== isLocalPlayerActive ||
       this.lastCanUndo !== canUndoNow ||
-      this.lastHandSignature !== handSignature;
+      this.lastHandSignature !== handSignature ||
+      this.lastLoadsSignature !== loadsSignature;
 
     // Turn changes and permission changes affect which controls render (undo button,
     // active-player alpha/interactive state, etc.). Those are easiest to keep correct
@@ -167,6 +173,7 @@ export class PlayerHandScene extends Phaser.Scene {
       this.lastIsLocalPlayerActive = isLocalPlayerActive;
       this.lastCanUndo = canUndoNow;
       this.lastHandSignature = handSignature;
+      this.lastLoadsSignature = loadsSignature;
       return;
     }
 

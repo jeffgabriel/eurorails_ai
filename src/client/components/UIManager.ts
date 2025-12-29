@@ -238,10 +238,9 @@ export class UIManager {
       this.gameStateService
     );
 
-    // Record committed track segments onto the unified undo stack.
-    // This ensures track undo participates in the same LIFO stack as movement/load actions.
-    this.trackDrawingManager.setOnTrackSegmentCommitted?.((segment) => {
-      // Only record for the active local player turn.
+    // Record track segments immediately when they are built (uncommitted),
+    // then mark them committed after a successful save. This preserves strict action ordering.
+    this.trackDrawingManager.setOnTrackSegmentAdded?.((segment) => {
       const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
         this.gameState.currentPlayerIndex,
         this.gameState.players
@@ -249,6 +248,14 @@ export class UIManager {
       if (!isLocalPlayerTurn) return;
       this.turnActionManager.recordTrackSegmentBuilt(segment);
       this.refreshPlayerHand().catch(console.error);
+    });
+    this.trackDrawingManager.setOnTrackSegmentsCommitted?.((segments) => {
+      const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
+        this.gameState.currentPlayerIndex,
+        this.gameState.players
+      );
+      if (!isLocalPlayerTurn) return;
+      this.turnActionManager.markLastUncommittedTrackSegmentsCommitted(segments.length);
     });
 
     // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
