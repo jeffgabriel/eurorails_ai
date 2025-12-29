@@ -1025,7 +1025,7 @@ describe('State consistency on backend failure', () => {
 });
 
 describe('TrackDrawingManager - Shift+Click Mode', () => {
-    let scene: InstanceType<typeof MockScene>;
+    let scene: any;
     let mapContainer: any;
     let gameState: GameState;
     let gridPoints: GridPoint[][];
@@ -1068,7 +1068,7 @@ describe('TrackDrawingManager - Shift+Click Mode', () => {
                 width: 1024,
                 height: 768
             }
-        } as any;
+        };
 
         mapContainer = { add: jest.fn() };
 
@@ -1118,8 +1118,8 @@ describe('TrackDrawingManager - Shift+Click Mode', () => {
             (trackDrawingManager as any).initializeDrawingMode();
 
             // Keyboard listeners should be registered
-            expect(scene.input.keyboard?.on).toHaveBeenCalledWith('keydown-SHIFT', expect.any(Function));
-            expect(scene.input.keyboard?.on).toHaveBeenCalledWith('keyup-SHIFT', expect.any(Function));
+            expect(scene.input.keyboard.on).toHaveBeenCalledWith('keydown-SHIFT', expect.any(Function));
+            expect(scene.input.keyboard.on).toHaveBeenCalledWith('keyup-SHIFT', expect.any(Function));
         });
 
         it('should remove shift key listeners on cleanup', () => {
@@ -1128,8 +1128,8 @@ describe('TrackDrawingManager - Shift+Click Mode', () => {
             (trackDrawingManager as any).cleanupDrawingMode();
 
             // Keyboard listeners should be removed
-            expect(scene.input.keyboard?.off).toHaveBeenCalledWith('keydown-SHIFT');
-            expect(scene.input.keyboard?.off).toHaveBeenCalledWith('keyup-SHIFT');
+            expect(scene.input.keyboard.off).toHaveBeenCalledWith('keydown-SHIFT');
+            expect(scene.input.keyboard.off).toHaveBeenCalledWith('keyup-SHIFT');
         });
 
         it('should reset shift mode state on cleanup', () => {
