@@ -66,7 +66,7 @@ export class UIManager {
 
   public updateGameState(gameState: GameState): void {
     this.gameState = gameState;
-    this.playerStateService.initializeLocalPlayer(this.gameState.players);
+    this.playerStateService.updateLocalPlayer(this.gameState.players);
     // Update component managers that need fresh gameState
     this.playerHandDisplay.updateGameState(gameState);
     // Turn changes can toggle whether the local player's train is interactive.

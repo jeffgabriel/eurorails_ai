@@ -278,9 +278,12 @@ export class TrainInteractionManager {
       //where the train is coming from
       const previousPosition = currentPlayer.trainState.position;
       const previousRemainingMovement = currentPlayer.trainState.remainingMovement;
-      const previousFerryState = currentPlayer.trainState.ferryState
-        ? (JSON.parse(JSON.stringify(currentPlayer.trainState.ferryState)) as any)
-        : undefined;
+      const previousFerryState: Player["trainState"]["ferryState"] =
+        currentPlayer.trainState.ferryState
+          ? (JSON.parse(
+              JSON.stringify(currentPlayer.trainState.ferryState)
+            ) as Player["trainState"]["ferryState"])
+          : undefined;
       const previousJustCrossedFerry = currentPlayer.trainState.justCrossedFerry;
       //check if the selected point is a valid move
       const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);

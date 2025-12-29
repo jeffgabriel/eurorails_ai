@@ -19,13 +19,6 @@ interface LoadDialogConfig {
     turnActionManager?: TurnActionManager | null;
 }
 
-interface LoadOperation {
-    type: 'pickup' | 'delivery' | 'drop';
-    loadType: LoadType;
-    timestamp: number;
-    id: string;
-}
-
 export class LoadDialogScene extends Scene {
     private city!: CityData;
     private player!: Player;
@@ -39,7 +32,6 @@ export class LoadDialogScene extends Scene {
     private gameStateService: GameStateService;
     private playerStateService: PlayerStateService;
     private dialogContainer!: Phaser.GameObjects.Container;
-    private loadOperations: LoadOperation[] = []; // Track operations this turn
     private errorText: Phaser.GameObjects.Text | null = null;
 
     constructor() {
@@ -547,140 +539,6 @@ export class LoadDialogScene extends Scene {
         }
     }
 
-    private async undoLoadOperation(operation: LoadOperation) {
-        try {
-            if (!this.player.trainState.loads) return;
-
-            if (operation.type === 'pickup') {
-                // Find the index of this specific load in the train's loads
-                const loadIndex = this.player.trainState.loads.lastIndexOf(operation.loadType);
-                if (loadIndex === -1) return;
-
-                // Calculate new loads array (for API call, not for local state yet)
-                const updatedLoads = [...this.player.trainState.loads];
-                updatedLoads.splice(loadIndex, 1);
-
-                // Server-authoritative: Make API calls first
-                // Return the load to the city
-                await this.loadService.returnLoad(operation.loadType, this.gameState.id, this.city.name);
-
-                // Update game state
-                const success = await this.playerStateService.updatePlayerLoads(
-                    updatedLoads,
-                    this.gameState.id
-                );
-
-                if (!success) {
-                    console.error('Failed to update game state');
-                    return;
-                }
-
-                // Only update local state after all API calls succeed
-                this.player.trainState.loads = updatedLoads;
-
-                // Remove only this specific operation from tracking
-                this.loadOperations = this.loadOperations.filter(
-                    op => op.id !== operation.id
-                );
-
-                // Update the train card display
-                this.onUpdateTrainCard();
-
-                // Refresh the UI
-                this.refreshLoadOperationsUI();
-            } else if (operation.type === 'drop') {
-                // Try to pick the load back up from the city
-                const availableLoads = await this.loadService.getCityLoadDetails(this.city.name);
-                const loadAvailable = availableLoads.some(l => l.loadType === operation.loadType);
-                
-                if (loadAvailable) {
-                    // Calculate new loads array (for API call, not for local state yet)
-                    const updatedLoads = [...this.player.trainState.loads, operation.loadType];
-                    
-                    // Server-authoritative: Make API calls first
-                    const pickupSuccess = await this.loadService.pickupLoad(operation.loadType, this.city.name, this.gameState.id);
-                    if (!pickupSuccess) {
-                        console.error('Failed to pick up load');
-                        return;
-                    }
-
-                    // Update game state
-                    const success = await this.playerStateService.updatePlayerLoads(
-                        updatedLoads,
-                        this.gameState.id
-                    );
-
-                    if (!success) {
-                        // Revert pickup if update failed
-                        await this.loadService.returnLoad(operation.loadType, this.gameState.id, this.city.name);
-                        console.error('Failed to update game state');
-                        return;
-                    }
-
-                    // Only update local state after all API calls succeed
-                    this.player.trainState.loads = updatedLoads;
-                    
-                    // Remove only this specific operation from tracking
-                    this.loadOperations = this.loadOperations.filter(
-                        op => op.id !== operation.id
-                    );
-
-                    // Update displays
-                    this.onUpdateTrainCard();
-                    this.refreshLoadOperationsUI();
-                }
-            }
-        } catch (error) {
-            console.error('Failed to undo load operation:', error);
-            // Show error - no need to revert since we never updated local state
-        }
-    }
-
-    private refreshLoadOperationsUI() {
-        // Remove existing operations UI if any
-        const existingOps = this.dialogContainer.getAll('name', 'operationsSection');
-        existingOps.forEach(op => op.destroy());
-
-        // Create new operations section
-        const operationsSection = this.add.container(0, 100);
-        operationsSection.setName('operationsSection');
-
-        // Add title for operations this turn
-        if (this.loadOperations.length > 0) {
-            const title = this.add.text(0, 0, "Operations this turn:", {
-                color: "#ffffff",
-                fontSize: "18px"
-            });
-            operationsSection.add(title);
-
-            // Add each operation with undo button
-            this.loadOperations.forEach((operation, index) => {
-                const opContainer = this.add.container(0, 40 + index * 40);
-                
-                const text = this.add.text(0, 0, 
-                    `${operation.type === 'pickup' ? 'Picked up' : operation.type === 'drop' ? 'Dropped' : 'Delivered'} ${operation.loadType}`, 
-                    { color: "#ffffff", fontSize: "16px" }
-                );
-
-                const undoButton = this.add.rectangle(200, 0, 60, 30, 0x666666)
-                    .setInteractive({ useHandCursor: true });
-                
-                const undoText = this.add.text(200, 0, "Undo", {
-                    color: "#ffffff",
-                    fontSize: "14px"
-                }).setOrigin(0.5);
-
-                undoButton.on('pointerdown', () => this.undoLoadOperation(operation));
-                undoButton.on('pointerover', () => undoButton.setFillStyle(0x777777));
-                undoButton.on('pointerout', () => undoButton.setFillStyle(0x666666));
-
-                opContainer.add([text, undoButton, undoText]);
-                operationsSection.add(opContainer);
-            });
-        }
-
-        this.dialogContainer.add(operationsSection);
-    }
 
     private closeDialog() {
         this.onUpdateTrainCard();
