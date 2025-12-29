@@ -41,6 +41,21 @@ export class DemandCard extends ContainerLite {
 
     if (card) {
       this.name = `demand-card-${card.id}`;
+
+      // Card id label (small, centered in the bottom margin)
+      const cardIdText = scene.add.text(
+        0,
+        (this.CARD_HEIGHT / 2) - 9,
+        String(card.id),
+        {
+          fontSize: '10px',
+          color: '#333333',
+          fontFamily: 'Arial',
+          align: 'center',
+        }
+      ).setOrigin(0.5, 0.5);
+      this.add(cardIdText);
+
       // Add each demand to its slot
       card.demands.forEach((demand, index) => {
         const sectionY = this.DEMAND_START_Y + (index * this.DEMAND_SPACING);

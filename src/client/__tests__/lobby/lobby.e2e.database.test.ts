@@ -10,6 +10,10 @@ import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
 
+// Skip these tests if SKIP_INTEGRATION_TESTS is set (e.g., CI or local runs without a test server)
+const SKIP_INTEGRATION = process.env.SKIP_INTEGRATION_TESTS === 'true';
+const describeIfIntegration = SKIP_INTEGRATION ? describe.skip : describe;
+
 // Helper function to run database queries with proper connection handling
 async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<T> {
   const client = await db.connect();
@@ -132,7 +136,7 @@ beforeEach(async () => {
   }
 });
 
-describe('True End-to-End Tests - Database Outcomes', () => {
+describeIfIntegration('True End-to-End Tests - Database Outcomes', () => {
   const TEST_TIMEOUT = 15000; // Longer timeout for database operations
   let testGameIds: string[] = [];
   let testPlayerIds: string[] = [];

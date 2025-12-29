@@ -252,6 +252,9 @@ export class GameScene extends Phaser.Scene {
                     const preservedPosition = existingPlayer.trainState?.position || null;
                     const preservedHistory = existingPlayer.trainState?.movementHistory || [];
                     const preservedHand = existingPlayer.hand;
+                    const preservedRemainingMovement = existingPlayer.trainState?.remainingMovement;
+                    const preservedFerryState = existingPlayer.trainState?.ferryState;
+                    const preservedJustCrossedFerry = existingPlayer.trainState?.justCrossedFerry;
 
                     this.gameState.players[index] = {
                       ...existingPlayer,
@@ -267,7 +270,14 @@ export class GameScene extends Phaser.Scene {
                         // Preserve movementHistory to maintain direction
                         movementHistory: preservedHistory.length > 0
                           ? preservedHistory
-                          : (updatedPlayer.trainState.movementHistory || [])
+                          : (updatedPlayer.trainState.movementHistory || []),
+                        // Server does not manage remainingMovement; preserve local (important for ferry half-rate)
+                        remainingMovement: typeof preservedRemainingMovement === 'number'
+                          ? preservedRemainingMovement
+                          : updatedPlayer.trainState.remainingMovement,
+                        // Ferry state is client-managed; preserve local if present
+                        ferryState: preservedFerryState ?? updatedPlayer.trainState.ferryState,
+                        justCrossedFerry: preservedJustCrossedFerry ?? updatedPlayer.trainState.justCrossedFerry,
                       } : existingPlayer.trainState
                     };
                   } else {
@@ -625,6 +635,7 @@ export class GameScene extends Phaser.Scene {
     // Always end-turn cleanup (even if buildCost was 0) so per-turn UI state resets
     // and undo state doesn't leak across turns (e.g., 0-cost ferry builds).
     await this.trackManager.endTurnCleanup(currentPlayer.id);
+    this.uiManager.clearTurnUndoStack();
 
     // Increment per-player turn count at END of the active player's turn.
     // Do NOT increment the next active player; that incorrectly advances players on their first activation.
@@ -1080,7 +1091,14 @@ export class GameScene extends Phaser.Scene {
                   // This is critical for direction reversal checks across turn boundaries
                   movementHistory: shouldPreserveHistory
                     ? localPlayer.trainState.movementHistory
-                    : (serverPlayer.trainState.movementHistory || [])
+                    : (serverPlayer.trainState.movementHistory || []),
+                  // Server does not manage remainingMovement; preserve local (important for ferry half-rate)
+                  remainingMovement: typeof localPlayer.trainState.remainingMovement === 'number'
+                    ? localPlayer.trainState.remainingMovement
+                    : serverPlayer.trainState.remainingMovement,
+                  // Ferry-related flags are client-managed
+                  ferryState: localPlayer.trainState.ferryState ?? serverPlayer.trainState.ferryState,
+                  justCrossedFerry: localPlayer.trainState.justCrossedFerry ?? serverPlayer.trainState.justCrossedFerry,
                 };
               } else {
                 localPlayer.trainState = serverPlayer.trainState;

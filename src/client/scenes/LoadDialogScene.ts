@@ -6,6 +6,7 @@ import { GameStateService } from '../services/GameStateService';
 import { PlayerStateService } from '../services/PlayerStateService';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { UIManager } from '../components/UIManager';
+import { TurnActionManager } from '../components/TurnActionManager';
 
 interface LoadDialogConfig {
     city: CityData;
@@ -15,6 +16,7 @@ interface LoadDialogConfig {
     onUpdateTrainCard: () => void;
     onUpdateHandDisplay: () => void;
     uiManager: UIManager;
+    turnActionManager?: TurnActionManager | null;
 }
 
 interface LoadOperation {
@@ -32,6 +34,7 @@ export class LoadDialogScene extends Scene {
     private onUpdateTrainCard!: () => void;
     private onUpdateHandDisplay!: () => void;
     private uiManager!: UIManager;
+    private turnActionManager: TurnActionManager | null = null;
     private loadService: LoadService;
     private gameStateService: GameStateService;
     private playerStateService: PlayerStateService;
@@ -68,6 +71,7 @@ export class LoadDialogScene extends Scene {
         this.onUpdateTrainCard = data.onUpdateTrainCard;
         this.onUpdateHandDisplay = data.onUpdateHandDisplay;
         this.uiManager = data.uiManager;
+        this.turnActionManager = data.turnActionManager || null;
     }
 
     async create() {
@@ -127,9 +131,6 @@ export class LoadDialogScene extends Scene {
 
             // Add available loads section
             await this.createLoadSections();
-            
-            // Initialize the operations section
-            this.refreshLoadOperationsUI();
         } catch (error) {
             console.error('Error in LoadDialogScene create:', error);
             // Handle the error appropriately - maybe show an error message to the user
@@ -379,17 +380,11 @@ export class LoadDialogScene extends Scene {
 
             // Only update local state after all API calls succeed
             this.player.trainState.loads = updatedLoads;
-            
-            // Track this operation with unique ID
-            this.loadOperations.push({
-                type: 'pickup',
-                loadType,
-                timestamp: Date.now(),
-                id: `${Date.now()}-${Math.random()}`
-            });
+            this.turnActionManager?.recordLoadPickup(this.city.name, loadType);
             
             // Update displays
             this.onUpdateTrainCard();
+            this.onUpdateHandDisplay();
             
             // Update just the load sections container
             const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
@@ -398,13 +393,10 @@ export class LoadDialogScene extends Scene {
             }
             this.createLoadSections();
             
-            // Update operations UI
-            this.refreshLoadOperationsUI();
         } catch (error) {
             console.error('Failed to pickup load:', error);
             // Show error - no need to revert since we never updated local state
             this.showError('Pickup failed. Check console for details.');
-            this.refreshLoadOperationsUI();
         }
     }
 
@@ -443,13 +435,12 @@ export class LoadDialogScene extends Scene {
             // All API calls succeeded - state is already updated by PlayerStateService
             // (since it updates this.localPlayer which is a reference to this.player)
             // Just refresh the UI
-            
-            // Track this operation
-            this.loadOperations.push({
-                type: 'delivery',
+            this.turnActionManager?.recordLoadDelivery({
+                city: this.city.name,
                 loadType: load.type,
-                timestamp: Date.now(),
-                id: `${Date.now()}-${Math.random()}`
+                cardIdUsed: load.cardId,
+                newCardIdDrawn: delivered.newCardId,
+                payment: delivered.payment
             });
             
             // Update displays
@@ -537,17 +528,11 @@ export class LoadDialogScene extends Scene {
 
             // Only update local state after all API calls succeed
             this.player.trainState.loads = updatedLoads;
-                
-            // Track this operation with unique ID
-            this.loadOperations.push({
-                type: 'drop',
-                loadType,
-                timestamp: Date.now(),
-                id: `${Date.now()}-${Math.random()}`
-            });
+            this.turnActionManager?.recordLoadDrop(this.city.name, loadType);
             
             // Update displays
             this.onUpdateTrainCard();
+            this.onUpdateHandDisplay();
             
             // Update just the load sections container
             const sectionsContainer = this.dialogContainer.getByName('sectionsContainer');
@@ -556,8 +541,6 @@ export class LoadDialogScene extends Scene {
             }
             this.createLoadSections();
             
-            // Update operations UI
-            this.refreshLoadOperationsUI();
         } catch (error) {
             console.error('Failed to drop load:', error);
             // Show error - no need to revert since we never updated local state
@@ -700,8 +683,6 @@ export class LoadDialogScene extends Scene {
     }
 
     private closeDialog() {
-        // Clear operations tracking when dialog closes
-        this.loadOperations = [];
         this.onUpdateTrainCard();
         this.onClose();
     }

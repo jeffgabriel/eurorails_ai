@@ -94,6 +94,7 @@ describe('VictoryService Integration Tests', () => {
   afterEach(async () => {
     await runQuery(async (client) => {
       // Delete in dependency order
+      await client.query('DELETE FROM turn_actions WHERE game_id = $1', [gameId]);
       await client.query('DELETE FROM player_tracks WHERE game_id = $1', [gameId]);
       await client.query('DELETE FROM players WHERE game_id = $1', [gameId]);
       await client.query('DELETE FROM games WHERE id = $1', [gameId]);
