@@ -22,6 +22,7 @@ export class TrackDrawingManager {
     
     // Drawing mode state
     private isDrawingMode: boolean = false;
+    private isShiftModeActive: boolean = false;
     private currentSegments: TrackSegment[] = [];
     private lastClickedPoint: GridPoint | null = null;
     private turnBuildCost: number = 0;
@@ -408,12 +409,37 @@ export class TrackDrawingManager {
         // Set up input handlers for drawing mode
         this.scene.input.on('pointerdown', this.handleDrawingClick, this);
         this.scene.input.on('pointermove', this.handleDrawingHover, this);
+
+        // Add keyboard tracking for shift key
+        if (this.scene.input.keyboard) {
+            this.scene.input.keyboard.on('keydown-SHIFT', () => {
+                this.isShiftModeActive = true;
+                // Refresh preview when shift is pressed
+                if (this.pendingHoverPoint) {
+                    this.processHoverUpdate(this.pendingHoverPoint);
+                }
+            });
+            this.scene.input.keyboard.on('keyup-SHIFT', () => {
+                this.isShiftModeActive = false;
+                // Refresh preview when shift is released
+                if (this.pendingHoverPoint) {
+                    this.processHoverUpdate(this.pendingHoverPoint);
+                }
+            });
+        }
     }
 
     private cleanupDrawingMode(): void {
         // Remove input handlers
         this.scene.input.off('pointerdown', this.handleDrawingClick, this);
         this.scene.input.off('pointermove', this.handleDrawingHover, this);
+
+        // Remove keyboard listeners
+        if (this.scene.input.keyboard) {
+            this.scene.input.keyboard.off('keydown-SHIFT');
+            this.scene.input.keyboard.off('keyup-SHIFT');
+        }
+        this.isShiftModeActive = false;
 
         // Clear any pending hover timer
         if (this.hoverThrottleTimer !== null) {
@@ -647,12 +673,12 @@ export class TrackDrawingManager {
         // If the last clicked point is a ferry port, find the other end of the ferry
         const initialStartPoint = this.lastClickedPoint;
         if (!initialStartPoint) return;
-        
+
         let startPoint: GridPoint = initialStartPoint;
         if (startPoint.terrain === TerrainType.FerryPort && startPoint.ferryConnection) {
             const currentRow = startPoint.row;
             const currentCol = startPoint.col;
-            const otherEnd = startPoint.ferryConnection.connections.find(p => 
+            const otherEnd = startPoint.ferryConnection.connections.find(p =>
                 p.row !== currentRow || p.col !== currentCol
             );
             if (otherEnd) {
@@ -663,8 +689,18 @@ export class TrackDrawingManager {
             }
         }
 
-        // Find path to hover point
-        const path = this.findPreviewPath(gridPoint);
+        // Generate path based on shift mode
+        let path: GridPoint[] | null = null;
+
+        if (this.isShiftModeActive) {
+            // Shift mode: direct path if adjacent
+            if (this.isAdjacent(initialStartPoint, gridPoint)) {
+                path = [initialStartPoint, gridPoint];
+            }
+        } else {
+            // Normal mode: use pathfinding
+            path = this.findPreviewPath(gridPoint);
+        }
 
         if (!path || path.length === 0) {
             this.previewGraphics.clear();
@@ -703,11 +739,10 @@ export class TrackDrawingManager {
 
         // Draw the preview path with color based on validity
         this.previewGraphics.clear();
-        
-        // Check if cost is valid
-        const isValidCost = this.isValidCost(previewCost);
-        const lineColor = isValidCost ? 0x00ff00 : 0xff0000; // Green if valid, red if not
-        
+
+        // Determine preview color using helper method
+        const lineColor = this.getPreviewLineColor(path, this.isShiftModeActive);
+
         this.previewGraphics.lineStyle(2, lineColor, 0.5);
         
         // Draw lines connecting all points in the path
@@ -717,6 +752,40 @@ export class TrackDrawingManager {
             this.previewGraphics.lineTo(path[i].x, path[i].y);
         }
         this.previewGraphics.strokePath();
+    }
+
+    private getPreviewLineColor(path: GridPoint[], isShiftMode: boolean): number {
+        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+        const playerTrackState = this.playerTracks.get(currentPlayer.id);
+
+        // Check if path has water points
+        const hasWater = path.some(point => point.terrain === TerrainType.Water);
+        if (hasWater) {
+            return 0xff0000; // Red - invalid
+        }
+
+        // Check if path uses other players' networks
+        for (let i = 0; i < path.length - 1; i++) {
+            if (this.isSegmentInAnyOtherNetwork(path[i], path[i + 1], currentPlayer.id)) {
+                return 0xff0000; // Red - invalid
+            }
+        }
+
+        // Calculate cost
+        let totalCost = 0;
+        for (let i = 0; i < path.length - 1; i++) {
+            if (!this.isSegmentInNetwork(path[i], path[i + 1], playerTrackState)) {
+                totalCost += Math.floor(this.calculateTrackCost(path[i], path[i + 1]));
+            }
+        }
+
+        // Check if over budget
+        if (!this.isValidCost(totalCost)) {
+            return 0xff0000; // Red - too expensive
+        }
+
+        // Valid path - use orange for shift mode, green for normal
+        return isShiftMode ? 0xffa500 : 0x00ff00;
     }
 
     public getGridPointAtPosition(worldX: number, worldY: number): GridPoint | null {
