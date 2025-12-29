@@ -619,4 +619,52 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
     }
 });
 
+// Undo the last server-tracked per-turn action for the authenticated player (currently: delivery)
+router.post('/undo-last-action', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.body as { gameId?: string };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId is required'
+            });
+        }
+
+        const result = await PlayerService.undoLastActionForUser(gameId, userId);
+
+        // Broadcast updated public player state (do not leak hand)
+        const publicPlayers = await PlayerService.getPlayers(gameId, '');
+        const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+        if (updatedPlayer) {
+            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
+            emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (message.includes('No undoable') || message.includes('not undoable') || message.includes('Invalid') || message.includes('Failed')) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({ error: 'Server error', details: message });
+    }
+});
+
 export default router; 

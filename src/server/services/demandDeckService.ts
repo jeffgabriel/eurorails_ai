@@ -87,6 +87,39 @@ export class DemandDeckService {
     this.discardPile.push(cardId);
   }
 
+  /**
+   * Return a currently-dealt card back to the top of the draw pile.
+   * Used for server-authoritative undo of a delivery draw.
+   */
+  public returnDealtCardToTop(cardId: number): boolean {
+    if (!this.cards.find(card => card.id === cardId)) {
+      return false;
+    }
+    if (!this.dealtCards.has(cardId)) {
+      return false;
+    }
+    this.dealtCards.delete(cardId);
+    this.drawPile.push(cardId);
+    return true;
+  }
+
+  /**
+   * Reverse a discard by moving a card from discard pile back into dealtCards.
+   * Used for server-authoritative undo of a delivery (restoring the discarded demand card to hand).
+   */
+  public returnDiscardedCardToDealt(cardId: number): boolean {
+    if (!this.cards.find(card => card.id === cardId)) {
+      return false;
+    }
+    const idx = this.discardPile.lastIndexOf(cardId);
+    if (idx === -1) {
+      return false;
+    }
+    this.discardPile.splice(idx, 1);
+    this.dealtCards.add(cardId);
+    return true;
+  }
+
   public getAllCards(): DemandCard[] {
     return [...this.cards];
   }

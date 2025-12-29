@@ -36,6 +36,7 @@ describe('PlayerService Integration Tests', () => {
     afterEach(async () => {
         await runQuery(async (client) => {
             // Delete in dependency order to avoid constraint errors
+            await client.query('DELETE FROM turn_actions');
             await client.query('DELETE FROM player_tracks');
             await client.query('DELETE FROM games'); // Delete games first (they reference players)
             await client.query('DELETE FROM players');
@@ -490,6 +491,74 @@ describe('PlayerService Integration Tests', () => {
             await expect(
                 PlayerService.deliverLoadForUser(gameId, userId, demand.city, demand.resource, cardId)
             ).rejects.toThrow('Demand card not in hand');
+        });
+
+        it('should undo the last delivery and restore money, load, and the discarded demand card', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            const player = {
+                id: playerId,
+                userId,
+                name: 'UndoDeliverer',
+                color: '#654321',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            expect(card).toBeTruthy();
+            if (!card) throw new Error('Expected demand card to exist');
+
+            const demand = card.demands[0];
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const delivered = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+            expect(delivered.updatedMoney).toBe(50 + demand.payment);
+            expect(delivered.updatedLoads).toEqual([]);
+            expect(delivered.newCard.id).toBeDefined();
+
+            const undone = await PlayerService.undoLastActionForUser(gameId, userId);
+            expect(undone.updatedMoney).toBe(50);
+            expect(undone.updatedLoads).toEqual([demand.resource]);
+            expect(undone.removedCardId).toBe(delivered.newCard.id);
+            expect(undone.restoredCard.id).toBe(cardId);
+
+            const after = await db.query('SELECT money, loads, hand FROM players WHERE id = $1', [playerId]);
+            expect(after.rows[0].money).toBe(50);
+            expect(after.rows[0].loads).toEqual([demand.resource]);
+            expect(after.rows[0].hand).toHaveLength(3);
+            expect(after.rows[0].hand).toContain(cardId);
+            expect(after.rows[0].hand).not.toContain(delivered.newCard.id);
+
+            // The card should no longer be considered dealt after undo.
+            expect(demandDeckService.returnDealtCardToTop(delivered.newCard.id)).toBe(false);
         });
     });
 }); 

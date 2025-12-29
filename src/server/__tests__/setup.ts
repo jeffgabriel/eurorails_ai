@@ -97,6 +97,7 @@ afterAll(async () => {
   try {
     // Clean up all tables one last time
     await db.query("DELETE FROM movement_history");
+    await db.query("DELETE FROM turn_actions");
     await db.query("DELETE FROM player_tracks");
     await db.query("DELETE FROM players");
     //await db.query('DELETE FROM games');

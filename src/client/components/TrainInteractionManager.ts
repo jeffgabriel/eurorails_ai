@@ -17,6 +17,7 @@ import { LoadService } from "../services/LoadService";
 import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { UIManager } from "./UIManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { TurnActionManager } from "./TurnActionManager";
 import { majorCityGroups } from "../config/mapConfig";
 
 export class TrainInteractionManager {
@@ -34,6 +35,7 @@ export class TrainInteractionManager {
   private handContainer: Phaser.GameObjects.Container | null = null;
   private uiManager: UIManager | null = null;
   private trackDrawingManager: TrackDrawingManager;
+  private turnActionManager: TurnActionManager | null = null;
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
@@ -41,7 +43,8 @@ export class TrainInteractionManager {
     mapRenderer: MapRenderer,
     gameStateService: GameStateService,
     trainContainer: Phaser.GameObjects.Container,
-    trackDrawingManager: TrackDrawingManager
+    trackDrawingManager: TrackDrawingManager,
+    turnActionManager?: TurnActionManager
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -52,6 +55,7 @@ export class TrainInteractionManager {
     this.playerStateService.initializeLocalPlayer(this.gameState.players);
     this.trainContainer = trainContainer;
     this.trackDrawingManager = trackDrawingManager;
+    this.turnActionManager = turnActionManager || null;
     // Initialize trainSprites map in gameState if not exists
     if (!this.gameState.trainSprites) {
       this.gameState.trainSprites = new Map();
@@ -273,6 +277,14 @@ export class TrainInteractionManager {
     try {
       //where the train is coming from
       const previousPosition = currentPlayer.trainState.position;
+      const previousRemainingMovement = currentPlayer.trainState.remainingMovement;
+      const previousFerryState: Player["trainState"]["ferryState"] =
+        currentPlayer.trainState.ferryState
+          ? (JSON.parse(
+              JSON.stringify(currentPlayer.trainState.ferryState)
+            ) as Player["trainState"]["ferryState"])
+          : undefined;
+      const previousJustCrossedFerry = currentPlayer.trainState.justCrossedFerry;
       //check if the selected point is a valid move
       const moveResult = this.trainMovementManager.canMoveTo(nearestMilepost);
       if (!moveResult.canMove) {
@@ -318,6 +330,27 @@ export class TrainInteractionManager {
         nearestMilepost.row,
         nearestMilepost.col
       );
+
+      // Record on unified undo stack (single click undoes one action)
+      if (this.turnActionManager && previousPosition) {
+        this.turnActionManager.recordTrainMoved({
+          playerId: currentPlayer.id,
+          previousPosition: { ...previousPosition },
+          previousRemainingMovement,
+          previousFerryState,
+          previousJustCrossedFerry,
+        });
+        // Refresh hand UI so Undo button visibility updates immediately
+        try {
+          const prevSessions =
+            this.trackDrawingManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
+          const currentSession = this.trackDrawingManager.getCurrentTurnBuildCost();
+          const totalCost = prevSessions + currentSession;
+          await this.uiManager?.setupPlayerHand(this.trackDrawingManager.isInDrawingMode, totalCost);
+        } catch (e) {
+          // Non-fatal
+        }
+      }
       // If arrived at a ferry port, or if movement should end, exit movement mode
       if (moveResult.endMovement) {
         this.exitTrainMovementMode();
@@ -414,6 +447,7 @@ export class TrainInteractionManager {
         }
       },
       uiManager: this.uiManager,
+      turnActionManager: this.turnActionManager,
     });
 
     // Ensure the dialog scene renders above the game scene.

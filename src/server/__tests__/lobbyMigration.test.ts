@@ -30,6 +30,7 @@ describe('Lobby Migration (Phase 1)', () => {
 
   afterAll(async () => {
     // Clean up test data
+    await db.query('DELETE FROM turn_actions WHERE game_id = $1', [testGameId]);
     await db.query('DELETE FROM games WHERE id = $1', [testGameId]);
     await db.query('DELETE FROM players WHERE id = $1', [testPlayerId]);
     // Clean up test user (this will cascade delete the player due to foreign key)

@@ -66,6 +66,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private lastCurrentPlayerIndex: number | null = null;
   private lastIsLocalPlayerActive: boolean | null = null;
   private lastCanUndo: boolean | null = null;
+  private lastHandSignature: string | null = null;
   private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
 
@@ -137,14 +138,25 @@ export class PlayerHandScene extends Phaser.Scene {
     const canUndoNow = this.canUndo ? this.canUndo() : false;
     const currentPlayerIndex = this.gameState.currentPlayerIndex ?? 0;
 
+    // Detect hand changes so we can rebuild the card UI immediately (deliver/undo within a turn).
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+    const handSignature = Array.isArray(localPlayer?.hand)
+      ? localPlayer!.hand.map((c) => c.id).join(",")
+      : "";
+
     const needsFullRefresh =
       !this.rootSizer ||
       this.lastCurrentPlayerIndex === null ||
       this.lastIsLocalPlayerActive === null ||
       this.lastCanUndo === null ||
+      this.lastHandSignature === null ||
       this.lastCurrentPlayerIndex !== currentPlayerIndex ||
       this.lastIsLocalPlayerActive !== isLocalPlayerActive ||
-      this.lastCanUndo !== canUndoNow;
+      this.lastCanUndo !== canUndoNow ||
+      this.lastHandSignature !== handSignature;
 
     // Turn changes and permission changes affect which controls render (undo button,
     // active-player alpha/interactive state, etc.). Those are easiest to keep correct
@@ -154,6 +166,7 @@ export class PlayerHandScene extends Phaser.Scene {
       this.lastCurrentPlayerIndex = currentPlayerIndex;
       this.lastIsLocalPlayerActive = isLocalPlayerActive;
       this.lastCanUndo = canUndoNow;
+      this.lastHandSignature = handSignature;
       return;
     }
 
@@ -1019,7 +1032,8 @@ export class PlayerHandScene extends Phaser.Scene {
       crayonStackSizer.add(undoButton, {
         proportion: 0,
         align: "center",
-        padding: 0,
+        // Add a bit of space below the undo button so it doesn't crowd the crayon.
+        padding: { bottom: 6 },
         expand: false,
       });
     }

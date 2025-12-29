@@ -32,6 +32,7 @@ async function cleanupTestData(gameIds: string[], playerIds: string[]) {
     // Delete in dependency order to avoid constraint errors
     // First delete games (which will cascade delete players), then any remaining players
     if (gameIds.length > 0) {
+      await client.query('DELETE FROM turn_actions WHERE game_id = ANY($1)', [gameIds]);
       await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
     if (playerIds.length > 0) {

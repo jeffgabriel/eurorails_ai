@@ -7,6 +7,15 @@ import { TrackService } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 
+type TurnActionDeliver = {
+  kind: "deliver";
+  city: string;
+  loadType: LoadType;
+  cardIdUsed: number;
+  newCardIdDrawn: number;
+  payment: number;
+};
+
 interface PlayerRow {
   id: string;
   user_id: string | null;
@@ -763,11 +772,13 @@ export class PlayerService {
     cardId: number
   ): Promise<{ payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard }> {
     const client = await db.connect();
+    let drewCardId: number | null = null;
+    let discardedCardId: number | null = null;
     try {
       await client.query("BEGIN");
 
       const playerRowResult = await client.query(
-        `SELECT id, money, hand, loads
+        `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
          FROM players
          WHERE game_id = $1 AND user_id = $2
          LIMIT 1`,
@@ -781,6 +792,7 @@ export class PlayerService {
       const currentMoney: number = playerRowResult.rows[0].money as number;
       const currentHand: unknown = playerRowResult.rows[0].hand;
       const currentLoads: unknown = playerRowResult.rows[0].loads;
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
 
       const handIds: number[] = Array.isArray(currentHand)
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
@@ -834,6 +846,7 @@ export class PlayerService {
       if (!newCard) {
         throw new Error("Failed to draw new card");
       }
+      drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
       const updatedMoney = currentMoney + payment;
@@ -845,8 +858,178 @@ export class PlayerService {
         [updatedMoney, updatedHandIds, updatedLoads, gameId, playerId]
       );
 
+      // Discard the fulfilled demand card into the deck discard pile.
+      // This prevents it from re-entering the draw pile until a reshuffle.
+      demandDeckService.discardCard(cardId);
+      discardedCardId = cardId;
+
+      // Persist server-authored action log for this turn (used for undo).
+      const deliverAction: TurnActionDeliver = {
+        kind: "deliver",
+        city,
+        loadType,
+        cardIdUsed: cardId,
+        newCardIdDrawn: newCard.id,
+        payment,
+      };
+      await client.query(
+        `
+          INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+          VALUES ($1, $2, $3, $4::jsonb)
+          ON CONFLICT (player_id, turn_number)
+          DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
+        `,
+        [playerId, gameId, turnNumber, JSON.stringify([deliverAction])]
+      );
+
       await client.query("COMMIT");
       return { payment, updatedMoney, updatedLoads, newCard };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      // Best-effort compensation for in-memory deck mutations.
+      // If we drew a replacement card, return it to the top of the draw pile.
+      if (typeof drewCardId === "number") {
+        try {
+          demandDeckService.returnDealtCardToTop(drewCardId);
+        } catch {
+          // ignore
+        }
+      }
+      // If we discarded the fulfilled card, try to return it to dealt so it isn't lost.
+      if (typeof discardedCardId === "number") {
+        try {
+          demandDeckService.returnDiscardedCardToDealt(discardedCardId);
+        } catch {
+          // ignore
+        }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Undo the last server-tracked action for the authenticated user's player.
+   * Currently supports undoing the most recent delivery this turn.
+   */
+  static async undoLastActionForUser(
+    gameId: string,
+    userId: string
+  ): Promise<{ updatedMoney: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const playerRowResult = await client.query(
+        `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentMoney: number = playerRowResult.rows[0].money as number;
+      const currentHand: unknown = playerRowResult.rows[0].hand;
+      const currentLoads: unknown = playerRowResult.rows[0].loads;
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+      const loads: LoadType[] = Array.isArray(currentLoads)
+        ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
+        : [];
+
+      const gameState = await this.getGameState(gameId);
+      const currentPlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, gameState.currentPlayerIndex]
+      );
+      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      const actionsResult = await client.query(
+        `SELECT actions
+         FROM turn_actions
+         WHERE player_id = $1 AND turn_number = $2
+         FOR UPDATE`,
+        [playerId, turnNumber]
+      );
+      const actionsJson = actionsResult.rows[0]?.actions;
+      const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
+      if (!Array.isArray(actions) || actions.length === 0) {
+        throw new Error("No undoable actions");
+      }
+
+      const last = actions[actions.length - 1] as TurnActionDeliver | any;
+      if (!last || last.kind !== "deliver") {
+        throw new Error("Last action is not undoable");
+      }
+
+      const removedCardId = Number(last.newCardIdDrawn);
+      const restoredCardId = Number(last.cardIdUsed);
+      const payment = Number(last.payment);
+      const loadType = last.loadType as LoadType;
+
+      if (!handIds.includes(removedCardId)) {
+        throw new Error("Hand does not contain drawn card to undo");
+      }
+      if (!Number.isFinite(payment)) {
+        throw new Error("Invalid payment on action");
+      }
+
+      const restoredCard = demandDeckService.getCard(restoredCardId);
+      if (!restoredCard) {
+        throw new Error("Invalid demand card on action");
+      }
+
+      const updatedMoney = currentMoney - payment;
+      if (!Number.isFinite(updatedMoney)) {
+        throw new Error("Invalid money update");
+      }
+
+      const updatedHandIds = handIds.map((id) => (id === removedCardId ? restoredCardId : id));
+      const updatedLoads = [...loads, loadType];
+
+      // Return the dealt card to the deck before committing player state.
+      const returned = demandDeckService.returnDealtCardToTop(removedCardId);
+      if (!returned) {
+        throw new Error("Failed to return dealt card to deck");
+      }
+
+      // Restore the discarded card back to dealt state (undo discard).
+      const restored = demandDeckService.returnDiscardedCardToDealt(restoredCardId);
+      if (!restored) {
+        throw new Error("Failed to restore discarded card");
+      }
+
+      await client.query(
+        `UPDATE players
+         SET money = $1, hand = $2, loads = $3
+         WHERE game_id = $4 AND id = $5`,
+        [updatedMoney, updatedHandIds, updatedLoads, gameId, playerId]
+      );
+
+      const remainingActions = actions.slice(0, actions.length - 1);
+      await client.query(
+        `UPDATE turn_actions
+         SET actions = $1::jsonb
+         WHERE player_id = $2 AND turn_number = $3`,
+        [JSON.stringify(remainingActions), playerId, turnNumber]
+      );
+
+      await client.query("COMMIT");
+      return { updatedMoney, updatedLoads, restoredCard, removedCardId };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

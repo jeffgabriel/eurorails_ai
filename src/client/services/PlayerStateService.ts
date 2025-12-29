@@ -379,10 +379,10 @@ export class PlayerStateService {
         loadType: LoadType,
         cardId: number,
         gameId: string
-    ): Promise<boolean> {
+    ): Promise<{ payment: number; newCardId: number } | null> {
         if (!this.localPlayer || !this.localPlayerId) {
             console.error('Cannot deliver load: no local player');
-            return false;
+            return null;
         }
 
         try {
@@ -399,7 +399,7 @@ export class PlayerStateService {
             if (!response.ok) {
                 const errorData = await response.json();
                 console.error('Failed to deliver load:', errorData);
-                return false;
+                return null;
             }
 
             const result: { payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard } = await response.json();
@@ -410,7 +410,7 @@ export class PlayerStateService {
                 !Array.isArray(result.updatedLoads)
             ) {
                 console.error('Invalid deliver-load response from server');
-                return false;
+                return null;
             }
 
             // Update loads (server-authoritative)
@@ -431,9 +431,70 @@ export class PlayerStateService {
             this.localPlayer.hand = (this.localPlayer.hand || []).filter(card => card.id !== cardId);
             this.localPlayer.hand.push(result.newCard);
 
-            return true;
+            return { payment: result.payment, newCardId: result.newCard.id };
         } catch (error) {
             console.error('Error delivering load:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Undo the last server-tracked per-turn action for the local player.
+     * Currently used for undoing deliveries (restoring money/loads/hand + deck).
+     */
+    public async undoLastAction(gameId: string): Promise<boolean> {
+        if (!this.localPlayer || !this.localPlayerId) {
+            console.error('Cannot undo action: no local player');
+            return false;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/undo-last-action`, {
+                method: 'POST',
+                body: JSON.stringify({ gameId })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to undo last action:', errorData);
+                return false;
+            }
+
+            const result: {
+                updatedMoney: number;
+                updatedLoads: LoadType[];
+                restoredCard: DemandCard;
+                removedCardId: number;
+            } = await response.json();
+
+            if (
+                typeof result?.updatedMoney !== 'number' ||
+                !Array.isArray(result?.updatedLoads) ||
+                typeof result?.removedCardId !== 'number' ||
+                !result?.restoredCard
+            ) {
+                console.error('Invalid undo-last-action response from server');
+                return false;
+            }
+
+            if (!this.localPlayer.trainState) {
+                this.localPlayer.trainState = {
+                    position: null,
+                    remainingMovement: 0,
+                    movementHistory: [],
+                    loads: []
+                };
+            }
+
+            this.localPlayer.money = result.updatedMoney;
+            this.localPlayer.trainState.loads = result.updatedLoads;
+            this.localPlayer.hand = (this.localPlayer.hand || [])
+                .filter(card => card.id !== result.removedCardId);
+            this.localPlayer.hand.push(result.restoredCard);
+
+            return true;
+        } catch (error) {
+            console.error('Error undoing last action:', error);
             return false;
         }
     }

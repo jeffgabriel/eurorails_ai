@@ -9,6 +9,9 @@ import { PlayerHandDisplay } from "./PlayerHandDisplay";
 import { CitySelectionManager } from "./CitySelectionManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { TurnActionManager } from "./TurnActionManager";
+import { PlayerStateService } from "../services/PlayerStateService";
+import { LoadService } from "../services/LoadService";
 
 export class UIManager {
   private scene: Phaser.Scene;
@@ -22,6 +25,8 @@ export class UIManager {
   private gameStateService: GameStateService;
   private mapRenderer: MapRenderer;
   private trackDrawingManager: TrackDrawingManager;
+  private turnActionManager!: TurnActionManager;
+  private playerStateService: PlayerStateService;
   // Component managers
   private trainInteractionManager!: TrainInteractionManager;
   private leaderboardManager!: LeaderboardManager;
@@ -48,6 +53,8 @@ export class UIManager {
     this.gameStateService = gameStateService;
     this.mapRenderer = mapRenderer;
     this.trackDrawingManager = trackDrawingManager;
+    this.playerStateService = new PlayerStateService();
+    this.playerStateService.initializeLocalPlayer(this.gameState.players);
     // Create containers
     this.uiContainer = this.scene.add.container(0, 0);
     this.playerHandContainer = this.scene.add.container(0, 0);
@@ -59,6 +66,7 @@ export class UIManager {
 
   public updateGameState(gameState: GameState): void {
     this.gameState = gameState;
+    this.playerStateService.updateLocalPlayer(this.gameState.players);
     // Update component managers that need fresh gameState
     this.playerHandDisplay.updateGameState(gameState);
     // Turn changes can toggle whether the local player's train is interactive.
@@ -66,6 +74,10 @@ export class UIManager {
     this.trainInteractionManager.updateTrainZOrders();
     this.trainInteractionManager.refreshTrainSpriteTextures();
     this.trainInteractionManager.updateTrainInteractivity();
+  }
+
+  public clearTurnUndoStack(): void {
+    this.turnActionManager?.clear();
   }
 
   /**
@@ -154,6 +166,14 @@ export class UIManager {
   }
 
   private initializeComponentManagers(nextPlayerCallback: () => void): void {
+    // Per-turn undo stack (in-memory only)
+    this.turnActionManager = new TurnActionManager({
+      gameState: this.gameState,
+      trackDrawingManager: this.trackDrawingManager,
+      playerStateService: this.playerStateService,
+      loadService: LoadService.getInstance(),
+    });
+
     // Create the train movement manager
     const trainMovementManager = new TrainMovementManager(this.gameState);
     
@@ -165,13 +185,16 @@ export class UIManager {
       this.mapRenderer,
       this.gameStateService,
       this.trainContainer,
-      this.trackDrawingManager
+      this.trackDrawingManager,
+      this.turnActionManager
     );
+    this.turnActionManager.setTrainPositionUpdater(this.trainInteractionManager);
 
     const UIManagedNextPlayerCallback = async () => {
       this.resetTrainMovementMode();
       this.cleanupCityDropdowns();
       await nextPlayerCallback();
+      this.clearTurnUndoStack();
       this.setupUIOverlay();
       this.trainInteractionManager.updateTrainZOrders();
       // Update train interactivity when turn changes
@@ -206,20 +229,27 @@ export class UIManager {
       this.gameState,
       this.toggleDrawingCallback,
       () => {
-        this.trackDrawingManager.undoLastSegment();
-        // Refresh the hand display after undo
-        const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
-        const previousSessionsCost = this.trackDrawingManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
-        const currentSessionCost = this.trackDrawingManager.getCurrentTurnBuildCost();
-        const totalCost = previousSessionsCost + currentSessionCost;
-        this.setupPlayerHand(this.isDrawingMode, totalCost).catch(console.error);
+        this.handleUndo().catch(console.error);
       },
-      () => this.trackDrawingManager.segmentsDrawnThisTurn.length > 0,
+      () => this.turnActionManager.canUndo(),
       this.mapRenderer,
       this.trainInteractionManager,
       this.trackDrawingManager,
       this.gameStateService
     );
+
+    // Record committed track segments onto the unified undo stack.
+    // This ensures track undo participates in the same LIFO stack as movement/load actions.
+    this.trackDrawingManager.setOnTrackSegmentCommitted?.((segment) => {
+      // Only record for the active local player turn.
+      const isLocalPlayerTurn = this.playerStateService.isCurrentPlayer(
+        this.gameState.currentPlayerIndex,
+        this.gameState.players
+      );
+      if (!isLocalPlayerTurn) return;
+      this.turnActionManager.recordTrackSegmentBuilt(segment);
+      this.refreshPlayerHand().catch(console.error);
+    });
 
     // Connect PlayerHandDisplay and UIManager to TrainInteractionManager
     this.trainInteractionManager.setPlayerHandDisplay(this.playerHandDisplay);
@@ -234,6 +264,21 @@ export class UIManager {
     //   (playerId, x, y, row, col) => this.trainInteractionManager.initializePlayerTrain(playerId, x, y, row, col),
     //   () => this.playerHandDisplay.isHandCollapsed()
     // );
+  }
+
+  private async handleUndo(): Promise<void> {
+    const undone = await this.turnActionManager.undoLastAction();
+    if (!undone) return;
+    await this.refreshPlayerHand();
+  }
+
+  private async refreshPlayerHand(): Promise<void> {
+    const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+    const previousSessionsCost =
+      this.trackDrawingManager.getPlayerTrackState(currentPlayer.id)?.turnBuildCost || 0;
+    const currentSessionCost = this.trackDrawingManager.getCurrentTurnBuildCost();
+    const totalCost = previousSessionsCost + currentSessionCost;
+    await this.setupPlayerHand(this.trackDrawingManager.isInDrawingMode, totalCost);
   }
 
   public getContainers(): {

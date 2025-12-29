@@ -68,6 +68,7 @@ export class TrackDrawingManager {
     private updateEventHandler: (() => void) | null = null;
     
     public segmentsDrawnThisTurn: TrackSegment[] = [];
+    private onTrackSegmentCommitted: ((segment: TrackSegment) => void) | null = null;
 
     // When true, player may not enter drawing mode for the rest of the turn (e.g., after a full upgrade)
     private drawingDisabledForTurn: boolean = false;
@@ -100,6 +101,14 @@ export class TrackDrawingManager {
 
         // Setup cost update handler
         this.setupCostUpdateHandler();
+    }
+
+    /**
+     * Register a callback invoked once per track segment successfully committed to the server.
+     * This is used to integrate track-building into the unified per-turn undo stack.
+     */
+    public setOnTrackSegmentCommitted(callback: ((segment: TrackSegment) => void) | null): void {
+        this.onTrackSegmentCommitted = callback;
     }
     
     private setupCostUpdateHandler(): void {
@@ -334,6 +343,7 @@ export class TrackDrawingManager {
         }
         // Only proceed if there are new segments to add
         if (this.currentSegments.length > 0 && playerTrackState) {
+            const committedSegments = [...this.currentSegments];
             // Prepare new state values (calculations only, no mutations yet)
             const newSegments = [...playerTrackState.segments, ...this.currentSegments];
             const newTotalCost = playerTrackState.totalCost + this.turnBuildCost;
@@ -364,6 +374,17 @@ export class TrackDrawingManager {
                 playerTrackState.turnBuildCost = newTurnBuildCost;
                 playerTrackState.lastBuildTimestamp = newLastBuildTimestamp;
                 this.segmentsDrawnThisTurn = newSegmentsDrawnThisTurn;
+
+                // Notify per-segment commit (for unified undo stack)
+                if (this.onTrackSegmentCommitted) {
+                    committedSegments.forEach((seg) => {
+                        try {
+                            this.onTrackSegmentCommitted?.(seg);
+                        } catch (e) {
+                            // Non-fatal: track commit succeeded even if recording failed
+                        }
+                    });
+                }
                 
                 // Check if we need to move the train to the track when first track is drawn from major city
                 this.checkAndUpdateTrainPosition(currentPlayer, playerTrackState);
