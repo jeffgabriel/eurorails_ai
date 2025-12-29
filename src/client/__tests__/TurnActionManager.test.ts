@@ -32,6 +32,7 @@ describe("TurnActionManager", () => {
     const gameState = createGameState();
     const trackDrawingManager = {
       undoLastSegment: jest.fn().mockResolvedValue(undefined),
+      undoLastUncommittedSegment: jest.fn().mockReturnValue(true),
     } as any;
     const playerStateService = {
       isCurrentPlayer: jest.fn().mockReturnValue(true),
@@ -54,6 +55,7 @@ describe("TurnActionManager", () => {
       to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear },
       cost: 1,
     });
+    mgr.markLastUncommittedTrackSegmentsCommitted(1);
 
     const ok = await mgr.undoLastAction();
     expect(ok).toBe(true);
@@ -75,7 +77,11 @@ describe("TurnActionManager", () => {
     player.trainState.remainingMovement = 5;
     player.trainState.ferryState = { status: "just_arrived" } as any;
 
-    const trackDrawingManager = { undoLastSegment: jest.fn() } as any;
+    const trackDrawingManager = {
+      undoLastSegment: jest.fn(),
+      getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
+      undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
+    } as any;
     const playerStateService = { isCurrentPlayer: jest.fn().mockReturnValue(true) } as any;
     const loadService = {} as any;
     const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
@@ -117,7 +123,11 @@ describe("TurnActionManager", () => {
     const loadService = {
       returnLoad: jest.fn().mockResolvedValue(true),
     } as any;
-    const trackDrawingManager = { undoLastSegment: jest.fn() } as any;
+    const trackDrawingManager = {
+      undoLastSegment: jest.fn(),
+      getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
+      undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
+    } as any;
     const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
 
     const mgr = new TurnActionManager({
@@ -145,7 +155,11 @@ describe("TurnActionManager", () => {
       pickupLoad: jest.fn().mockResolvedValue(true),
       returnLoad: jest.fn().mockResolvedValue(true),
     } as any;
-    const trackDrawingManager = { undoLastSegment: jest.fn() } as any;
+    const trackDrawingManager = {
+      undoLastSegment: jest.fn(),
+      getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
+      undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
+    } as any;
     const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
 
     const mgr = new TurnActionManager({

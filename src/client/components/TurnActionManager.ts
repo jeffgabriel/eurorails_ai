@@ -19,6 +19,7 @@ export type TurnAction =
   | {
       kind: "trackSegmentBuilt";
       segment: TrackSegment;
+      committed: boolean;
     }
   | {
       kind: "trainMoved";
@@ -84,7 +85,19 @@ export class TurnActionManager {
   }
 
   public recordTrackSegmentBuilt(segment: TrackSegment): void {
-    this.stack.push({ kind: "trackSegmentBuilt", segment });
+    this.stack.push({ kind: "trackSegmentBuilt", segment, committed: false });
+  }
+
+  public markLastUncommittedTrackSegmentsCommitted(count: number): void {
+    if (!Number.isFinite(count) || count <= 0) return;
+    let remaining = Math.floor(count);
+    for (let i = this.stack.length - 1; i >= 0 && remaining > 0; i--) {
+      const action = this.stack[i];
+      if (action.kind !== "trackSegmentBuilt") continue;
+      if (action.committed) continue;
+      action.committed = true;
+      remaining--;
+    }
   }
 
   public recordTrainMoved(args: {
@@ -137,8 +150,14 @@ export class TurnActionManager {
   private async undoAction(action: TurnAction): Promise<boolean> {
     switch (action.kind) {
       case "trackSegmentBuilt": {
-        await this.trackDrawingManager.undoLastSegment();
-        return true;
+        if (action.committed) {
+          await this.trackDrawingManager.undoLastSegment();
+          return true;
+        }
+        if (typeof (this.trackDrawingManager as any).undoLastUncommittedSegment === "function") {
+          return (this.trackDrawingManager as any).undoLastUncommittedSegment();
+        }
+        return false;
       }
       case "trainMoved": {
         if (!this.trainPositionUpdater) return false;
