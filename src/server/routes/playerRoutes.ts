@@ -766,6 +766,9 @@ router.post('/restart', authenticateToken, async (req, res) => {
     } catch (error: any) {
         const message = error?.message || 'An unexpected error occurred';
 
+        if (message === 'Game not found') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
         if (message === 'Player not found in game') {
             return res.status(404).json({ error: 'Not found', details: message });
         }
@@ -776,8 +779,7 @@ router.post('/restart', authenticateToken, async (req, res) => {
             message.includes('Cannot restart') ||
             message.includes('Invalid') ||
             message.includes('Failed') ||
-            message.includes('Cannot') ||
-            message.includes('not found')
+            message.includes('Cannot')
         ) {
             return res.status(400).json({ error: 'Validation error', details: message });
         }

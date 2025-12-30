@@ -158,10 +158,16 @@ class SocketService {
       //
       // For now, treat serverSeq as a monotonic value and accept newer patches.
       // If we later move to true per-game incrementing sequences + state:init, we can tighten this.
-      if (typeof data?.serverSeq === 'number' && data.serverSeq <= this.serverSeq) {
+      const nextSeq = (typeof data?.serverSeq === 'number' && Number.isFinite(data.serverSeq))
+        ? data.serverSeq
+        : null;
+      if (nextSeq !== null && nextSeq <= this.serverSeq) {
         return;
       }
-      this.serverSeq = typeof data?.serverSeq === 'number' ? data.serverSeq : this.serverSeq;
+      // Only accept finite numbers; ignore NaN/Infinity to avoid corrupting comparisons.
+      if (nextSeq !== null) {
+        this.serverSeq = nextSeq;
+      }
       callback(data);
     });
   }
