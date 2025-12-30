@@ -177,7 +177,7 @@ router.post('/update', async (req, res) => {
         if (updatedPlayer) {
             // Emit socket update with updated player (do not broadcast private hand data)
             const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            emitStatePatch(gameId, {
+            await emitStatePatch(gameId, {
                 players: [playerWithoutHand]
             } as any);
         }
@@ -294,7 +294,7 @@ router.post('/updateCurrentPlayer', async (req, res) => {
         
         // Emit turn change and state patch
         emitTurnChange(gameId, currentPlayerIndex);
-        emitStatePatch(gameId, {
+        await emitStatePatch(gameId, {
             currentPlayerIndex: currentPlayerIndex
         });
         
@@ -429,7 +429,7 @@ router.post('/upgrade-train', authenticateToken, async (req, res) => {
         );
 
         // Broadcast player update
-        emitStatePatch(gameId, {
+        await emitStatePatch(gameId, {
             players: [updatedPlayer]
         });
 
@@ -511,7 +511,7 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
         
         if (updatedPlayer) {
             const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            emitStatePatch(gameId, {
+            await emitStatePatch(gameId, {
                 players: [playerWithoutHand]
             } as any);
         }
@@ -587,7 +587,7 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
         if (updatedPlayer) {
             const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+            await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
         }
 
         return res.status(200).json(result);
@@ -646,7 +646,7 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
         if (updatedPlayer) {
             const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+            await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
         }
 
         return res.status(200).json(result);
@@ -750,7 +750,7 @@ router.post('/restart', authenticateToken, async (req, res) => {
 
         // Broadcast updated public player state (do not leak hand)
         const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-        emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+        await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
 
         // Broadcast track update so clients reload track state
         const io = getSocketIO();

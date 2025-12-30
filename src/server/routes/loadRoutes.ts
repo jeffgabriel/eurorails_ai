@@ -78,7 +78,7 @@ const handleLoadPickup: RequestHandler = async (req: Request, res: Response) => 
     
     // Emit socket update with load state and dropped loads
     // Note: Player loads are updated separately via /api/players/update, which will emit its own socket update
-    emitStatePatch(gameId, {
+    await emitStatePatch(gameId, {
       // Load state changes are handled client-side from the response
       // Dropped loads are included in the response and will be synced via socket
     });
@@ -137,7 +137,7 @@ const handleLoadReturn: RequestHandler = async (req: Request, res: Response) => 
     const result = await loadService.returnLoad(city, loadType, gameId);
     
     // Emit socket update with load state and dropped loads
-    emitStatePatch(gameId, {
+    await emitStatePatch(gameId, {
       // Load state changes are handled client-side from the response
       // Dropped loads are included in the response and will be synced via socket
     });
@@ -177,7 +177,7 @@ const handleSetLoadInCity: RequestHandler = async (req: Request, res: Response) 
     const result = await loadService.setLoadInCity(city, loadType, gameId);
     
     // Emit socket update with dropped loads
-    emitStatePatch(gameId, {
+    await emitStatePatch(gameId, {
       // Dropped loads are included in the response and will be synced via socket
     });
     

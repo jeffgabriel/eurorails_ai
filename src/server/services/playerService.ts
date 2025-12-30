@@ -1225,7 +1225,7 @@ export class PlayerService {
       try {
         const { emitTurnChange, emitStatePatch } = await import("./socketService");
         emitTurnChange(gameId, nextIndex, nextPlayerId);
-        emitStatePatch(gameId, { currentPlayerIndex: nextIndex } as any);
+        await emitStatePatch(gameId, { currentPlayerIndex: nextIndex } as any);
       } catch {
         // Socket is best-effort; clients will fall back to polling.
       }
