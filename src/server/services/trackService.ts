@@ -122,4 +122,29 @@ export class TrackService {
             [gameId, playerId]
         );
     }
+
+    /**
+     * Reset a player's track state to an empty baseline.
+     * If a transaction client is provided, it will be used for consistency.
+     */
+    static async resetTrackState(
+        gameId: string,
+        playerId: string,
+        client?: { query: (text: string, params?: any[]) => Promise<any> }
+    ): Promise<void> {
+        const q = client && typeof client.query === 'function' ? client : db;
+        const emptySegmentsJson = JSON.stringify([]);
+        await q.query(
+            `
+            INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+            VALUES ($1, $2, $3, 0, 0, NULL)
+            ON CONFLICT (game_id, player_id)
+            DO UPDATE SET segments = EXCLUDED.segments,
+                          total_cost = 0,
+                          turn_build_cost = 0,
+                          last_build_timestamp = NULL
+            `,
+            [gameId, playerId, emptySegmentsJson]
+        );
+    }
 } 

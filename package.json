@@ -12,6 +12,7 @@
     "dev:server": "npx nodemon",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:test": "NODE_ENV=development DB_ENV=test npm run dev",
+    "test:all": "NODE_ENV=test RUN_INTEGRATION_TESTS=true DB_ENV=test npm test",
     "test": "jest",
     "test:coverage": "jest --coverage",
     "debug": "npx nodemon --exec \"node --inspect -r ts-node/register src/server/index.ts\""

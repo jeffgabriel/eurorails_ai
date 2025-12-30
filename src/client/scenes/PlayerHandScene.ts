@@ -71,6 +71,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private actionsModal: Phaser.GameObjects.Container | null = null;
   private confirmDiscardModal: Phaser.GameObjects.Container | null = null;
+  private confirmRestartModal: Phaser.GameObjects.Container | null = null;
   private confirmTrainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
 
@@ -535,7 +536,7 @@ export class PlayerHandScene extends Phaser.Scene {
 
     const panelBg = (this as any).rexUI.add.roundRectangle({
       width: panelW,
-      height: 240,
+      height: 320,
       color: 0x1a1a1a,
       alpha: 1,
       radius: 16,
@@ -641,6 +642,46 @@ export class PlayerHandScene extends Phaser.Scene {
       });
     }
     panelSizer.add(discardBtn, { proportion: 0, align: "center", expand: false });
+
+    // Section: Restart (Reset) - Mercy rule recovery (does NOT end turn)
+    const canRestart =
+      isLocalPlayerActive &&
+      !this.isDrawingMode &&
+      turnBuildCost === 0 &&
+      !canUndoNow;
+    const restartDisabledReason = !isLocalPlayerActive
+      ? "Only available on your turn"
+      : (this.isDrawingMode ? "Exit build mode first"
+          : (turnBuildCost !== 0 ? "Cannot restart after building"
+              : (canUndoNow ? "Undo must be cleared first" : "")));
+
+    const restartLabel = this.add.text(0, 0, "Restart (Reset) — Mercy Rule", {
+      color: "#dddddd",
+      fontSize: "14px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(restartLabel, { proportion: 0, align: "center", expand: false });
+
+    const restartBtn = this.add
+      .text(0, 0, canRestart ? "Restart Player" : (restartDisabledReason || "Restart Player"), {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: canRestart ? "#a63" : "#555",
+        padding: { left: 14, right: 14, top: 10, bottom: 10 },
+      })
+      .setAlpha(canRestart ? 1.0 : 0.6)
+      .setInteractive({ useHandCursor: canRestart });
+    if (canRestart) {
+      restartBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        this.closeActionsModal();
+        this.openConfirmRestartModal();
+      });
+    }
+    panelSizer.add(restartBtn, { proportion: 0, align: "center", expand: false });
 
     const closeBtn = this.add
       .text(0, 0, "Close", {
@@ -914,6 +955,168 @@ export class PlayerHandScene extends Phaser.Scene {
     if (!this.confirmDiscardModal) return;
     this.confirmDiscardModal.destroy(true);
     this.confirmDiscardModal = null;
+  }
+
+  private openConfirmRestartModal(): void {
+    if (this.confirmRestartModal) {
+      this.closeConfirmRestartModal();
+    }
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const modalRoot = this.add.container(0, 0).setDepth(1250);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.65)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
+    modalRoot.add(backdrop);
+
+    const panelW = Math.min(600, this.scale.width - 40);
+    const panelX = this.scale.width / 2;
+    const panelY = this.scale.height / 2;
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: 280,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 16, right: 16, top: 12, bottom: 12, item: 12 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const headerRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 10 },
+    });
+    const title = this.add.text(0, 0, "Confirm Restart (Reset)", {
+      color: "#ffffff",
+      fontSize: "18px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    const flex = this.add.zone(0, 0, 1, 1);
+    const closeX = this.add
+      .text(0, 0, "✕", {
+        color: "#ffffff",
+        fontSize: "20px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+      })
+      .setInteractive({ useHandCursor: true });
+    closeX.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmRestartModal();
+    });
+    headerRow.add(title, { proportion: 0, align: "center", expand: false });
+    headerRow.add(flex, { proportion: 1, align: "center", expand: true });
+    headerRow.add(closeX, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(headerRow, { proportion: 0, align: "center", expand: true });
+
+    const body = this.add.text(
+      0,
+      0,
+      "Reset your player to recover from being cash-trapped:\n\n• Money → ECU 50M\n• Train → Freight\n• Loads → cleared\n• Track → erased\n• Demand hand → replaced\n• Train position → cleared (you'll re-place your train)\n\nThis does NOT end your turn.",
+      {
+        color: "#dddddd",
+        fontSize: "14px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40, useAdvancedWrap: true },
+      }
+    );
+    panelSizer.add(body, { proportion: 0, align: "center", expand: false });
+
+    const buttonsRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 14 },
+    });
+
+    const cancelBtn = this.add
+      .text(0, 0, "Cancel", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    cancelBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmRestartModal();
+    });
+
+    const confirmBtn = this.add
+      .text(0, 0, "Restart", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#a63",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    confirmBtn.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+
+      const result = await this.gameStateService.restartPlayer();
+      if (!result.ok) {
+        this.showToast(result.errorMessage || "Restart failed.");
+        return;
+      }
+
+      // Best-effort: clear local per-turn undo stack (restart requires a clean state anyway).
+      try {
+        const gameScene = this.scene.get("GameScene") as any;
+        if (gameScene?.uiManager && typeof gameScene.uiManager.clearTurnUndoStack === "function") {
+          gameScene.uiManager.clearTurnUndoStack();
+        }
+      } catch {
+        // non-fatal
+      }
+
+      // Best-effort: refresh tracks immediately (also happens via track:updated socket).
+      try {
+        const gameScene = this.scene.get("GameScene") as any;
+        if (gameScene?.trackManager?.loadExistingTracks && gameScene?.trackManager?.drawAllTracks) {
+          await gameScene.trackManager.loadExistingTracks();
+          gameScene.trackManager.drawAllTracks();
+        }
+      } catch {
+        // non-fatal
+      }
+
+      this.closeConfirmRestartModal();
+      this.closeActionsModal();
+      this.gameState = this.gameStateService.getGameState();
+      this.createUI({ animate: false });
+      this.showToast("Player restarted. You can place your train and continue your turn.");
+    });
+
+    buttonsRow.add(cancelBtn, { proportion: 0, align: "center", expand: false });
+    buttonsRow.add(confirmBtn, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(buttonsRow, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.confirmRestartModal = modalRoot;
+  }
+
+  private closeConfirmRestartModal(): void {
+    if (!this.confirmRestartModal) return;
+    this.confirmRestartModal.destroy(true);
+    this.confirmRestartModal = null;
   }
 
   private openConfirmTrainPurchaseModal(args: {
@@ -1605,6 +1808,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private destroyUI(): void {
     // Close any open modals (they are not children of rootSizer)
     this.closeConfirmDiscardModal();
+    this.closeConfirmRestartModal();
     this.closeConfirmTrainPurchaseModal();
     this.closeActionsModal();
 

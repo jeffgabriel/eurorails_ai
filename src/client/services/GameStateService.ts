@@ -7,6 +7,7 @@ import { TrainType } from '../../shared/types/GameTypes';
  * Event listener type for turn changes
  */
 type TurnChangeListener = (currentPlayerIndex: number) => void;
+type StateChangeListener = () => void;
 
 /**
  * Manages shared game state that applies to all players
@@ -17,6 +18,7 @@ export class GameStateService {
     private localPlayerId: string | null = null;
     private playerStateService: PlayerStateService | null = null; // Reference to PlayerStateService for local player checks
     private turnChangeListeners: TurnChangeListener[] = [];
+    private stateChangeListeners: StateChangeListener[] = [];
     private pollingInterval: number | null = null;
     
     constructor(gameState: GameState) {
@@ -191,6 +193,32 @@ export class GameStateService {
             }
         });
     }
+
+    /**
+     * Notify listeners that local game state has changed (e.g. after a server-authoritative
+     * action updates a player but does not necessarily trigger a turn change).
+     *
+     * IMPORTANT: This is intended for local actions that already merged server response data
+     * into `this.gameState` (purchaseTrainType/discardHand/restart, etc.). Socket-driven state
+     * patches should continue to refresh UI through GameScene's socket handler.
+     */
+    private notifyStateChange(): void {
+        this.stateChangeListeners.forEach(listener => {
+            try {
+                listener();
+            } catch (error) {
+                console.error('Error in state change listener:', error);
+            }
+        });
+    }
+
+    public onStateChange(listener: StateChangeListener): void {
+        this.stateChangeListeners.push(listener);
+    }
+
+    public offStateChange(listener: StateChangeListener): void {
+        this.stateChangeListeners = this.stateChangeListeners.filter(l => l !== listener);
+    }
     
     /**
      * Update current player index (called when receiving turn change event)
@@ -302,6 +330,7 @@ export class GameStateService {
                 }
             }
 
+            this.notifyStateChange();
             return { ok: true };
         } catch (error) {
             // Avoid noisy console logging; callers can show a toast.
@@ -363,9 +392,64 @@ export class GameStateService {
                 this.updateCurrentPlayerIndex(nextIndex);
             }
 
+            // Even though the turn changes, notify so UI can refresh immediately if sockets are down.
+            this.notifyStateChange();
             return { ok: true, nextPlayerName };
         } catch (error) {
             return { ok: false, errorMessage: 'Discard failed' };
+        }
+    }
+
+    /**
+     * Restart (reset) the local player's state to a clean baseline.
+     * Server-authoritative: validates it's your turn + start-of-turn constraints, resets money/train/loads/position/hand, clears track.
+     * Does NOT end the turn.
+     */
+    public async restartPlayer(): Promise<{ ok: boolean; errorMessage?: string }> {
+        try {
+            const { authenticatedFetch } = await import('./authenticatedFetch');
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/restart`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: this.gameState.id
+                })
+            });
+
+            if (!response.ok) {
+                const errorData: any = await response.json().catch(() => ({}));
+                const details = (typeof errorData?.details === 'string' && errorData.details.trim().length > 0)
+                    ? errorData.details
+                    : (typeof errorData?.error === 'string' ? errorData.error : 'Restart failed');
+                return { ok: false, errorMessage: details };
+            }
+
+            const data = await response.json();
+            const updatedPlayer = data?.player;
+            if (!updatedPlayer?.id) {
+                return { ok: false, errorMessage: 'Restart failed' };
+            }
+
+            // Merge updated player (including hand) into local game state (in-place mutation).
+            const idx = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+            if (idx >= 0) {
+                const existing: any = this.gameState.players[idx];
+                Object.assign(existing, updatedPlayer);
+                if (updatedPlayer.trainState) {
+                    if (existing.trainState) {
+                        Object.assign(existing.trainState, updatedPlayer.trainState);
+                    } else {
+                        existing.trainState = updatedPlayer.trainState;
+                    }
+                }
+                if (Array.isArray(updatedPlayer.hand)) {
+                    existing.hand = updatedPlayer.hand;
+                }
+            }
+
+            this.notifyStateChange();
+            return { ok: true };
+        } catch (error) {
+            return { ok: false, errorMessage: 'Restart failed' };
         }
     }
 }

@@ -112,7 +112,12 @@ export class PlayerService {
       if (client !== undefined) {
         console.error(`PlayerService.createPlayer: Invalid client provided. Expected a database client with query() method, got:`, typeof client);
       } else {
-        console.warn(`PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`);
+        // In tests we often create players without explicit transactions; avoid log spam in Jest.
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn(
+            `PlayerService.createPlayer: No transaction client provided. Using pool connection. This may cause foreign key issues if called within a transaction.`
+          );
+        }
       }
       useClient = db;
     }
@@ -1226,6 +1231,179 @@ export class PlayerService {
       }
 
       return { currentPlayerIndex: nextIndex, nextPlayerId, nextPlayerName: nextPlayerName || "Next player" };
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      // Best-effort compensation for in-memory deck mutations.
+      for (const id of drawnIds) {
+        try {
+          demandDeckService.returnDealtCardToTop(id);
+        } catch {
+          // ignore
+        }
+      }
+      for (const id of discardedIds) {
+        try {
+          demandDeckService.returnDiscardedCardToDealt(id);
+        } catch {
+          // ignore
+        }
+      }
+
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Restart (reset) the authenticated user's player to a clean starting state.
+   *
+   * Constraints (MVP, matches discard-hand checks):
+   * - Must be the active player ("Not your turn" otherwise)
+   * - turn_build_cost must be 0
+   * - no server-tracked turn_actions exist for this turn
+   *
+   * Effects:
+   * - money -> 50
+   * - train_type -> Freight
+   * - loads -> []
+   * - position_* -> NULL
+   * - hand -> replaced with 3 freshly drawn cards (server-authoritative)
+   * - player_tracks -> cleared (segments=[], costs reset)
+   *
+   * Note: Does NOT advance turn or increment current_turn_number.
+   */
+  static async restartForUser(gameId: string, userId: string): Promise<Player> {
+    const client = await db.connect();
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
+    try {
+      await client.query("BEGIN");
+
+      const playerRowResult = await client.query(
+        `SELECT id, hand, current_turn_number as "turnNumber"
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentHand: unknown = playerRowResult.rows[0].hand;
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+
+      const gameStateResult = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameStateResult.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
+
+      // Determine active player by ordering (must match getPlayers ordering).
+      const activePlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, currentPlayerIndex]
+      );
+      const activePlayerId = activePlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      // Start-of-turn constraint: no track spend this turn (server-side).
+      const trackRow = await client.query(
+        `SELECT turn_build_cost
+         FROM player_tracks
+         WHERE game_id = $1 AND player_id = $2
+         FOR UPDATE`,
+        [gameId, playerId]
+      );
+      const turnBuildCost = trackRow.rows.length > 0 ? Number(trackRow.rows[0].turn_build_cost ?? 0) : 0;
+      if (turnBuildCost !== 0) {
+        throw new Error("Cannot restart after building track this turn");
+      }
+
+      // Start-of-turn constraint: no server-tracked actions (deliveries) this turn.
+      const actionsRow = await client.query(
+        `SELECT actions
+         FROM turn_actions
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+      if (actionsRow.rows.length > 0) {
+        const actionsJson = actionsRow.rows[0]?.actions;
+        const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
+        if (Array.isArray(actions) && actions.length > 0) {
+          throw new Error("Cannot restart after performing actions this turn");
+        }
+      }
+
+      // Discard old hand (must be currently dealt).
+      for (const id of handIds) {
+        demandDeckService.discardCard(id);
+        discardedIds.push(id);
+      }
+
+      // Draw replacement hand.
+      const newCards: DemandCard[] = [];
+      while (newCards.length < 3) {
+        const card = demandDeckService.drawCard();
+        if (!card) {
+          throw new Error("Failed to draw new demand card");
+        }
+        newCards.push(card);
+        drawnIds.push(card.id);
+      }
+      const newHandIds = newCards.map((c) => c.id);
+
+      // Reset player state (does NOT end turn).
+      await client.query(
+        `UPDATE players
+         SET money = 50,
+             train_type = $1,
+             loads = $2,
+             position_x = NULL,
+             position_y = NULL,
+             position_row = NULL,
+             position_col = NULL,
+             hand = $3
+         WHERE game_id = $4 AND id = $5`,
+        [TrainType.Freight, [], newHandIds, gameId, playerId]
+      );
+
+      // Clear track state.
+      await TrackService.resetTrackState(gameId, playerId, client);
+
+      // Best-effort: clear any action log row for this turn to avoid future confusion.
+      await client.query(
+        `DELETE FROM turn_actions WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+
+      await client.query("COMMIT");
+
+      // Return updated player with proper hand filtering for this user (includes new hand).
+      const updatedPlayers = await this.getPlayers(gameId, userId);
+      const updatedPlayer = updatedPlayers.find((p) => p.id === playerId);
+      if (!updatedPlayer) {
+        throw new Error("Failed to load updated player");
+      }
+      return updatedPlayer;
     } catch (error) {
       await client.query("ROLLBACK");
 

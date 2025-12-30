@@ -100,7 +100,10 @@ afterAll(async () => {
     await db.query("DELETE FROM turn_actions");
     await db.query("DELETE FROM player_tracks");
     await db.query("DELETE FROM players");
-    //await db.query('DELETE FROM games');
+    // These are required to keep re-running `npm test` idempotent.
+    // Order matters due to foreign keys (players -> games/users).
+    await db.query("DELETE FROM games");
+    await db.query("DELETE FROM users");
   } catch (err) {
     // Pool might already be closed, check the error
     if (err instanceof Error && err.message.includes('pool has been ended')) {
