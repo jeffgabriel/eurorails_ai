@@ -5,10 +5,10 @@ This is a test project for building with AI tools. Pretty much everything in thi
 
 A digital implementation of the Eurorails board game using modern web technologies.
 ## Game Lobby
-![](https://drive.google.com/file/d/1B1L6vP5cViqNsIGWMTHQ4Obdzga9ejdw/view?usp=drive_link)
+![](https://drive.google.com/uc?export=view&id=1B1L6vP5cViqNsIGWMTHQ4Obdzga9ejdw)
 
 ## Game Setup
-![](https://drive.google.com/file/d/1-f-HbtPa971tQsdjerum9IHKKQ6catb2/view?usp=drive_link)
+![](https://drive.google.com/uc?export=view&id=1-f-HbtPa971tQsdjerum9IHKKQ6catb2)
 
 ## Track Drawing
 ![](https://drive.google.com/uc?export=view&id=13aahnxy0Ov7hlK87-cJIvFCSj3ZRO_Et)
