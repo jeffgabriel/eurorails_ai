@@ -7,8 +7,13 @@ class SocketService {
   private socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
   private serverSeq = 0;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
   private connecting = false;
+  private joinedGameIds = new Set<ID>();
+  private joinedLobbyIds = new Set<ID>();
+  private hasEverConnected = false;
+
+  private onReconnectedCallbacks = new Set<() => void>();
+  private onSeqGapCallbacks = new Set<(data: { expected: number; received: number }) => void>();
 
   connect(token: string): void {
     if (this.socket) {
@@ -22,6 +27,7 @@ class SocketService {
       auth: { token },
       transports: ['websocket'],
       reconnection: true,
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 5000,
     });
@@ -32,26 +38,55 @@ class SocketService {
   private setupEventHandlers(): void {
     if (!this.socket) return;
 
+    // Keep auth fresh across reconnect attempts (handles token refresh cases)
+    this.socket.io.on('reconnect_attempt', () => {
+      const latestToken = localStorage.getItem('eurorails.jwt');
+      if (latestToken) {
+        this.socket!.auth = { token: latestToken };
+      }
+    });
+
     this.socket.on('connect', () => {
       debug.log('Socket connected');
       this.connecting = false;
       this.reconnectAttempts = 0;
+
+      const isReconnect = this.hasEverConnected;
+      this.hasEverConnected = true;
+
+      if (isReconnect) {
+        // Server restarts lose room membership; re-emit joins for anything we were in.
+        for (const gameId of this.joinedGameIds) {
+          this.socket!.emit('join', { gameId });
+        }
+        for (const gameId of this.joinedLobbyIds) {
+          this.socket!.emit('join-lobby', { gameId });
+        }
+
+        for (const cb of this.onReconnectedCallbacks) {
+          try {
+            cb();
+          } catch (err) {
+            debug.error('onReconnected callback failed:', err);
+          }
+        }
+      }
     });
 
     this.socket.on('disconnect', (reason) => {
       debug.log('Socket disconnected:', reason);
       this.connecting = false;
+      // If server explicitly disconnected us, Socket.IO won't auto-reconnect unless we call connect()
+      if (reason === 'io server disconnect') {
+        this.socket?.connect();
+      }
     });
 
     this.socket.on('connect_error', (error) => {
       debug.error('Socket connection error:', error);
       this.connecting = false;
       this.reconnectAttempts++;
-      
-      if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-        debug.error('Max reconnection attempts reached');
-        this.disconnect();
-      }
+      // IMPORTANT: do not disconnect/null out the socket here; let Socket.IO keep retrying.
     });
   }
 
@@ -60,7 +95,11 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
       this.serverSeq = 0;
+      this.reconnectAttempts = 0;
       this.connecting = false;
+      this.hasEverConnected = false;
+      this.joinedGameIds.clear();
+      this.joinedLobbyIds.clear();
     }
   }
 
@@ -129,6 +168,7 @@ class SocketService {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
+    this.joinedGameIds.add(gameId);
     this.socket.emit('join', { gameId });
   }
 
@@ -143,7 +183,9 @@ class SocketService {
     if (!this.socket) return;
     
     this.socket.on('state:init', (data) => {
-      this.serverSeq = data.serverSeq;
+      if (typeof data?.serverSeq === 'number' && Number.isFinite(data.serverSeq)) {
+        this.serverSeq = data.serverSeq;
+      }
       callback(data);
     });
   }
@@ -152,17 +194,20 @@ class SocketService {
     if (!this.socket) return;
     
     this.socket.on('state:patch', (data) => {
-      // NOTE:
-      // The server currently uses a timestamp-based `serverSeq` (Date.now()).
-      // That means strict "+1" sequencing is invalid and would cause clients to drop patches.
-      //
-      // For now, treat serverSeq as a monotonic value and accept newer patches.
-      // If we later move to true per-game incrementing sequences + state:init, we can tighten this.
       const nextSeq = (typeof data?.serverSeq === 'number' && Number.isFinite(data.serverSeq))
         ? data.serverSeq
         : null;
       if (nextSeq !== null && nextSeq <= this.serverSeq) {
         return;
+      }
+      if (nextSeq !== null && nextSeq > this.serverSeq + 1) {
+        for (const cb of this.onSeqGapCallbacks) {
+          try {
+            cb({ expected: this.serverSeq + 1, received: nextSeq });
+          } catch (err) {
+            debug.error('onSeqGap callback failed:', err);
+          }
+        }
       }
       // Only accept finite numbers; ignore NaN/Infinity to avoid corrupting comparisons.
       if (nextSeq !== null) {
@@ -181,7 +226,9 @@ class SocketService {
     if (!this.socket) return;
     // Allow multiple listeners - both GameScene and game.store need to receive turn changes
     this.socket.on('turn:change', (data) => {
-      this.serverSeq = data.serverSeq;
+      if (typeof (data as any)?.serverSeq === 'number' && Number.isFinite((data as any).serverSeq)) {
+        this.serverSeq = (data as any).serverSeq;
+      }
       callback(data);
     });
   }
@@ -196,6 +243,7 @@ class SocketService {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
+    this.joinedLobbyIds.add(gameId);
     this.socket.emit('join-lobby', { gameId });
     debug.log(`Joined lobby room for game ${gameId}`);
   }
@@ -204,6 +252,7 @@ class SocketService {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
+    this.joinedLobbyIds.delete(gameId);
     this.socket.emit('leave-lobby', { gameId });
     debug.log(`Left lobby room for game ${gameId}`);
   }
@@ -265,6 +314,20 @@ class SocketService {
 
   getServerSeq(): number {
     return this.serverSeq;
+  }
+
+  onReconnected(callback: () => void): () => void {
+    this.onReconnectedCallbacks.add(callback);
+    return () => {
+      this.onReconnectedCallbacks.delete(callback);
+    };
+  }
+
+  onSeqGap(callback: (data: { expected: number; received: number }) => void): () => void {
+    this.onSeqGapCallbacks.add(callback);
+    return () => {
+      this.onSeqGapCallbacks.delete(callback);
+    };
   }
 
   // Remove all listeners

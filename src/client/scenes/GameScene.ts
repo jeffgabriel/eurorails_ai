@@ -222,6 +222,15 @@ export class GameScene extends Phaser.Scene {
         if (socketService && socketService.isConnected()) {
           // Join the game room so we receive events
           socketService.join(this.gameState.id);
+
+          this.socketUnsubReconnected?.();
+          this.socketUnsubSeqGap?.();
+          this.socketUnsubReconnected = socketService.onReconnected(() => {
+            this.scheduleSocketResync('reconnect');
+          });
+          this.socketUnsubSeqGap = socketService.onSeqGap(({ expected, received }) => {
+            this.scheduleSocketResync(`seq-gap ${expected}->${received}`);
+          });
           
           socketService.onTurnChange((data: any) => {
             // Server sends: { currentPlayerIndex, currentPlayerId, gameId, timestamp }
@@ -1002,6 +1011,15 @@ export class GameScene extends Phaser.Scene {
         this.stateChangeListener = undefined;
       }
     }
+
+    if (this.socketResyncTimer !== undefined) {
+      window.clearTimeout(this.socketResyncTimer);
+      this.socketResyncTimer = undefined;
+    }
+    this.socketUnsubReconnected?.();
+    this.socketUnsubReconnected = undefined;
+    this.socketUnsubSeqGap?.();
+    this.socketUnsubSeqGap = undefined;
     
     // Clean up TurnNotification
     if (this.turnNotification) {
@@ -1047,6 +1065,37 @@ export class GameScene extends Phaser.Scene {
     } catch (error) {
       console.warn('Could not setup track update listener:', error);
     }
+  }
+
+  private socketResyncTimer: number | undefined;
+  private socketResyncInFlight = false;
+  private socketUnsubReconnected: (() => void) | undefined;
+  private socketUnsubSeqGap: (() => void) | undefined;
+
+  private scheduleSocketResync(reason: string): void {
+    if (!this.gameState || !this.gameState.id) return;
+    if (this.socketResyncTimer !== undefined) {
+      window.clearTimeout(this.socketResyncTimer);
+    }
+    this.socketResyncTimer = window.setTimeout(async () => {
+      if (this.socketResyncInFlight) return;
+      this.socketResyncInFlight = true;
+      try {
+        console.warn(`[socket] resyncing via HTTP (${reason})`);
+        await this.refreshPlayerData();
+        if (this.trackManager) {
+          await this.trackManager.loadExistingTracks();
+          this.trackManager.drawAllTracks();
+        }
+        if (this.loadService) {
+          await this.loadService.loadInitialState();
+        }
+      } catch (error) {
+        console.error('Socket resync failed:', error);
+      } finally {
+        this.socketResyncInFlight = false;
+      }
+    }, 250);
   }
 
   /**

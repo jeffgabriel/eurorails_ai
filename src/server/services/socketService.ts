@@ -4,12 +4,52 @@ import type { Server as HTTPServer } from 'http';
 import type { GameState } from '../../shared/types/GameTypes';
 import { AuthService } from './authService';
 import { db } from '../db';
+import { GameService } from './gameService';
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
 
 const PRESENCE_HEARTBEAT_MS = 60_000;
 const PRESENCE_STALE_INTERVAL = '5 minutes';
+
+async function nextServerSeq(gameId: string): Promise<number> {
+  const result = await db.query(
+    `UPDATE games
+     SET server_seq = server_seq + 1
+     WHERE id = $1
+     RETURNING server_seq`,
+    [gameId]
+  );
+
+  if (result.rows.length === 0) {
+    throw new Error('GAME_NOT_FOUND');
+  }
+
+  const raw = result.rows[0]?.server_seq;
+  const serverSeq = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(serverSeq)) {
+    throw new Error('INVALID_SERVER_SEQ');
+  }
+  return serverSeq;
+}
+
+async function getCurrentServerSeq(gameId: string): Promise<number> {
+  const result = await db.query(
+    `SELECT server_seq
+     FROM games
+     WHERE id = $1`,
+    [gameId]
+  );
+  if (result.rows.length === 0) {
+    throw new Error('GAME_NOT_FOUND');
+  }
+  const raw = result.rows[0]?.server_seq;
+  const serverSeq = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(serverSeq)) {
+    throw new Error('INVALID_SERVER_SEQ');
+  }
+  return serverSeq;
+}
 
 /**
  * Initialize Socket.IO server
@@ -147,20 +187,55 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         console.warn(`Invalid gameId from client ${socket.id} for join`);
         return;
       }
-      socket.join(data.gameId);
+      const gameId = data.gameId;
+      socket.join(gameId);
       if (userId) {
-        joinedGameIds.add(data.gameId);
+        joinedGameIds.add(gameId);
         db.query(
           `UPDATE players
            SET is_online = true,
                last_seen_at = NOW()
            WHERE game_id = $1 AND user_id = $2`,
-          [data.gameId, userId]
+          [gameId, userId]
         ).catch((err) => console.error('Failed to set presence on join:', err));
       }
+
+      (async () => {
+        try {
+          if (!userId) {
+            socket.emit('error', { code: 'UNAUTHORIZED', message: 'Authentication required to join game' });
+            return;
+          }
+
+          const membershipResult = await db.query(
+            'SELECT is_deleted FROM players WHERE game_id = $1 AND user_id = $2 LIMIT 1',
+            [gameId, userId]
+          );
+          if (membershipResult.rows.length === 0) {
+            socket.emit('error', { code: 'FORBIDDEN', message: 'You are not a player in this game' });
+            return;
+          }
+          if (membershipResult.rows[0].is_deleted === true) {
+            socket.emit('error', { code: 'FORBIDDEN', message: 'You no longer have access to this game' });
+            return;
+          }
+
+          const gameState = await GameService.getGame(gameId, userId);
+          if (!gameState) {
+            socket.emit('error', { code: 'GAME_NOT_FOUND', message: 'Game not found' });
+            return;
+          }
+
+          const serverSeq = await getCurrentServerSeq(gameId);
+          socket.emit('state:init', { gameState, serverSeq });
+        } catch (err) {
+          console.error('Failed to emit state:init on join:', err);
+          socket.emit('error', { code: 'STATE_INIT_FAILED', message: 'Failed to initialize game state' });
+        }
+      })();
     });
 
-    socket.on('action', (data: { gameId: string; type: string; payload: unknown; clientSeq: number }) => {
+    socket.on('action', async (data: { gameId: string; type: string; payload: unknown; clientSeq: number }) => {
       if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
         console.warn(`Invalid gameId from client ${socket.id} for action`);
         return;
@@ -180,11 +255,16 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           [data.gameId, userId]
         ).catch(() => {});
       }
-      // Forward action to other players in the game
-      socket.to(data.gameId).emit('state:patch', {
-        patch: data.payload as any,
-        serverSeq: data.clientSeq,
-      });
+      try {
+        const serverSeq = await nextServerSeq(data.gameId);
+        // Forward action to other players in the game
+        socket.to(data.gameId).emit('state:patch', {
+          patch: data.payload as any,
+          serverSeq,
+        });
+      } catch (err) {
+        console.error('Failed to forward action as state:patch:', err);
+      }
     });
   });
 
@@ -265,13 +345,12 @@ export function emitToGame(gameId: string, event: string, data: unknown): void {
  * @param gameId - The game ID
  * @param patch - The state patch (only changed data, not full state)
  */
-export function emitStatePatch(gameId: string, patch: Partial<GameState>): void {
+export async function emitStatePatch(gameId: string, patch: Partial<GameState>): Promise<void> {
   if (!io) {
     console.warn('Socket.IO not initialized, cannot emit state patch');
     return;
   }
-
-  const serverSeq = Date.now(); // Can be replaced with proper sequence number later
+  const serverSeq = await nextServerSeq(gameId);
   io.to(gameId).emit('state:patch', {
     patch,
     serverSeq,
