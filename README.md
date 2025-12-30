@@ -11,7 +11,7 @@ A digital implementation of the Eurorails board game using modern web technologi
 ![](https://drive.google.com/file/d/1-f-HbtPa971tQsdjerum9IHKKQ6catb2/view?usp=drive_link)
 
 ## Track Drawing
-![](https://drive.google.com/file/d/13aahnxy0Ov7hlK87-cJIvFCSj3ZRO_Et/view?usp=drive_link)
+![](https://drive.google.com/uc?export=view&id=13aahnxy0Ov7hlK87-cJIvFCSj3ZRO_Et)
 
 ## Manage Load @ City
 ![](https://drive.google.com/uc?export=view&id=1LLX9KNwIYmOwaUtHTZ_ytHRqi8s_9c46)
