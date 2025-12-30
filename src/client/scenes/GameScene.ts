@@ -41,6 +41,7 @@ export class GameScene extends Phaser.Scene {
   private playerStateService!: PlayerStateService;
   private loadService: LoadService;
   private turnChangeListener?: (currentPlayerIndex: number) => void;
+  private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
   private loadsReferencePanel?: LoadsReferencePanel;
   
@@ -450,6 +451,18 @@ export class GameScene extends Phaser.Scene {
       this.mapRenderer,
       this.trackManager
     );
+
+    // Reusable pattern: when local, server-authoritative actions mutate game state
+    // without guaranteed socket connectivity (restart, upgrade, etc.), force-refresh overlay.
+    this.stateChangeListener = () => {
+      try {
+        this.uiManager.updateGameState(this.gameState);
+        this.uiManager.setupUIOverlay();
+      } catch (error) {
+        console.error('Error refreshing UI overlay after local state change:', error);
+      }
+    };
+    this.gameStateService.onStateChange(this.stateChangeListener);
 
     // Get container references from UI manager
     const containers = this.uiManager.getContainers();
@@ -983,6 +996,10 @@ export class GameScene extends Phaser.Scene {
       if (this.turnChangeListener) {
         this.gameStateService.offTurnChange(this.turnChangeListener);
         this.turnChangeListener = undefined;
+      }
+      if (this.stateChangeListener) {
+        this.gameStateService.offStateChange(this.stateChangeListener);
+        this.stateChangeListener = undefined;
       }
     }
     

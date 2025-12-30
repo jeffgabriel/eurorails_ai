@@ -10,8 +10,10 @@ import { db } from '../../../server/db';
 import { v4 as uuidv4 } from 'uuid';
 import jwt from 'jsonwebtoken';
 
-// Skip these tests if SKIP_INTEGRATION_TESTS is set (e.g., CI or local runs without a test server)
-const SKIP_INTEGRATION = process.env.SKIP_INTEGRATION_TESTS === 'true';
+// Integration tests require a real server started with NODE_ENV=test (so it uses the test DB).
+// Default to skipping unless explicitly enabled to avoid false failures against a dev server.
+const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === 'true';
+const SKIP_INTEGRATION = !RUN_INTEGRATION || process.env.SKIP_INTEGRATION_TESTS === 'true';
 const describeIfIntegration = SKIP_INTEGRATION ? describe.skip : describe;
 
 // Helper function to run database queries with proper connection handling

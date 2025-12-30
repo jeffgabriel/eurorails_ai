@@ -203,7 +203,11 @@ export function getSocketIO(): SocketIOServer | null {
  */
 export function emitToLobby(gameId: string, event: string, data: unknown): void {
   if (!io) {
-    console.warn('Socket.IO not initialized, cannot emit to lobby');
+    // In tests we often exercise services without initializing Socket.IO.
+    // Avoid spamming console during Jest runs; this is still a useful warning at runtime.
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('Socket.IO not initialized, cannot emit to lobby');
+    }
     return;
   }
   io.to(`lobby-${gameId}`).emit(event, data);

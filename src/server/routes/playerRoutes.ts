@@ -3,7 +3,7 @@ import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
-import { emitStatePatch, emitTurnChange } from '../services/socketService';
+import { emitStatePatch, emitTurnChange, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 
@@ -718,6 +718,68 @@ router.post('/discard-hand', authenticateToken, async (req, res) => {
             message.includes('Failed to draw') ||
             message.includes('Invalid') ||
             message.includes('not found')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({ error: 'Server error', details: message });
+    }
+});
+
+// Restart (reset) the authenticated user's player to a clean starting state (does NOT end turn)
+router.post('/restart', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.body as { gameId?: string };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId is required'
+            });
+        }
+
+        const updatedPlayer = await PlayerService.restartForUser(gameId, userId);
+
+        // Broadcast updated public player state (do not leak hand)
+        const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
+        emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+
+        // Broadcast track update so clients reload track state
+        const io = getSocketIO();
+        if (io) {
+            io.to(gameId).emit('track:updated', {
+                gameId,
+                playerId: updatedPlayer.id,
+                timestamp: Date.now()
+            });
+        }
+
+        return res.status(200).json({ player: updatedPlayer });
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'Game not found') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (
+            message.includes('Cannot restart') ||
+            message.includes('Invalid') ||
+            message.includes('Failed') ||
+            message.includes('Cannot')
         ) {
             return res.status(400).json({ error: 'Validation error', details: message });
         }

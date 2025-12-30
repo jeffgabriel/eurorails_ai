@@ -152,17 +152,22 @@ class SocketService {
     if (!this.socket) return;
     
     this.socket.on('state:patch', (data) => {
-      // Check for sequence gap
-      if (data.serverSeq !== this.serverSeq + 1) {
-        debug.warn('Sequence gap detected, requesting full state', {
-          expected: this.serverSeq + 1,
-          received: data.serverSeq
-        });
-        // Request full state refresh - this would be handled by the game store
+      // NOTE:
+      // The server currently uses a timestamp-based `serverSeq` (Date.now()).
+      // That means strict "+1" sequencing is invalid and would cause clients to drop patches.
+      //
+      // For now, treat serverSeq as a monotonic value and accept newer patches.
+      // If we later move to true per-game incrementing sequences + state:init, we can tighten this.
+      const nextSeq = (typeof data?.serverSeq === 'number' && Number.isFinite(data.serverSeq))
+        ? data.serverSeq
+        : null;
+      if (nextSeq !== null && nextSeq <= this.serverSeq) {
         return;
       }
-      
-      this.serverSeq = data.serverSeq;
+      // Only accept finite numbers; ignore NaN/Infinity to avoid corrupting comparisons.
+      if (nextSeq !== null) {
+        this.serverSeq = nextSeq;
+      }
       callback(data);
     });
   }

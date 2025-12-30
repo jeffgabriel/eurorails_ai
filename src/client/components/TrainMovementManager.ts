@@ -21,6 +21,19 @@ export class TrainMovementManager {
     this.movementCalculator = new MovementCostCalculator();
   }
 
+  private isTestEnv(): boolean {
+    return (
+      typeof process !== "undefined" &&
+      typeof process.env !== "undefined" &&
+      process.env.NODE_ENV === "test"
+    );
+  }
+
+  private warn(message: string): void {
+    if (this.isTestEnv()) return;
+    console.warn(message);
+  }
+
   /**
    * Look up a GridPoint by its row and column coordinates
    * This is used to get the actual terrain type at a position
@@ -110,7 +123,7 @@ export class TrainMovementManager {
     // Defensive fallback for basic distance when no game state available
     if (!this.gameState.players || this.gameState.players.length === 0 ||
         this.gameState.currentPlayerIndex >= this.gameState.players.length) {
-      console.warn("[TrainMovementManager] No players available, using direct distance");
+      this.warn("[TrainMovementManager] No players available, using direct distance");
       const dx = Math.abs(to.col - from.col);
       const dy = Math.abs(to.row - from.row);
       return Math.max(dx, dy);
@@ -119,7 +132,7 @@ export class TrainMovementManager {
     // Get current player's track data
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.id) {
-      console.warn("[TrainMovementManager] Invalid current player, using direct distance");
+      this.warn("[TrainMovementManager] Invalid current player, using direct distance");
       const dx = Math.abs(to.col - from.col);
       const dy = Math.abs(to.row - from.row);
       return Math.max(dx, dy);
@@ -135,7 +148,7 @@ export class TrainMovementManager {
     );
 
     if (!result.isValid) {
-      console.warn(`[TrainMovementManager] Invalid movement: ${result.errorMessage}, using direct distance`);
+      this.warn(`[TrainMovementManager] Invalid movement: ${result.errorMessage}, using direct distance`);
       const dx = Math.abs(to.col - from.col);
       const dy = Math.abs(to.row - from.row);
       return Math.max(dx, dy);
@@ -205,7 +218,6 @@ export class TrainMovementManager {
       currentPlayer.trainState.position,
       point
     );
-    console.log("Can Move To CalculatedDistance:", distance);
     // Check movement points
     if (!this.hasEnoughMovement(currentPlayer, point)) {
       console.log("Not enough movement points remaining");
@@ -252,7 +264,7 @@ export class TrainMovementManager {
         );
 
         if (!currentGridPoint) {
-          console.warn(
+          this.warn(
             `[TrainMovementManager] Could not find GridPoint at (${priorPosition.row}, ${priorPosition.col})`
           );
           return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
