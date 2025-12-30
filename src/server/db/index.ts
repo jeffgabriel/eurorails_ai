@@ -9,6 +9,8 @@ dotenv.config();
 // Development mode flag
 const DEV_MODE = process.env.NODE_ENV === 'development';
 const TEST_MODE = process.env.NODE_ENV === 'test';
+// DB_ENV is used to select the test database without changing NODE_ENV (keeps webpack/client behavior stable)
+const TEST_DB_MODE = process.env.DB_ENV === 'test';
 const CLEAN_DB_ON_START = process.env.CLEAN_DB_ON_START === 'true';
 
 // Parse DATABASE_URL if provided (Railway, Heroku, etc.)
@@ -66,7 +68,7 @@ const usingDatabaseUrl = dbConfigFromUrl.host !== undefined;
 // Use test database when in test mode, otherwise use configured database
 // IMPORTANT: If DATABASE_URL is provided, use its database name (Railway/Heroku)
 // Otherwise fall back to DB_NAME env var
-const databaseName = TEST_MODE 
+const databaseName = (TEST_MODE || TEST_DB_MODE)
     ? (process.env.DB_NAME_TEST || 'eurorails_test')
     : (usingDatabaseUrl && dbConfigFromUrl.database ? dbConfigFromUrl.database : process.env.DB_NAME);
 
@@ -87,7 +89,7 @@ const pool = new Pool({
     port: usingDatabaseUrl ? dbConfigFromUrl.port : parseInt(process.env.DB_PORT || '5432'),
     ssl: dbConfigFromUrl.ssl !== undefined 
         ? dbConfigFromUrl.ssl 
-        : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: process.env.NODE_ENV !== 'test' } : false),
+        : (process.env.DB_SSL === 'true' ? { rejectUnauthorized: !(TEST_MODE || TEST_DB_MODE) } : false),
     max: parseInt(process.env.DB_MAX_CONNECTIONS || '10'),
     idleTimeoutMillis: parseInt(process.env.DB_IDLE_TIMEOUT || '30000'),
 });

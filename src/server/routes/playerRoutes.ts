@@ -667,4 +667,63 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
     }
 });
 
+// Discard entire hand and redraw 3 demand cards (skip turn) - authenticated, server-authoritative
+router.post('/discard-hand', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.body as { gameId?: string };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId is required'
+            });
+        }
+
+        const result = await PlayerService.discardHandForUser(gameId, userId);
+
+        // Return updated player WITH hand to the requesting user only.
+        const updatedPlayers = await PlayerService.getPlayers(gameId, userId);
+        const updatedPlayer = updatedPlayers.find(p => p.userId === userId);
+        if (!updatedPlayer) {
+            return res.status(500).json({
+                error: 'Server error',
+                details: 'Failed to load updated player'
+            });
+        }
+
+        return res.status(200).json({
+            player: updatedPlayer,
+            currentPlayerIndex: result.currentPlayerIndex,
+            nextPlayerName: result.nextPlayerName,
+        });
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (
+            message.includes('Cannot discard') ||
+            message.includes('Failed to draw') ||
+            message.includes('Invalid') ||
+            message.includes('not found')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({ error: 'Server error', details: message });
+    }
+});
+
 export default router; 

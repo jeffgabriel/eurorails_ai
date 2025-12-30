@@ -453,6 +453,13 @@ export class PlayerService {
             handCards = [];
           } else {
             handCards = handArray.map((cardId: number) => {
+              // Reconcile in-memory deck state after server restarts:
+              // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
+              try {
+                demandDeckService.ensureCardIsDealt(cardId);
+              } catch {
+                // ignore
+              }
               const card = demandDeckService.getCard(cardId);
               if (!card) {
                 console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
@@ -1032,6 +1039,216 @@ export class PlayerService {
       return { updatedMoney, updatedLoads, restoredCard, removedCardId };
     } catch (error) {
       await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Discard the authenticated user's entire hand and draw 3 new Demand cards,
+   * consuming (ending) the user's turn by advancing the game's currentPlayerIndex.
+   *
+   * Server-authoritative:
+   * - Validate it's the player's turn
+   * - Enforce "start of turn" constraints (MVP):
+   *   - player_tracks.turn_build_cost must be 0
+   *   - no server-tracked turn_actions exist for this turn (deliveries)
+   *   - best-effort: movement_history for this turn must be empty if present
+   * - Discard all currently dealt hand cards into the deck discard pile
+   * - Draw 3 replacement cards and persist to players.hand
+   * - Increment players.current_turn_number for the discarding player
+   * - Advance games.current_player_index to the next player
+   *
+   * Notes:
+   * - Deck operations are in-memory; on DB failure we do best-effort compensation
+   *   similar to deliverLoadForUser.
+   * - Hand privacy is enforced by not broadcasting hand contents to other players.
+   */
+  static async discardHandForUser(
+    gameId: string,
+    userId: string
+  ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
+    const client = await db.connect();
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
+    try {
+      await client.query("BEGIN");
+
+      const playerRowResult = await client.query(
+        `SELECT id, hand, current_turn_number as "turnNumber"
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentHand: unknown = playerRowResult.rows[0].hand;
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+
+      const gameStateResult = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameStateResult.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
+
+      // Determine active player by ordering (must match getPlayers ordering).
+      const activePlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, currentPlayerIndex]
+      );
+      const activePlayerId = activePlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      // Start-of-turn constraint: no track spend this turn (server-side).
+      const trackRow = await client.query(
+        `SELECT turn_build_cost
+         FROM player_tracks
+         WHERE game_id = $1 AND player_id = $2
+         FOR UPDATE`,
+        [gameId, playerId]
+      );
+      const turnBuildCost = trackRow.rows.length > 0 ? Number(trackRow.rows[0].turn_build_cost ?? 0) : 0;
+      if (turnBuildCost !== 0) {
+        throw new Error("Cannot discard hand after building track this turn");
+      }
+
+      // Start-of-turn constraint: no server-tracked actions (deliveries) this turn.
+      const actionsRow = await client.query(
+        `SELECT actions
+         FROM turn_actions
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+      if (actionsRow.rows.length > 0) {
+        const actionsJson = actionsRow.rows[0]?.actions;
+        const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
+        if (Array.isArray(actions) && actions.length > 0) {
+          throw new Error("Cannot discard hand after performing actions this turn");
+        }
+      }
+
+      // NOTE:
+      // We intentionally do NOT gate on movement_history here.
+      // The client preserves movementHistory across turns for directionality, and some updates
+      // (like persisting turnNumber) can write a non-empty movement_history row at the start of a new turn.
+      // That makes movement_history unreliable as a "did you move this turn?" signal.
+      // Start-of-turn enforcement remains server-authoritative via:
+      // - turn_build_cost === 0
+      // - no server-tracked turn_actions this turn
+
+      // Discard old hand (must be currently dealt).
+      for (const id of handIds) {
+        demandDeckService.discardCard(id);
+        discardedIds.push(id);
+      }
+
+      // Draw replacement hand (future-proof loop structure).
+      const newCards: DemandCard[] = [];
+      while (newCards.length < 3) {
+        const card = demandDeckService.drawCard();
+        if (!card) {
+          throw new Error("Failed to draw new demand card");
+        }
+        newCards.push(card);
+        drawnIds.push(card.id);
+      }
+      const newHandIds = newCards.map((c) => c.id);
+
+      await client.query(
+        `UPDATE players
+         SET hand = $1
+         WHERE game_id = $2 AND id = $3`,
+        [newHandIds, gameId, playerId]
+      );
+
+      // Increment per-player turn count at END of the active player's turn.
+      await client.query(
+        `UPDATE players
+         SET current_turn_number = COALESCE(current_turn_number, 1) + 1
+         WHERE game_id = $1 AND id = $2`,
+        [gameId, playerId]
+      );
+
+      // Advance the game turn.
+      const countResult = await client.query(
+        "SELECT COUNT(*)::int as count FROM players WHERE game_id = $1",
+        [gameId]
+      );
+      const playerCount = Number(countResult.rows[0]?.count ?? 0);
+      if (!Number.isFinite(playerCount) || playerCount <= 0) {
+        throw new Error("Game has no players");
+      }
+      const nextIndex = (currentPlayerIndex + 1) % playerCount;
+
+      await client.query(
+        `UPDATE games
+         SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [nextIndex, gameId]
+      );
+
+      // Resolve next player identity for response + socket events.
+      const nextPlayerQuery = await client.query(
+        "SELECT id, name FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, nextIndex]
+      );
+      const nextPlayerId = nextPlayerQuery.rows[0]?.id as string | undefined;
+      const nextPlayerName = nextPlayerQuery.rows[0]?.name as string | undefined;
+      if (!nextPlayerId) {
+        throw new Error("Failed to resolve next player");
+      }
+
+      await client.query("COMMIT");
+
+      // Emit socket events AFTER commit.
+      try {
+        const { emitTurnChange, emitStatePatch } = await import("./socketService");
+        emitTurnChange(gameId, nextIndex, nextPlayerId);
+        emitStatePatch(gameId, { currentPlayerIndex: nextIndex } as any);
+      } catch {
+        // Socket is best-effort; clients will fall back to polling.
+      }
+
+      return { currentPlayerIndex: nextIndex, nextPlayerId, nextPlayerName: nextPlayerName || "Next player" };
+    } catch (error) {
+      await client.query("ROLLBACK");
+
+      // Best-effort compensation for in-memory deck mutations.
+      for (const id of drawnIds) {
+        try {
+          demandDeckService.returnDealtCardToTop(id);
+        } catch {
+          // ignore
+        }
+      }
+      for (const id of discardedIds) {
+        try {
+          demandDeckService.returnDiscardedCardToDealt(id);
+        } catch {
+          // ignore
+        }
+      }
+
       throw error;
     } finally {
       client.release();

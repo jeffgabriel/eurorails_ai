@@ -2,7 +2,8 @@ import { Pool } from 'pg';
 
 // Use test database when in test mode, otherwise use configured database
 const TEST_MODE = process.env.NODE_ENV === 'test';
-const databaseName = TEST_MODE 
+const TEST_DB_MODE = process.env.DB_ENV === 'test';
+const databaseName = (TEST_MODE || TEST_DB_MODE)
     ? (process.env.DB_NAME_TEST || 'eurorails_test')
     : process.env.DB_NAME;
 

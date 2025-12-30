@@ -1156,4 +1156,17 @@ export class GameScene extends Phaser.Scene {
       console.error('Error refreshing player data:', error);
     }
   }
+
+  /**
+   * Force-refresh UI overlay (leaderboard, banners, etc.).
+   * Used when local-only actions update player state without a guaranteed socket patch
+   * (e.g., if Socket.IO is disconnected and we're relying on polling for turns).
+   */
+  public refreshUIOverlay(): void {
+    try {
+      this.uiManager?.setupUIOverlay();
+    } catch {
+      // non-fatal
+    }
+  }
 }

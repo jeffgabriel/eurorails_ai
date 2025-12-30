@@ -76,12 +76,45 @@ export class DemandDeckService {
     return this.cards.find(card => card.id === cardId) || null;
   }
 
+  /**
+   * Ensure a card is marked as dealt in the in-memory deck state.
+   *
+   * This is used to reconcile deck state after a server restart: players' hands are persisted
+   * in Postgres, but the deck's dealtCards/drawPile/discardPile are currently in-memory only.
+   *
+   * If the card is found in the draw pile or discard pile, it is removed from that pile to
+   * prevent duplicates, then added to dealtCards.
+   */
+  public ensureCardIsDealt(cardId: number): boolean {
+    if (!this.cards.find(card => card.id === cardId)) {
+      return false;
+    }
+    if (this.dealtCards.has(cardId)) {
+      return true;
+    }
+    const drawIdx = this.drawPile.lastIndexOf(cardId);
+    if (drawIdx !== -1) {
+      this.drawPile.splice(drawIdx, 1);
+    }
+    const discardIdx = this.discardPile.lastIndexOf(cardId);
+    if (discardIdx !== -1) {
+      this.discardPile.splice(discardIdx, 1);
+    }
+    this.dealtCards.add(cardId);
+    return true;
+  }
+
   public discardCard(cardId: number): void {
     if (!this.cards.find(card => card.id === cardId)) {
       throw new Error(`Invalid card ID: ${cardId}`);
     }
     if (!this.dealtCards.has(cardId)) {
-      throw new Error(`Card ${cardId} is not currently dealt to any player`);
+      // Attempt to reconcile after restart: the card may be in a persisted player hand
+      // but not in dealtCards. Ensure it's treated as dealt and removed from draw/discard.
+      const ok = this.ensureCardIsDealt(cardId);
+      if (!ok || !this.dealtCards.has(cardId)) {
+        throw new Error(`Card ${cardId} is not currently dealt to any player`);
+      }
     }
     this.dealtCards.delete(cardId);  // Remove from dealt cards
     this.discardPile.push(cardId);
