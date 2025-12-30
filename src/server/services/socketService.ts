@@ -264,6 +264,11 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         });
       } catch (err) {
         console.error('Failed to forward action as state:patch:', err);
+        // Notify the sending client; otherwise this failure is silent and the UI may assume success.
+        socket.emit('error', {
+          code: 'ACTION_PATCH_FAILED',
+          message: 'Failed to broadcast action update. Please retry.',
+        });
       }
     });
   });
