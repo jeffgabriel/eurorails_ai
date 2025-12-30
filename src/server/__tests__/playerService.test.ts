@@ -561,4 +561,235 @@ describe('PlayerService Integration Tests', () => {
             expect(demandDeckService.returnDealtCardToTop(delivered.newCard.id)).toBe(false);
         });
     });
+
+    describe('Discard hand (skip turn)', () => {
+        it('should discard all 3 cards, draw 3 new cards, and advance the turn', async () => {
+            demandDeckService.reset();
+
+            const userId1 = uuidv4();
+            const userId2 = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId1, `user_${userId1.slice(0, 8)}`, `user_${userId1.slice(0, 8)}@test.local`, 'hash']
+            );
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId2, `user_${userId2.slice(0, 8)}`, `user_${userId2.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId1 = uuidv4();
+            const playerId2 = uuidv4();
+
+            await PlayerService.createPlayer(gameId, {
+                id: playerId1,
+                userId: userId1,
+                name: 'Discarder',
+                color: '#AA0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await PlayerService.createPlayer(gameId, {
+                id: playerId2,
+                userId: userId2,
+                name: 'Other',
+                color: '#00AA00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            const beforeDeck = demandDeckService.getDeckState();
+            const beforePlayerRow = await db.query('SELECT hand, current_turn_number FROM players WHERE id = $1', [playerId1]);
+            const oldHand: number[] = beforePlayerRow.rows[0].hand;
+            const oldTurnNumber: number = beforePlayerRow.rows[0].current_turn_number;
+            expect(Array.isArray(oldHand)).toBe(true);
+            expect(oldHand).toHaveLength(3);
+
+            const result = await PlayerService.discardHandForUser(gameId, userId1);
+            expect(result.currentPlayerIndex).toBe(1);
+
+            const afterDeck = demandDeckService.getDeckState();
+            expect(afterDeck.discardPileSize).toBe(beforeDeck.discardPileSize + 3);
+            expect(afterDeck.dealtCardsCount).toBe(beforeDeck.dealtCardsCount);
+
+            const afterPlayerRow = await db.query('SELECT hand, current_turn_number FROM players WHERE id = $1', [playerId1]);
+            const newHand: number[] = afterPlayerRow.rows[0].hand;
+            const newTurnNumber: number = afterPlayerRow.rows[0].current_turn_number;
+            expect(newHand).toHaveLength(3);
+            expect(newTurnNumber).toBe(oldTurnNumber + 1);
+            // Old hand should not remain intact (high probability); enforce at least one different id.
+            const overlap = newHand.filter((id) => oldHand.includes(id));
+            expect(overlap.length).toBeLessThan(3);
+
+            const gameRow = await db.query('SELECT current_player_index FROM games WHERE id = $1', [gameId]);
+            expect(gameRow.rows[0].current_player_index).toBe(1);
+        });
+
+        it('should reject discard when it is not your turn', async () => {
+            demandDeckService.reset();
+
+            const userId1 = uuidv4();
+            const userId2 = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId1, `user_${userId1.slice(0, 8)}`, `user_${userId1.slice(0, 8)}@test.local`, 'hash']
+            );
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId2, `user_${userId2.slice(0, 8)}`, `user_${userId2.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId1 = uuidv4();
+            const playerId2 = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId1,
+                userId: userId1,
+                name: 'P1',
+                color: '#111111',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: playerId2,
+                userId: userId2,
+                name: 'P2',
+                color: '#222222',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+
+            // Force current player index to 1 (P2's turn)
+            await db.query('UPDATE games SET current_player_index = 1 WHERE id = $1', [gameId]);
+
+            await expect(
+                PlayerService.discardHandForUser(gameId, userId1)
+            ).rejects.toThrow('Not your turn');
+        });
+
+        it('should reject discard when turn_build_cost > 0', async () => {
+            demandDeckService.reset();
+
+            const userId1 = uuidv4();
+            const userId2 = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId1, `user_${userId1.slice(0, 8)}`, `user_${userId1.slice(0, 8)}@test.local`, 'hash']
+            );
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId2, `user_${userId2.slice(0, 8)}`, `user_${userId2.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId1 = uuidv4();
+            const playerId2 = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId1,
+                userId: userId1,
+                name: 'P1',
+                color: '#111111',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: playerId2,
+                userId: userId2,
+                name: 'P2',
+                color: '#222222',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+
+            // Simulate track spend this turn for P1
+            await db.query(
+                `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+                 VALUES ($1, $2, $3, $4, $5, NOW())`,
+                [gameId, playerId1, JSON.stringify([]), 0, 1]
+            );
+
+            await expect(
+                PlayerService.discardHandForUser(gameId, userId1)
+            ).rejects.toThrow('Cannot discard hand after building track this turn');
+        });
+
+        it('should reject discard when server-tracked actions exist this turn', async () => {
+            demandDeckService.reset();
+
+            const userId1 = uuidv4();
+            const userId2 = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId1, `user_${userId1.slice(0, 8)}`, `user_${userId1.slice(0, 8)}@test.local`, 'hash']
+            );
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId2, `user_${userId2.slice(0, 8)}`, `user_${userId2.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId1 = uuidv4();
+            const playerId2 = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId1,
+                userId: userId1,
+                name: 'P1',
+                color: '#111111',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: playerId2,
+                userId: userId2,
+                name: 'P2',
+                color: '#222222',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+
+            const row = await db.query('SELECT current_turn_number FROM players WHERE id = $1', [playerId1]);
+            const turnNumber: number = row.rows[0].current_turn_number;
+
+            await db.query(
+                `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+                 VALUES ($1, $2, $3, $4::jsonb)`,
+                [playerId1, gameId, turnNumber, JSON.stringify([{ kind: 'deliver', payment: 0 }])]
+            );
+
+            await expect(
+                PlayerService.discardHandForUser(gameId, userId1)
+            ).rejects.toThrow('Cannot discard hand after performing actions this turn');
+        });
+    });
 }); 

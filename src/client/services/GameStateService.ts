@@ -308,4 +308,64 @@ export class GameStateService {
             return { ok: false, errorMessage: 'Purchase failed' };
         }
     }
+
+    /**
+     * Discard the local player's entire demand hand and redraw 3 cards, consuming the turn.
+     * Server-authoritative: endpoint validates start-of-turn constraints and advances the turn.
+     */
+    public async discardHandAndEndTurn(): Promise<{ ok: boolean; errorMessage?: string; nextPlayerName?: string }> {
+        try {
+            const { authenticatedFetch } = await import('./authenticatedFetch');
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/discard-hand`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: this.gameState.id
+                })
+            });
+
+            if (!response.ok) {
+                const errorData: any = await response.json().catch(() => ({}));
+                const details = (typeof errorData?.details === 'string' && errorData.details.trim().length > 0)
+                    ? errorData.details
+                    : (typeof errorData?.error === 'string' ? errorData.error : 'Discard failed');
+                return { ok: false, errorMessage: details };
+            }
+
+            const data = await response.json();
+            const updatedPlayer = data?.player;
+            const nextIndex = data?.currentPlayerIndex;
+            const nextPlayerName = typeof data?.nextPlayerName === 'string' ? data.nextPlayerName : undefined;
+
+            if (!updatedPlayer?.id) {
+                return { ok: false, errorMessage: 'Discard failed' };
+            }
+
+            // Merge updated player (including hand) into local game state (in-place mutation).
+            const idx = this.gameState.players.findIndex(p => p.id === updatedPlayer.id);
+            if (idx >= 0) {
+                const existing: any = this.gameState.players[idx];
+                Object.assign(existing, updatedPlayer);
+                if (updatedPlayer.trainState) {
+                    if (existing.trainState) {
+                        Object.assign(existing.trainState, updatedPlayer.trainState);
+                    } else {
+                        existing.trainState = updatedPlayer.trainState;
+                    }
+                }
+                // Ensure hand is replaced for local player so they can review it even after turn ends.
+                if (Array.isArray(updatedPlayer.hand)) {
+                    existing.hand = updatedPlayer.hand;
+                }
+            }
+
+            // Immediately update currentPlayerIndex from the server response (even if socket is delayed).
+            if (typeof nextIndex === 'number' && Number.isFinite(nextIndex)) {
+                this.updateCurrentPlayerIndex(nextIndex);
+            }
+
+            return { ok: true, nextPlayerName };
+        } catch (error) {
+            return { ok: false, errorMessage: 'Discard failed' };
+        }
+    }
 }

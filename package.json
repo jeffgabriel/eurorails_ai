@@ -11,7 +11,7 @@
     "dev:client": "webpack serve --open",
     "dev:server": "npx nodemon",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
-    "dev:test": "NODE_ENV=test npm run dev",
+    "dev:test": "NODE_ENV=development DB_ENV=test npm run dev",
     "test": "jest",
     "test:coverage": "jest --coverage",
     "debug": "npx nodemon --exec \"node --inspect -r ts-node/register src/server/index.ts\""

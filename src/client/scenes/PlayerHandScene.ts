@@ -69,6 +69,9 @@ export class PlayerHandScene extends Phaser.Scene {
   private lastHandSignature: string | null = null;
   private lastLoadsSignature: string | null = null;
   private trainPurchaseModal: Phaser.GameObjects.Container | null = null;
+  private actionsModal: Phaser.GameObjects.Container | null = null;
+  private confirmDiscardModal: Phaser.GameObjects.Container | null = null;
+  private confirmTrainPurchaseModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
 
   // Card dimensions
@@ -256,6 +259,9 @@ export class PlayerHandScene extends Phaser.Scene {
     if (this.trainPurchaseModal) {
       this.closeTrainPurchaseModal();
     }
+    // If actions is open, close it before opening the dedicated upgrade dialog.
+    this.closeActionsModal();
+
     const localPlayer = this.getLocalPlayer();
     if (!localPlayer) return;
 
@@ -276,11 +282,9 @@ export class PlayerHandScene extends Phaser.Scene {
       disabledReason?: string;
     }> = [];
 
-    // Helper for option enable/disable text
     const needsMoney = (cost: number) => localPlayer.money < cost;
 
     if (localPlayer.trainType === TrainType.Freight) {
-      // 20M upgrade choice (requires no track built yet this turn)
       const baseEnabled = !needsMoney(20) && !hasAnyTrackThisTurn;
       const baseReason = needsMoney(20)
         ? "Need 20M"
@@ -309,7 +313,6 @@ export class PlayerHandScene extends Phaser.Scene {
         }
       );
     } else if (localPlayer.trainType === TrainType.FastFreight) {
-      // Upgrade to Superfreight (20M) requires no track built yet this turn
       const canUpgrade = !needsMoney(20) && !hasAnyTrackThisTurn;
       options.push({
         kind: "upgrade",
@@ -321,7 +324,6 @@ export class PlayerHandScene extends Phaser.Scene {
         disabledReason: canUpgrade ? undefined : (needsMoney(20) ? "Need 20M" : "Must upgrade before building"),
       });
 
-      // Crossgrade to Heavy (5M), allowed if turnBuildCost <= 15
       const canCrossgrade = !needsMoney(5) && turnBuildCost <= 15;
       options.push({
         kind: "crossgrade",
@@ -359,95 +361,128 @@ export class PlayerHandScene extends Phaser.Scene {
           : (needsMoney(5) ? "Need 5M" : "Track spend must be ≤ 15M"),
       });
     } else {
-      // Superfreight: no options
-      return;
+      // Superfreight: no upgrade options
     }
 
-    // Backdrop + modal root
-    const modalRoot = this.add.container(0, 0).setDepth(1000);
+    const modalRoot = this.add.container(0, 0).setDepth(1200);
     const backdrop = this.add
-      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.55)
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.65)
       .setOrigin(0, 0)
       .setInteractive({ useHandCursor: true });
-    backdrop.on("pointerdown", () => this.closeTrainPurchaseModal());
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
     modalRoot.add(backdrop);
 
-    const panelW = Math.min(640, this.scale.width - 40);
-    const panelH = 220;
+    const panelW = Math.min(720, this.scale.width - 40);
     const panelX = this.scale.width / 2;
-    // Place the panel inside the hand bar region
-    const panelY = this.scale.height - this.HAND_HEIGHT_BASE / 2;
+    const panelY = this.scale.height / 2;
 
     const panelBg = (this as any).rexUI.add.roundRectangle({
       width: panelW,
-      height: panelH,
-      color: 0x222222,
-      alpha: 0.95,
-      radius: 14,
+      height: 320,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
     });
 
     const panelSizer = (this as any).rexUI.add
       .sizer({
         orientation: "y",
-        space: { left: 14, right: 14, top: 12, bottom: 12, item: 10 },
+        space: { left: 18, right: 18, top: 14, bottom: 16, item: 12 },
       })
       .setPosition(panelX, panelY);
     panelSizer.addBackground(panelBg);
 
+    const headerRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 10 },
+    });
     const title = this.add.text(0, 0, "Train Upgrade", {
       color: "#ffffff",
       fontSize: "20px",
       fontStyle: "bold",
       fontFamily: UI_FONT_FAMILY,
     });
-    panelSizer.add(title, { proportion: 0, align: "center", expand: false });
-
-    const optionsRow = (this as any).rexUI.add.sizer({
-      orientation: "x",
-      space: { item: 18 },
-    });
-
-    options.forEach((opt) => {
-      const optionSizer = (this as any).rexUI.add.sizer({
-        orientation: "y",
-        space: { item: 6 },
-      });
-
-      const texKey = this.trainTypeToCardKey(opt.targetTrainType);
-      const cardImg = this.add.image(0, 0, texKey).setScale(0.085);
-      cardImg.setAlpha(opt.enabled ? 1.0 : 0.35);
-      cardImg.setInteractive({ useHandCursor: opt.enabled });
-      if (opt.enabled) {
-        cardImg.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
-          if (pointer.event) pointer.event.stopPropagation();
-          await this.handleTrainPurchase(opt.kind, opt.targetTrainType);
-        });
-      }
-
-      const label = this.add.text(0, 0, `${opt.title} (ECU ${opt.cost}M)`, {
-        color: opt.enabled ? "#ffffff" : "#aaaaaa",
-        fontSize: "14px",
+    const flex = this.add.zone(0, 0, 1, 1);
+    const closeX = this.add
+      .text(0, 0, "✕", {
+        color: "#ffffff",
+        fontSize: "20px",
         fontStyle: "bold",
         fontFamily: UI_FONT_FAMILY,
-        align: "center",
-        wordWrap: { width: 180, useAdvancedWrap: true },
-      });
-      const sub = this.add.text(0, 0, opt.enabled ? opt.subtitle : (opt.disabledReason || opt.subtitle), {
-        color: opt.enabled ? "#dddddd" : "#888888",
-        fontSize: "12px",
+      })
+      .setInteractive({ useHandCursor: true });
+    closeX.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeTrainPurchaseModal();
+    });
+    headerRow.add(title, { proportion: 0, align: "center", expand: false });
+    headerRow.add(flex, { proportion: 1, align: "center", expand: true });
+    headerRow.add(closeX, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(headerRow, { proportion: 0, align: "center", expand: true });
+
+    if (options.length === 0) {
+      const none = this.add.text(0, 0, "No upgrades available.", {
+        color: "#aaaaaa",
+        fontSize: "14px",
         fontFamily: UI_FONT_FAMILY,
         align: "center",
-        wordWrap: { width: 180, useAdvancedWrap: true },
+      });
+      panelSizer.add(none, { proportion: 0, align: "center", expand: false });
+    } else {
+      const optionsRow = (this as any).rexUI.add.sizer({
+        orientation: "x",
+        space: { item: 22 },
       });
 
-      optionSizer.add(cardImg, { proportion: 0, align: "center", expand: false });
-      optionSizer.add(label, { proportion: 0, align: "center", expand: false });
-      optionSizer.add(sub, { proportion: 0, align: "center", expand: false });
+      options.forEach((opt) => {
+        const optionSizer = (this as any).rexUI.add.sizer({
+          orientation: "y",
+          space: { item: 6 },
+        });
 
-      optionsRow.add(optionSizer, { proportion: 0, align: "center", expand: false });
-    });
+        const texKey = this.trainTypeToCardKey(opt.targetTrainType);
+        const cardImg = this.add.image(0, 0, texKey).setScale(0.1);
+        cardImg.setAlpha(opt.enabled ? 1.0 : 0.35);
+        cardImg.setInteractive({ useHandCursor: opt.enabled });
+        if (opt.enabled) {
+          cardImg.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            if (pointer.event) pointer.event.stopPropagation();
+            // Train purchase is NOT undoable this turn; require confirm.
+            this.openConfirmTrainPurchaseModal({
+              kind: opt.kind,
+              targetTrainType: opt.targetTrainType,
+              title: opt.title,
+              cost: opt.cost,
+            });
+          });
+        }
 
-    panelSizer.add(optionsRow, { proportion: 0, align: "center", expand: false });
+        const label = this.add.text(0, 0, `${opt.title} (ECU ${opt.cost}M)`, {
+          color: opt.enabled ? "#ffffff" : "#aaaaaa",
+          fontSize: "14px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+          align: "center",
+          wordWrap: { width: 220, useAdvancedWrap: true },
+        });
+        const sub = this.add.text(0, 0, opt.enabled ? opt.subtitle : (opt.disabledReason || opt.subtitle), {
+          color: opt.enabled ? "#dddddd" : "#888888",
+          fontSize: "12px",
+          fontFamily: UI_FONT_FAMILY,
+          align: "center",
+          wordWrap: { width: 220, useAdvancedWrap: true },
+        });
+
+        optionSizer.add(cardImg, { proportion: 0, align: "center", expand: false });
+        optionSizer.add(label, { proportion: 0, align: "center", expand: false });
+        optionSizer.add(sub, { proportion: 0, align: "center", expand: false });
+        optionsRow.add(optionSizer, { proportion: 0, align: "center", expand: false });
+      });
+
+      panelSizer.add(optionsRow, { proportion: 0, align: "center", expand: false });
+    }
 
     const closeBtn = this.add
       .text(0, 0, "Close", {
@@ -456,7 +491,7 @@ export class PlayerHandScene extends Phaser.Scene {
         fontStyle: "bold",
         fontFamily: UI_FONT_FAMILY,
         backgroundColor: "#444",
-        padding: { left: 10, right: 10, top: 6, bottom: 6 },
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
       })
       .setInteractive({ useHandCursor: true });
     closeBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
@@ -471,10 +506,174 @@ export class PlayerHandScene extends Phaser.Scene {
     this.trainPurchaseModal = modalRoot;
   }
 
+  private openActionsModal(): void {
+    if (this.actionsModal) {
+      this.closeActionsModal();
+    }
+    const localPlayer = this.getLocalPlayer();
+    if (!localPlayer) return;
+
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const turnBuildCost = this.getTurnBuildCostThisTurn(localPlayer);
+
+    // Backdrop + modal root (blocks clicks; does NOT dismiss)
+    const modalRoot = this.add.container(0, 0).setDepth(1000);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.55)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
+    modalRoot.add(backdrop);
+
+    const panelX = this.scale.width / 2;
+    const panelY = this.scale.height / 2;
+    const panelW = Math.min(520, this.scale.width - 40);
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: 240,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 18, right: 18, top: 14, bottom: 16, item: 14 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const headerRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 10 },
+    });
+    const title = this.add.text(0, 0, "Actions", {
+      color: "#ffffff",
+      fontSize: "20px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    const flex = this.add.zone(0, 0, 1, 1);
+    const closeX = this.add
+      .text(0, 0, "✕", {
+        color: "#ffffff",
+        fontSize: "20px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+      })
+      .setInteractive({ useHandCursor: true });
+    closeX.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeActionsModal();
+    });
+    headerRow.add(title, { proportion: 0, align: "center", expand: false });
+    headerRow.add(flex, { proportion: 1, align: "center", expand: true });
+    headerRow.add(closeX, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(headerRow, { proportion: 0, align: "center", expand: true });
+
+    // Action: Train Upgrade (opens the dedicated upgrade dialog)
+    const upgradeAvailable = localPlayer.trainType !== TrainType.Superfreight;
+    const upgradeBtn = this.add
+      .text(0, 0, upgradeAvailable ? "Train Upgrade…" : "Train Upgrade (Not available)", {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: upgradeAvailable ? "#3b5" : "#555",
+        padding: { left: 14, right: 14, top: 10, bottom: 10 },
+      })
+      .setAlpha(upgradeAvailable ? 1.0 : 0.6)
+      .setInteractive({ useHandCursor: upgradeAvailable });
+    if (upgradeAvailable) {
+      upgradeBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        // Choosing this action closes Actions and opens the dedicated upgrade modal.
+        this.closeActionsModal();
+        this.openTrainPurchaseModal();
+      });
+    }
+    panelSizer.add(upgradeBtn, { proportion: 0, align: "center", expand: false });
+
+    // Section: Discard & Redraw (Skip Turn)
+    const canUndoNow = this.canUndo ? this.canUndo() : false;
+    const canDiscard =
+      isLocalPlayerActive &&
+      !this.isDrawingMode &&
+      turnBuildCost === 0 &&
+      !canUndoNow;
+    const discardDisabledReason = !isLocalPlayerActive
+      ? "Only available on your turn"
+      : (this.isDrawingMode ? "Exit build mode first"
+          : (turnBuildCost !== 0 ? "Cannot discard after building"
+              : (canUndoNow ? "Undo must be cleared first" : "")));
+
+    const discardLabel = this.add.text(0, 0, "Discard & Redraw (Skip Turn)", {
+      color: "#dddddd",
+      fontSize: "14px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(discardLabel, { proportion: 0, align: "center", expand: false });
+
+    const discardBtn = this.add
+      .text(0, 0, canDiscard ? "Discard & End Turn" : (discardDisabledReason || "Discard & End Turn"), {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: canDiscard ? "#b33" : "#555",
+        padding: { left: 14, right: 14, top: 10, bottom: 10 },
+      })
+      .setAlpha(canDiscard ? 1.0 : 0.6)
+      .setInteractive({ useHandCursor: canDiscard });
+    if (canDiscard) {
+      discardBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        // Choosing this action closes Actions and opens the confirm dialog.
+        this.closeActionsModal();
+        this.openConfirmDiscardModal();
+      });
+    }
+    panelSizer.add(discardBtn, { proportion: 0, align: "center", expand: false });
+
+    const closeBtn = this.add
+      .text(0, 0, "Close", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 10, right: 10, top: 6, bottom: 6 },
+      })
+      .setInteractive({ useHandCursor: true });
+    closeBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeActionsModal();
+    });
+    panelSizer.add(closeBtn, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.actionsModal = modalRoot;
+  }
+
   private closeTrainPurchaseModal(): void {
     if (!this.trainPurchaseModal) return;
     this.trainPurchaseModal.destroy(true);
     this.trainPurchaseModal = null;
+  }
+
+  private closeActionsModal(): void {
+    if (!this.actionsModal) return;
+    this.actionsModal.destroy(true);
+    this.actionsModal = null;
   }
 
   private showToast(message: string): void {
@@ -561,9 +760,296 @@ export class PlayerHandScene extends Phaser.Scene {
     // Refresh our local view of game state (same object reference updated by GameStateService)
     this.gameState = this.gameStateService.getGameState();
 
-    this.closeTrainPurchaseModal();
+    this.closeActionsModal();
     // Rebuild UI to ensure TrainCard is recreated with latest player object
     this.createUI({ animate: false });
+
+    // Ensure scoreboard/leaderboard updates immediately (not only on turn change).
+    try {
+      const gameScene = this.scene.get("GameScene") as any;
+      if (gameScene && typeof gameScene.refreshUIOverlay === "function") {
+        gameScene.refreshUIOverlay();
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  private openConfirmDiscardModal(): void {
+    if (this.confirmDiscardModal) {
+      this.closeConfirmDiscardModal();
+    }
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const modalRoot = this.add.container(0, 0).setDepth(1200);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.65)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
+    modalRoot.add(backdrop);
+
+    const panelW = Math.min(560, this.scale.width - 40);
+    const panelX = this.scale.width / 2;
+    const panelY = this.scale.height / 2;
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: 240,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 16, right: 16, top: 12, bottom: 12, item: 12 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const headerRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 10 },
+    });
+    const title = this.add.text(0, 0, "Confirm Discard & Redraw", {
+      color: "#ffffff",
+      fontSize: "18px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    const flex = this.add.zone(0, 0, 1, 1);
+    const closeX = this.add
+      .text(0, 0, "✕", {
+        color: "#ffffff",
+        fontSize: "20px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+      })
+      .setInteractive({ useHandCursor: true });
+    closeX.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmDiscardModal();
+    });
+    headerRow.add(title, { proportion: 0, align: "center", expand: false });
+    headerRow.add(flex, { proportion: 1, align: "center", expand: true });
+    headerRow.add(closeX, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(headerRow, { proportion: 0, align: "center", expand: true });
+
+    const body = this.add.text(
+      0,
+      0,
+      "Discard your entire hand and draw 3 new Demand cards.\nThis will end your turn immediately.",
+      {
+        color: "#dddddd",
+        fontSize: "14px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40, useAdvancedWrap: true },
+      }
+    );
+    panelSizer.add(body, { proportion: 0, align: "center", expand: false });
+
+    const buttonsRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 14 },
+    });
+
+    const cancelBtn = this.add
+      .text(0, 0, "Cancel", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    cancelBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmDiscardModal();
+    });
+
+    const confirmBtn = this.add
+      .text(0, 0, "Discard & End Turn", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#b33",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    confirmBtn.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      const result = await this.gameStateService.discardHandAndEndTurn();
+      if (!result.ok) {
+        this.showToast(result.errorMessage || "Discard failed.");
+        return;
+      }
+      this.closeConfirmDiscardModal();
+      this.closeActionsModal();
+      // Refresh local view
+      this.gameState = this.gameStateService.getGameState();
+      this.createUI({ animate: false });
+      const nextName = result.nextPlayerName || "Next player";
+      this.showToast(`Hand replaced. Turn ended. Next: ${nextName}`);
+    });
+
+    buttonsRow.add(cancelBtn, { proportion: 0, align: "center", expand: false });
+    buttonsRow.add(confirmBtn, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(buttonsRow, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.confirmDiscardModal = modalRoot;
+  }
+
+  private closeConfirmDiscardModal(): void {
+    if (!this.confirmDiscardModal) return;
+    this.confirmDiscardModal.destroy(true);
+    this.confirmDiscardModal = null;
+  }
+
+  private openConfirmTrainPurchaseModal(args: {
+    kind: "upgrade" | "crossgrade";
+    targetTrainType: TrainType;
+    title: string;
+    cost: number;
+  }): void {
+    if (this.confirmTrainPurchaseModal) {
+      this.closeConfirmTrainPurchaseModal();
+    }
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const modalRoot = this.add.container(0, 0).setDepth(1300);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.65)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
+    modalRoot.add(backdrop);
+
+    const panelW = Math.min(600, this.scale.width - 40);
+    const panelX = this.scale.width / 2;
+    const panelY = this.scale.height / 2;
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: 250,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 18, right: 18, top: 14, bottom: 16, item: 14 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const headerRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 10 },
+    });
+    const title = this.add.text(0, 0, "Confirm Train Purchase", {
+      color: "#ffffff",
+      fontSize: "18px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    const flex = this.add.zone(0, 0, 1, 1);
+    const closeX = this.add
+      .text(0, 0, "✕", {
+        color: "#ffffff",
+        fontSize: "20px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+      })
+      .setInteractive({ useHandCursor: true });
+    closeX.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmTrainPurchaseModal();
+    });
+    headerRow.add(title, { proportion: 0, align: "center", expand: false });
+    headerRow.add(flex, { proportion: 1, align: "center", expand: true });
+    headerRow.add(closeX, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(headerRow, { proportion: 0, align: "center", expand: true });
+
+    const body = this.add.text(
+      0,
+      0,
+      `${args.title} (ECU ${args.cost}M)\nThis action cannot be undone.`,
+      {
+        color: "#dddddd",
+        fontSize: "14px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40, useAdvancedWrap: true },
+      }
+    );
+    panelSizer.add(body, { proportion: 0, align: "center", expand: false });
+
+    const buttonsRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 14 },
+    });
+
+    const cancelBtn = this.add
+      .text(0, 0, "Cancel", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    cancelBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmTrainPurchaseModal();
+    });
+
+    const confirmBtn = this.add
+      .text(0, 0, "Confirm", {
+        color: "#ffffff",
+        fontSize: "14px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#3b5",
+        padding: { left: 12, right: 12, top: 8, bottom: 8 },
+      })
+      .setInteractive({ useHandCursor: true });
+    confirmBtn.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeConfirmTrainPurchaseModal();
+      await this.handleTrainPurchase(args.kind, args.targetTrainType);
+    });
+
+    buttonsRow.add(cancelBtn, { proportion: 0, align: "center", expand: false });
+    buttonsRow.add(confirmBtn, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(buttonsRow, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.confirmTrainPurchaseModal = modalRoot;
+  }
+
+  private closeConfirmTrainPurchaseModal(): void {
+    if (!this.confirmTrainPurchaseModal) return;
+    this.confirmTrainPurchaseModal.destroy(true);
+    this.confirmTrainPurchaseModal = null;
   }
 
   private createUI(options: { animate?: boolean } = {}) {
@@ -743,7 +1229,7 @@ export class PlayerHandScene extends Phaser.Scene {
         currentPlayer
       );
 
-      // Train column: card + upgrade button
+      // Train column: card only (Train Upgrade now lives in Actions modal)
       const trainColumn = (this as any).rexUI.add
         .sizer({
           orientation: "y",
@@ -756,48 +1242,6 @@ export class PlayerHandScene extends Phaser.Scene {
         align: "center",
         expand: false,
       });
-
-      const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
-      const isSuperfreight = currentPlayer.trainType === TrainType.Superfreight;
-      const turnBuildCost = this.getTurnBuildCostThisTurn(currentPlayer);
-      const hasAnyTrackThisTurn =
-        this.isDrawingMode || (this.canUndo ? this.canUndo() : false) || turnBuildCost > 0;
-
-      const hasUpgradeOption =
-        !isSuperfreight &&
-        currentPlayer.money >= 20 &&
-        !hasAnyTrackThisTurn &&
-        currentPlayer.trainType !== TrainType.Superfreight;
-      const hasCrossgradeOption =
-        !isSuperfreight &&
-        (currentPlayer.trainType === TrainType.FastFreight ||
-          currentPlayer.trainType === TrainType.HeavyFreight) &&
-        currentPlayer.money >= 5 &&
-        turnBuildCost <= 15;
-
-      if (isLocalPlayerActive && (hasUpgradeOption || hasCrossgradeOption)) {
-        const upgradeButton = this.add
-          .text(0, 0, "Upgrade", {
-            color: "#ffffff",
-            fontSize: "18px",
-            fontStyle: "bold",
-            fontFamily: UI_FONT_FAMILY,
-            backgroundColor: "#3b5",
-            padding: { left: 10, right: 10, top: 6, bottom: 6 },
-          })
-          .setInteractive({ useHandCursor: true })
-          .setName("train-upgrade-button");
-        upgradeButton.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-          if (pointer.event) pointer.event.stopPropagation();
-          this.openTrainPurchaseModal();
-        });
-
-        trainColumn.add(upgradeButton, {
-          proportion: 0,
-          align: "center",
-          expand: false,
-        });
-      }
 
       // Add the train column to the root sizer
       this.rootSizer.add(trainColumn, {
@@ -832,11 +1276,42 @@ export class PlayerHandScene extends Phaser.Scene {
     this.createCitySelectionSection(this.infoSizer);
     this.createNameAndMoneySection(this.infoSizer);
     this.createBuildCostSection(this.infoSizer);
+    this.createMoreActionsSection(this.infoSizer);
 
     this.rootSizer.add(this.infoSizer, {
       proportion: 0,
       align: "center",
       padding: { left: 10, right: 10 },
+      expand: false,
+    });
+  }
+
+  private createMoreActionsSection(parentSizer: any): void {
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+
+    const btn = this.add
+      .text(0, 0, "More actions…", {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#444",
+        padding: { left: 10, right: 10, top: 6, bottom: 6 },
+      })
+      .setAlpha(isLocalPlayerActive ? 1.0 : 0.5)
+      .setInteractive({ useHandCursor: isLocalPlayerActive });
+
+    if (isLocalPlayerActive) {
+      btn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        this.openActionsModal();
+      });
+    }
+
+    parentSizer.add(btn, {
+      proportion: 0,
+      align: "center",
+      padding: 0,
       expand: false,
     });
   }
@@ -1128,6 +1603,11 @@ export class PlayerHandScene extends Phaser.Scene {
   }
 
   private destroyUI(): void {
+    // Close any open modals (they are not children of rootSizer)
+    this.closeConfirmDiscardModal();
+    this.closeConfirmTrainPurchaseModal();
+    this.closeActionsModal();
+
     // Destroy train card
     if (this.trainCard) {
       try {
