@@ -1164,9 +1164,9 @@ export class GameScene extends Phaser.Scene {
    */
   public refreshUIOverlay(): void {
     try {
-      this.uiManager?.setupUIOverlay();
-    } catch {
-      // non-fatal
+      this.uiManager.setupUIOverlay();
+    } catch (error) {
+      console.error('Error refreshing UI overlay:', error);
     }
   }
 }

@@ -455,11 +455,7 @@ export class PlayerService {
             handCards = handArray.map((cardId: number) => {
               // Reconcile in-memory deck state after server restarts:
               // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
-              try {
-                demandDeckService.ensureCardIsDealt(cardId);
-              } catch {
-                // ignore
-              }
+              demandDeckService.ensureCardIsDealt(cardId);
               const card = demandDeckService.getCard(cardId);
               if (!card) {
                 console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
