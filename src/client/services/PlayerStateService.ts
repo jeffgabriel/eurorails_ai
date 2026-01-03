@@ -222,6 +222,74 @@ export class PlayerStateService {
     }
 
     /**
+     * Move train using the server-authoritative fee settlement endpoint.
+     * This should be used for click-to-move during train operation.
+     */
+    public async moveTrainWithFees(
+        to: { row: number; col: number; x: number; y: number },
+        gameId: string
+    ): Promise<{
+        feeTotal: number;
+        ownersUsed: string[];
+        ownersPaid: Array<{ playerId: string; amount: number }>;
+        updatedMoney: number;
+    } | null> {
+        if (!this.localPlayer) {
+            console.error('Cannot move train: no local player');
+            return null;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/move-train`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId,
+                    to
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to move train:', errorData);
+                return null;
+            }
+
+            const result: any = await response.json();
+            if (
+                typeof result?.feeTotal !== 'number' ||
+                !Array.isArray(result?.ownersUsed) ||
+                !Array.isArray(result?.ownersPaid) ||
+                typeof result?.updatedMoney !== 'number'
+            ) {
+                console.error('Invalid move-train response from server');
+                return null;
+            }
+
+            // Update local state after success (server-authoritative)
+            if (!this.localPlayer.trainState) {
+                this.localPlayer.trainState = {
+                    position: null,
+                    remainingMovement: 0,
+                    movementHistory: [],
+                    loads: []
+                };
+            }
+            this.localPlayer.trainState.position = { x: to.x, y: to.y, row: to.row, col: to.col };
+            this.localPlayer.money = result.updatedMoney;
+
+            return {
+                feeTotal: result.feeTotal,
+                ownersUsed: result.ownersUsed,
+                ownersPaid: result.ownersPaid,
+                updatedMoney: result.updatedMoney
+            };
+        } catch (error) {
+            console.error('Error moving train:', error);
+            return null;
+        }
+    }
+
+    /**
      * Update local player's loads
      * Server-authoritative: API call first, update local state only after success
      */
@@ -460,39 +528,64 @@ export class PlayerStateService {
                 return false;
             }
 
-            const result: {
-                updatedMoney: number;
-                updatedLoads: LoadType[];
-                restoredCard: DemandCard;
-                removedCardId: number;
-            } = await response.json();
+            const result: any = await response.json();
+            const kind = result?.kind;
 
-            if (
-                typeof result?.updatedMoney !== 'number' ||
-                !Array.isArray(result?.updatedLoads) ||
-                typeof result?.removedCardId !== 'number' ||
-                !result?.restoredCard
-            ) {
-                console.error('Invalid undo-last-action response from server');
-                return false;
+            if (kind === 'deliver') {
+                if (
+                    typeof result?.updatedMoney !== 'number' ||
+                    !Array.isArray(result?.updatedLoads) ||
+                    typeof result?.removedCardId !== 'number' ||
+                    !result?.restoredCard
+                ) {
+                    console.error('Invalid undo-last-action(deliver) response from server');
+                    return false;
+                }
+
+                if (!this.localPlayer.trainState) {
+                    this.localPlayer.trainState = {
+                        position: null,
+                        remainingMovement: 0,
+                        movementHistory: [],
+                        loads: []
+                    };
+                }
+
+                this.localPlayer.money = result.updatedMoney;
+                this.localPlayer.trainState.loads = result.updatedLoads;
+                this.localPlayer.hand = (this.localPlayer.hand || [])
+                    .filter((card: any) => card.id !== result.removedCardId);
+                this.localPlayer.hand.push(result.restoredCard);
+                return true;
             }
 
-            if (!this.localPlayer.trainState) {
-                this.localPlayer.trainState = {
-                    position: null,
-                    remainingMovement: 0,
-                    movementHistory: [],
-                    loads: []
-                };
+            if (kind === 'move') {
+                if (
+                    typeof result?.updatedMoney !== 'number' ||
+                    !result?.restoredPosition ||
+                    typeof result?.restoredPosition?.row !== 'number' ||
+                    typeof result?.restoredPosition?.col !== 'number'
+                ) {
+                    console.error('Invalid undo-last-action(move) response from server');
+                    return false;
+                }
+
+                if (!this.localPlayer.trainState) {
+                    this.localPlayer.trainState = {
+                        position: null,
+                        remainingMovement: 0,
+                        movementHistory: [],
+                        loads: []
+                    };
+                }
+
+                // Money is server-authoritative; position will be applied by TrainInteractionManager
+                this.localPlayer.money = result.updatedMoney;
+                return true;
             }
 
-            this.localPlayer.money = result.updatedMoney;
-            this.localPlayer.trainState.loads = result.updatedLoads;
-            this.localPlayer.hand = (this.localPlayer.hand || [])
-                .filter(card => card.id !== result.removedCardId);
-            this.localPlayer.hand.push(result.restoredCard);
-
-            return true;
+            console.error('Invalid undo-last-action response from server (unknown kind)');
+            return false;
         } catch (error) {
             console.error('Error undoing last action:', error);
             return false;

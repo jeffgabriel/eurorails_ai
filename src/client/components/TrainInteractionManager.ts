@@ -19,6 +19,7 @@ import { UIManager } from "./UIManager";
 import { TrackDrawingManager } from "./TrackDrawingManager";
 import { TurnActionManager } from "./TurnActionManager";
 import { majorCityGroups } from "../config/mapConfig";
+import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 
 export class TrainInteractionManager {
   private scene: Phaser.Scene;
@@ -107,37 +108,25 @@ export class TrainInteractionManager {
       return null;
     }
 
-    // Get the player's track state
-    const playerTrackState =
-      this.trackDrawingManager.getPlayerTrackState(playerId);
-    if (!playerTrackState || !playerTrackState.segments) {
-      return null;
+    // Union-of-tracks selection: allow selecting a destination on any player's track.
+    const trackPoints = this.trainMovementManager.getUnionTrackPointKeys();
+    if (trackPoints.size === 0) {
+      // Fallback to own track points if the movement manager has not loaded tracks yet.
+      const playerTrackState = this.trackDrawingManager.getPlayerTrackState(playerId);
+      if (!playerTrackState || !playerTrackState.segments) return null;
+      playerTrackState.segments.forEach((segment) => {
+        trackPoints.add(`${segment.from.row},${segment.from.col}`);
+        trackPoints.add(`${segment.to.row},${segment.to.col}`);
+      });
     }
 
-    // Check if the clicked point is part of any of the player's track segments
-    const isOnPlayerTrack = playerTrackState.segments.some(
-      (segment) =>
-        // Check both ends of each segment
-        (segment.from.row === clickedPoint.row &&
-          segment.from.col === clickedPoint.col) ||
-        (segment.to.row === clickedPoint.row &&
-          segment.to.col === clickedPoint.col)
-    );
-
-    if (isOnPlayerTrack) {
+    if (trackPoints.has(`${clickedPoint.row},${clickedPoint.col}`)) {
       return clickedPoint;
     }
 
     // If not, find the nearest point that is part of a player's track segment
     let nearestPoint: GridPoint | null = null;
     let minDistance = Infinity;
-
-    // Create a set of all points that are part of the player's track network
-    const trackPoints = new Set<string>();
-    playerTrackState.segments.forEach((segment) => {
-      trackPoints.add(`${segment.from.row},${segment.from.col}`);
-      trackPoints.add(`${segment.to.row},${segment.to.col}`);
-    });
 
     // Search through adjacent points first (within a reasonable radius)
     const searchRadius = 3; // Adjust this value as needed
@@ -295,7 +284,52 @@ export class TrainInteractionManager {
         return;
       }
 
-      // Create a track segment for the movement history
+      // canMoveTo() deducts movement immediately; if user cancels or server rejects we must restore.
+      const restoreAfterAbort = () => {
+        currentPlayer.trainState.remainingMovement = previousRemainingMovement;
+        currentPlayer.trainState.ferryState = previousFerryState;
+        currentPlayer.trainState.justCrossedFerry = previousJustCrossedFerry;
+      };
+
+      // Fee warning modal (UX only). Server remains authoritative.
+      if (previousPosition && this.uiManager) {
+        const usage = computeTrackUsageForMove({
+          allTracks: this.trainMovementManager.getAllTrackStates(),
+          from: { row: previousPosition.row, col: previousPosition.col },
+          to: { row: nearestMilepost.row, col: nearestMilepost.col },
+          currentPlayerId: currentPlayer.id,
+        });
+
+        if (usage.isValid && usage.ownersUsed.size > 0 && this.turnActionManager) {
+          const alreadyPaid = this.turnActionManager.getPaidOpponentIdsThisTurn();
+          const newlyPayable = Array.from(usage.ownersUsed).filter((pid) => !alreadyPaid.has(pid));
+          if (newlyPayable.length > 0) {
+            const payees = newlyPayable.map((pid) => {
+              const p = this.gameState.players.find((pp) => pp.id === pid);
+              return { name: p?.name || "Opponent", amount: 4 };
+            });
+            const total = payees.reduce((sum, p) => sum + p.amount, 0);
+            const accepted = await this.uiManager.confirmOpponentTrackFee({ payees, total });
+            if (!accepted) {
+              restoreAfterAbort();
+              return;
+            }
+          }
+        }
+      }
+
+      // Persist movement via server-authoritative fee settlement.
+      const moveApiResult = await this.playerStateService.moveTrainWithFees(
+        { x: nearestMilepost.x, y: nearestMilepost.y, row: nearestMilepost.row, col: nearestMilepost.col },
+        this.gameState.id
+      );
+      if (!moveApiResult) {
+        restoreAfterAbort();
+        this.showInvalidMoveMessage(pointer, "Move rejected by server (fees/path).");
+        return;
+      }
+
+      // Create a track segment for movement history (client-only, for direction rules)
       if (previousPosition) {
         const movementSegment: TrackSegment = {
           from: {
@@ -303,7 +337,7 @@ export class TrainInteractionManager {
             y: previousPosition.y,
             row: previousPosition.row,
             col: previousPosition.col,
-            terrain: TerrainType.Clear, // We'll use Clear as default since we don't track terrain for movement
+            terrain: TerrainType.Clear,
           },
           to: {
             x: nearestMilepost.x,
@@ -312,23 +346,22 @@ export class TrainInteractionManager {
             col: nearestMilepost.col,
             terrain: nearestMilepost.terrain,
           },
-          cost: 0, // Movement cost is handled separately from track building cost
+          cost: 0,
         };
-
-        // Add to movement history
         if (!currentPlayer.trainState.movementHistory) {
           currentPlayer.trainState.movementHistory = [];
         }
         currentPlayer.trainState.movementHistory.push(movementSegment);
       }
 
-      // Update train position - await the async operation to complete
+      // Update train position visually without re-posting position (already persisted by move-train).
       await this.updateTrainPosition(
         currentPlayer.id,
         nearestMilepost.x,
         nearestMilepost.y,
         nearestMilepost.row,
-        nearestMilepost.col
+        nearestMilepost.col,
+        { persist: false }
       );
 
       // Record on unified undo stack (single click undoes one action)
@@ -339,6 +372,8 @@ export class TrainInteractionManager {
           previousRemainingMovement,
           previousFerryState,
           previousJustCrossedFerry,
+          ownersPaidPlayerIds: (moveApiResult.ownersPaid || []).map((p) => p.playerId),
+          feeTotal: moveApiResult.feeTotal,
         });
         // Refresh hand UI so Undo button visibility updates immediately
         try {
@@ -509,7 +544,7 @@ export class TrainInteractionManager {
     y: number,
     row: number,
     col: number
-  ): Promise<void> {
+  , opts?: { persist?: boolean }): Promise<void> {
     const player = this.gameState.players.find((p) => p.id === playerId);
     if (!player) return;
 
@@ -523,11 +558,10 @@ export class TrainInteractionManager {
       };
     }
 
-    // Update player position in database
-    if (this.playerStateService.getLocalPlayerId() === playerId) {
+    const shouldPersist = opts?.persist !== false;
+    if (shouldPersist && this.playerStateService.getLocalPlayerId() === playerId) {
       await this.playerStateService.updatePlayerPosition(x, y, row, col, this.gameState.id);
     } else {
-      // Update local state for display
       player.trainState.position = { x, y, row, col };
     }
 

@@ -4,8 +4,9 @@ import { v4 as uuidv4 } from 'uuid';
 import '@jest/globals';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { cleanDatabase } from '../db/index';
-import { TrainType } from '../../shared/types/GameTypes';
+import { TerrainType, TrainType } from '../../shared/types/GameTypes';
 import { demandDeckService } from '../services/demandDeckService';
+import { TrackService } from '../services/trackService';
 
 // Force Jest to run this test file serially
 export const test = { concurrent: false };
@@ -25,6 +26,7 @@ describe('PlayerService Integration Tests', () => {
 
     beforeEach(async () => {
         gameId = uuidv4();
+        demandDeckService.reset();
         await runQuery(async (client) => {
             await client.query(
                 'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
@@ -227,6 +229,219 @@ describe('PlayerService Integration Tests', () => {
 
             const trackResult = await db.query('SELECT * FROM player_tracks WHERE player_id = $1', [playerId]);
             expect(trackResult.rows.length).toBe(0);
+        });
+    });
+
+    describe('Track usage fees (move-train + undo)', () => {
+        it('charges ECU 4M per distinct opponent per turn and supports undo reversal', async () => {
+            const user1 = uuidv4();
+            const user2 = uuidv4();
+            await runQuery(async (client) => {
+                await client.query(
+                    `INSERT INTO users (id, username, email, password_hash)
+                     VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+                    [
+                        user1, 'u1', 'u1@example.com', 'hash',
+                        user2, 'u2', 'u2@example.com', 'hash'
+                    ]
+                );
+            });
+
+            const p1Id = uuidv4();
+            const p2Id = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: p1Id,
+                userId: user1,
+                name: 'P1',
+                color: '#ff0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[],
+                },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: p2Id,
+                userId: user2,
+                name: 'P2',
+                color: '#00ff00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 3 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[],
+                },
+                hand: []
+            } as any);
+
+            // Track graph: P1 owns 0,0-0,1; P2 owns 0,1-0,2 and 0,2-0,3
+            await TrackService.saveTrackState(gameId, p1Id, {
+                playerId: p1Id,
+                gameId,
+                segments: [
+                    {
+                        from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        cost: 1,
+                    }
+                ],
+                totalCost: 1,
+                turnBuildCost: 0,
+                lastBuildTimestamp: new Date() as any,
+            } as any);
+            await TrackService.saveTrackState(gameId, p2Id, {
+                playerId: p2Id,
+                gameId,
+                segments: [
+                    {
+                        from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+                        cost: 1,
+                    },
+                    {
+                        from: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+                        cost: 1,
+                    }
+                ],
+                totalCost: 2,
+                turnBuildCost: 0,
+                lastBuildTimestamp: new Date() as any,
+            } as any);
+
+            const move1 = await PlayerService.moveTrainForUser({
+                gameId,
+                userId: user1,
+                to: { row: 0, col: 2, x: 0, y: 0 }
+            });
+            expect(move1.feeTotal).toBe(4);
+            expect(move1.ownersPaid.map(o => o.playerId)).toEqual([p2Id]);
+
+            const afterMove1P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
+            const afterMove1P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
+            expect(afterMove1P1.rows[0].money).toBe(46);
+            expect(afterMove1P1.rows[0].position_row).toBe(0);
+            expect(afterMove1P1.rows[0].position_col).toBe(2);
+            expect(afterMove1P2.rows[0].money).toBe(54);
+
+            // Second move in same turn over same opponent should not charge again
+            const move2 = await PlayerService.moveTrainForUser({
+                gameId,
+                userId: user1,
+                to: { row: 0, col: 3, x: 0, y: 0 }
+            });
+            expect(move2.feeTotal).toBe(0);
+
+            // Undo second move (no fee) -> position back to 0,2, money unchanged
+            const undo2 = await PlayerService.undoLastActionForUser(gameId, user1);
+            expect((undo2 as any).kind).toBe('move');
+            const afterUndo2P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
+            const afterUndo2P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
+            expect(afterUndo2P1.rows[0].money).toBe(46);
+            expect(afterUndo2P1.rows[0].position_col).toBe(2);
+            expect(afterUndo2P2.rows[0].money).toBe(54);
+
+            // Undo first move -> reverse fee and restore to 0,0
+            const undo1 = await PlayerService.undoLastActionForUser(gameId, user1);
+            expect((undo1 as any).kind).toBe('move');
+            const afterUndo1P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
+            const afterUndo1P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
+            expect(afterUndo1P1.rows[0].money).toBe(50);
+            expect(afterUndo1P1.rows[0].position_col).toBe(0);
+            expect(afterUndo1P2.rows[0].money).toBe(50);
+        });
+
+        it('rejects move when payer cannot afford new track-usage fees', async () => {
+            const user1 = uuidv4();
+            const user2 = uuidv4();
+            await runQuery(async (client) => {
+                await client.query(
+                    `INSERT INTO users (id, username, email, password_hash)
+                     VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+                    [
+                        user1, 'u1b', 'u1b@example.com', 'hash',
+                        user2, 'u2b', 'u2b@example.com', 'hash'
+                    ]
+                );
+            });
+
+            const p1Id = uuidv4();
+            const p2Id = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: p1Id,
+                userId: user1,
+                name: 'P1',
+                color: '#ff0000',
+                money: 3,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[],
+                },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: p2Id,
+                userId: user2,
+                name: 'P2',
+                color: '#00ff00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 2 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[],
+                },
+                hand: []
+            } as any);
+
+            await TrackService.saveTrackState(gameId, p1Id, {
+                playerId: p1Id,
+                gameId,
+                segments: [
+                    {
+                        from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        cost: 1,
+                    }
+                ],
+                totalCost: 1,
+                turnBuildCost: 0,
+                lastBuildTimestamp: new Date() as any,
+            } as any);
+            await TrackService.saveTrackState(gameId, p2Id, {
+                playerId: p2Id,
+                gameId,
+                segments: [
+                    {
+                        from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+                        cost: 1,
+                    }
+                ],
+                totalCost: 1,
+                turnBuildCost: 0,
+                lastBuildTimestamp: new Date() as any,
+            } as any);
+
+            await expect(PlayerService.moveTrainForUser({
+                gameId,
+                userId: user1,
+                to: { row: 0, col: 2, x: 0, y: 0 }
+            })).rejects.toThrow('Insufficient funds for track usage fees');
         });
     });
 
@@ -545,7 +760,9 @@ describe('PlayerService Integration Tests', () => {
             expect(delivered.newCard.id).toBeDefined();
 
             const undone = await PlayerService.undoLastActionForUser(gameId, userId);
+            expect(undone.kind).toBe('deliver');
             expect(undone.updatedMoney).toBe(50);
+            if (undone.kind !== 'deliver') throw new Error('Expected deliver undo');
             expect(undone.updatedLoads).toEqual([demand.resource]);
             expect(undone.removedCardId).toBe(delivered.newCard.id);
             expect(undone.restoredCard.id).toBe(cardId);

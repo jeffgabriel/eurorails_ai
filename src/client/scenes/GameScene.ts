@@ -261,15 +261,20 @@ export class GameScene extends Phaser.Scene {
                     // This prevents train from jumping backward when server sends outdated position
                     const preservedPosition = existingPlayer.trainState?.position || null;
                     const preservedHistory = existingPlayer.trainState?.movementHistory || [];
-                    const preservedHand = existingPlayer.hand;
                     const preservedRemainingMovement = existingPlayer.trainState?.remainingMovement;
                     const preservedFerryState = existingPlayer.trainState?.ferryState;
                     const preservedJustCrossedFerry = existingPlayer.trainState?.justCrossedFerry;
 
+                    // For hand: get from playerStateService which is the authoritative local source.
+                    // This avoids race conditions where deliverLoad updates the hand concurrently.
+                    // Server patches don't include hand data for privacy, so we always preserve local.
+                    const currentLocalPlayer = this.playerStateService.getLocalPlayer();
+                    const preservedHand = currentLocalPlayer?.hand || existingPlayer.hand;
+
                     this.gameState.players[index] = {
                       ...existingPlayer,
                       ...updatedPlayer,
-                      // Preserve private hand if server patch doesn't include it (or includes empty for privacy)
+                      // Preserve private hand - server patches don't include it for privacy
                       hand: Array.isArray(updatedPlayer.hand) && updatedPlayer.hand.length > 0
                         ? updatedPlayer.hand
                         : preservedHand,
