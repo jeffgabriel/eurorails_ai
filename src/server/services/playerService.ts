@@ -428,10 +428,10 @@ export class PlayerService {
                     camera_state
                 FROM players 
                 LEFT JOIN LATERAL (
-                    SELECT movement_path 
+                    SELECT movement_path, created_at, updated_at
                     FROM movement_history 
                     WHERE player_id = players.id 
-                    ORDER BY id DESC 
+                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
                     LIMIT 1
                 ) mh ON true
                 WHERE players.game_id = $1
@@ -1104,6 +1104,49 @@ export class PlayerService {
           playerId,
         ]
       );
+
+      // Persist movement history for directionality checks after refresh.
+      // The client enforces reversal rules using its movementHistory array; we store the latest
+      // segment(s) here so a refresh can rehydrate that state.
+      if (from && (from.row !== to.row || from.col !== to.col)) {
+        const segment = {
+          from: {
+            row: from.row,
+            col: from.col,
+            ...(typeof from.x === "number" ? { x: from.x } : {}),
+            ...(typeof from.y === "number" ? { y: from.y } : {}),
+          },
+          to: {
+            row: Math.round(to.row),
+            col: Math.round(to.col),
+            ...(typeof to.x === "number" ? { x: Math.round(to.x) } : {}),
+            ...(typeof to.y === "number" ? { y: Math.round(to.y) } : {}),
+          },
+          cost: 0,
+        };
+
+        // Update existing row for this turn (if any) by appending the segment.
+        const updateMovement = await client.query(
+          `
+            UPDATE movement_history
+            SET movement_path = COALESCE(movement_path, '[]'::jsonb) || $4::jsonb,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+          `,
+          [playerId, gameId, turnNumber, JSON.stringify([segment])]
+        );
+
+        // If no row existed, insert one.
+        if ((updateMovement.rowCount ?? 0) === 0) {
+          await client.query(
+            `
+              INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+              VALUES ($1, $2, $3, $4::jsonb)
+            `,
+            [playerId, gameId, turnNumber, JSON.stringify([segment])]
+          );
+        }
+      }
 
       // Record server-authored action log for this turn (used for undo and for "already paid" tracking)
       const moveAction: TurnActionMove = {

@@ -341,6 +341,23 @@ describe('PlayerService Integration Tests', () => {
             });
             expect(move2.feeTotal).toBe(0);
 
+            // Movement history should be persisted server-side for refresh rehydration
+            // (directionality / reversal checks are client-side but depend on this state after refresh).
+            const mh = await db.query(
+                `SELECT movement_path
+                 FROM movement_history
+                 WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+                [p1Id, gameId, 1]
+            );
+            expect(mh.rows.length).toBe(1);
+            const path = mh.rows[0].movement_path;
+            expect(Array.isArray(path)).toBe(true);
+            expect(path).toHaveLength(2);
+            expect(path[0]?.from?.row).toBe(1000);
+            expect(path[0]?.from?.col).toBe(1000);
+            expect(path[0]?.to?.col).toBe(1002);
+            expect(path[1]?.to?.col).toBe(1003);
+
             // Undo second move (no fee) -> position back to 0,2, money unchanged
             const undo2 = await PlayerService.undoLastActionForUser(gameId, user1);
             expect((undo2 as any).kind).toBe('move');
@@ -358,6 +375,59 @@ describe('PlayerService Integration Tests', () => {
             expect(afterUndo1P1.rows[0].money).toBe(50);
             expect(afterUndo1P1.rows[0].position_col).toBe(1000);
             expect(afterUndo1P2.rows[0].money).toBe(50);
+        });
+
+        it('getPlayers returns the latest movementHistory by timestamps (not UUID ordering)', async () => {
+            const userId = uuidv4();
+            await runQuery(async (client) => {
+                await client.query(
+                    `INSERT INTO users (id, username, email, password_hash)
+                     VALUES ($1, $2, $3, $4)`,
+                    [userId, 'mh_user', 'mh_user@example.com', 'hash']
+                );
+            });
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MH',
+                color: '#ff0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 1, col: 1 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[],
+                },
+                hand: []
+            } as any);
+
+            const olderId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+            const newerId = '00000000-0000-0000-0000-000000000000';
+            const olderPath = [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 0 }];
+            const newerPath = [{ from: { row: 1, col: 2 }, to: { row: 1, col: 3 }, cost: 0 }];
+
+            // Insert two movement_history rows for the same player. The "older" row has a higher UUID,
+            // which would have been incorrectly selected by `ORDER BY id DESC`.
+            await db.query(
+                `INSERT INTO movement_history (id, player_id, game_id, movement_path, turn_number, created_at, updated_at)
+                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::jsonb, $5, $6, $6)`,
+                [olderId, playerId, gameId, JSON.stringify(olderPath), 1, '2000-01-01T00:00:00Z']
+            );
+            await db.query(
+                `INSERT INTO movement_history (id, player_id, game_id, movement_path, turn_number, created_at, updated_at)
+                 VALUES ($1::uuid, $2::uuid, $3::uuid, $4::jsonb, $5, $6, $6)`,
+                [newerId, playerId, gameId, JSON.stringify(newerPath), 2, '2000-01-02T00:00:00Z']
+            );
+
+            const players = await PlayerService.getPlayers(gameId, userId);
+            const me = players.find(p => p.id === playerId);
+            expect(me).toBeTruthy();
+            expect(Array.isArray((me as any).trainState?.movementHistory)).toBe(true);
+            expect((me as any).trainState.movementHistory).toEqual(newerPath);
         });
 
         it('rejects move when payer cannot afford new track-usage fees', async () => {
