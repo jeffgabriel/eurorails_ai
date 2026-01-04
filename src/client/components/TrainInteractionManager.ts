@@ -186,6 +186,8 @@ export class TrainInteractionManager {
 
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
+    const currentPlayerId = currentPlayer?.id;
+    if (!currentPlayerId) return;
 
     // Convert pointer position to world coordinates
     const worldPoint = this.scene.cameras.main.getWorldPoint(
@@ -197,7 +199,7 @@ export class TrainInteractionManager {
     const nearestMilepost = this.findNearestMilepostOnOwnTrack(
       worldPoint.x,
       worldPoint.y,
-      currentPlayer.id
+      currentPlayerId
     );
 
     if (nearestMilepost) {
@@ -218,12 +220,18 @@ export class TrainInteractionManager {
           : null;
         
         await this.handleMovement(currentPlayer, nearestMilepost, pointer);
+
+        // Re-fetch after async movement; socket patches can replace objects in `gameState.players`.
+        const refreshedCurrentPlayer = this.gameState.players.find((p) => p.id === currentPlayerId);
+        if (!refreshedCurrentPlayer) {
+          return;
+        }
         
         // Check if arrived at any city - only if movement actually succeeded
         // Verify: (1) destination is a city, (2) train position matches destination, 
         // and (3) position actually changed (movement was successful, preventing dialog 
         // from opening on failed moves)
-        const positionAfterMovement = currentPlayer.trainState.position;
+        const positionAfterMovement = refreshedCurrentPlayer.trainState.position;
         // Movement succeeded if: train now has a position AND either:
         // - train didn't have a position before (first placement), OR
         // - position changed (train moved to a new location)
@@ -236,7 +244,7 @@ export class TrainInteractionManager {
           this.isSamePoint(nearestMilepost, positionAfterMovement) &&
           movementSucceeded
         ) {
-          await this.handleCityArrival(currentPlayer, nearestMilepost);
+          await this.handleCityArrival(refreshedCurrentPlayer, nearestMilepost);
         }
       }
     }
@@ -264,6 +272,9 @@ export class TrainInteractionManager {
     pointer: Phaser.Input.Pointer
   ) {
     try {
+      const currentPlayerId = currentPlayer?.id;
+      if (!currentPlayerId) return;
+
       //where the train is coming from
       const previousPosition = currentPlayer.trainState.position;
       const previousRemainingMovement = currentPlayer.trainState.remainingMovement;
@@ -284,11 +295,18 @@ export class TrainInteractionManager {
         return;
       }
 
+      const remainingMovementAfterValidation = currentPlayer.trainState.remainingMovement;
+
+      const getRefreshedPlayer = (): Player | undefined =>
+        this.gameState.players.find((p) => p.id === currentPlayerId);
+
       // canMoveTo() deducts movement immediately; if user cancels or server rejects we must restore.
       const restoreAfterAbort = () => {
-        currentPlayer.trainState.remainingMovement = previousRemainingMovement;
-        currentPlayer.trainState.ferryState = previousFerryState;
-        currentPlayer.trainState.justCrossedFerry = previousJustCrossedFerry;
+        const refreshed = getRefreshedPlayer();
+        if (!refreshed?.trainState) return;
+        refreshed.trainState.remainingMovement = previousRemainingMovement;
+        refreshed.trainState.ferryState = previousFerryState;
+        refreshed.trainState.justCrossedFerry = previousJustCrossedFerry;
       };
 
       // Fee warning modal (UX only). Server remains authoritative.
@@ -329,6 +347,18 @@ export class TrainInteractionManager {
         return;
       }
 
+      // Re-fetch current player after async call - socket patches may have replaced the object
+      // in the gameState.players array, making our earlier reference stale.
+      const refreshedPlayer = getRefreshedPlayer();
+      if (!refreshedPlayer) {
+        console.error("[TrainInteractionManager] Player reference became invalid after move");
+        return;
+      }
+      // Ensure the movement deduction from canMoveTo is applied to the refreshed object.
+      if (refreshedPlayer.trainState) {
+        refreshedPlayer.trainState.remainingMovement = remainingMovementAfterValidation;
+      }
+
       // Create a track segment for movement history (client-only, for direction rules)
       if (previousPosition) {
         const movementSegment: TrackSegment = {
@@ -348,15 +378,15 @@ export class TrainInteractionManager {
           },
           cost: 0,
         };
-        if (!currentPlayer.trainState.movementHistory) {
-          currentPlayer.trainState.movementHistory = [];
+        if (!refreshedPlayer.trainState.movementHistory) {
+          refreshedPlayer.trainState.movementHistory = [];
         }
-        currentPlayer.trainState.movementHistory.push(movementSegment);
+        refreshedPlayer.trainState.movementHistory.push(movementSegment);
       }
 
       // Update train position visually without re-posting position (already persisted by move-train).
       await this.updateTrainPosition(
-        currentPlayer.id,
+        currentPlayerId,
         nearestMilepost.x,
         nearestMilepost.y,
         nearestMilepost.row,
@@ -367,7 +397,7 @@ export class TrainInteractionManager {
       // Record on unified undo stack (single click undoes one action)
       if (this.turnActionManager && previousPosition) {
         this.turnActionManager.recordTrainMoved({
-          playerId: currentPlayer.id,
+          playerId: currentPlayerId,
           previousPosition: { ...previousPosition },
           previousRemainingMovement,
           previousFerryState,
@@ -545,12 +575,12 @@ export class TrainInteractionManager {
     row: number,
     col: number
   , opts?: { persist?: boolean }): Promise<void> {
-    const player = this.gameState.players.find((p) => p.id === playerId);
-    if (!player) return;
+    const playerBefore = this.gameState.players.find((p) => p.id === playerId);
+    if (!playerBefore) return;
 
     // Initialize trainState if it doesn't exist
-    if (!player.trainState) {
-      player.trainState = {
+    if (!playerBefore.trainState) {
+      playerBefore.trainState = {
         position: null,
         remainingMovement: 0,
         movementHistory: [],
@@ -561,9 +591,21 @@ export class TrainInteractionManager {
     const shouldPersist = opts?.persist !== false;
     if (shouldPersist && this.playerStateService.getLocalPlayerId() === playerId) {
       await this.playerStateService.updatePlayerPosition(x, y, row, col, this.gameState.id);
-    } else {
-      player.trainState.position = { x, y, row, col };
     }
+
+    // Re-fetch player after potential socket patch / async call.
+    const player = this.gameState.players.find((p) => p.id === playerId);
+    if (!player) return;
+    if (!player.trainState) {
+      player.trainState = {
+        position: null,
+        remainingMovement: 0,
+        movementHistory: [],
+        loads: [],
+      };
+    }
+    // Always set local position for rendering; server persistence already happened if enabled.
+    player.trainState.position = { x, y, row, col };
 
     // Find all trains at this location
     const trainsAtLocation = this.gameState.players
