@@ -6,6 +6,7 @@ import { demandDeckService } from "./demandDeckService";
 import { TrackService } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
+import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -14,6 +15,14 @@ type TurnActionDeliver = {
   cardIdUsed: number;
   newCardIdDrawn: number;
   payment: number;
+};
+
+type TurnActionMove = {
+  kind: "move";
+  from: { row: number; col: number; x?: number; y?: number } | null;
+  to: { row: number; col: number; x?: number; y?: number };
+  ownersPaid: Array<{ playerId: string; amount: number }>;
+  feeTotal: number;
 };
 
 interface PlayerRow {
@@ -789,7 +798,8 @@ export class PlayerService {
         `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
          FROM players
          WHERE game_id = $1 AND user_id = $2
-         LIMIT 1`,
+         LIMIT 1
+         FOR UPDATE`,
         [gameId, userId]
       );
       if (playerRowResult.rows.length === 0) {
@@ -809,10 +819,21 @@ export class PlayerService {
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
 
-      const gameState = await this.getGameState(gameId);
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
+        [gameId, currentPlayerIndex]
       );
       const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
       if (!activePlayerId) {
@@ -884,7 +905,7 @@ export class PlayerService {
         `
           INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
           VALUES ($1, $2, $3, $4::jsonb)
-          ON CONFLICT (player_id, turn_number)
+          ON CONFLICT (player_id, game_id, turn_number)
           DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
         `,
         [playerId, gameId, turnNumber, JSON.stringify([deliverAction])]
@@ -918,22 +939,230 @@ export class PlayerService {
   }
 
   /**
-   * Undo the last server-tracked action for the authenticated user's player.
-   * Currently supports undoing the most recent delivery this turn.
+   * Move a train for the authenticated user's player and settle opponent track-usage fees.
+   *
+   * Important constraints:
+   * - This endpoint is NOT fully server-authoritative on movement legality (movement points, reversal, ferry).
+   * - It IS server-authoritative on: turn ownership, fee calculation, affordability, and money transfers.
+   *
+   * Fee rule:
+   * - ECU 4M per distinct opponent whose track is used at any point in the turn.
+   * - We therefore charge only for opponents that have NOT already been paid earlier in the same turn.
    */
-  static async undoLastActionForUser(
-    gameId: string,
-    userId: string
-  ): Promise<{ updatedMoney: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }> {
+  static async moveTrainForUser(args: {
+    gameId: string;
+    userId: string;
+    to: { row: number; col: number; x?: number; y?: number };
+  }): Promise<{
+    feeTotal: number;
+    ownersUsed: string[];
+    ownersPaid: Array<{ playerId: string; amount: number }>;
+    affectedPlayerIds: string[];
+    updatedPosition: { row: number; col: number; x?: number; y?: number };
+    updatedMoney: number;
+  }> {
+    const { gameId, userId, to } = args;
     const client = await db.connect();
     try {
       await client.query("BEGIN");
 
       const playerRowResult = await client.query(
-        `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
+        `SELECT id, money, position_row, position_col, position_x, position_y, current_turn_number as "turnNumber"
          FROM players
          WHERE game_id = $1 AND user_id = $2
-         LIMIT 1`,
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentMoney: number = Number(playerRowResult.rows[0].money ?? 0);
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+
+      const fromRow = playerRowResult.rows[0].position_row;
+      const fromCol = playerRowResult.rows[0].position_col;
+      const fromX = playerRowResult.rows[0].position_x;
+      const fromY = playerRowResult.rows[0].position_y;
+      const from =
+        fromRow != null && fromCol != null
+          ? {
+              row: Number(fromRow),
+              col: Number(fromCol),
+              x: fromX != null && Number.isFinite(Number(fromX)) ? Number(fromX) : undefined,
+              y: fromY != null && Number.isFinite(Number(fromY)) ? Number(fromY) : undefined,
+            }
+          : null;
+
+      // Validate game exists + determine whose turn it is
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
+      const currentPlayerQuery = await client.query(
+        "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
+        [gameId, currentPlayerIndex]
+      );
+      const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
+      if (!activePlayerId) {
+        throw new Error("Game has no active player");
+      }
+      if (activePlayerId !== playerId) {
+        throw new Error("Not your turn");
+      }
+
+      // Lock action log row for this turn (if it exists) so we can safely compute already-paid opponents.
+      const actionsResult = await client.query(
+        `SELECT actions
+         FROM turn_actions
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+         FOR UPDATE`,
+        [playerId, gameId, turnNumber]
+      );
+      const actionsJson = actionsResult.rows[0]?.actions;
+      const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
+      const alreadyPaid = new Set<string>();
+      for (const act of Array.isArray(actions) ? actions : []) {
+        if (act?.kind !== "move") continue;
+        const ownersPaid = Array.isArray(act.ownersPaid) ? act.ownersPaid : [];
+        for (const p of ownersPaid) {
+          const pid = typeof p?.playerId === "string" ? p.playerId : null;
+          if (pid) alreadyPaid.add(pid);
+        }
+      }
+
+      // Compute owners used for this move. If this is the first placement (no from), no fees.
+      let ownersUsed: string[] = [];
+      if (from && (from.row !== to.row || from.col !== to.col)) {
+        const allTracks = await TrackService.getAllTracks(gameId);
+        const usage = computeTrackUsageForMove({
+          allTracks,
+          from: { row: from.row, col: from.col },
+          to: { row: to.row, col: to.col },
+          currentPlayerId: playerId,
+        });
+        if (!usage.isValid) {
+          throw new Error(usage.errorMessage || "Invalid move");
+        }
+        ownersUsed = Array.from(usage.ownersUsed);
+      }
+
+      const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
+      const ownersPaid: Array<{ playerId: string; amount: number }> = newlyPayable.map((pid) => ({
+        playerId: pid,
+        amount: 4,
+      }));
+      const feeTotal = ownersPaid.reduce((sum, p) => sum + p.amount, 0);
+
+      if (feeTotal > 0 && currentMoney < feeTotal) {
+        throw new Error("Insufficient funds for track usage fees");
+      }
+
+      // Apply money transfers (payer -> payees)
+      if (feeTotal > 0) {
+        await client.query(
+          `UPDATE players
+           SET money = money - $1
+           WHERE game_id = $2 AND id = $3`,
+          [feeTotal, gameId, playerId]
+        );
+
+        for (const payee of ownersPaid) {
+          await client.query(
+            `UPDATE players
+             SET money = money + $1
+             WHERE game_id = $2 AND id = $3`,
+            [payee.amount, gameId, payee.playerId]
+          );
+        }
+      }
+
+      // Persist new position (server stores row/col and best-effort x/y if provided)
+      await client.query(
+        `UPDATE players
+         SET position_row = $1,
+             position_col = $2,
+             position_x = $3,
+             position_y = $4
+         WHERE game_id = $5 AND id = $6`,
+        [
+          Math.round(to.row),
+          Math.round(to.col),
+          typeof to.x === "number" ? Math.round(to.x) : null,
+          typeof to.y === "number" ? Math.round(to.y) : null,
+          gameId,
+          playerId,
+        ]
+      );
+
+      // Record server-authored action log for this turn (used for undo and for "already paid" tracking)
+      const moveAction: TurnActionMove = {
+        kind: "move",
+        from: from ? { row: from.row, col: from.col, x: from.x, y: from.y } : null,
+        to: { row: to.row, col: to.col, x: to.x, y: to.y },
+        ownersPaid,
+        feeTotal,
+      };
+      await client.query(
+        `
+          INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+          VALUES ($1, $2, $3, $4::jsonb)
+          ON CONFLICT (player_id, game_id, turn_number)
+          DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
+        `,
+        [playerId, gameId, turnNumber, JSON.stringify([moveAction])]
+      );
+
+      await client.query("COMMIT");
+
+      const affectedPlayerIds = [playerId, ...ownersPaid.map((p) => p.playerId)];
+      return {
+        feeTotal,
+        ownersUsed,
+        ownersPaid,
+        affectedPlayerIds,
+        updatedPosition: { row: to.row, col: to.col, x: to.x, y: to.y },
+        updatedMoney: currentMoney - feeTotal,
+      };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Undo the last server-tracked action for the authenticated user's player.
+   * Supports undoing the most recent delivery OR move this turn.
+   */
+  static async undoLastActionForUser(
+    gameId: string,
+    userId: string
+  ): Promise<
+    | { kind: "deliver"; updatedMoney: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
+    | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
+  > {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      const playerRowResult = await client.query(
+        `SELECT id, money, hand, loads, current_turn_number as "turnNumber", position_row, position_col, position_x, position_y
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
         [gameId, userId]
       );
       if (playerRowResult.rows.length === 0) {
@@ -953,10 +1182,21 @@ export class PlayerService {
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
 
-      const gameState = await this.getGameState(gameId);
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
+        [gameId, currentPlayerIndex]
       );
       const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
       if (!activePlayerId) {
@@ -969,9 +1209,9 @@ export class PlayerService {
       const actionsResult = await client.query(
         `SELECT actions
          FROM turn_actions
-         WHERE player_id = $1 AND turn_number = $2
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
          FOR UPDATE`,
-        [playerId, turnNumber]
+        [playerId, gameId, turnNumber]
       );
       const actionsJson = actionsResult.rows[0]?.actions;
       const actions: any[] = Array.isArray(actionsJson) ? actionsJson : (actionsJson ? (actionsJson as any) : []);
@@ -979,9 +1219,82 @@ export class PlayerService {
         throw new Error("No undoable actions");
       }
 
-      const last = actions[actions.length - 1] as TurnActionDeliver | any;
-      if (!last || last.kind !== "deliver") {
+      const last = actions[actions.length - 1] as (TurnActionDeliver | TurnActionMove | any);
+      if (!last || (last.kind !== "deliver" && last.kind !== "move")) {
         throw new Error("Last action is not undoable");
+      }
+
+      if (last.kind === "move") {
+        const from = last.from as any;
+        const ownersPaid = Array.isArray(last.ownersPaid) ? last.ownersPaid : [];
+        const feeTotal = Number(last.feeTotal ?? 0);
+
+        if (!from || typeof from.row !== "number" || typeof from.col !== "number") {
+          throw new Error("Invalid move action");
+        }
+
+        // Reverse money transfers (payees lose, payer gains)
+        const ownersReversed: Array<{ playerId: string; amount: number }> = [];
+        for (const p of ownersPaid) {
+          const pid = typeof p?.playerId === "string" ? p.playerId : null;
+          const amt = Number(p?.amount ?? 0);
+          if (!pid || !Number.isFinite(amt) || amt <= 0) continue;
+          ownersReversed.push({ playerId: pid, amount: amt });
+        }
+
+        if (feeTotal > 0) {
+          await client.query(
+            `UPDATE players
+             SET money = money + $1
+             WHERE game_id = $2 AND id = $3`,
+            [feeTotal, gameId, playerId]
+          );
+          for (const payee of ownersReversed) {
+            await client.query(
+              `UPDATE players
+               SET money = money - $1
+               WHERE game_id = $2 AND id = $3`,
+              [payee.amount, gameId, payee.playerId]
+            );
+          }
+        }
+
+        // Restore position to the "from" of the move action
+        await client.query(
+          `UPDATE players
+           SET position_row = $1,
+               position_col = $2,
+               position_x = $3,
+               position_y = $4
+           WHERE game_id = $5 AND id = $6`,
+          [
+            Math.round(from.row),
+            Math.round(from.col),
+            typeof from.x === "number" ? Math.round(from.x) : null,
+            typeof from.y === "number" ? Math.round(from.y) : null,
+            gameId,
+            playerId,
+          ]
+        );
+
+        // Pop last action
+        const remainingActions = actions.slice(0, actions.length - 1);
+        await client.query(
+          `UPDATE turn_actions
+           SET actions = $1::jsonb
+           WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+          [JSON.stringify(remainingActions), playerId, gameId, turnNumber]
+        );
+
+        await client.query("COMMIT");
+        const updatedMoney = currentMoney + feeTotal;
+        return {
+          kind: "move",
+          updatedMoney,
+          restoredPosition: { row: from.row, col: from.col, x: from.x, y: from.y },
+          ownersReversed,
+          feeTotal,
+        };
       }
 
       const removedCardId = Number(last.newCardIdDrawn);
@@ -1032,12 +1345,12 @@ export class PlayerService {
       await client.query(
         `UPDATE turn_actions
          SET actions = $1::jsonb
-         WHERE player_id = $2 AND turn_number = $3`,
-        [JSON.stringify(remainingActions), playerId, turnNumber]
+         WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+        [JSON.stringify(remainingActions), playerId, gameId, turnNumber]
       );
 
       await client.query("COMMIT");
-      return { updatedMoney, updatedLoads, restoredCard, removedCardId };
+      return { kind: "deliver", updatedMoney, updatedLoads, restoredCard, removedCardId };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

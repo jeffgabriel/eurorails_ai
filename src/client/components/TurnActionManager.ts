@@ -12,6 +12,7 @@ type TrainPositionUpdater = {
     y: number,
     row: number,
     col: number
+    , opts?: { persist?: boolean }
   ): Promise<void>;
 };
 
@@ -28,6 +29,8 @@ export type TurnAction =
       previousRemainingMovement: number;
       previousFerryState: Player["trainState"]["ferryState"];
       previousJustCrossedFerry: boolean | undefined;
+      ownersPaidPlayerIds?: string[];
+      feeTotal?: number;
     }
   | {
       kind: "loadPickup";
@@ -106,8 +109,28 @@ export class TurnActionManager {
     previousRemainingMovement: number;
     previousFerryState: Player["trainState"]["ferryState"];
     previousJustCrossedFerry: boolean | undefined;
+    ownersPaidPlayerIds?: string[];
+    feeTotal?: number;
   }): void {
     this.stack.push({ kind: "trainMoved", ...args });
+  }
+
+  /**
+   * Best-effort: track which opponents have already been paid for track usage this turn
+   * (based on local action stack). This is used for client warning/modals only.
+   * Server remains authoritative.
+   */
+  public getPaidOpponentIdsThisTurn(): Set<string> {
+    const paid = new Set<string>();
+    for (const action of this.stack) {
+      if (action.kind !== "trainMoved") continue;
+      const ids = (action as any).ownersPaidPlayerIds;
+      if (!Array.isArray(ids)) continue;
+      for (const id of ids) {
+        if (typeof id === "string" && id.length > 0) paid.add(id);
+      }
+    }
+    return paid;
   }
 
   public recordLoadPickup(city: string, loadType: LoadType): void {
@@ -161,8 +184,21 @@ export class TurnActionManager {
       }
       case "trainMoved": {
         if (!this.trainPositionUpdater) return false;
+        const playerBefore = this.gameState.players.find((p) => p.id === action.playerId);
+        if (!playerBefore?.trainState?.position) {
+          return false;
+        }
+
+        // Server-authoritative undo for move fees + persisted position.
+        // If this fails, do not change local state.
+        const okServer = await this.playerStateService.undoLastAction(this.gameState.id);
+        if (!okServer) {
+          return false;
+        }
+
+        // Re-fetch player after server call - socket patch may have replaced the object in the array
         const player = this.gameState.players.find((p) => p.id === action.playerId);
-        if (!player?.trainState?.position) {
+        if (!player?.trainState) {
           return false;
         }
 
@@ -182,7 +218,8 @@ export class TurnActionManager {
           pos.x,
           pos.y,
           pos.row,
-          pos.col
+          pos.col,
+          { persist: false }
         );
         return true;
       }

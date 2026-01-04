@@ -43,7 +43,8 @@ export class UIManager {
     openSettingsCallback: () => void,
     gameStateService: GameStateService,
     mapRenderer: MapRenderer,
-    trackDrawingManager: TrackDrawingManager
+    trackDrawingManager: TrackDrawingManager,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -53,7 +54,9 @@ export class UIManager {
     this.gameStateService = gameStateService;
     this.mapRenderer = mapRenderer;
     this.trackDrawingManager = trackDrawingManager;
-    this.playerStateService = new PlayerStateService();
+    // IMPORTANT: Use a shared PlayerStateService instance so local-only state (like hand)
+    // stays consistent across UI + dialogs. If not provided, fall back to creating one.
+    this.playerStateService = playerStateService ?? new PlayerStateService();
     this.playerStateService.initializeLocalPlayer(this.gameState.players);
     // Create containers
     this.uiContainer = this.scene.add.container(0, 0);
@@ -165,6 +168,93 @@ export class UIManager {
     }
   }
 
+  /**
+   * Confirm using opponent track for a per-opponent fee.
+   * Renders a simple blocking modal on the main scene.
+   */
+  public async confirmOpponentTrackFee(args: {
+    payees: Array<{ name: string; amount: number }>;
+    total: number;
+  }): Promise<boolean> {
+    return await new Promise<boolean>((resolve) => {
+      const { payees, total } = args;
+      const modalRoot = this.scene.add.container(0, 0).setDepth(3000);
+
+      const backdrop = this.scene.add.rectangle(
+        this.scene.scale.width / 2,
+        this.scene.scale.height / 2,
+        this.scene.scale.width,
+        this.scene.scale.height,
+        0x000000,
+        0.55
+      );
+      backdrop.setInteractive(); // blocks clicks behind modal
+      modalRoot.add(backdrop);
+
+      const panelW = Math.min(520, this.scene.scale.width - 60);
+      const panelH = 200;
+      const panelX = this.scene.scale.width / 2;
+      const panelY = this.scene.scale.height / 2;
+
+      const panelBg = this.scene.add.rectangle(panelX, panelY, panelW, panelH, 0x111111, 0.95);
+      const panelBorder = this.scene.add.rectangle(panelX, panelY, panelW + 4, panelH + 4, 0xffffff, 0.12);
+      modalRoot.add([panelBorder, panelBg]);
+
+      const title = this.scene.add.text(panelX, panelY - 70, "Use another player’s track for ECU 4M each?", {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40, useAdvancedWrap: true },
+      }).setOrigin(0.5, 0.5);
+
+      const detailLines =
+        payees.length > 0
+          ? `${payees.map((p) => `${p.name} (${p.amount}M)`).join(", ")}\nTotal: ${total}M`
+          : `Total: ${total}M`;
+      const detail = this.scene.add.text(panelX, panelY - 20, detailLines, {
+        color: "#dddddd",
+        fontSize: "14px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40, useAdvancedWrap: true },
+      }).setOrigin(0.5, 0.5);
+
+      const buttonY = panelY + 55;
+      const buttonW = 140;
+      const buttonH = 36;
+      const gap = 18;
+
+      const makeButton = (x: number, label: string, bgColor: number, onClick: () => void) => {
+        const bg = this.scene.add.rectangle(x, buttonY, buttonW, buttonH, bgColor, 1).setOrigin(0.5);
+        bg.setStrokeStyle(1, 0xffffff, 0.18);
+        const text = this.scene.add.text(x, buttonY, label, {
+          color: "#ffffff",
+          fontSize: "14px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+        }).setOrigin(0.5);
+        bg.setInteractive({ useHandCursor: true }).on("pointerdown", onClick);
+        modalRoot.add([bg, text]);
+      };
+
+      const cleanup = (result: boolean) => {
+        try {
+          modalRoot.destroy(true);
+        } catch {}
+        resolve(result);
+      };
+
+      const cancelX = panelX - (buttonW / 2 + gap / 2);
+      const acceptX = panelX + (buttonW / 2 + gap / 2);
+      makeButton(cancelX, "Cancel", 0x444444, () => cleanup(false));
+      makeButton(acceptX, "Accept", 0x1f6feb, () => cleanup(true));
+
+      modalRoot.add([title, detail]);
+    });
+  }
+
   private initializeComponentManagers(nextPlayerCallback: () => void): void {
     // Per-turn undo stack (in-memory only)
     this.turnActionManager = new TurnActionManager({
@@ -186,7 +276,8 @@ export class UIManager {
       this.gameStateService,
       this.trainContainer,
       this.trackDrawingManager,
-      this.turnActionManager
+      this.turnActionManager,
+      this.playerStateService
     );
     this.turnActionManager.setTrainPositionUpdater(this.trainInteractionManager);
 
@@ -346,8 +437,9 @@ export class UIManager {
       return;
     }
 
-    // Reset train movement mode when UI is refreshed
-    this.resetTrainMovementMode();
+    // NOTE: Do NOT reset train movement mode here - setupUIOverlay is called after every
+    // socket patch, including after moves. Movement mode should only reset on turn change
+    // (handled in UIManagedNextPlayerCallback) or when entering drawing mode.
 
     // Clear UI container
     this.uiContainer.removeAll(true);

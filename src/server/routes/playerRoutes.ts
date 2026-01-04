@@ -619,7 +619,67 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
     }
 });
 
-// Undo the last server-tracked per-turn action for the authenticated player (currently: delivery)
+// Move train and settle opponent track-usage fees (authenticated, server-authoritative on fees)
+router.post('/move-train', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, to } = req.body as {
+            gameId?: string;
+            to?: { row: number; col: number; x?: number; y?: number };
+        };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId || !to || typeof to.row !== 'number' || typeof to.col !== 'number') {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId and to{row,col} are required'
+            });
+        }
+
+        const result = await PlayerService.moveTrainForUser({
+            gameId,
+            userId,
+            to
+        });
+
+        // Broadcast updated public player states (payer + any payees). Do not leak hands.
+        const publicPlayers = await PlayerService.getPlayers(gameId, '');
+        const patchedPlayers = publicPlayers
+            .filter(p => result.affectedPlayerIds.includes(p.id))
+            .map(p => {
+                const { hand: _hand, ...playerWithoutHand } = p as any;
+                return playerWithoutHand;
+            });
+
+        if (patchedPlayers.length > 0) {
+            await emitStatePatch(gameId, { players: patchedPlayers } as any);
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (message.includes('Insufficient') || message.includes('Invalid') || message.includes('No valid path')) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({ error: 'Server error', details: message });
+    }
+});
+
+// Undo the last server-tracked per-turn action for the authenticated player (delivery or move)
 router.post('/undo-last-action', authenticateToken, async (req, res) => {
     try {
         const { gameId } = req.body as { gameId?: string };
@@ -641,12 +701,33 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
 
         const result = await PlayerService.undoLastActionForUser(gameId, userId);
 
-        // Broadcast updated public player state (do not leak hand)
+        // Broadcast updated public player state(s) (do not leak hand)
+        // - deliver undo affects only the local player's public state
+        // - move undo can affect other players' money too (reverse fee transfer)
         const publicPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+        const patched: any[] = [];
         if (updatedPlayer) {
             const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+            patched.push(playerWithoutHand);
+        }
+        if (result && (result as any).kind === 'move') {
+            const owners = Array.isArray((result as any).ownersReversed)
+                ? (result as any).ownersReversed.map((o: any) => o.playerId).filter((v: any) => typeof v === 'string')
+                : [];
+            for (const pid of owners) {
+                const p = publicPlayers.find(pp => pp.id === pid);
+                if (p) {
+                    const { hand: _hand, ...playerWithoutHand } = p as any;
+                    // Avoid dupes
+                    if (!patched.find(x => x.id === playerWithoutHand.id)) {
+                        patched.push(playerWithoutHand);
+                    }
+                }
+            }
+        }
+        if (patched.length > 0) {
+            await emitStatePatch(gameId, { players: patched } as any);
         }
 
         return res.status(200).json(result);

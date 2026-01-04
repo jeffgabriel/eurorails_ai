@@ -12,6 +12,7 @@ interface LoadDialogConfig {
     city: CityData;
     player: Player;
     gameState: GameState;
+    playerStateService: PlayerStateService;
     onClose: () => void;
     onUpdateTrainCard: () => void;
     onUpdateHandDisplay: () => void;
@@ -44,10 +45,7 @@ export class LoadDialogScene extends Scene {
         this.player = data.player;
         this.gameState = data.gameState;
         this.gameStateService = new GameStateService(this.gameState);
-        this.playerStateService = new PlayerStateService();
-        
-        // Initialize player state service for local player
-        this.playerStateService.initializeLocalPlayer(this.gameState.players);
+        this.playerStateService = data.playerStateService;
         
         // Assert that the passed player is the local player (for security)
         const localPlayer = this.playerStateService.getLocalPlayer();
@@ -424,6 +422,10 @@ export class LoadDialogScene extends Scene {
                 throw new Error('Failed to deliver load');
             }
             
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/ee63971d-7078-4c66-a767-c90c475dbcfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'hand-bug-pre',hypothesisId:'H18',location:'LoadDialogScene.ts:handleLoadDelivery',message:'after deliverLoad',data:{playerId:this.player?.id,localPlayerId:this.playerStateService.getLocalPlayerId?.(),sameRef:this.player===this.playerStateService.getLocalPlayer(),dialogHandIds:Array.isArray(this.player?.hand)?this.player.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],serviceHandIds:Array.isArray(this.playerStateService.getLocalPlayer()?.hand)?this.playerStateService.getLocalPlayer()!.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[]},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion agent log
+
             // All API calls succeeded - state is already updated by PlayerStateService
             // (since it updates this.localPlayer which is a reference to this.player)
             // Just refresh the UI

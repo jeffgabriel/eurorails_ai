@@ -82,7 +82,10 @@ describe("TurnActionManager", () => {
       getUncommittedSegmentCount: jest.fn().mockReturnValue(0),
       undoLastUncommittedSegment: jest.fn().mockReturnValue(false),
     } as any;
-    const playerStateService = { isCurrentPlayer: jest.fn().mockReturnValue(true) } as any;
+    const playerStateService = {
+      isCurrentPlayer: jest.fn().mockReturnValue(true),
+      undoLastAction: jest.fn().mockResolvedValue(true),
+    } as any;
     const loadService = {} as any;
     const trainUpdater = { updateTrainPosition: jest.fn().mockResolvedValue(undefined) };
 
@@ -104,10 +107,11 @@ describe("TurnActionManager", () => {
 
     const ok = await mgr.undoLastAction();
     expect(ok).toBe(true);
+    expect(playerStateService.undoLastAction).toHaveBeenCalledWith("game-1");
     expect(player.trainState.remainingMovement).toBe(7);
     expect(player.trainState.ferryState).toBeUndefined();
     expect(player.trainState.movementHistory).toHaveLength(0);
-    expect(trainUpdater.updateTrainPosition).toHaveBeenCalledWith("p1", 10, 20, 1, 2);
+    expect(trainUpdater.updateTrainPosition).toHaveBeenCalledWith("p1", 10, 20, 1, 2, { persist: false });
   });
 
   it("should undo load pickup by returning load and updating player loads", async () => {

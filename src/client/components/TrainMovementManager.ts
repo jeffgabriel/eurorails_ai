@@ -68,6 +68,44 @@ export class TrainMovementManager {
     this.playerTracks = playerTracks;
   }
 
+  public getAllTrackStates(): PlayerTrackState[] {
+    return Array.from(this.playerTracks.values());
+  }
+
+  /**
+   * Union-of-tracks "selection set" for picking a destination milepost.
+   * We treat any endpoint of any track segment as being "on track".
+   */
+  public getUnionTrackPointKeys(): Set<string> {
+    const keys = new Set<string>();
+    for (const t of this.playerTracks.values()) {
+      for (const seg of t.segments || []) {
+        keys.add(`${seg.from.row},${seg.from.col}`);
+        keys.add(`${seg.to.row},${seg.to.col}`);
+      }
+    }
+    return keys;
+  }
+
+  private getUnionTrackState(): PlayerTrackState | null {
+    const all = this.getAllTrackStates();
+    if (all.length === 0) return null;
+    const currentPlayer =
+      this.gameState.players && this.gameState.players.length > 0
+        ? this.gameState.players[this.gameState.currentPlayerIndex]
+        : null;
+    const playerId = currentPlayer?.id || all[0].playerId;
+    const gameId = this.gameState.id || all[0].gameId;
+    return {
+      playerId,
+      gameId,
+      segments: all.flatMap((t) => t.segments || []),
+      totalCost: 0,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date(),
+    };
+  }
+
   private isTerrainCityOrFerry(terrain: TerrainType): boolean {
     return [
       TerrainType.MajorCity,
@@ -105,7 +143,7 @@ export class TrainMovementManager {
   }
 
   private getMovementCostSegments(from: Point, to: Point, playerId: string): MovementSegment[] | null {
-    const playerTrackState = this.playerTracks.get(playerId);
+    const playerTrackState = this.getUnionTrackState();
     const result = this.movementCalculator.calculateMovementCost(
       from,
       to,
@@ -129,7 +167,7 @@ export class TrainMovementManager {
       return Math.max(dx, dy);
     }
 
-    // Get current player's track data
+    // Get union track data (across all players)
     const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.id) {
       this.warn("[TrainMovementManager] Invalid current player, using direct distance");
@@ -138,7 +176,7 @@ export class TrainMovementManager {
       return Math.max(dx, dy);
     }
 
-    const playerTrackState = this.playerTracks.get(currentPlayer.id);
+    const playerTrackState = this.getUnionTrackState();
 
     const result = this.movementCalculator.calculateMovementCost(
       from,
