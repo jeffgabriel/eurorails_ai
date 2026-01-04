@@ -45,14 +45,15 @@ export class TrainInteractionManager {
     gameStateService: GameStateService,
     trainContainer: Phaser.GameObjects.Container,
     trackDrawingManager: TrackDrawingManager,
-    turnActionManager?: TurnActionManager
+    turnActionManager?: TurnActionManager,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.trainMovementManager = trainMovementManager;
     this.mapRenderer = mapRenderer;
     this.gameStateService = gameStateService;
-    this.playerStateService = new PlayerStateService();
+    this.playerStateService = playerStateService ?? new PlayerStateService();
     this.playerStateService.initializeLocalPlayer(this.gameState.players);
     this.trainContainer = trainContainer;
     this.trackDrawingManager = trackDrawingManager;
@@ -494,6 +495,7 @@ export class TrainInteractionManager {
       city: city,
       player: player,
       gameState: this.gameState,
+      playerStateService: this.playerStateService,
       onClose: () => {
         this.scene.scene.stop("LoadDialogScene");
         // Re-enable board input after dialog closes.

@@ -43,7 +43,8 @@ export class UIManager {
     openSettingsCallback: () => void,
     gameStateService: GameStateService,
     mapRenderer: MapRenderer,
-    trackDrawingManager: TrackDrawingManager
+    trackDrawingManager: TrackDrawingManager,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -53,7 +54,9 @@ export class UIManager {
     this.gameStateService = gameStateService;
     this.mapRenderer = mapRenderer;
     this.trackDrawingManager = trackDrawingManager;
-    this.playerStateService = new PlayerStateService();
+    // IMPORTANT: Use a shared PlayerStateService instance so local-only state (like hand)
+    // stays consistent across UI + dialogs. If not provided, fall back to creating one.
+    this.playerStateService = playerStateService ?? new PlayerStateService();
     this.playerStateService.initializeLocalPlayer(this.gameState.players);
     // Create containers
     this.uiContainer = this.scene.add.container(0, 0);
@@ -273,7 +276,8 @@ export class UIManager {
       this.gameStateService,
       this.trainContainer,
       this.trackDrawingManager,
-      this.turnActionManager
+      this.turnActionManager,
+      this.playerStateService
     );
     this.turnActionManager.setTrainPositionUpdater(this.trainInteractionManager);
 

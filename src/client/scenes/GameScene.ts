@@ -271,6 +271,10 @@ export class GameScene extends Phaser.Scene {
                     const currentLocalPlayer = this.playerStateService.getLocalPlayer();
                     const preservedHand = currentLocalPlayer?.hand || existingPlayer.hand;
 
+                    // #region agent log
+                    fetch('http://127.0.0.1:7242/ingest/ee63971d-7078-4c66-a767-c90c475dbcfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'hand-bug-pre',hypothesisId:'H19',location:'GameScene.ts:onPatch',message:'local merge (hand) snapshot',data:{localPlayerId,currentLocalPlayerId:currentLocalPlayer?.id,sameRef:currentLocalPlayer===existingPlayer,existingHandIds:Array.isArray(existingPlayer.hand)?existingPlayer.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],serviceHandIds:Array.isArray(currentLocalPlayer?.hand)?currentLocalPlayer!.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],updatedHandLen:Array.isArray(updatedPlayer.hand)?updatedPlayer.hand.length:null,preservedHandLen:Array.isArray(preservedHand)?preservedHand.length:null},timestamp:Date.now()})}).catch(()=>{});
+                    // #endregion agent log
+
                     this.gameState.players[index] = {
                       ...existingPlayer,
                       ...updatedPlayer,
@@ -463,7 +467,8 @@ export class GameScene extends Phaser.Scene {
       () => this.openSettings(),
       this.gameStateService,
       this.mapRenderer,
-      this.trackManager
+      this.trackManager,
+      this.playerStateService
     );
 
     // Reusable pattern: when local, server-authoritative actions mutate game state
