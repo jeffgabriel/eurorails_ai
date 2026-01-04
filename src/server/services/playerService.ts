@@ -798,7 +798,8 @@ export class PlayerService {
         `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
          FROM players
          WHERE game_id = $1 AND user_id = $2
-         LIMIT 1`,
+         LIMIT 1
+         FOR UPDATE`,
         [gameId, userId]
       );
       if (playerRowResult.rows.length === 0) {
@@ -818,10 +819,21 @@ export class PlayerService {
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
 
-      const gameState = await this.getGameState(gameId);
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
+        [gameId, currentPlayerIndex]
       );
       const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
       if (!activePlayerId) {
@@ -893,7 +905,7 @@ export class PlayerService {
         `
           INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
           VALUES ($1, $2, $3, $4::jsonb)
-          ON CONFLICT (player_id, turn_number)
+          ON CONFLICT (player_id, game_id, turn_number)
           DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
         `,
         [playerId, gameId, turnNumber, JSON.stringify([deliverAction])]
@@ -974,25 +986,32 @@ export class PlayerService {
       const fromCol = playerRowResult.rows[0].position_col;
       const fromX = playerRowResult.rows[0].position_x;
       const fromY = playerRowResult.rows[0].position_y;
-      const fromRowNum = Number(fromRow);
-      const fromColNum = Number(fromCol);
-      const fromXNum = typeof fromX === "number" ? fromX : Number(fromX);
-      const fromYNum = typeof fromY === "number" ? fromY : Number(fromY);
       const from =
-        Number.isFinite(fromRowNum) && Number.isFinite(fromColNum)
+        fromRow != null && fromCol != null
           ? {
-              row: fromRowNum,
-              col: fromColNum,
-              x: Number.isFinite(fromXNum) ? Number(fromXNum) : undefined,
-              y: Number.isFinite(fromYNum) ? Number(fromYNum) : undefined,
+              row: Number(fromRow),
+              col: Number(fromCol),
+              x: fromX != null && Number.isFinite(Number(fromX)) ? Number(fromX) : undefined,
+              y: fromY != null && Number.isFinite(Number(fromY)) ? Number(fromY) : undefined,
             }
           : null;
 
       // Validate game exists + determine whose turn it is
-      const gameState = await this.getGameState(gameId);
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
+        [gameId, currentPlayerIndex]
       );
       const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
       if (!activePlayerId) {
@@ -1098,7 +1117,7 @@ export class PlayerService {
         `
           INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
           VALUES ($1, $2, $3, $4::jsonb)
-          ON CONFLICT (player_id, turn_number)
+          ON CONFLICT (player_id, game_id, turn_number)
           DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
         `,
         [playerId, gameId, turnNumber, JSON.stringify([moveAction])]
@@ -1163,10 +1182,21 @@ export class PlayerService {
         ? (currentLoads as unknown[]).filter((v): v is LoadType => typeof v === "string") as LoadType[]
         : [];
 
-      const gameState = await this.getGameState(gameId);
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
-        [gameId, gameState.currentPlayerIndex]
+        [gameId, currentPlayerIndex]
       );
       const activePlayerId = currentPlayerQuery.rows[0]?.id as string | undefined;
       if (!activePlayerId) {

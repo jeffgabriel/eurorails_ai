@@ -258,7 +258,7 @@ describe('PlayerService Integration Tests', () => {
                 trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
-                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    position: { x: 0, y: 0, row: 1000, col: 1000 },
                     movementHistory: [],
                     remainingMovement: 9,
                     loads: [] as LoadType[],
@@ -274,7 +274,7 @@ describe('PlayerService Integration Tests', () => {
                 trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
-                    position: { x: 0, y: 0, row: 0, col: 3 },
+                    position: { x: 0, y: 0, row: 1000, col: 1003 },
                     movementHistory: [],
                     remainingMovement: 9,
                     loads: [] as LoadType[],
@@ -282,14 +282,15 @@ describe('PlayerService Integration Tests', () => {
                 hand: []
             } as any);
 
-            // Track graph: P1 owns 0,0-0,1; P2 owns 0,1-0,2 and 0,2-0,3
+            // Track graph (use out-of-map coordinates to avoid accidental major-city public edges):
+            // P1 owns 1000,1000-1000,1001; P2 owns 1000,1001-1000,1002 and 1000,1002-1000,1003
             await TrackService.saveTrackState(gameId, p1Id, {
                 playerId: p1Id,
                 gameId,
                 segments: [
                     {
-                        from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
-                        to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        from: { x: 0, y: 0, row: 1000, col: 1000, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 1000, col: 1001, terrain: TerrainType.Clear },
                         cost: 1,
                     }
                 ],
@@ -302,13 +303,13 @@ describe('PlayerService Integration Tests', () => {
                 gameId,
                 segments: [
                     {
-                        from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
-                        to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+                        from: { x: 0, y: 0, row: 1000, col: 1001, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 1000, col: 1002, terrain: TerrainType.Clear },
                         cost: 1,
                     },
                     {
-                        from: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
-                        to: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+                        from: { x: 0, y: 0, row: 1000, col: 1002, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 1000, col: 1003, terrain: TerrainType.Clear },
                         cost: 1,
                     }
                 ],
@@ -320,7 +321,7 @@ describe('PlayerService Integration Tests', () => {
             const move1 = await PlayerService.moveTrainForUser({
                 gameId,
                 userId: user1,
-                to: { row: 0, col: 2, x: 0, y: 0 }
+                to: { row: 1000, col: 1002, x: 0, y: 0 }
             });
             expect(move1.feeTotal).toBe(4);
             expect(move1.ownersPaid.map(o => o.playerId)).toEqual([p2Id]);
@@ -328,15 +329,15 @@ describe('PlayerService Integration Tests', () => {
             const afterMove1P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
             const afterMove1P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
             expect(afterMove1P1.rows[0].money).toBe(46);
-            expect(afterMove1P1.rows[0].position_row).toBe(0);
-            expect(afterMove1P1.rows[0].position_col).toBe(2);
+            expect(afterMove1P1.rows[0].position_row).toBe(1000);
+            expect(afterMove1P1.rows[0].position_col).toBe(1002);
             expect(afterMove1P2.rows[0].money).toBe(54);
 
             // Second move in same turn over same opponent should not charge again
             const move2 = await PlayerService.moveTrainForUser({
                 gameId,
                 userId: user1,
-                to: { row: 0, col: 3, x: 0, y: 0 }
+                to: { row: 1000, col: 1003, x: 0, y: 0 }
             });
             expect(move2.feeTotal).toBe(0);
 
@@ -346,7 +347,7 @@ describe('PlayerService Integration Tests', () => {
             const afterUndo2P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
             const afterUndo2P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
             expect(afterUndo2P1.rows[0].money).toBe(46);
-            expect(afterUndo2P1.rows[0].position_col).toBe(2);
+            expect(afterUndo2P1.rows[0].position_col).toBe(1002);
             expect(afterUndo2P2.rows[0].money).toBe(54);
 
             // Undo first move -> reverse fee and restore to 0,0
@@ -355,7 +356,7 @@ describe('PlayerService Integration Tests', () => {
             const afterUndo1P1 = await db.query('SELECT money, position_row, position_col FROM players WHERE id = $1', [p1Id]);
             const afterUndo1P2 = await db.query('SELECT money FROM players WHERE id = $1', [p2Id]);
             expect(afterUndo1P1.rows[0].money).toBe(50);
-            expect(afterUndo1P1.rows[0].position_col).toBe(0);
+            expect(afterUndo1P1.rows[0].position_col).toBe(1000);
             expect(afterUndo1P2.rows[0].money).toBe(50);
         });
 
@@ -384,7 +385,7 @@ describe('PlayerService Integration Tests', () => {
                 trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
-                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    position: { x: 0, y: 0, row: 1000, col: 1000 },
                     movementHistory: [],
                     remainingMovement: 9,
                     loads: [] as LoadType[],
@@ -400,7 +401,7 @@ describe('PlayerService Integration Tests', () => {
                 trainType: TrainType.Freight,
                 turnNumber: 1,
                 trainState: {
-                    position: { x: 0, y: 0, row: 0, col: 2 },
+                    position: { x: 0, y: 0, row: 1000, col: 1002 },
                     movementHistory: [],
                     remainingMovement: 9,
                     loads: [] as LoadType[],
@@ -413,8 +414,8 @@ describe('PlayerService Integration Tests', () => {
                 gameId,
                 segments: [
                     {
-                        from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
-                        to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+                        from: { x: 0, y: 0, row: 1000, col: 1000, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 1000, col: 1001, terrain: TerrainType.Clear },
                         cost: 1,
                     }
                 ],
@@ -427,8 +428,8 @@ describe('PlayerService Integration Tests', () => {
                 gameId,
                 segments: [
                     {
-                        from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
-                        to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+                        from: { x: 0, y: 0, row: 1000, col: 1001, terrain: TerrainType.Clear },
+                        to: { x: 0, y: 0, row: 1000, col: 1002, terrain: TerrainType.Clear },
                         cost: 1,
                     }
                 ],
@@ -440,7 +441,7 @@ describe('PlayerService Integration Tests', () => {
             await expect(PlayerService.moveTrainForUser({
                 gameId,
                 userId: user1,
-                to: { row: 0, col: 2, x: 0, y: 0 }
+                to: { row: 1000, col: 1002, x: 0, y: 0 }
             })).rejects.toThrow('Insufficient funds for track usage fees');
         });
     });
