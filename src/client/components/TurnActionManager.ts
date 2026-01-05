@@ -117,11 +117,23 @@ export class TurnActionManager {
 
   /**
    * Best-effort: track which opponents have already been paid for track usage this turn
-   * (based on local action stack). This is used for client warning/modals only.
+   * (based on local action stack AND server-loaded paidOpponentIds).
+   * This ensures "once per turn" fee tracking persists across browser refresh.
    * Server remains authoritative.
    */
   public getPaidOpponentIdsThisTurn(): Set<string> {
     const paid = new Set<string>();
+
+    // Include paidOpponentIds loaded from server (persisted across refresh)
+    const currentPlayer = this.gameState.players?.[this.gameState.currentPlayerIndex];
+    const serverPaidIds = currentPlayer?.trainState?.paidOpponentIds;
+    if (Array.isArray(serverPaidIds)) {
+      for (const id of serverPaidIds) {
+        if (typeof id === "string" && id.length > 0) paid.add(id);
+      }
+    }
+
+    // Also include any paid during this session (local stack)
     for (const action of this.stack) {
       if (action.kind !== "trainMoved") continue;
       const ids = (action as any).ownersPaidPlayerIds;

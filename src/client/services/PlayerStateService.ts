@@ -227,7 +227,8 @@ export class PlayerStateService {
      */
     public async moveTrainWithFees(
         to: { row: number; col: number; x: number; y: number },
-        gameId: string
+        gameId: string,
+        movementCost?: number
     ): Promise<{
         feeTotal: number;
         ownersUsed: string[];
@@ -244,7 +245,8 @@ export class PlayerStateService {
                 method: 'POST',
                 body: JSON.stringify({
                     gameId,
-                    to
+                    to,
+                    movementCost
                 })
             });
 

@@ -39,6 +39,7 @@ describe('PlayerService Integration Tests', () => {
         await runQuery(async (client) => {
             // Delete in dependency order to avoid constraint errors
             await client.query('DELETE FROM turn_actions');
+            await client.query('DELETE FROM movement_history');
             await client.query('DELETE FROM player_tracks');
             await client.query('DELETE FROM games'); // Delete games first (they reference players)
             await client.query('DELETE FROM players');
@@ -421,6 +422,12 @@ describe('PlayerService Integration Tests', () => {
                 `INSERT INTO movement_history (id, player_id, game_id, movement_path, turn_number, created_at, updated_at)
                  VALUES ($1::uuid, $2::uuid, $3::uuid, $4::jsonb, $5, $6, $6)`,
                 [newerId, playerId, gameId, JSON.stringify(newerPath), 2, '2000-01-02T00:00:00Z']
+            );
+
+            // Update player to turn 2 so the query fetches the turn 2 movement history
+            await db.query(
+                `UPDATE players SET current_turn_number = 2 WHERE id = $1`,
+                [playerId]
             );
 
             const players = await PlayerService.getPlayers(gameId, userId);
@@ -1078,6 +1085,198 @@ describe('PlayerService Integration Tests', () => {
             await expect(
                 PlayerService.discardHandForUser(gameId, userId1)
             ).rejects.toThrow('Cannot discard hand after performing actions this turn');
+        });
+    });
+
+    describe('Movement state persistence', () => {
+        it('should load movement history for current turn only, not previous turns', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MovementTester',
+                color: '#FF0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 2, // Current turn is 2
+                trainState: {
+                    position: { x: 100, y: 100, row: 5, col: 5 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Insert movement history for turn 1 (previous turn)
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 1, JSON.stringify([
+                    { from: { row: 0, col: 0 }, to: { row: 1, col: 1 }, cost: 3 }
+                ])]
+            );
+
+            // Insert movement history for turn 2 (current turn)
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 2, JSON.stringify([
+                    { from: { row: 5, col: 5 }, to: { row: 6, col: 6 }, cost: 2 }
+                ])]
+            );
+
+            // getPlayers should return movement history for turn 2 only
+            const players = await PlayerService.getPlayers(gameId, userId);
+            const player = players.find(p => p.id === playerId);
+
+            expect(player).toBeDefined();
+            expect(player!.trainState.movementHistory).toHaveLength(1);
+            expect(player!.trainState.movementHistory[0].from.row).toBe(5);
+            expect(player!.trainState.movementHistory[0].to.row).toBe(6);
+            expect(player!.trainState.movementHistory[0].cost).toBe(2);
+        });
+
+        it('should calculate remainingMovement from movement history costs', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MovementCalc',
+                color: '#00FF00',
+                money: 50,
+                trainType: TrainType.Freight, // 9 movement points max
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 100, y: 100, row: 5, col: 5 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Insert movement history with costs totaling 5 movement points
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 1, JSON.stringify([
+                    { from: { row: 5, col: 5 }, to: { row: 6, col: 6 }, cost: 2 },
+                    { from: { row: 6, col: 6 }, to: { row: 7, col: 7 }, cost: 3 }
+                ])]
+            );
+
+            const players = await PlayerService.getPlayers(gameId, userId);
+            const player = players.find(p => p.id === playerId);
+
+            expect(player).toBeDefined();
+            // Max movement (9) - costs used (2 + 3 = 5) = 4 remaining
+            expect(player!.trainState.remainingMovement).toBe(4);
+        });
+
+        it('should return full movement when no movement history exists for current turn', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'NoMovement',
+                color: '#0000FF',
+                money: 50,
+                trainType: TrainType.FastFreight, // 12 movement points max
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 100, y: 100, row: 5, col: 5 },
+                    movementHistory: [],
+                    remainingMovement: 12,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // No movement history inserted - should have full movement
+
+            const players = await PlayerService.getPlayers(gameId, userId);
+            const player = players.find(p => p.id === playerId);
+
+            expect(player).toBeDefined();
+            expect(player!.trainState.remainingMovement).toBe(12); // Full FastFreight speed
+        });
+
+        it('should not count previous turn movement against current turn remaining movement', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'TurnBoundary',
+                color: '#FF00FF',
+                money: 50,
+                trainType: TrainType.Freight, // 9 movement points max
+                turnNumber: 3, // Current turn is 3
+                trainState: {
+                    position: { x: 100, y: 100, row: 5, col: 5 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Insert movement history for previous turns (should be ignored)
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 1, JSON.stringify([
+                    { from: { row: 0, col: 0 }, to: { row: 1, col: 1 }, cost: 5 }
+                ])]
+            );
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 2, JSON.stringify([
+                    { from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 7 }
+                ])]
+            );
+
+            // Insert movement for current turn (turn 3) with cost 2
+            await db.query(
+                `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+                 VALUES ($1, $2, $3, $4)`,
+                [playerId, gameId, 3, JSON.stringify([
+                    { from: { row: 5, col: 5 }, to: { row: 6, col: 6 }, cost: 2 }
+                ])]
+            );
+
+            const players = await PlayerService.getPlayers(gameId, userId);
+            const player = players.find(p => p.id === playerId);
+
+            expect(player).toBeDefined();
+            // Should only count turn 3's cost (2), not turn 1 (5) or turn 2 (7)
+            expect(player!.trainState.remainingMovement).toBe(7); // 9 - 2 = 7
+            expect(player!.trainState.movementHistory).toHaveLength(1);
         });
     });
 

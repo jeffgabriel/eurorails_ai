@@ -1,5 +1,5 @@
 import { db } from "../db/index";
-import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES } from "../../shared/types/GameTypes";
+import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -312,42 +312,9 @@ export class PlayerService {
         throw new Error("Player update failed");
       }
 
-      if (
-        player.trainState.movementHistory &&
-        player.trainState.movementHistory.length > 0
-      ) {
-        // Update existing movement history for this turn, or insert if it doesn't exist
-        // This ensures we maintain cumulative movement history across the turn
-        // First, try to update existing entry for this turn
-        const update_query = `
-                    UPDATE movement_history
-                    SET movement_path = $2, updated_at = CURRENT_TIMESTAMP
-                    WHERE player_id = $1 AND turn_number = $3
-                `;
-        const movement_values = [
-          player.id,
-          JSON.stringify(player.trainState.movementHistory),
-          player.turnNumber,
-        ];
-        
-        // Try to update first
-        const updateResult = await client.query(update_query, movement_values);
-        
-        // If no row was updated, insert a new one
-        if (updateResult.rowCount === 0) {
-          const insert_query = `
-                      INSERT INTO movement_history (player_id, movement_path, turn_number, game_id)
-                      VALUES ($1, $2, $3, $4)
-                  `;
-          const insert_values = [
-            player.id,
-            JSON.stringify(player.trainState.movementHistory),
-            player.turnNumber,
-            gameId,
-          ];
-          await client.query(insert_query, insert_values);
-        }
-      }
+      // Note: movement_history is now persisted per-move in moveTrainForUser
+      // to ensure resilience against browser refresh mid-turn.
+      // We no longer write it here to avoid duplication.
 
       await client.query("COMMIT");
     } catch (err) {
@@ -410,12 +377,12 @@ export class PlayerService {
     const client = await db.connect();
     try {
       const query = `
-                SELECT 
-                    players.id, 
+                SELECT
+                    players.id,
                     user_id,
-                    name, 
-                    color, 
-                    money, 
+                    name,
+                    color,
+                    money,
                     train_type as "trainType",
                     position_x,
                     position_y,
@@ -423,17 +390,25 @@ export class PlayerService {
                     position_col,
                     current_turn_number as "turnNumber",
                     mh.movement_path as "movementHistory",
+                    ta.actions as "turnActions",
                     hand,
                     loads,
                     camera_state
-                FROM players 
+                FROM players
                 LEFT JOIN LATERAL (
-                    SELECT movement_path, created_at, updated_at
-                    FROM movement_history 
-                    WHERE player_id = players.id 
-                    ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                    SELECT movement_path
+                    FROM movement_history
+                    WHERE player_id = players.id
+                      AND turn_number = players.current_turn_number
                     LIMIT 1
                 ) mh ON true
+                LEFT JOIN LATERAL (
+                    SELECT actions
+                    FROM turn_actions
+                    WHERE player_id = players.id
+                      AND turn_number = players.current_turn_number
+                    LIMIT 1
+                ) ta ON true
                 WHERE players.game_id = $1
                 ORDER BY players.created_at ASC
             `;
@@ -486,11 +461,36 @@ export class PlayerService {
         // Normalize trainType from database (legacy values like "Freight" may exist)
         const trainType = this.normalizeTrainType(row.trainType);
 
-        // Calculate remainingMovement based on train type
-        // Note: This is a default value; actual remainingMovement should be managed client-side
-        // or stored in the database if we want to persist it across server refreshes
+        // Calculate remainingMovement based on train type and movement already made this turn
         const trainProps = TRAIN_PROPERTIES[trainType];
-        const defaultMovement = trainProps ? trainProps.speed : 9; // Fallback to 9 if train type is invalid
+        const maxMovement = trainProps ? trainProps.speed : 9; // Fallback to 9 if train type is invalid
+
+        // Sum up movement costs from the current turn's movement history
+        const movementHistory = row.movementHistory || [];
+        const movementCostThisTurn = Array.isArray(movementHistory)
+          ? movementHistory.reduce((sum: number, segment: any) => {
+              // Each segment has a 'cost' field representing movement points used
+              const cost = typeof segment?.cost === 'number' ? segment.cost : 0;
+              return sum + cost;
+            }, 0)
+          : 0;
+
+        const remainingMovement = Math.max(0, maxMovement - movementCostThisTurn);
+
+        // Extract paidOpponentIds from turn_actions for this turn
+        // This ensures the "once per turn" fee tracking persists across browser refresh
+        const turnActions = row.turnActions || [];
+        const paidOpponentIds: string[] = [];
+        for (const act of Array.isArray(turnActions) ? turnActions : []) {
+          if (act?.kind !== "move") continue;
+          const ownersPaid = Array.isArray(act.ownersPaid) ? act.ownersPaid : [];
+          for (const p of ownersPaid) {
+            const pid = typeof p?.playerId === "string" ? p.playerId : null;
+            if (pid && !paidOpponentIds.includes(pid)) {
+              paidOpponentIds.push(pid);
+            }
+          }
+        }
 
         return {
           ...row,
@@ -507,9 +507,10 @@ export class PlayerService {
                   }
                 : undefined,
             turnNumber: row.turnNumber || 1,
-            movementHistory: row.movementHistory ? row.movementHistory : [],
-            remainingMovement: defaultMovement, // Calculate based on train type instead of hardcoding
+            movementHistory: movementHistory,
+            remainingMovement: remainingMovement, // Calculated from max movement minus costs already spent this turn
             loads: row.loads || [],
+            paidOpponentIds: paidOpponentIds, // Track which opponents have been paid for track usage this turn
           },
           hand: handCards,
           cameraState: row.camera_state || undefined,  // Per-player camera state
@@ -953,6 +954,7 @@ export class PlayerService {
     gameId: string;
     userId: string;
     to: { row: number; col: number; x?: number; y?: number };
+    movementCost?: number;
   }): Promise<{
     feeTotal: number;
     ownersUsed: string[];
@@ -961,7 +963,7 @@ export class PlayerService {
     updatedPosition: { row: number; col: number; x?: number; y?: number };
     updatedMoney: number;
   }> {
-    const { gameId, userId, to } = args;
+    const { gameId, userId, to, movementCost } = args;
     const client = await db.connect();
     try {
       await client.query("BEGIN");
@@ -1060,7 +1062,7 @@ export class PlayerService {
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
       const ownersPaid: Array<{ playerId: string; amount: number }> = newlyPayable.map((pid) => ({
         playerId: pid,
-        amount: 4,
+        amount: TRACK_USAGE_FEE,
       }));
       const feeTotal = ownersPaid.reduce((sum, p) => sum + p.amount, 0);
 
@@ -1105,49 +1107,6 @@ export class PlayerService {
         ]
       );
 
-      // Persist movement history for directionality checks after refresh.
-      // The client enforces reversal rules using its movementHistory array; we store the latest
-      // segment(s) here so a refresh can rehydrate that state.
-      if (from && (from.row !== to.row || from.col !== to.col)) {
-        const segment = {
-          from: {
-            row: from.row,
-            col: from.col,
-            ...(typeof from.x === "number" ? { x: from.x } : {}),
-            ...(typeof from.y === "number" ? { y: from.y } : {}),
-          },
-          to: {
-            row: Math.round(to.row),
-            col: Math.round(to.col),
-            ...(typeof to.x === "number" ? { x: Math.round(to.x) } : {}),
-            ...(typeof to.y === "number" ? { y: Math.round(to.y) } : {}),
-          },
-          cost: 0,
-        };
-
-        // Update existing row for this turn (if any) by appending the segment.
-        const updateMovement = await client.query(
-          `
-            UPDATE movement_history
-            SET movement_path = COALESCE(movement_path, '[]'::jsonb) || $4::jsonb,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
-          `,
-          [playerId, gameId, turnNumber, JSON.stringify([segment])]
-        );
-
-        // If no row existed, insert one.
-        if ((updateMovement.rowCount ?? 0) === 0) {
-          await client.query(
-            `
-              INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
-              VALUES ($1, $2, $3, $4::jsonb)
-            `,
-            [playerId, gameId, turnNumber, JSON.stringify([segment])]
-          );
-        }
-      }
-
       // Record server-authored action log for this turn (used for undo and for "already paid" tracking)
       const moveAction: TurnActionMove = {
         kind: "move",
@@ -1165,6 +1124,40 @@ export class PlayerService {
         `,
         [playerId, gameId, turnNumber, JSON.stringify([moveAction])]
       );
+
+      // Persist movement history with cost for remaining movement calculation on reload
+      // Build movement segment matching the TrackSegment structure
+      const movementSegment = {
+        from: from ? { x: from.x, y: from.y, row: from.row, col: from.col, terrain: 0 } : null,
+        to: { x: to.x, y: to.y, row: to.row, col: to.col, terrain: 0 },
+        cost: typeof movementCost === 'number' ? movementCost : 0,
+      };
+
+      // Check if movement_history exists for this turn
+      const existingHistory = await client.query(
+        `SELECT movement_path FROM movement_history
+         WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+        [playerId, gameId, turnNumber]
+      );
+
+      if (existingHistory.rows.length > 0) {
+        // Append to existing movement path
+        const existingPath = existingHistory.rows[0].movement_path || [];
+        const updatedPath = [...existingPath, movementSegment];
+        await client.query(
+          `UPDATE movement_history
+           SET movement_path = $1, updated_at = CURRENT_TIMESTAMP
+           WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+          [JSON.stringify(updatedPath), playerId, gameId, turnNumber]
+        );
+      } else {
+        // Insert new movement history record
+        await client.query(
+          `INSERT INTO movement_history (player_id, game_id, turn_number, movement_path)
+           VALUES ($1, $2, $3, $4)`,
+          [playerId, gameId, turnNumber, JSON.stringify([movementSegment])]
+        );
+      }
 
       await client.query("COMMIT");
 
@@ -1320,7 +1313,7 @@ export class PlayerService {
           ]
         );
 
-        // Pop last action
+        // Pop last action from turn_actions
         const remainingActions = actions.slice(0, actions.length - 1);
         await client.query(
           `UPDATE turn_actions
@@ -1328,6 +1321,27 @@ export class PlayerService {
            WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
           [JSON.stringify(remainingActions), playerId, gameId, turnNumber]
         );
+
+        // Also remove the last movement segment from movement_history
+        // so remainingMovement is recalculated correctly on refresh
+        const historyResult = await client.query(
+          `SELECT movement_path FROM movement_history
+           WHERE player_id = $1 AND game_id = $2 AND turn_number = $3
+           FOR UPDATE`,
+          [playerId, gameId, turnNumber]
+        );
+        if (historyResult.rows.length > 0) {
+          const movementPath = historyResult.rows[0].movement_path || [];
+          if (Array.isArray(movementPath) && movementPath.length > 0) {
+            const updatedPath = movementPath.slice(0, movementPath.length - 1);
+            await client.query(
+              `UPDATE movement_history
+               SET movement_path = $1, updated_at = CURRENT_TIMESTAMP
+               WHERE player_id = $2 AND game_id = $3 AND turn_number = $4`,
+              [JSON.stringify(updatedPath), playerId, gameId, turnNumber]
+            );
+          }
+        }
 
         await client.query("COMMIT");
         const updatedMoney = currentMoney + feeTotal;

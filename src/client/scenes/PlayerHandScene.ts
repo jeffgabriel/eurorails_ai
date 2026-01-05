@@ -190,7 +190,10 @@ export class PlayerHandScene extends Phaser.Scene {
     let costColor = COST_COLOR;
     const turnLimit = this.trackDrawingManager?.getTurnBuildLimit?.() ?? 20;
 
-    if (this.currentTrackCost > currentPlayer.money) {
+    // "Insufficient funds" is only meaningful while actively drawing / previewing track.
+    // After committing track, the player's money is already decremented, while `currentTrackCost`
+    // may still reflect total spent this turn, which would incorrectly trigger this warning.
+    if (this.isDrawingMode && this.currentTrackCost > currentPlayer.money) {
       costColor = "#ff4444";
       costWarning = " (Insufficient funds!)";
     } else if (this.currentTrackCost > turnLimit) {
