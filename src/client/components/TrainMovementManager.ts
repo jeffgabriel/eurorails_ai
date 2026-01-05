@@ -217,13 +217,13 @@ export class TrainMovementManager {
     // console.log("Deducted movement points:", distance, "Remaining:", currentPlayer.trainState.remainingMovement);
   }
 
-  canMoveTo(point: GridPoint): { canMove: boolean; endMovement: boolean; message?: string } {
+  canMoveTo(point: GridPoint): { canMove: boolean; endMovement: boolean; message?: string; distance?: number } {
     // Get current player
     const currentPlayer =
       this.gameState.players[this.gameState.currentPlayerIndex];
     if (!currentPlayer || !currentPlayer.trainState) {
       // console.log("Current player or train state is undefined");
-      return { canMove: false, endMovement: false, message: "Current player or train state is undefined" };
+      return { canMove: false, endMovement: false, message: "Current player or train state is undefined", distance: 0 };
     }
 
     // Initialize movement history if needed
@@ -234,7 +234,7 @@ export class TrainMovementManager {
     // Check ferry state - if just arrived at ferry, no movement allowed
     if (currentPlayer.trainState.ferryState?.status === 'just_arrived') {
       // console.log("Cannot move - just arrived at ferry this turn");
-      return { canMove: false, endMovement: false, message: "Cannot move - just arrived at ferry this turn" };
+      return { canMove: false, endMovement: false, message: "Cannot move - just arrived at ferry this turn", distance: 0 };
     }
 
     // If this is the first move, only check if it's a valid starting point
@@ -245,7 +245,7 @@ export class TrainMovementManager {
         //   "Invalid starting point - must start first move from a major city"
         // );
       }
-      return { canMove: isStartingCity, endMovement: false, message: "Invalid starting point - must start first move from a major city" };
+      return { canMove: isStartingCity, endMovement: false, message: "Invalid starting point - must start first move from a major city", distance: 0 };
     }
 
     // Convert current position to GridPoint
@@ -259,7 +259,7 @@ export class TrainMovementManager {
     // Check movement points
     if (!this.hasEnoughMovement(currentPlayer, point)) {
       console.log("Not enough movement points remaining");
-      return { canMove: false, endMovement: false, message: "Not enough movement points remaining" };
+      return { canMove: false, endMovement: false, message: "Not enough movement points remaining", distance };
     }
 
     // Check if this is a valid track connection
@@ -305,12 +305,12 @@ export class TrainMovementManager {
           this.warn(
             `[TrainMovementManager] Could not find GridPoint at (${priorPosition.row}, ${priorPosition.col})`
           );
-          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports", distance };
         }
 
         const canReverse = this.isTerrainCityOrFerry(currentGridPoint.terrain);
         if (!canReverse) {
-          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports" };
+          return { canMove: false, endMovement: false, message: "Invalid direction change - can only reverse at cities or ferry ports", distance };
         }
       }
     }
@@ -334,9 +334,9 @@ export class TrainMovementManager {
           otherSide: isCurrentFrom ? to : from,
         };
       }
-      return { canMove: true, endMovement: true, message: "Ferry port reached - ending movement" };
+      return { canMove: true, endMovement: true, message: "Ferry port reached - ending movement", distance };
     }
 
-    return { canMove: true, endMovement: false, message: "Move completed successfully" };
+    return { canMove: true, endMovement: false, message: "Move completed successfully", distance };
   }
 }

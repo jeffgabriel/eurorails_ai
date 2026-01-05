@@ -73,12 +73,18 @@ export interface TrainState {
      * Set to true for the turn immediately after crossing a ferry, to halve movement.
      */
     justCrossedFerry?: boolean;
+    /**
+     * Track which opponents have been paid for track usage this turn.
+     * Loaded from server on page refresh to ensure "once per turn" fee tracking persists.
+     */
+    paidOpponentIds?: string[];
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';
 
 export const VICTORY_INITIAL_THRESHOLD = 250; // 250M ECU to win
 export const VICTORY_TIE_THRESHOLD = 300; // 300M ECU after a tie
+export const TRACK_USAGE_FEE = 4; // 4M ECU per opponent's track used per turn
 
 export interface VictoryState {
     triggered: boolean;              // Has someone declared victory?

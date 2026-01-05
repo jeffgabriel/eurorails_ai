@@ -622,9 +622,10 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
 // Move train and settle opponent track-usage fees (authenticated, server-authoritative on fees)
 router.post('/move-train', authenticateToken, async (req, res) => {
     try {
-        const { gameId, to } = req.body as {
+        const { gameId, to, movementCost } = req.body as {
             gameId?: string;
             to?: { row: number; col: number; x?: number; y?: number };
+            movementCost?: number;
         };
         const userId = req.user?.id;
 
@@ -645,7 +646,8 @@ router.post('/move-train', authenticateToken, async (req, res) => {
         const result = await PlayerService.moveTrainForUser({
             gameId,
             userId,
-            to
+            to,
+            movementCost
         });
 
         // Broadcast updated public player states (payer + any payees). Do not leak hands.
