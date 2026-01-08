@@ -119,6 +119,37 @@ export class PlayerHandScene extends Phaser.Scene {
     this.showToast(message);
   }
 
+  private shouldWarnBeforeEnteringDrawingMode(): boolean {
+    if (this.isDrawingMode) return false;
+
+    const localPlayerId = this.gameStateService.getLocalPlayerId();
+    const localPlayer = localPlayerId
+      ? this.gameState.players.find((p) => p.id === localPlayerId)
+      : null;
+    if (!localPlayer) return false;
+
+    // Match movement-mode guards (no warning if movement is not available anyway).
+    if ((localPlayer.turnNumber ?? 1) < 3) return false;
+
+    // If the player has no track, they cannot move anyway.
+    const hasTrack = this.trainInteractionManager?.playerHasTrack?.(localPlayer.id) ?? false;
+    if (!hasTrack) return false;
+
+    return (localPlayer.trainState?.remainingMovement ?? 0) > 0;
+  }
+
+  private onCrayonPressed(pointer: Phaser.Input.Pointer): void {
+    if (pointer.event) {
+      pointer.event.stopPropagation();
+    }
+    if (this.shouldWarnBeforeEnteringDrawingMode()) {
+      this.showHandToast(
+        "Move fully before drawing. You cannot move again this turn once you start drawing"
+      );
+    }
+    this.toggleDrawingCallback();
+  }
+
   public updateTrainCardLoads(): void {
     if (!this.trainCard) return;
     this.trainCard.updateLoads();
@@ -762,7 +793,7 @@ export class PlayerHandScene extends Phaser.Scene {
         targets: container,
         alpha: 0,
         duration: 1200,
-        delay: 1600,
+        delay: 3600,
         ease: "Power2",
         onComplete: () => {
           container.destroy(true);
@@ -1692,10 +1723,7 @@ export class PlayerHandScene extends Phaser.Scene {
           }
         })
         .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-          if (pointer.event) {
-            pointer.event.stopPropagation();
-          }
-          this.toggleDrawingCallback();
+          this.onCrayonPressed(pointer);
         });
     } else {
       crayonButton.setInteractive({ useHandCursor: false });
