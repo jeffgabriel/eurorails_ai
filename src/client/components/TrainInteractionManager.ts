@@ -165,6 +165,15 @@ export class TrainInteractionManager {
       return;
     }
 
+    // Movement-before-drawing rule:
+    // If the player has drawn/built any track this turn, they cannot move again until next turn.
+    if (this.trackDrawingManager.hasDrawnThisTurn()) {
+      this.uiManager?.showHandToast?.(
+        "You cannot move again this turn after you start drawing track."
+      );
+      return;
+    }
+
     const hasTrack = this.playerHasTrack(playerId);
     if (!hasTrack) {
       this.uiManager?.showHandToast?.(

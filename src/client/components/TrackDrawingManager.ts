@@ -228,6 +228,17 @@ export class TrackDrawingManager {
         return this.playerTracks.get(playerId);
     }
 
+    /**
+     * Derived per-turn state: has this player drawn/built any track this turn?
+     */
+    public hasDrawnThisTurn(): boolean {
+        const currentPlayer = this.gameState.players?.[this.gameState.currentPlayerIndex];
+        const committedTurnSpend = (this.playerTracks.get(currentPlayer?.id)?.turnBuildCost ?? 0) > 0;
+        const uncommittedThisSession = this.currentSegments.length > 0;
+
+        return committedTurnSpend || uncommittedThisSession;
+    }
+
     public async loadExistingTracks(): Promise<void> {
         try {
             // Fetch all tracks for the current game

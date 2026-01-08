@@ -45,6 +45,80 @@ describe('TrackDrawingManager Undo Feature', () => {
     expect(manager.segmentsDrawnThisTurn).toEqual([]);
   });
 
+  describe('hasDrawnThisTurn', () => {
+    it('should be false when nothing has been drawn or committed this turn', () => {
+      const manager = new TrackDrawingManager(
+        mockScene,
+        mockMapContainer,
+        mockGameState,
+        mockGridPoints
+      );
+      expect(manager.hasDrawnThisTurn()).toBe(false);
+    });
+
+    it('should be true when there are uncommitted segments in the current session', () => {
+      const manager = new TrackDrawingManager(
+        mockScene,
+        mockMapContainer,
+        mockGameState,
+        mockGridPoints
+      );
+      (manager as any)["currentSegments"] = [
+        {
+          from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+          to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear },
+          cost: 1
+        }
+      ];
+      expect(manager.hasDrawnThisTurn()).toBe(true);
+    });
+
+    it('should be true when committed turnBuildCost exists for the player', () => {
+      const manager = new TrackDrawingManager(
+        mockScene,
+        mockMapContainer,
+        mockGameState,
+        mockGridPoints
+      );
+      (manager as any).playerTracks.set(mockGameState.players[0].id, {
+        playerId: mockGameState.players[0].id,
+        gameId: mockGameState.id,
+        segments: [],
+        totalCost: 0,
+        turnBuildCost: 3,
+        lastBuildTimestamp: new Date()
+      } as any);
+      expect(manager.hasDrawnThisTurn()).toBe(true);
+    });
+
+    it('should become false again after undo clears committed spend (turnBuildCost -> 0)', async () => {
+      const manager = new TrackDrawingManager(
+        mockScene,
+        mockMapContainer,
+        mockGameState,
+        mockGridPoints
+      );
+      const segment1 = {
+        from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+        to: { x: 1, y: 1, row: 0, col: 1, terrain: TerrainType.Clear },
+        cost: 1
+      };
+      (manager as any).playerTracks.set(mockGameState.players[0].id, {
+        playerId: mockGameState.players[0].id,
+        gameId: mockGameState.id,
+        segments: [segment1],
+        totalCost: 1,
+        turnBuildCost: 1,
+        lastBuildTimestamp: new Date()
+      } as any);
+      manager.segmentsDrawnThisTurn = [segment1 as any];
+
+      expect(manager.hasDrawnThisTurn()).toBe(true);
+      await manager.undoLastSegment();
+      expect(manager.hasDrawnThisTurn()).toBe(false);
+    });
+  });
+
   it('should accumulate segmentsDrawnThisTurn across multiple drawing sessions in a turn', async () => {
     const manager = new TrackDrawingManager(
       mockScene,
