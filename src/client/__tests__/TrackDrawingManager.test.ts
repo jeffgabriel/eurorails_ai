@@ -931,6 +931,41 @@ describe('TrackDrawingManager', () => {
             // Should use red color (0xff0000)
             expect(mockGraphics6.lineStyle).toHaveBeenCalledWith(2, 0xff0000, 0.5);
         });
+
+        it('should still render a red preview (and update cost) when over the turn build limit', () => {
+            const mockGraphics = {
+                clear: jest.fn(),
+                lineStyle: jest.fn(),
+                beginPath: jest.fn(),
+                moveTo: jest.fn(),
+                lineTo: jest.fn(),
+                strokePath: jest.fn()
+            };
+            (trackDrawingManager as any).previewGraphics = mockGraphics;
+
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            trackDrawingManager.toggleDrawingMode();
+            costUpdateCallback.mockClear();
+
+            // Force over-limit scenario: 20M limit, but already spent 20M this turn
+            (trackDrawingManager as any).turnBuildCost = 20;
+            gameState.players[0].money = 999; // Not cash-limited
+
+            const startPoint = gridPoints[2][2];
+            (trackDrawingManager as any).lastClickedPoint = startPoint;
+
+            const targetPoint = gridPoints[2][3];
+
+            // Use real pathfinding (no mock) so we validate the preview doesn't disappear.
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
+
+            // Flush queued cost update
+            (trackDrawingManager as any).updateEventHandler?.();
+
+            // Cost should include 20 already spent + 1 preview = 21
+            expect(costUpdateCallback).toHaveBeenCalledWith(21);
+            expect(mockGraphics.lineStyle).toHaveBeenCalledWith(2, 0xff0000, 0.5);
+        });
     });
 });
 
