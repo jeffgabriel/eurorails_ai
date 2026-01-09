@@ -175,8 +175,21 @@ export class TrackDrawingManager {
         this.updateEventHandler = () => {
             if (this.costUpdateQueue) {
                 const now = Date.now();
-                // Only update if we've been hovering for at least 100ms
-                if (now - this.costUpdateQueue.timestamp > 100) {
+                const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+                const playerTrackState = this.playerTracks.get(currentPlayer.id);
+                const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+
+                // Total cost = previous sessions + current session committed + preview
+                const totalCost = previousSessionsCost + this.turnBuildCost + this.costUpdateQueue.cost;
+
+                // Provide immediate feedback when the preview is unaffordable (or transitions back to affordable),
+                // otherwise keep the 100ms debounce to reduce flicker during fast dragging.
+                const isUnaffordableNow = totalCost > currentPlayer.money;
+                const wasUnaffordable = this.lastDisplayedCost > currentPlayer.money;
+                const shouldFlushImmediately = isUnaffordableNow || (wasUnaffordable && !isUnaffordableNow);
+
+                const minHoverMs = shouldFlushImmediately ? 0 : 100;
+                if (now - this.costUpdateQueue.timestamp >= minHoverMs) {
                     this.processCostUpdate();
                 }
             }

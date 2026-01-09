@@ -695,6 +695,29 @@ describe('TrackDrawingManager', () => {
             expect(costUpdateCallback).toHaveBeenCalledWith(1);
         });
 
+        it('should flush cost update immediately when preview is unaffordable', () => {
+            trackDrawingManager.onCostUpdate(costUpdateCallback);
+            trackDrawingManager.toggleDrawingMode();
+            costUpdateCallback.mockClear();
+
+            const startPoint = gridPoints[2][2];
+            (trackDrawingManager as any).lastClickedPoint = startPoint;
+
+            const targetPoint = gridPoints[2][3];
+            const mockPath = [startPoint, targetPoint];
+            jest.spyOn(trackDrawingManager as any, 'findPreviewPath').mockReturnValue(mockPath);
+
+            // Make the preview unaffordable (clear segment costs 1)
+            gameState.players[0].money = 0;
+
+            (trackDrawingManager as any).processHoverUpdate(targetPoint);
+
+            // No manual timestamp adjustment; unaffordable previews should flush on the next update handler call.
+            (trackDrawingManager as any).updateEventHandler?.();
+
+            expect(costUpdateCallback).toHaveBeenCalledWith(1);
+        });
+
         it('should accumulate costs across multiple drawing sessions', () => {
             // Setup: Register callback
             trackDrawingManager.onCostUpdate(costUpdateCallback);
