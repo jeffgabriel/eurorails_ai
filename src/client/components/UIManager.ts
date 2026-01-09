@@ -299,10 +299,10 @@ export class UIManager {
       const newPlayer =
         this.gameState.players[this.gameState.currentPlayerIndex];
       if (!newPlayer.trainState?.position) {
-        this.showCitySelectionForPlayer(newPlayer.id);
-      } else {
-        const { x, y } = newPlayer.trainState.position;
-        this.scene.cameras.main.pan(x, y, 1000, "Linear", true);
+        // Only the local player should see the city selection prompt for their own train placement.
+        if (this.playerStateService.getLocalPlayerId() === newPlayer.id) {
+          this.showCitySelectionForPlayer(newPlayer.id);
+        }
       }
     };
 
