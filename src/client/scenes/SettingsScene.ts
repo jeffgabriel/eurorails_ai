@@ -62,11 +62,16 @@ export class SettingsScene extends Phaser.Scene {
                 console.error('Failed to fetch join code:', error);
             }
         }
-        
-        // If we're not editing a player, show the main settings menu
-        if (!this.editingPlayer) {
-            this.showMainSettings();
+
+        // If we're editing a player, always re-render the edit dialog so we never strand the user
+        // on an empty overlay if something triggers a rerender (e.g., clicks falling through).
+        if (this.editingPlayer) {
+            const isNewPlayer = !this.editingPlayer.id;
+            this.showEditPlayer(this.editingPlayer, isNewPlayer);
+            return;
         }
+
+        this.showMainSettings();
     }
 
     private showMainSettings() {
@@ -171,6 +176,7 @@ export class SettingsScene extends Phaser.Scene {
             ).setOrigin(0.5);
 
             rect.on('pointerdown', () => {
+                if (this.editingPlayer) return;
                 if (this.activeTab === tab) return;
                 this.activeTab = tab;
                 this.renderScene().catch(console.error);
@@ -445,6 +451,8 @@ export class SettingsScene extends Phaser.Scene {
             0x000000,
             0.7
         ).setOrigin(0);
+        // Critical: block clicks so they can't reach the tabs/buttons underneath.
+        overlay.setInteractive();
 
         // Calculate panel dimensions based on content
         const panelWidth = 500;
