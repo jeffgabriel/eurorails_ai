@@ -990,11 +990,9 @@ export class GameScene extends Phaser.Scene {
       
       await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode, totalCost);
       
-      // Pan camera to new player's train if they have a position
-      if (newCurrentPlayer.trainState?.position) {
-        const { x, y } = newCurrentPlayer.trainState.position;
-        this.cameras.main.pan(x, y, 1000, "Linear", true);
-      }
+      // Do not auto-pan on turn changes.
+      // Each client maintains its own per-player camera state via CameraController,
+      // and auto-panning to the new active player's train is disorienting for other players.
       
       // Check if new player needs to select a city
       if (!newCurrentPlayer.trainState?.position) {
