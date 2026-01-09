@@ -62,6 +62,62 @@ export class GameScene extends Phaser.Scene {
     this.loadService = LoadService.getInstance();
   }
 
+  /**
+   * Build a list of all cities currently available on the board (from MapRenderer grid points).
+   * Returns a stable, alphabetized list for UI search/autocomplete.
+   */
+  public getAllCityNames(): string[] {
+    const names = new Set<string>();
+    const grid = this.mapRenderer?.gridPoints;
+    if (!grid) return [];
+
+    for (const row of grid) {
+      for (const point of row) {
+        const name = point?.city?.name;
+        if (name) {
+          names.add(name);
+        }
+      }
+    }
+
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }
+
+  /**
+   * Pan/center the main camera on a given city by name.
+   * Returns true if the city was found and the camera was centered.
+   */
+  public centerCameraOnCity(cityName: string): boolean {
+    const target = cityName.trim().toLowerCase();
+    if (!target) return false;
+
+    const grid = this.mapRenderer?.gridPoints;
+    if (!grid) return false;
+
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+
+    for (const row of grid) {
+      for (const point of row) {
+        const name = point?.city?.name;
+        if (name && name.trim().toLowerCase() === target) {
+          sumX += point.x;
+          sumY += point.y;
+          count += 1;
+        }
+      }
+    }
+
+    if (count === 0) return false;
+
+    const x = sumX / count;
+    const y = sumY / count;
+    this.cameras.main.centerOn(x, y);
+    this.cameras.main.dirty = true;
+    return true;
+  }
+
   init(data: { gameState?: GameState }) {
     // If we get a gameState, always use it
     if (data.gameState) {

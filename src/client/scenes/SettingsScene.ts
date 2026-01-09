@@ -2,11 +2,13 @@ import 'phaser';
 import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
+import { CityListDropDown, CityListItem } from '../components/CityListDropDown';
 
 export class SettingsScene extends Phaser.Scene {
     private gameState: GameState;
     private editingPlayer?: Player;
     private nameInput?: HTMLInputElement;
+    private cityDropDown?: CityListDropDown;
     private colorButtons: Phaser.GameObjects.Rectangle[] = [];
     private selectedColor?: PlayerColor;
     private errorContainer?: Phaser.GameObjects.Container;
@@ -63,7 +65,11 @@ export class SettingsScene extends Phaser.Scene {
         // Add white background panel for settings
         const panelWidth = 600;
         const joinCodeHeight = this.joinCode ? 80 : 0;
-        const panelHeight = Math.max(400, 150 + joinCodeHeight + (this.gameState.players.length * 60) + 200);
+        const citySearchHeight = 90;
+        const panelHeight = Math.max(
+            400,
+            150 + joinCodeHeight + (this.gameState.players.length * 60) + 200 + citySearchHeight
+        );
         const panel = this.add.rectangle(
             this.scale.width / 2,
             this.scale.height / 2,
@@ -196,6 +202,60 @@ export class SettingsScene extends Phaser.Scene {
 
         const yForButtonIndex = (idx: number) =>
             blockTopY + (buttonHeight / 2) + idx * (buttonHeight + buttonGap);
+
+        // --- City search ("Take me to...") ---
+        const gameScene = this.scene.get('GameScene') as GameScene;
+        const citySearchLabelY = blockTopY - 70;
+        const citySearchRowY = blockTopY - 40;
+
+        this.add.text(
+            buttonX,
+            citySearchLabelY,
+            'Take me to…',
+            {
+                color: '#000000',
+                fontSize: '18px',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0.5);
+
+        // RexUI dropdown (more reliable than HTML DOM inside Phaser scenes)
+        this.cityDropDown?.destroy();
+        this.cityDropDown = new CityListDropDown(this, (gameScene as any).mapRenderer);
+        this.cityDropDown.setPosition(buttonX - 70, citySearchRowY);
+        this.cityDropDown.init();
+        this.add.existing(this.cityDropDown);
+
+        const goButton = this.add.rectangle(
+            buttonX + 180,
+            citySearchRowY,
+            70,
+            40,
+            0x2563eb
+        ).setInteractive({ useHandCursor: true });
+
+        this.add.text(
+            buttonX + 180,
+            citySearchRowY,
+            'Go',
+            {
+                color: '#ffffff',
+                fontSize: '18px',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0.5);
+
+        const runCitySearch = () => {
+            const selected = this.cityDropDown?.getSelectedCity() ?? null;
+            if (!selected) return;
+
+            this.centerGameCameraOnCity(selected, gameScene);
+
+            // Close settings so the player immediately sees the centered map.
+            this.closeSettings();
+        };
+
+        goButton.on('pointerdown', runCitySearch);
 
         // Add end game button
         const endGameButton = this.add.rectangle(
@@ -666,6 +726,10 @@ export class SettingsScene extends Phaser.Scene {
         if (this.nameInput) {
             this.nameInput = undefined;
         }
+        if (this.cityDropDown) {
+            this.cityDropDown.destroy();
+            this.cityDropDown = undefined;
+        }
 
         // Get the game scene and update its state
         const gameScene = this.scene.get('GameScene') as GameScene;
@@ -684,6 +748,12 @@ export class SettingsScene extends Phaser.Scene {
         
         // Refresh UI elements without restarting the scene
         gameScene.events.emit('resume');
+    }
+
+    private centerGameCameraOnCity(city: CityListItem, gameScene: GameScene): void {
+        // Prefer centering for predictable "jump to" behavior (no animation).
+        gameScene.cameras.main.centerOn(city.x, city.y);
+        gameScene.cameras.main.dirty = true;
     }
 
     private async endGame() {
