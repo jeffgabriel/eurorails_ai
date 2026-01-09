@@ -2,7 +2,6 @@ import "phaser";
 import SimpleDropDownList from "phaser3-rex-plugins/templates/ui/simpledropdownlist/SimpleDropDownList";
 import { TerrainType } from "../../shared/types/GameTypes";
 import { MapRenderer } from "./MapRenderer";
-
 export type CityListItem = {
   name: string;
   terrain: TerrainType;

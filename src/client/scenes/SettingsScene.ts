@@ -2,7 +2,8 @@ import 'phaser';
 import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
-import { CityListDropDown, CityListItem } from '../components/CityListDropDown';
+import { CityListDropDown } from '../components/CityListDropDown';
+import { CityListItem } from '../components/CityListDropDown';
 
 export class SettingsScene extends Phaser.Scene {
     private gameState: GameState;
@@ -205,6 +206,7 @@ export class SettingsScene extends Phaser.Scene {
 
         // --- City search ("Take me to...") ---
         const gameScene = this.scene.get('GameScene') as GameScene;
+        const mapRenderer = gameScene.getMapRenderer();
         const citySearchLabelY = blockTopY - 70;
         const citySearchRowY = blockTopY - 40;
 
@@ -221,10 +223,12 @@ export class SettingsScene extends Phaser.Scene {
 
         // RexUI dropdown (more reliable than HTML DOM inside Phaser scenes)
         this.cityDropDown?.destroy();
-        this.cityDropDown = new CityListDropDown(this, (gameScene as any).mapRenderer);
-        this.cityDropDown.setPosition(buttonX - 70, citySearchRowY);
-        this.cityDropDown.init();
-        this.add.existing(this.cityDropDown);
+        if (mapRenderer) {
+            this.cityDropDown = new CityListDropDown(this, mapRenderer);
+            this.cityDropDown.setPosition(buttonX - 70, citySearchRowY);
+            this.cityDropDown.init();
+            this.add.existing(this.cityDropDown);
+        }
 
         const goButton = this.add.rectangle(
             buttonX + 180,
@@ -753,7 +757,7 @@ export class SettingsScene extends Phaser.Scene {
     private centerGameCameraOnCity(city: CityListItem, gameScene: GameScene): void {
         // Prefer centering for predictable "jump to" behavior (no animation).
         gameScene.cameras.main.centerOn(city.x, city.y);
-        gameScene.cameras.main.dirty = true;
+        gameScene.persistLocalCameraState();
     }
 
     private async endGame() {

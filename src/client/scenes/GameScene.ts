@@ -63,6 +63,25 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
+   * Expose MapRenderer for other scenes (e.g., Settings) without reaching into private fields via `as any`.
+   */
+  public getMapRenderer(): MapRenderer | null {
+    return this.mapRenderer ?? null;
+  }
+
+  /**
+   * Persist the current camera position/zoom to the per-player camera state (and server) so it survives reloads.
+   * Safe to call after any external camera changes (e.g., "Take me to…" jump).
+   */
+  public persistLocalCameraState(): void {
+    try {
+      void this.cameraController?.saveCameraState?.();
+    } catch (_e) {
+      // Non-fatal
+    }
+  }
+
+  /**
    * Build a list of all cities currently available on the board (from MapRenderer grid points).
    * Returns a stable, alphabetized list for UI search/autocomplete.
    */
@@ -114,7 +133,7 @@ export class GameScene extends Phaser.Scene {
     const x = sumX / count;
     const y = sumY / count;
     this.cameras.main.centerOn(x, y);
-    this.cameras.main.dirty = true;
+    this.persistLocalCameraState();
     return true;
   }
 
