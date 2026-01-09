@@ -14,6 +14,7 @@ export class CameraController {
     private gameState: GameState;
     private pendingRender: boolean = false;
     private localPlayerId: string | null = null;
+    private readonly ZOOM_STEP: number = 0.05;
     
     constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
         this.scene = scene;
@@ -151,9 +152,9 @@ export class CameraController {
                 const maxZoom = 2.0;
                 
                 if (deltaY > 0) {
-                    this.camera.zoom = Math.max(minZoom, zoom - 0.1);
+                    this.camera.zoom = Math.max(minZoom, zoom - this.ZOOM_STEP);
                 } else {
-                    this.camera.zoom = Math.min(maxZoom, zoom + 0.1);
+                    this.camera.zoom = Math.min(maxZoom, zoom + this.ZOOM_STEP);
                 }
                 
                 const maxScrollY = this.mapHeight - ((this.camera.height - 200) / this.camera.zoom);
