@@ -175,8 +175,27 @@ export class TrackDrawingManager {
         this.updateEventHandler = () => {
             if (this.costUpdateQueue) {
                 const now = Date.now();
-                // Only update if we've been hovering for at least 100ms
-                if (now - this.costUpdateQueue.timestamp > 100) {
+                const currentPlayer = this.gameState.players[this.gameState.currentPlayerIndex];
+                const playerTrackState = this.playerTracks.get(currentPlayer.id);
+                const previousSessionsCost = playerTrackState ? playerTrackState.turnBuildCost : 0;
+
+                // Total cost = previous sessions + current session committed + preview
+                const totalCost = previousSessionsCost + this.turnBuildCost + this.costUpdateQueue.cost;
+
+                // Provide immediate feedback when the preview is unaffordable (or transitions back to affordable),
+                // otherwise keep the 100ms debounce to reduce flicker during fast dragging.
+                const isOverMoneyNow = totalCost > currentPlayer.money;
+                const isOverTurnLimitNow = totalCost > this.turnBuildLimit;
+                const isUnaffordableNow = isOverMoneyNow || isOverTurnLimitNow;
+
+                const wasOverMoney = this.lastDisplayedCost > currentPlayer.money;
+                const wasOverTurnLimit = this.lastDisplayedCost > this.turnBuildLimit;
+                const wasUnaffordable = wasOverMoney || wasOverTurnLimit;
+
+                const shouldFlushImmediately = isUnaffordableNow || (wasUnaffordable && !isUnaffordableNow);
+
+                const minHoverMs = shouldFlushImmediately ? 0 : 100;
+                if (now - this.costUpdateQueue.timestamp >= minHoverMs) {
                     this.processCostUpdate();
                 }
             }
@@ -1086,10 +1105,10 @@ export class TrackDrawingManager {
                     }
                 }
 
-                // Use the true build cost for the validity check
-                if (!this.isValidCost(trueBuildCost)) {
-                    return null;
-                }
+                // Preview-only behavior:
+                // Even if this path is unaffordable (money or per-turn build limit), we still return it so
+                // the UI can render a red preview and show an explanation in the cost display.
+                // The hard affordability check is enforced on click/commit in `handleDrawingClick`.
 
                 return path;
             }
