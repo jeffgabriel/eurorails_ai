@@ -2,6 +2,7 @@ import 'phaser';
 import { GameState, Player, PlayerColor, TrainType } from '../../shared/types/GameTypes';
 import { GameScene } from './GameScene';
 import { config } from '../config/apiConfig';
+import { UI_FONT_FAMILY } from '../config/uiFont';
 import { CityListDropDown } from '../components/CityListDropDown';
 import { CityListItem } from '../components/CityListDropDown';
 
@@ -14,6 +15,7 @@ export class SettingsScene extends Phaser.Scene {
     private selectedColor?: PlayerColor;
     private errorContainer?: Phaser.GameObjects.Container;
     private joinCode?: string;
+    private activeTab: 'players' | 'rules' = 'players';
 
     constructor() {
         super({ key: 'SettingsScene' });
@@ -31,11 +33,19 @@ export class SettingsScene extends Phaser.Scene {
     }
 
     async create() {
+        await this.renderScene();
+    }
+
+    private async renderScene(): Promise<void> {
+        // Clean up only settings scene DOM elements
+        const settingsElements = document.querySelectorAll('.settings-scene-element');
+        settingsElements.forEach(element => element.remove());
+
         // Clear existing scene
         this.children.removeAll();
         
         // Add semi-transparent dark background for better visibility
-        const background = this.add.rectangle(
+        this.add.rectangle(
             0, 0,
             this.scale.width,
             this.scale.height,
@@ -55,21 +65,33 @@ export class SettingsScene extends Phaser.Scene {
                 console.error('Failed to fetch join code:', error);
             }
         }
-        
-        // If we're not editing a player, show the main settings menu
-        if (!this.editingPlayer) {
-            this.showMainSettings();
+
+        // If we're editing a player, always re-render the edit dialog so we never strand the user
+        // on an empty overlay if something triggers a rerender (e.g., clicks falling through).
+        if (this.editingPlayer) {
+            const isNewPlayer = !this.editingPlayer.id;
+            this.showEditPlayer(this.editingPlayer, isNewPlayer);
+            return;
         }
+
+        this.showMainSettings();
     }
 
     private showMainSettings() {
         // Add white background panel for settings
         const panelWidth = 600;
         const joinCodeHeight = this.joinCode ? 80 : 0;
+        const tabHeaderHeight = 50;
         const citySearchHeight = 90;
-        const panelHeight = Math.max(
-            400,
-            150 + joinCodeHeight + (this.gameState.players.length * 60) + 200 + citySearchHeight
+        const contentHeight =
+            this.activeTab === 'players'
+                ? (this.gameState.players.length * 60) + citySearchHeight
+                : 340;
+        const showBottomButtons = this.activeTab === 'players';
+        const bottomButtonsHeight = showBottomButtons ? 160 : 0;
+        const panelHeight = Math.min(
+            this.scale.height - 40,
+            Math.max(420, 170 + tabHeaderHeight + joinCodeHeight + contentHeight + bottomButtonsHeight)
         );
         const panel = this.add.rectangle(
             this.scale.width / 2,
@@ -80,6 +102,9 @@ export class SettingsScene extends Phaser.Scene {
             1
         ).setOrigin(0.5);
 
+        const panelLeftX = (this.scale.width / 2) - (panelWidth / 2);
+        const panelTopY = (this.scale.height / 2) - (panelHeight / 2);
+
         // Add title
         this.add.text(
             this.scale.width / 2,
@@ -88,20 +113,94 @@ export class SettingsScene extends Phaser.Scene {
             {
                 color: '#000000',
                 fontSize: '32px',
-                fontStyle: 'bold'
+                fontStyle: 'bold',
+                fontFamily: UI_FONT_FAMILY
             }
         ).setOrigin(0.5);
 
+        // Top-right close button (always available, regardless of tab/content height)
+        const closeSize = 28;
+        const closeX = panelLeftX + panelWidth - 22;
+        const closeY = panelTopY + 22;
+
+        const closeBg = this.add.rectangle(
+            closeX,
+            closeY,
+            closeSize,
+            closeSize,
+            0xdddddd
+        ).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+        this.add.text(
+            closeX,
+            closeY + 1,
+            '✕',
+            {
+                color: '#000000',
+                fontSize: '18px',
+                fontStyle: 'bold',
+                fontFamily: UI_FONT_FAMILY
+            }
+        ).setOrigin(0.5);
+
+        closeBg.on('pointerdown', () => this.closeSettings());
+
+        // Tabs row
+        const tabsY = panelTopY + 95;
+        const tabW = 140;
+        const tabH = 34;
+        const tabGap = 14;
+        const tabsXLeft = (this.scale.width / 2) - (tabW + tabGap / 2);
+        const tabsXRight = (this.scale.width / 2) + (tabW + tabGap / 2) - tabW;
+
+        const makeTabButton = (
+            label: string,
+            tab: 'players' | 'rules',
+            x: number
+        ) => {
+            const isActive = this.activeTab === tab;
+            const rect = this.add.rectangle(
+                x,
+                tabsY,
+                tabW,
+                tabH,
+                isActive ? 0x2563eb : 0xdddddd
+            ).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
+
+            this.add.text(
+                x + (tabW / 2),
+                tabsY,
+                label,
+                {
+                    color: isActive ? '#ffffff' : '#000000',
+                    fontSize: '16px',
+                    fontStyle: 'bold',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
+
+            rect.on('pointerdown', () => {
+                if (this.editingPlayer) return;
+                if (this.activeTab === tab) return;
+                this.activeTab = tab;
+                this.renderScene().catch(console.error);
+            });
+        };
+
+        makeTabButton('Players', 'players', tabsXLeft);
+        makeTabButton('Rules', 'rules', tabsXRight);
+
         // Add join code display
         if (this.joinCode) {
-            const joinCodeY = this.scale.height / 2 - (panelHeight / 2) + 100;
+            const joinCodeY = panelTopY + 140;
             this.add.text(
                 this.scale.width / 2,
                 joinCodeY,
                 'Join Code:',
                 {
                     color: '#666666',
-                    fontSize: '16px'
+                    fontSize: '16px',
+                    fontFamily: UI_FONT_FAMILY
                 }
             ).setOrigin(0.5);
             
@@ -118,215 +217,260 @@ export class SettingsScene extends Phaser.Scene {
             ).setOrigin(0.5);
         }
 
-        // Add player list with edit/delete buttons
-        const playerListStartY = this.joinCode ? this.scale.height / 2 - (panelHeight / 4) + 40 : this.scale.height / 2 - (panelHeight / 4);
-        this.gameState.players.forEach((player, index) => {
-            const y = playerListStartY + (index * 60);
-            const rowCenter = this.scale.width / 2;
+        // Content region (above the bottom button block)
+        const contentTopY = this.joinCode ? panelTopY + 185 : panelTopY + 135;
 
-            // Player info
-            this.add.text(
-                rowCenter - 150,
-                y,
-                `${player.name}`,
-                {
-                    color: '#000000',
-                    fontSize: '18px'
-                }
-            ).setOrigin(0, 0.5);
+        if (this.activeTab === 'players') {
+            // Add player list with edit/delete buttons
+            const playerListStartY = contentTopY + 20;
+            this.gameState.players.forEach((player, index) => {
+                const y = playerListStartY + (index * 60);
+                const rowCenter = this.scale.width / 2;
 
-            // Color indicator
-            this.add.rectangle(
-                rowCenter,
-                y,
-                30,
-                30,
-                parseInt(player.color.replace('#', '0x'))
-            ).setOrigin(0.5);
+                // Player info
+                this.add.text(
+                    rowCenter - 150,
+                    y,
+                    `${player.name}`,
+                    {
+                        color: '#000000',
+                        fontSize: '18px',
+                        fontFamily: UI_FONT_FAMILY
+                    }
+                ).setOrigin(0, 0.5);
 
-            // Edit button
-            const editButton = this.add.rectangle(
-                rowCenter + 100,
-                y,
-                80,
-                30,
-                0x0055aa
-            ).setInteractive({ useHandCursor: true });
+                // Color indicator
+                this.add.rectangle(
+                    rowCenter,
+                    y,
+                    30,
+                    30,
+                    parseInt(player.color.replace('#', '0x'))
+                ).setOrigin(0.5);
 
-            this.add.text(
-                rowCenter + 100,
-                y,
-                'Edit',
-                {
-                    color: '#ffffff',
-                    fontSize: '16px'
-                }
-            ).setOrigin(0.5);
-
-            editButton.on('pointerdown', () => this.showEditPlayer(player));
-
-            // Delete button (only show if more than 2 players)
-            if (this.gameState.players.length > 2) {
-                const deleteButton = this.add.rectangle(
-                    rowCenter + 200,
+                // Edit button
+                const editButton = this.add.rectangle(
+                    rowCenter + 100,
                     y,
                     80,
                     30,
-                    0xaa0000
+                    0x0055aa
                 ).setInteractive({ useHandCursor: true });
 
                 this.add.text(
-                    rowCenter + 200,
+                    rowCenter + 100,
                     y,
-                    'Delete',
+                    'Edit',
                     {
                         color: '#ffffff',
-                        fontSize: '16px'
+                        fontSize: '16px',
+                        fontFamily: UI_FONT_FAMILY
                     }
                 ).setOrigin(0.5);
 
-                deleteButton.on('pointerdown', () => this.deletePlayer(player));
-            }
-        });
+                editButton.on('pointerdown', () => this.showEditPlayer(player));
 
-        // --- Button block layout ---
-        // Keep buttons nicely spaced and centered within the panel regardless of panelHeight.
-        const buttonX = this.scale.width / 2;
-        const panelBottomY = this.scale.height / 2 + (panelHeight / 2);
-        const buttonWidth = 260;
-        const buttonHeight = 48;
-        const buttonGap = 14;
-        const bottomPadding = 48;
-        const buttonCount = 3;
-        const blockHeight = (buttonCount * buttonHeight) + ((buttonCount - 1) * buttonGap);
-        const blockTopY = panelBottomY - bottomPadding - blockHeight;
+                // Delete button (only show if more than 2 players)
+                if (this.gameState.players.length > 2) {
+                    const deleteButton = this.add.rectangle(
+                        rowCenter + 200,
+                        y,
+                        80,
+                        30,
+                        0xaa0000
+                    ).setInteractive({ useHandCursor: true });
 
-        const yForButtonIndex = (idx: number) =>
-            blockTopY + (buttonHeight / 2) + idx * (buttonHeight + buttonGap);
+                    this.add.text(
+                        rowCenter + 200,
+                        y,
+                        'Delete',
+                        {
+                            color: '#ffffff',
+                            fontSize: '16px',
+                            fontFamily: UI_FONT_FAMILY
+                        }
+                    ).setOrigin(0.5);
 
-        // --- City search ("Take me to...") ---
-        const gameScene = this.scene.get('GameScene') as GameScene;
-        const mapRenderer = gameScene.getMapRenderer();
-        const citySearchLabelY = blockTopY - 70;
-        const citySearchRowY = blockTopY - 40;
+                    deleteButton.on('pointerdown', () => this.deletePlayer(player));
+                }
+            });
+        } else {
+            const rulesLeftX = (this.scale.width / 2) - (panelWidth / 2) + 30;
+            const rulesWidth = panelWidth - 60;
 
-        this.add.text(
-            buttonX,
-            citySearchLabelY,
-            'Take me to…',
-            {
-                color: '#000000',
-                fontSize: '18px',
-                fontStyle: 'bold'
-            }
-        ).setOrigin(0.5);
+            const rulesText =
+                "Turn summary:\n" +
+                "- Move train first (move, load/unload, pay fees, collect payoffs)\n" +
+                "- Then build track OR upgrade (spend up to ECU 20M per turn)\n\n" +
+                "Track building:\n" +
+                "- Build from any major city milepost or from your existing network\n" +
+                "- Costs: Clear 1M, Mountain 2M, Alpine 5M, Small/Medium 3M, Major 5M\n" +
+                "- Water crossing adds: River +2M, Lake +3M, Ocean inlet +3M\n\n" +
+                "Movement & fees:\n" +
+                "- Freight/Heavy: 9 mileposts; Fast/Super: 12 mileposts\n" +
+                "- Own track: free; Opponent track: pay ECU 4M per opponent used (per turn)\n" +
+                "- Reverse only at cities (major city / ferry port)\n\n" +
+                "Loads & demand cards:\n" +
+                "- Pick up a load by passing through a producing city (no card required)\n" +
+                "- Deliver to satisfy a matching Demand card: discard card, get payoff, return chip, draw back to 3\n" +
+                "- Drop a load at any city (no payoff)\n\n" +
+                "Events:\n" +
+                "- Event cards take effect immediately; keep drawing until you have 3 Demand cards.";
 
-        // RexUI dropdown (more reliable than HTML DOM inside Phaser scenes)
-        this.cityDropDown?.destroy();
-        if (mapRenderer) {
-            this.cityDropDown = new CityListDropDown(this, mapRenderer);
-            this.cityDropDown.setPosition(buttonX - 70, citySearchRowY);
-            this.cityDropDown.init();
-            this.add.existing(this.cityDropDown);
+            this.add.text(
+                rulesLeftX,
+                contentTopY,
+                rulesText,
+                {
+                    color: '#000000',
+                    fontSize: '15px',
+                    fontFamily: UI_FONT_FAMILY,
+                    wordWrap: { width: rulesWidth, useAdvancedWrap: true }
+                }
+            ).setOrigin(0, 0);
         }
 
-        const goButton = this.add.rectangle(
-            buttonX + 180,
-            citySearchRowY,
-            70,
-            40,
-            0x2563eb
-        ).setInteractive({ useHandCursor: true });
+        if (showBottomButtons) {
+            // --- Button block layout ---
+            // Keep buttons nicely spaced and centered within the panel regardless of panelHeight.
+            const buttonX = this.scale.width / 2;
+            const panelBottomY = this.scale.height / 2 + (panelHeight / 2);
+            const buttonWidth = 260;
+            const buttonHeight = 48;
+            const buttonGap = 14;
+            const bottomPadding = 48;
+            const buttonCount = 3;
+            const blockHeight = (buttonCount * buttonHeight) + ((buttonCount - 1) * buttonGap);
+            const blockTopY = panelBottomY - bottomPadding - blockHeight;
 
-        this.add.text(
-            buttonX + 180,
-            citySearchRowY,
-            'Go',
-            {
-                color: '#ffffff',
-                fontSize: '18px',
-                fontStyle: 'bold'
+            const yForButtonIndex = (idx: number) =>
+                blockTopY + (buttonHeight / 2) + idx * (buttonHeight + buttonGap);
+
+            // --- City search ("Take me to...") --- (Players tab only)
+            const gameScene = this.scene.get('GameScene') as GameScene;
+            const mapRenderer = gameScene.getMapRenderer?.() ?? null;
+            const citySearchLabelY = blockTopY - 70;
+            const citySearchRowY = blockTopY - 40;
+
+            this.add.text(
+                buttonX,
+                citySearchLabelY,
+                'Take me to…',
+                {
+                    color: '#000000',
+                    fontSize: '18px',
+                    fontStyle: 'bold',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
+
+            this.cityDropDown?.destroy();
+            if (mapRenderer) {
+                this.cityDropDown = new CityListDropDown(this, mapRenderer);
+                this.cityDropDown.setPosition(buttonX - 70, citySearchRowY);
+                this.cityDropDown.init();
+                this.add.existing(this.cityDropDown);
             }
-        ).setOrigin(0.5);
 
-        const runCitySearch = () => {
-            const selected = this.cityDropDown?.getSelectedCity() ?? null;
-            if (!selected) return;
+            const goButton = this.add.rectangle(
+                buttonX + 180,
+                citySearchRowY,
+                70,
+                40,
+                0x2563eb
+            ).setInteractive({ useHandCursor: true });
 
-            this.centerGameCameraOnCity(selected, gameScene);
+            this.add.text(
+                buttonX + 180,
+                citySearchRowY,
+                'Go',
+                {
+                    color: '#ffffff',
+                    fontSize: '18px',
+                    fontStyle: 'bold',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
 
-            // Close settings so the player immediately sees the centered map.
-            this.closeSettings();
-        };
+            const runCitySearch = () => {
+                const selected = this.cityDropDown?.getSelectedCity() ?? null;
+                if (!selected) return;
+                this.centerGameCameraOnCity(selected, gameScene);
+                this.closeSettings();
+            };
 
-        goButton.on('pointerdown', runCitySearch);
+            goButton.on('pointerdown', runCitySearch);
 
-        // Add end game button
-        const endGameButton = this.add.rectangle(
-            buttonX,
-            yForButtonIndex(0),
-            buttonWidth,
-            buttonHeight,
-            0xff0000
-        ).setInteractive({ useHandCursor: true });
+            // Add end game button
+            const endGameButton = this.add.rectangle(
+                buttonX,
+                yForButtonIndex(0),
+                buttonWidth,
+                buttonHeight,
+                0xff0000
+            ).setInteractive({ useHandCursor: true });
 
-        this.add.text(
-            buttonX,
-            yForButtonIndex(0),
-            'End Game',
-            {
-                color: '#ffffff',
-                fontSize: '20px'
-            }
-        ).setOrigin(0.5);
+            this.add.text(
+                buttonX,
+                yForButtonIndex(0),
+                'End Game',
+                {
+                    color: '#ffffff',
+                    fontSize: '20px',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
 
-        endGameButton.on('pointerdown', () => this.endGame());
+            endGameButton.on('pointerdown', () => this.endGame());
 
-        // Add lobby button
-        const lobbyButton = this.add.rectangle(
-            buttonX,
-            yForButtonIndex(1),
-            buttonWidth,
-            buttonHeight,
-            0x2563eb // blue
-        ).setInteractive({ useHandCursor: true });
+            // Add lobby button
+            const lobbyButton = this.add.rectangle(
+                buttonX,
+                yForButtonIndex(1),
+                buttonWidth,
+                buttonHeight,
+                0x2563eb // blue
+            ).setInteractive({ useHandCursor: true });
 
-        this.add.text(
-            buttonX,
-            yForButtonIndex(1),
-            'Back to Lobby',
-            {
-                color: '#ffffff',
-                fontSize: '20px'
-            }
-        ).setOrigin(0.5);
+            this.add.text(
+                buttonX,
+                yForButtonIndex(1),
+                'Back to Lobby',
+                {
+                    color: '#ffffff',
+                    fontSize: '20px',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
 
-        lobbyButton.on('pointerdown', () => {
-            // Do not end the game; just return to the lobby UI.
-            // Use a full navigation since Phaser is running outside React.
-            window.location.href = '/lobby';
-        });
+            lobbyButton.on('pointerdown', () => {
+                // Do not end the game; just return to the lobby UI.
+                // Use a full navigation since Phaser is running outside React.
+                window.location.href = '/lobby';
+            });
 
-        // Add back-to-game button
-        const backButton = this.add.rectangle(
-            buttonX,
-            yForButtonIndex(2),
-            buttonWidth,
-            buttonHeight,
-            0x666666
-        ).setInteractive({ useHandCursor: true });
+            // Add back-to-game button
+            const backButton = this.add.rectangle(
+                buttonX,
+                yForButtonIndex(2),
+                buttonWidth,
+                buttonHeight,
+                0x666666
+            ).setInteractive({ useHandCursor: true });
 
-        this.add.text(
-            buttonX,
-            yForButtonIndex(2),
-            'Back to Game',
-            {
-                color: '#ffffff',
-                fontSize: '20px'
-            }
-        ).setOrigin(0.5);
+            this.add.text(
+                buttonX,
+                yForButtonIndex(2),
+                'Back to Game',
+                {
+                    color: '#ffffff',
+                    fontSize: '20px',
+                    fontFamily: UI_FONT_FAMILY
+                }
+            ).setOrigin(0.5);
 
-        backButton.on('pointerdown', () => this.closeSettings());
+            backButton.on('pointerdown', () => this.closeSettings());
+        }
     }
 
     private showAddPlayer() {
@@ -366,6 +510,8 @@ export class SettingsScene extends Phaser.Scene {
             0x000000,
             0.7
         ).setOrigin(0);
+        // Critical: block clicks so they can't reach the tabs/buttons underneath.
+        overlay.setInteractive();
 
         // Calculate panel dimensions based on content
         const panelWidth = 500;
