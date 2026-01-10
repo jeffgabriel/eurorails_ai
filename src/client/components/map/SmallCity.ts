@@ -29,7 +29,7 @@ export class SmallCity extends City {
     graphics.stroke();
     this.drawMilepostDot(graphics);
     // Add city name
-    this.addCityName(container, "10px");
+    this.addCityName(container, "11px");
     this.addLoadSpritesToCity(this.x, this.y, this.cityData.name, this.cityData.type, container);
   }
 } 
