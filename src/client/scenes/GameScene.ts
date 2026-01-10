@@ -466,7 +466,8 @@ export class GameScene extends Phaser.Scene {
       .setScale(boardCalibration.scaleX, boardCalibration.scaleY);
 
     this.uiContainer = this.add.container(0, 0);
-    const buttonContainer = this.createSettingsButton();
+    const settingsButtonContainer = this.createSettingsButton();
+    const rulesButtonContainer = this.createRulesButton();
 
     this.playerHandContainer = this.add.container(0, 0);
 
@@ -596,7 +597,8 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.ignore([
       this.uiContainer,
       this.playerHandContainer,
-      buttonContainer,
+      settingsButtonContainer,
+      rulesButtonContainer,
       this.loadsReferencePanel.getContainer(),
     ]);
 
@@ -668,7 +670,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createSettingsButton(): Phaser.GameObjects.Container {
-    const buttonContainer = this.add.container(1, 1);
+    const buttonContainer = this.add.container(1, 1).setDepth(1000);
     const icon = this.add
       .text(10, 10, "⚙️", { fontSize: "28px", color: "#ffffff", fontFamily: UI_FONT_FAMILY })
       .setPadding(8)
@@ -677,6 +679,23 @@ export class GameScene extends Phaser.Scene {
     buttonContainer.add(icon);
 
     return buttonContainer;
+  }
+
+  private createRulesButton(): Phaser.GameObjects.Container {
+    const buttonContainer = this.add.container(this.scale.width - 60, 1).setDepth(1000);
+    const icon = this.add
+      .text(10, 10, "📖", { fontSize: "28px", color: "#ffffff", fontFamily: UI_FONT_FAMILY })
+      .setPadding(8)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.openRulesModal());
+    buttonContainer.add(icon);
+
+    return buttonContainer;
+  }
+
+  private openRulesModal(): void {
+    this.scene.pause('GameScene');
+    this.scene.launch('RulesScene', { gameState: this.gameState });
   }
 
   private async toggleDrawingMode(): Promise<void> {
