@@ -400,6 +400,11 @@ export class GameScene extends Phaser.Scene {
 
             // Refresh UI
             this.uiManager.setupUIOverlay();
+            
+            // Update LoadsReferencePanel with new game state (issue #176: hands are public)
+            if (this.loadsReferencePanel) {
+              this.loadsReferencePanel.setGameState(this.gameState);
+            }
           });
 
           // Listen for victory triggered event
@@ -585,11 +590,12 @@ export class GameScene extends Phaser.Scene {
     uiCamera.setScroll(0, 0);
     uiCamera.ignore([this.mapContainer]); // UI camera ignores the map
 
-    // Static slideout reference panel (independent of game state)
+    // Static slideout reference panel with Cards tab (issue #176)
     this.loadsReferencePanel = new LoadsReferencePanel(this, [
-      { key: "loads-reference-page-1", label: "Loads Available" },
-      { key: "loads-reference-page-2", label: "Cities and Loads" },
-    ]);
+      { key: "loads-reference-page-1", label: "Loads Available", type: "image" },
+      { key: "loads-reference-page-2", label: "Cities and Loads", type: "image" },
+      { key: "player-cards", label: "Cards", type: "cards" }, // Dynamic content showing all players' hands
+    ], this.gameState);
     this.loadsReferencePanel.create();
 
     // Main camera ignores UI elements

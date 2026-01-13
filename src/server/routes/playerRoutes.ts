@@ -170,15 +170,14 @@ router.post('/update', async (req, res) => {
         await PlayerService.updatePlayer(gameId, player);
 
         // Get updated player data for socket broadcast
-        // Use empty string to hide private hand data when broadcasting to all players
+        // Issue #176: Hands are public, so broadcast full player data including hand
         const updatedPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = updatedPlayers.find(p => p.id === player.id);
         
         if (updatedPlayer) {
-            // Emit socket update with updated player (do not broadcast private hand data)
-            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
+            // Emit socket update with full player data (including public hand)
             await emitStatePatch(gameId, {
-                players: [playerWithoutHand]
+                players: [updatedPlayer]
             } as any);
         }
 
@@ -505,14 +504,14 @@ router.post('/fulfill-demand', authenticateToken, async (req, res) => {
         // Call the service to handle the demand fulfillment
         const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
-        // Get updated player data for socket broadcast (do not broadcast private hand data)
+        // Get updated player data for socket broadcast
+        // Issue #176: Hands are public, so broadcast full player data including hand
         const updatedPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = updatedPlayers.find(p => p.id === playerId);
         
         if (updatedPlayer) {
-            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
             await emitStatePatch(gameId, {
-                players: [playerWithoutHand]
+                players: [updatedPlayer]
             } as any);
         }
 
@@ -582,12 +581,12 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
             cardId
         );
 
-        // Broadcast updated public player state (do not leak hand to other players)
+        // Broadcast updated player state
+        // Issue #176: Hands are public, so broadcast full player data including hand
         const publicPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
         if (updatedPlayer) {
-            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+            await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
         }
 
         return res.status(200).json(result);
@@ -650,14 +649,11 @@ router.post('/move-train', authenticateToken, async (req, res) => {
             movementCost
         });
 
-        // Broadcast updated public player states (payer + any payees). Do not leak hands.
+        // Broadcast updated player states (payer + any payees)
+        // Issue #176: Hands are public, so broadcast full player data including hands
         const publicPlayers = await PlayerService.getPlayers(gameId, '');
         const patchedPlayers = publicPlayers
-            .filter(p => result.affectedPlayerIds.includes(p.id))
-            .map(p => {
-                const { hand: _hand, ...playerWithoutHand } = p as any;
-                return playerWithoutHand;
-            });
+            .filter(p => result.affectedPlayerIds.includes(p.id));
 
         if (patchedPlayers.length > 0) {
             await emitStatePatch(gameId, { players: patchedPlayers } as any);
@@ -703,15 +699,15 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
 
         const result = await PlayerService.undoLastActionForUser(gameId, userId);
 
-        // Broadcast updated public player state(s) (do not leak hand)
-        // - deliver undo affects only the local player's public state
+        // Broadcast updated player state(s)
+        // Issue #176: Hands are public, so broadcast full player data including hands
+        // - deliver undo affects only the local player's state
         // - move undo can affect other players' money too (reverse fee transfer)
         const publicPlayers = await PlayerService.getPlayers(gameId, '');
         const updatedPlayer = publicPlayers.find(p => p.userId === userId);
         const patched: any[] = [];
         if (updatedPlayer) {
-            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-            patched.push(playerWithoutHand);
+            patched.push(updatedPlayer);
         }
         if (result && (result as any).kind === 'move') {
             const owners = Array.isArray((result as any).ownersReversed)
@@ -720,10 +716,9 @@ router.post('/undo-last-action', authenticateToken, async (req, res) => {
             for (const pid of owners) {
                 const p = publicPlayers.find(pp => pp.id === pid);
                 if (p) {
-                    const { hand: _hand, ...playerWithoutHand } = p as any;
                     // Avoid dupes
-                    if (!patched.find(x => x.id === playerWithoutHand.id)) {
-                        patched.push(playerWithoutHand);
+                    if (!patched.find(x => x.id === p.id)) {
+                        patched.push(p);
                     }
                 }
             }
@@ -831,9 +826,9 @@ router.post('/restart', authenticateToken, async (req, res) => {
 
         const updatedPlayer = await PlayerService.restartForUser(gameId, userId);
 
-        // Broadcast updated public player state (do not leak hand)
-        const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
-        await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+        // Broadcast updated player state
+        // Issue #176: Hands are public, so broadcast full player data including hand
+        await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
 
         // Broadcast track update so clients reload track state
         const io = getSocketIO();
