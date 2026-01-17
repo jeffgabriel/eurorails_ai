@@ -198,17 +198,17 @@ export class TrainMovementManager {
 
   private hasEnoughMovement(currentPlayer: any, proposedPoint: Point): boolean {
     if (!currentPlayer.trainState.position) return true; // First move is always allowed
-    
+
     const distance = this.calculateDistance(
       currentPlayer.trainState.position,
       proposedPoint
     );
-    
+
     let maxMovement = currentPlayer.trainState.remainingMovement;
     // console.log("Checking movement - Distance:", distance, "Max Movement:", maxMovement);
 
     // Remove ferry port halving here; already handled at turn start
-    
+
     return distance <= maxMovement;
   }
 
@@ -258,7 +258,6 @@ export class TrainMovementManager {
     );
     // Check movement points
     if (!this.hasEnoughMovement(currentPlayer, point)) {
-      console.log("Not enough movement points remaining");
       return { canMove: false, endMovement: false, message: "Not enough movement points remaining", distance };
     }
 

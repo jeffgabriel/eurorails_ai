@@ -36,6 +36,13 @@ export class TrainInteractionManager {
   private uiManager: UIManager | null = null;
   private trackDrawingManager: TrackDrawingManager;
   private turnActionManager: TurnActionManager | null = null;
+
+  // Drag tracking properties for drag-based train movement
+  private isMouseDown: boolean = false;
+  private isDragging: boolean = false;
+  private lastPointerPosition: { x: number; y: number } = { x: 0, y: 0 };
+  private readonly DRAG_THRESHOLD: number = 5; // pixels before drag starts
+
   constructor(
     scene: Phaser.Scene,
     gameState: GameState,
@@ -103,6 +110,12 @@ export class TrainInteractionManager {
     // Set up callback for train sprite interaction
     this.trainSpriteManager.setInteractionCallback(
       (playerId: string, pointer: Phaser.Input.Pointer) => {
+        // Initialize drag tracking state here since the scene's pointerdown handler
+        // won't fire due to stopPropagation() in the sprite handler
+        this.isMouseDown = true;
+        this.isDragging = false;
+        this.lastPointerPosition = { x: pointer.x, y: pointer.y };
+
         this.handleTrainSpriteClick(playerId, pointer);
       }
     );
@@ -117,27 +130,77 @@ export class TrainInteractionManager {
   }
 
   private setupTrainInteraction(): void {
-    // Listen for pointer down events on the scene
+    // pointerdown handler - track mouse state and record position
     this.scene.input.on(
       "pointerdown",
-      async (pointer: Phaser.Input.Pointer) => {
-        // Only handle train placement if we're in train movement mode
-        // AND we didn't just enter movement mode on this same click
-        if (
-          this.movementModeController.isInMovementMode() &&
-          !this.movementModeController.wasJustEntered()
-        ) {
-          // Stop event propagation to prevent other handlers
-          if (pointer.event) {
-            pointer.event.stopPropagation();
-          }
-        }
-        // Use await to ensure we handle the entire train placement process
-        await this.handleTrainPlacement(pointer);
-        // Reset the flag after the click is processed
-        this.movementModeController.clearJustEnteredFlag();
+      (pointer: Phaser.Input.Pointer) => {
+        this.isMouseDown = true;
+        this.isDragging = false;
+        this.lastPointerPosition = { x: pointer.x, y: pointer.y };
       }
     );
+
+    // pointermove handler - detect drag and update train sprite position visually
+    this.scene.input.on(
+      "pointermove",
+      (pointer: Phaser.Input.Pointer) => {
+        if (!this.isMouseDown) return;
+
+        const deltaX = pointer.x - this.lastPointerPosition.x;
+        const deltaY = pointer.y - this.lastPointerPosition.y;
+
+        // Check drag threshold
+        if (
+          !this.isDragging &&
+          (Math.abs(deltaX) > this.DRAG_THRESHOLD ||
+            Math.abs(deltaY) > this.DRAG_THRESHOLD)
+        ) {
+          this.isDragging = true;
+        }
+
+        // If in movement mode and dragging, update the train sprite to follow the cursor
+        if (this.movementModeController.isInMovementMode() && this.isDragging) {
+          const currentPlayer =
+            this.gameState.players[this.gameState.currentPlayerIndex];
+          if (currentPlayer) {
+            const trainSprite = this.trainSpriteManager.getSprite(currentPlayer.id);
+            if (trainSprite) {
+              // Convert screen coordinates to world coordinates
+              const worldPoint = this.scene.cameras.main.getWorldPoint(
+                pointer.x,
+                pointer.y
+              );
+              trainSprite.setPosition(worldPoint.x, worldPoint.y);
+            }
+          }
+        }
+      }
+    );
+
+    // pointerup handler - handle train placement at final position, then exit movement mode
+    this.scene.input.on("pointerup", async (pointer: Phaser.Input.Pointer) => {
+      const wasInMovementMode = this.movementModeController.isInMovementMode();
+      const wasDragging = this.isDragging;
+
+      // Clean up drag state first
+      this.isMouseDown = false;
+      this.isDragging = false;
+
+      // Handle train placement if we were in movement mode and dragged
+      if (wasInMovementMode && wasDragging) {
+        await this.handleTrainPlacement(pointer);
+      }
+
+      // Exit movement mode after placement
+      this.exitTrainMovementMode();
+    });
+
+    // Handle edge case where mouse up happens outside the window
+    this.scene.game.events.on("blur", () => {
+      this.isMouseDown = false;
+      this.isDragging = false;
+      this.exitTrainMovementMode();
+    });
   }
 
   /**
@@ -182,8 +245,8 @@ export class TrainInteractionManager {
       return;
     }
 
-    // Toggle movement mode
-    this.movementModeController.toggleMovementMode();
+    // Enter movement mode (exit is handled by pointerup in drag-based interaction)
+    this.movementModeController.enterMovementMode();
   }
 
   public playerHasTrack(playerId: string): boolean {
@@ -387,6 +450,14 @@ export class TrainInteractionManager {
 
   public resetTrainMovementMode(): void {
     this.movementModeController.resetMovementMode();
+  }
+
+  /**
+   * Check if currently in train movement mode.
+   * Used by CameraController to suppress panning during train movement.
+   */
+  public isInMovementMode(): boolean {
+    return this.movementModeController.isInMovementMode();
   }
 
   public async updateTrainPosition(

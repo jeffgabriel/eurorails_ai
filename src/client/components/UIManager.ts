@@ -432,6 +432,14 @@ export class UIManager {
     this.trainInteractionManager.resetTrainMovementMode();
   }
 
+  /**
+   * Check if train movement mode is currently active.
+   * Used by CameraController to suppress panning during train movement.
+   */
+  public isTrainMovementActive(): boolean {
+    return this.trainInteractionManager.isInMovementMode();
+  }
+
   public setupUIOverlay(): void {
     if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
       return;

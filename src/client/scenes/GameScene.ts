@@ -546,6 +546,11 @@ export class GameScene extends Phaser.Scene {
       this.playerStateService
     );
 
+    // Wire up train movement callback to camera controller to prevent panning conflicts
+    this.cameraController.setTrainMovementActiveCallback(
+      () => this.uiManager.isTrainMovementActive()
+    );
+
     // Reusable pattern: when local, server-authoritative actions mutate game state
     // without guaranteed socket connectivity (restart, upgrade, etc.), force-refresh overlay.
     this.stateChangeListener = () => {
