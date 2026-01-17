@@ -15,6 +15,7 @@ export class CameraController {
     private pendingRender: boolean = false;
     private localPlayerId: string | null = null;
     private readonly ZOOM_STEP: number = 0.05;
+    private isTrainMovementActiveCallback: (() => boolean) | null = null;
     
     constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
         this.scene = scene;
@@ -29,6 +30,14 @@ export class CameraController {
      */
     public setLocalPlayerId(playerId: string | null): void {
         this.localPlayerId = playerId;
+    }
+
+    /**
+     * Set callback to check if train movement is active.
+     * When active, camera panning is suppressed to avoid conflicts.
+     */
+    public setTrainMovementActiveCallback(callback: () => boolean): void {
+        this.isTrainMovementActiveCallback = callback;
     }
 
     /**
@@ -96,16 +105,19 @@ export class CameraController {
         // Handle pointer move for camera panning
         this.scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
             if (!this.isMouseDown) return;
-            
+
+            // Skip camera panning when train movement is active to avoid conflicts
+            if (this.isTrainMovementActiveCallback?.()) return;
+
             const now = Date.now();
             const deltaX = pointer.x - this.lastPointerPosition.x;
             const deltaY = pointer.y - this.lastPointerPosition.y;
-            
+
             // Only start dragging if we've moved a significant amount
             if (!this.isDragging && (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5)) {
                 this.isDragging = true;
             }
-            
+
             // If we're dragging, handle the camera movement
             if (this.isDragging && now - this.lastDragTime >= 32) {
                 const newScrollX = this.camera.scrollX - (deltaX / this.camera.zoom);

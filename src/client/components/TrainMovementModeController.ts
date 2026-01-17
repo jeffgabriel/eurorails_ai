@@ -22,7 +22,6 @@ export class TrainMovementModeController {
   private playerStateService: PlayerStateService;
 
   private _isTrainMovementMode: boolean = false;
-  private _justEnteredMovementMode: boolean = false;
   private _isDrawingMode: boolean = false;
 
   constructor(
@@ -54,20 +53,6 @@ export class TrainMovementModeController {
   }
 
   /**
-   * Check if movement mode was just entered (to prevent immediate exit on same click).
-   */
-  public wasJustEntered(): boolean {
-    return this._justEnteredMovementMode;
-  }
-
-  /**
-   * Clear the just-entered flag after click is processed.
-   */
-  public clearJustEnteredFlag(): void {
-    this._justEnteredMovementMode = false;
-  }
-
-  /**
    * Enter train movement mode.
    * - Loads latest track data
    * - Sets cursor to pointer
@@ -88,7 +73,6 @@ export class TrainMovementModeController {
     }
 
     this._isTrainMovementMode = true;
-    this._justEnteredMovementMode = true;
 
     // Set cursor to indicate movement mode
     this.scene.input.setDefaultCursor("pointer");
@@ -103,6 +87,7 @@ export class TrainMovementModeController {
    * Exit train movement mode.
    * - Resets cursor
    * - Restores train sprite opacity
+   * - Restores train sprite to its actual position (in case of drag to invalid location)
    */
   public exitMovementMode(): void {
     this._isTrainMovementMode = false;
@@ -112,6 +97,18 @@ export class TrainMovementModeController {
 
     // Reset opacity for all train sprites
     this.trainSpriteManager.resetAllSpriteAlpha();
+
+    // Restore the current player's train sprite to its actual game state position
+    // This handles the case where the user dragged to an invalid location
+    const currentPlayer =
+      this.gameState.players[this.gameState.currentPlayerIndex];
+    if (currentPlayer?.trainState?.position) {
+      const pos = currentPlayer.trainState.position;
+      const sprite = this.trainSpriteManager.getSprite(currentPlayer.id);
+      if (sprite) {
+        sprite.setPosition(pos.x, pos.y);
+      }
+    }
   }
 
   /**
@@ -135,21 +132,5 @@ export class TrainMovementModeController {
     if (isDrawing && this._isTrainMovementMode) {
       this.exitMovementMode();
     }
-  }
-
-  /**
-   * Toggle movement mode - enter if not in mode, exit if in mode.
-   * Returns the new mode state.
-   */
-  public async toggleMovementMode(): Promise<boolean> {
-    if (this._isTrainMovementMode) {
-      // Prevent immediate exit if just entered
-      if (!this._justEnteredMovementMode) {
-        this.exitMovementMode();
-      }
-    } else {
-      await this.enterMovementMode();
-    }
-    return this._isTrainMovementMode;
   }
 }
