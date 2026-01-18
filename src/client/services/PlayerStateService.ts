@@ -501,13 +501,9 @@ export class PlayerStateService {
             // Update money (server-authoritative)
             this.localPlayer.money = result.updatedMoney;
 
-            // Replace demand card in hand
-            this.localPlayer.hand = (this.localPlayer.hand || []).filter(card => card.id !== cardId);
-            this.localPlayer.hand.push(result.newCard);
-
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/ee63971d-7078-4c66-a767-c90c475dbcfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'hand-bug-pre',hypothesisId:'H17',location:'PlayerStateService.ts:deliverLoad',message:'deliverLoad applied to localPlayer',data:{localPlayerId:this.localPlayerId,removedCardId:cardId,addedCardId:result.newCard?.id,handIds:Array.isArray(this.localPlayer.hand)?this.localPlayer.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],money:this.localPlayer.money,loads:Array.isArray(this.localPlayer.trainState?.loads)?this.localPlayer.trainState.loads:[]},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion agent log
+            // Issue #176: Don't manually update hand here
+            // The socket patch will update the hand with the authoritative server state
+            // Manually updating here causes duplicates when the patch arrives
 
             return { payment: result.payment, newCardId: result.newCard.id };
         } catch (error) {

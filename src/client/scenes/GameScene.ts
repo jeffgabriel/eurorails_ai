@@ -340,23 +340,12 @@ export class GameScene extends Phaser.Scene {
                     const preservedFerryState = existingPlayer.trainState?.ferryState;
                     const preservedJustCrossedFerry = existingPlayer.trainState?.justCrossedFerry;
 
-                    // For hand: get from playerStateService which is the authoritative local source.
-                    // This avoids race conditions where deliverLoad updates the hand concurrently.
-                    // Server patches don't include hand data for privacy, so we always preserve local.
-                    const currentLocalPlayer = this.playerStateService.getLocalPlayer();
-                    const preservedHand = currentLocalPlayer?.hand || existingPlayer.hand;
-
-                    // #region agent log
-                    fetch('http://127.0.0.1:7242/ingest/ee63971d-7078-4c66-a767-c90c475dbcfc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId:'debug-session',runId:'hand-bug-pre',hypothesisId:'H19',location:'GameScene.ts:onPatch',message:'local merge (hand) snapshot',data:{localPlayerId,currentLocalPlayerId:currentLocalPlayer?.id,sameRef:currentLocalPlayer===existingPlayer,existingHandIds:Array.isArray(existingPlayer.hand)?existingPlayer.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],serviceHandIds:Array.isArray(currentLocalPlayer?.hand)?currentLocalPlayer!.hand.map((c:any)=>c?.id).filter((v:any)=>typeof v==="number"):[],updatedHandLen:Array.isArray(updatedPlayer.hand)?updatedPlayer.hand.length:null,preservedHandLen:Array.isArray(preservedHand)?preservedHand.length:null},timestamp:Date.now()})}).catch(()=>{});
-                    // #endregion agent log
-
                     this.gameState.players[index] = {
                       ...existingPlayer,
                       ...updatedPlayer,
-                      // Preserve private hand - server patches don't include it for privacy
-                      hand: Array.isArray(updatedPlayer.hand) && updatedPlayer.hand.length > 0
-                        ? updatedPlayer.hand
-                        : preservedHand,
+                      // Issue #176: Hands are now public, server is authoritative
+                      // Always use server hand data when provided
+                      hand: updatedPlayer.hand || existingPlayer.hand,
                       // Preserve local position if it exists (server position might be outdated)
                       trainState: updatedPlayer.trainState ? {
                         ...updatedPlayer.trainState,
