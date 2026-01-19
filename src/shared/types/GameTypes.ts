@@ -45,6 +45,7 @@ export interface Player {
     name: string;
     color: string;  // Hex color code
     money: number;
+    debtOwed?: number;  // Amount remaining to repay (already doubled from borrowed amount)
     trainType: TrainType;
     turnNumber: number;
     trainState: TrainState;
@@ -227,4 +228,14 @@ export interface PlayerTrackState {
     totalCost: number;
     turnBuildCost: number;
     lastBuildTimestamp: Date;
+}
+
+/**
+ * Result of borrowing money from the bank (Mercy Rule)
+ */
+export interface BorrowResult {
+    borrowedAmount: number;      // Amount borrowed (same as request)
+    debtIncurred: number;        // Amount added to debt (2x borrowed)
+    updatedMoney: number;        // New player money balance
+    updatedDebtOwed: number;     // New total debt owed
 }

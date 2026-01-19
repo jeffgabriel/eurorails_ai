@@ -73,6 +73,7 @@ export class PlayerHandScene extends Phaser.Scene {
   private confirmDiscardModal: Phaser.GameObjects.Container | null = null;
   private confirmRestartModal: Phaser.GameObjects.Container | null = null;
   private confirmTrainPurchaseModal: Phaser.GameObjects.Container | null = null;
+  private borrowAmountModal: Phaser.GameObjects.Container | null = null;
   private toastContainer: Phaser.GameObjects.Container | null = null;
 
   // Card dimensions
@@ -249,8 +250,11 @@ export class PlayerHandScene extends Phaser.Scene {
 
     // Update name/money if it changed
     if (this.nameAndMoneyText) {
+      const debtText = localPlayer.debtOwed && localPlayer.debtOwed > 0
+        ? `\nDebt: ECU ${localPlayer.debtOwed}M`
+        : '';
       this.nameAndMoneyText.setText(
-        `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M`
+        `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M${debtText}`
       );
     }
 
@@ -570,7 +574,7 @@ export class PlayerHandScene extends Phaser.Scene {
 
     const panelBg = (this as any).rexUI.add.roundRectangle({
       width: panelW,
-      height: 320,
+      height: 420,
       color: 0x1a1a1a,
       alpha: 1,
       radius: 16,
@@ -716,6 +720,42 @@ export class PlayerHandScene extends Phaser.Scene {
       });
     }
     panelSizer.add(restartBtn, { proportion: 0, align: "center", expand: false });
+
+    // Section: Borrow — Mercy Rule
+    const canBorrow =
+      isLocalPlayerActive &&
+      !this.isDrawingMode;
+    const borrowDisabledReason = !isLocalPlayerActive
+      ? "Only available on your turn"
+      : (this.isDrawingMode ? "Exit build mode first" : "");
+
+    const borrowLabel = this.add.text(0, 0, "Borrow — Mercy Rule", {
+      color: "#dddddd",
+      fontSize: "14px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(borrowLabel, { proportion: 0, align: "center", expand: false });
+
+    const borrowBtn = this.add
+      .text(0, 0, canBorrow ? "Borrow Money" : (borrowDisabledReason || "Borrow Money"), {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: canBorrow ? "#57a" : "#555",
+        padding: { left: 14, right: 14, top: 10, bottom: 10 },
+      })
+      .setAlpha(canBorrow ? 1.0 : 0.6)
+      .setInteractive({ useHandCursor: canBorrow });
+    if (canBorrow) {
+      borrowBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+        if (pointer.event) pointer.event.stopPropagation();
+        this.closeActionsModal();
+        this.openBorrowAmountModal();
+      });
+    }
+    panelSizer.add(borrowBtn, { proportion: 0, align: "center", expand: false });
 
     const closeBtn = this.add
       .text(0, 0, "Close", {
@@ -1151,6 +1191,224 @@ export class PlayerHandScene extends Phaser.Scene {
     if (!this.confirmRestartModal) return;
     this.confirmRestartModal.destroy(true);
     this.confirmRestartModal = null;
+  }
+
+  private openBorrowAmountModal(): void {
+    if (this.borrowAmountModal) {
+      this.closeBorrowAmountModal();
+    }
+    const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive?.() ?? false;
+    if (!isLocalPlayerActive) return;
+
+    const modalRoot = this.add.container(0, 0).setDepth(1300);
+    const backdrop = this.add
+      .rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.6)
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: true });
+    backdrop.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+    });
+    modalRoot.add(backdrop);
+
+    const panelX = this.scale.width / 2;
+    const panelY = this.scale.height / 2;
+    const panelW = Math.min(400, this.scale.width - 40);
+
+    const panelBg = (this as any).rexUI.add.roundRectangle({
+      width: panelW,
+      height: 320,
+      color: 0x1a1a1a,
+      alpha: 1,
+      radius: 16,
+    });
+
+    const panelSizer = (this as any).rexUI.add
+      .sizer({
+        orientation: "y",
+        space: { left: 20, right: 20, top: 16, bottom: 16, item: 16 },
+      })
+      .setPosition(panelX, panelY);
+    panelSizer.addBackground(panelBg);
+
+    const title = this.add.text(0, 0, "Borrow Money", {
+      color: "#ffffff",
+      fontSize: "20px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(title, { proportion: 0, align: "center", expand: false });
+
+    const description = this.add.text(
+      0,
+      0,
+      "Borrow 1-20 ECU from the bank.\nYou must repay 2× the borrowed amount\nfrom future delivery payoffs.",
+      {
+        color: "#cccccc",
+        fontSize: "14px",
+        fontFamily: UI_FONT_FAMILY,
+        align: "center",
+        wordWrap: { width: panelW - 40 },
+      }
+    );
+    panelSizer.add(description, { proportion: 0, align: "center", expand: false });
+
+    // Amount selector row
+    let selectedAmount = 10;
+    const amountRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 16 },
+    });
+
+    const minusBtn = this.add
+      .text(0, 0, "−", {
+        color: "#ffffff",
+        fontSize: "28px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#555",
+        padding: { left: 14, right: 14, top: 6, bottom: 6 },
+      })
+      .setInteractive({ useHandCursor: true });
+
+    const amountText = this.add.text(0, 0, `ECU ${selectedAmount}M`, {
+      color: "#ffdd44",
+      fontSize: "24px",
+      fontStyle: "bold",
+      fontFamily: UI_FONT_FAMILY,
+    });
+
+    const plusBtn = this.add
+      .text(0, 0, "+", {
+        color: "#ffffff",
+        fontSize: "28px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#555",
+        padding: { left: 14, right: 14, top: 6, bottom: 6 },
+      })
+      .setInteractive({ useHandCursor: true });
+
+    const updateAmountDisplay = () => {
+      amountText.setText(`ECU ${selectedAmount}M`);
+    };
+
+    minusBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      if (selectedAmount > 1) {
+        selectedAmount--;
+        updateAmountDisplay();
+      }
+    });
+
+    plusBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      if (selectedAmount < 20) {
+        selectedAmount++;
+        updateAmountDisplay();
+      }
+    });
+
+    amountRow.add(minusBtn, { proportion: 0, align: "center", expand: false });
+    amountRow.add(amountText, { proportion: 0, align: "center", expand: false });
+    amountRow.add(plusBtn, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(amountRow, { proportion: 0, align: "center", expand: false });
+
+    // Debt info
+    const debtInfo = this.add.text(0, 0, `Debt incurred: ECU ${selectedAmount * 2}M`, {
+      color: "#ff8866",
+      fontSize: "14px",
+      fontFamily: UI_FONT_FAMILY,
+    });
+    panelSizer.add(debtInfo, { proportion: 0, align: "center", expand: false });
+
+    // Update debt info when amount changes
+    const originalUpdateAmountDisplay = updateAmountDisplay;
+    const newUpdateAmountDisplay = () => {
+      originalUpdateAmountDisplay();
+      debtInfo.setText(`Debt incurred: ECU ${selectedAmount * 2}M`);
+    };
+    minusBtn.off("pointerdown");
+    plusBtn.off("pointerdown");
+    minusBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      if (selectedAmount > 1) {
+        selectedAmount--;
+        newUpdateAmountDisplay();
+      }
+    });
+    plusBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      if (selectedAmount < 20) {
+        selectedAmount++;
+        newUpdateAmountDisplay();
+      }
+    });
+
+    // Buttons row
+    const buttonsRow = (this as any).rexUI.add.sizer({
+      orientation: "x",
+      space: { item: 16 },
+    });
+
+    const cancelBtn = this.add
+      .text(0, 0, "Cancel", {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#555",
+        padding: { left: 20, right: 20, top: 10, bottom: 10 },
+      })
+      .setInteractive({ useHandCursor: true });
+    cancelBtn.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeBorrowAmountModal();
+    });
+
+    const confirmBtn = this.add
+      .text(0, 0, "Borrow", {
+        color: "#ffffff",
+        fontSize: "16px",
+        fontStyle: "bold",
+        fontFamily: UI_FONT_FAMILY,
+        backgroundColor: "#57a",
+        padding: { left: 20, right: 20, top: 10, bottom: 10 },
+      })
+      .setInteractive({ useHandCursor: true });
+    confirmBtn.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) pointer.event.stopPropagation();
+      this.closeBorrowAmountModal();
+
+      const gameId = this.gameState?.id;
+      if (!gameId) {
+        this.showToast("Error: No game ID");
+        return;
+      }
+
+      const result = await this.gameStateService?.borrowMoney(gameId, selectedAmount);
+      if (result) {
+        this.showToast(
+          `Borrowed ECU ${result.borrowedAmount}M. Debt: ECU ${result.updatedDebtOwed}M`
+        );
+      } else {
+        this.showToast("Borrow failed. Please try again.");
+      }
+    });
+
+    buttonsRow.add(cancelBtn, { proportion: 0, align: "center", expand: false });
+    buttonsRow.add(confirmBtn, { proportion: 0, align: "center", expand: false });
+    panelSizer.add(buttonsRow, { proportion: 0, align: "center", expand: false });
+
+    modalRoot.add(panelSizer);
+    panelSizer.layout();
+
+    this.borrowAmountModal = modalRoot;
+  }
+
+  private closeBorrowAmountModal(): void {
+    if (!this.borrowAmountModal) return;
+    this.borrowAmountModal.destroy(true);
+    this.borrowAmountModal = null;
   }
 
   private openConfirmTrainPurchaseModal(args: {
@@ -1606,7 +1864,10 @@ export class PlayerHandScene extends Phaser.Scene {
       return;
     }
 
-    const playerInfoText = `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M`;
+    const debtText = localPlayer.debtOwed && localPlayer.debtOwed > 0
+      ? `\nDebt: ECU ${localPlayer.debtOwed}M`
+      : '';
+    const playerInfoText = `${localPlayer.name}\nMoney: ECU ${localPlayer.money}M${debtText}`;
     const nameAndMoney = this.add
       .text(0, 0, playerInfoText, {
         color: "#ffffff",
@@ -1840,6 +2101,7 @@ export class PlayerHandScene extends Phaser.Scene {
     // Close any open modals (they are not children of rootSizer)
     this.closeConfirmDiscardModal();
     this.closeConfirmRestartModal();
+    this.closeBorrowAmountModal();
     this.closeConfirmTrainPurchaseModal();
     this.closeActionsModal();
 

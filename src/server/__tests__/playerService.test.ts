@@ -1556,4 +1556,637 @@ describe('PlayerService Integration Tests', () => {
             ).rejects.toThrow('Cannot restart after performing actions this turn');
         });
     });
+
+    describe('Mercy Borrowing - borrowForUser', () => {
+        it('should borrow 10 ECU and incur 20 ECU debt', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'Borrower',
+                color: '#FF0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            const result = await PlayerService.borrowForUser(gameId, userId, 10);
+
+            expect(result.borrowedAmount).toBe(10);
+            expect(result.debtIncurred).toBe(20); // 2x borrowed
+            expect(result.updatedMoney).toBe(60); // 50 + 10
+            expect(result.updatedDebtOwed).toBe(20);
+
+            // Verify database state
+            const after = await db.query('SELECT money, debt_owed FROM players WHERE id = $1', [playerId]);
+            expect(after.rows[0].money).toBe(60);
+            expect(after.rows[0].debt_owed).toBe(20);
+        });
+
+        it('should allow borrowing minimum amount (1 ECU)', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MinBorrower',
+                color: '#00FF00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            const result = await PlayerService.borrowForUser(gameId, userId, 1);
+
+            expect(result.borrowedAmount).toBe(1);
+            expect(result.debtIncurred).toBe(2);
+            expect(result.updatedMoney).toBe(51);
+            expect(result.updatedDebtOwed).toBe(2);
+        });
+
+        it('should allow borrowing maximum amount (20 ECU)', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MaxBorrower',
+                color: '#0000FF',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            const result = await PlayerService.borrowForUser(gameId, userId, 20);
+
+            expect(result.borrowedAmount).toBe(20);
+            expect(result.debtIncurred).toBe(40);
+            expect(result.updatedMoney).toBe(70);
+            expect(result.updatedDebtOwed).toBe(40);
+        });
+
+        it('should accumulate debt with multiple borrows', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'MultiBorrower',
+                color: '#FFFF00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // First borrow
+            const result1 = await PlayerService.borrowForUser(gameId, userId, 10);
+            expect(result1.updatedMoney).toBe(60);
+            expect(result1.updatedDebtOwed).toBe(20);
+
+            // Second borrow (debt accumulates)
+            const result2 = await PlayerService.borrowForUser(gameId, userId, 5);
+            expect(result2.updatedMoney).toBe(65);
+            expect(result2.updatedDebtOwed).toBe(30); // 20 + 10
+        });
+
+        it('should reject borrow amount of 0', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'ZeroBorrower',
+                color: '#FF00FF',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, 0)
+            ).rejects.toThrow('Amount must be between 1 and 20');
+        });
+
+        it('should reject borrow amount over 20', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'OverBorrower',
+                color: '#00FFFF',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, 21)
+            ).rejects.toThrow('Amount must be between 1 and 20');
+        });
+
+        it('should reject negative borrow amount', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'NegBorrower',
+                color: '#808080',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, -5)
+            ).rejects.toThrow('Amount must be between 1 and 20');
+        });
+
+        it('should reject non-integer borrow amount', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'FloatBorrower',
+                color: '#C0C0C0',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, 5.5)
+            ).rejects.toThrow('Amount must be an integer');
+        });
+
+        it('should reject NaN borrow amount', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'NaNBorrower',
+                color: '#404040',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, NaN)
+            ).rejects.toThrow('Amount must be an integer');
+        });
+
+        it('should reject borrow when not player turn', async () => {
+            const userId1 = uuidv4();
+            const userId2 = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId1, `user_${userId1.slice(0, 8)}`, `user_${userId1.slice(0, 8)}@test.local`, 'hash']
+            );
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId2, `user_${userId2.slice(0, 8)}`, `user_${userId2.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId1 = uuidv4();
+            const playerId2 = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId1,
+                userId: userId1,
+                name: 'P1',
+                color: '#AA0000',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+            await PlayerService.createPlayer(gameId, {
+                id: playerId2,
+                userId: userId2,
+                name: 'P2',
+                color: '#00AA00',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: { position: { x: 0, y: 0, row: 0, col: 0 }, movementHistory: [], remainingMovement: 9, loads: [] as LoadType[] },
+                hand: []
+            } as any);
+
+            // Force current player index to 1 (P2's turn)
+            await db.query('UPDATE games SET current_player_index = 1 WHERE id = $1', [gameId]);
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId1, 10)
+            ).rejects.toThrow('Not your turn');
+        });
+
+        it('should reject borrow when player not found in game', async () => {
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            // Player is not created in the game
+
+            await expect(
+                PlayerService.borrowForUser(gameId, userId, 10)
+            ).rejects.toThrow('Player not found in game');
+        });
+    });
+
+    describe('Mercy Borrowing - deliverLoadForUser debt repayment', () => {
+        it('should apply full payment to money when no debt exists', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'NoDebtDeliverer',
+                color: '#112233',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Set debt_owed to 0 explicitly
+            await db.query('UPDATE players SET debt_owed = 0 WHERE id = $1', [playerId]);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            if (!card) throw new Error('Expected demand card to exist');
+            const demand = card.demands[0];
+
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const result = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            expect(result.payment).toBe(demand.payment);
+            expect(result.repayment).toBe(0);
+            expect(result.updatedMoney).toBe(50 + demand.payment);
+            expect(result.updatedDebtOwed).toBe(0);
+        });
+
+        it('should clear debt and give excess to money when debt < payment', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'SmallDebtDeliverer',
+                color: '#223344',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Set debt_owed to 5 (less than any demand payment which are typically 7+)
+            await db.query('UPDATE players SET debt_owed = 5 WHERE id = $1', [playerId]);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            if (!card) throw new Error('Expected demand card to exist');
+            const demand = card.demands[0];
+
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const result = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            // With 5 debt and payment >= 7, repayment = 5, excess = payment - 5
+            expect(result.payment).toBe(demand.payment);
+            expect(result.repayment).toBe(5);
+            expect(result.updatedMoney).toBe(50 + (demand.payment - 5));
+            expect(result.updatedDebtOwed).toBe(0);
+        });
+
+        it('should reduce debt and give nothing to money when debt > payment', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'BigDebtDeliverer',
+                color: '#334455',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Set debt_owed to 100 (more than any typical demand payment)
+            await db.query('UPDATE players SET debt_owed = 100 WHERE id = $1', [playerId]);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            if (!card) throw new Error('Expected demand card to exist');
+            const demand = card.demands[0];
+
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const result = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            // With 100 debt and payment (e.g., 15), repayment = 15, money unchanged
+            expect(result.payment).toBe(demand.payment);
+            expect(result.repayment).toBe(demand.payment);
+            expect(result.updatedMoney).toBe(50); // No money added
+            expect(result.updatedDebtOwed).toBe(100 - demand.payment);
+        });
+
+        it('should clear debt exactly when debt == payment', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'ExactDebtDeliverer',
+                color: '#445566',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            if (!card) throw new Error('Expected demand card to exist');
+            const demand = card.demands[0];
+
+            // Set debt_owed to exactly match the payment
+            await db.query('UPDATE players SET debt_owed = $1 WHERE id = $2', [demand.payment, playerId]);
+
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            const result = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            expect(result.payment).toBe(demand.payment);
+            expect(result.repayment).toBe(demand.payment);
+            expect(result.updatedMoney).toBe(50); // No money added
+            expect(result.updatedDebtOwed).toBe(0); // Debt cleared
+        });
+
+        it('should persist debt changes to database after delivery', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            await PlayerService.createPlayer(gameId, {
+                id: playerId,
+                userId,
+                name: 'PersistDebtDeliverer',
+                color: '#556677',
+                money: 50,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: { x: 0, y: 0, row: 0, col: 0 },
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            } as any);
+
+            // Set initial debt
+            await db.query('UPDATE players SET debt_owed = 30 WHERE id = $1', [playerId]);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            if (!card) throw new Error('Expected demand card to exist');
+            const demand = card.demands[0];
+
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2 WHERE id = $3',
+                [[demand.resource], 50, playerId]
+            );
+
+            await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            // Verify database state after delivery
+            const after = await db.query('SELECT money, debt_owed FROM players WHERE id = $1', [playerId]);
+            const expectedDebt = Math.max(0, 30 - demand.payment);
+            const expectedMoney = 50 + Math.max(0, demand.payment - 30);
+
+            expect(after.rows[0].debt_owed).toBe(expectedDebt);
+            expect(after.rows[0].money).toBe(expectedMoney);
+        });
+    });
 }); 
