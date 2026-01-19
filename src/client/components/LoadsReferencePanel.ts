@@ -1,14 +1,17 @@
 import Phaser from "phaser";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { GameState } from "../../shared/types/GameTypes";
 
 type LoadsReferencePage = {
   key: string;
   label: string;
+  type?: "image" | "cards"; // "image" uses texture key, "cards" renders dynamic content
 };
 
 export class LoadsReferencePanel {
   private readonly scene: Phaser.Scene;
   private readonly pages: LoadsReferencePage[];
+  private gameState: GameState | null = null;
 
   private root!: Phaser.GameObjects.Container;
   private background!: Phaser.GameObjects.Rectangle;
@@ -16,6 +19,7 @@ export class LoadsReferencePanel {
   private handleBg!: Phaser.GameObjects.Rectangle;
   private handleText!: Phaser.GameObjects.Text;
   private image!: Phaser.GameObjects.Image;
+  private cardsContainer!: Phaser.GameObjects.Container; // For dynamic cards content
   private tabContainers: Phaser.GameObjects.Container[] = [];
   private tabHitAreas: Phaser.GameObjects.Rectangle[] = [];
   private tabLabels: Phaser.GameObjects.Text[] = [];
@@ -29,13 +33,26 @@ export class LoadsReferencePanel {
   private readonly handleWidth = 34;
   private handleHeight = 160;
 
-  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[]) {
+  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState) {
     this.scene = scene;
     this.pages = pages;
+    this.gameState = gameState || null;
   }
 
   getContainer(): Phaser.GameObjects.Container {
     return this.root;
+  }
+
+  /**
+   * Update game state for dynamic content (e.g., Cards tab)
+   */
+  setGameState(gameState: GameState): void {
+    this.gameState = gameState;
+    // If we're currently on the Cards tab, re-render it
+    const activePage = this.pages[this.activePageIndex];
+    if (activePage && activePage.type === "cards") {
+      this.renderCardsContent();
+    }
   }
 
   create(): void {
@@ -47,7 +64,7 @@ export class LoadsReferencePanel {
     this.background.setStrokeStyle(2, 0x334155, 1);
     this.background.setInteractive();
 
-    // Tabs (two pages)
+    // Tabs (create one for each page)
     const tabsBar = this.scene.add.container(0, 0);
     this.pages.forEach((page, idx) => {
       const tab = this.scene.add.container(0, 0);
@@ -75,8 +92,14 @@ export class LoadsReferencePanel {
       this.tabActiveIndicators.push(activeIndicator);
     });
 
-    // Image
-    this.image = this.scene.add.image(0, 0, this.pages[this.activePageIndex].key).setOrigin(0.5, 0.5);
+    // Image (for image-type pages) - use first image page as default
+    const firstImagePage = this.pages.find(p => p.type !== "cards") || this.pages[0];
+    this.image = this.scene.add.image(0, 0, firstImagePage.key).setOrigin(0.5, 0.5);
+    this.image.setVisible(this.pages[this.activePageIndex].type !== "cards");
+    
+    // Cards container (for cards-type pages)
+    this.cardsContainer = this.scene.add.container(0, 0);
+    this.cardsContainer.setVisible(this.pages[this.activePageIndex].type === "cards");
 
     // Handle (always visible on left edge; clickable for full panel height)
     this.handleContainer = this.scene.add.container(0, 0);
@@ -98,7 +121,7 @@ export class LoadsReferencePanel {
 
     this.handleContainer.add([this.handleBg, this.handleText]);
 
-    this.root.add([this.background, tabsBar, this.image, this.handleContainer]);
+    this.root.add([this.background, tabsBar, this.image, this.cardsContainer, this.handleContainer]);
 
     // Keep references for layout
     (this.root as any).__loadsTabsBar = tabsBar as Phaser.GameObjects.Container;
@@ -135,30 +158,61 @@ export class LoadsReferencePanel {
     const maxPanelHeightFromSafeBand = Math.floor(height - safeTop - safeBottom) - shrinkPx;
     const maxPanelHeight = Math.max(240, Math.min(maxPanelHeightFromViewport, maxPanelHeightFromSafeBand));
 
-    // Determine panel size based on scaled image size (so it doesn't slide out farther than needed)
-    this.image.setTexture(this.pages[this.activePageIndex].key);
-    const source = this.scene.textures.get(this.pages[this.activePageIndex].key).getSourceImage() as
-      | HTMLImageElement
-      | HTMLCanvasElement
-      | ImageBitmap;
+    // Determine panel size based on active page type
+    const activePage = this.pages[this.activePageIndex];
+    const isCardsPage = activePage?.type === "cards";
+    
+    let scaledW: number;
+    let scaledH: number;
+    
+    if (isCardsPage) {
+      // For cards page, use similar dimensions to image pages (don't expand)
+      // Use the first image page as reference for consistent sizing
+      const firstImagePage = this.pages.find(p => p.type !== "cards");
+      if (firstImagePage) {
+        const refSource = this.scene.textures.get(firstImagePage.key).getSourceImage() as
+          | HTMLImageElement
+          | HTMLCanvasElement
+          | ImageBitmap;
+        const refW: number = refSource.width;
+        const refH: number = refSource.height;
+        const maxImageHeight = maxPanelHeight - imageTop - imagePaddingBottom;
+        const maxImageWidth = maxPanelWidth - imagePaddingX * 2;
+        const scale = Math.min(1, maxImageWidth / refW, maxImageHeight / refH);
+        scaledW = Math.floor(refW * scale);
+        scaledH = Math.floor(refH * scale);
+      } else {
+        // Fallback if no image pages exist
+        scaledW = 400;
+        scaledH = 400;
+      }
+    } else {
+      // Determine panel size based on scaled image size (so it doesn't slide out farther than needed)
+      this.image.setTexture(this.pages[this.activePageIndex].key);
+      const source = this.scene.textures.get(this.pages[this.activePageIndex].key).getSourceImage() as
+        | HTMLImageElement
+        | HTMLCanvasElement
+        | ImageBitmap;
 
-    const srcW: number = source.width;
-    const srcH: number = source.height;
+      const srcW: number = source.width;
+      const srcH: number = source.height;
 
-    const maxImageHeight = maxPanelHeight - imageTop - imagePaddingBottom;
-    const maxImageWidth = maxPanelWidth - imagePaddingX * 2;
+      const maxImageHeight = maxPanelHeight - imageTop - imagePaddingBottom;
+      const maxImageWidth = maxPanelWidth - imagePaddingX * 2;
 
-    const scale = Math.min(1, maxImageWidth / srcW, maxImageHeight / srcH);
-    const scaledW = Math.floor(srcW * scale);
-    const scaledH = Math.floor(srcH * scale);
+      const scale = Math.min(1, maxImageWidth / srcW, maxImageHeight / srcH);
+      scaledW = Math.floor(srcW * scale);
+      scaledH = Math.floor(srcH * scale);
+    }
 
-    // Ensure panel is wide enough for both tab labels (so tabs are clickable and text fits),
+    // Ensure panel is wide enough for all tab labels (so tabs are clickable and text fits),
     // while still keeping it "image-sized" when possible.
     const estimatedLabelWidths = this.tabLabels.map((t) => Math.ceil(t.getBounds().width));
-    const minTabWidths = estimatedLabelWidths.map((w) => Math.max(140, w + 20));
+    const minTabWidths = estimatedLabelWidths.map((w) => Math.max(100, w + 20));
+    const totalTabGaps = tabGap * (this.pages.length - 1);
     // Extra breathing room so tab labels never get clipped by rounding/layout.
     const minWidthForTabs =
-      tabsPadding * 2 + minTabWidths.reduce((a, b) => a + b, 0) + tabGap + 40;
+      tabsPadding * 2 + minTabWidths.reduce((a, b) => a + b, 0) + totalTabGaps + 40;
 
     this.panelWidth = Math.min(
       maxPanelWidth,
@@ -188,7 +242,9 @@ export class LoadsReferencePanel {
 
     // Tabs
     const tabsBar: Phaser.GameObjects.Container = (this.root as any).__loadsTabsBar;
-    const tabWidth = Math.max(160, Math.floor((this.panelWidth - tabsPadding * 2 - tabGap) / 2));
+    const numTabs = this.pages.length;
+    const totalGapWidth = tabGap * (numTabs - 1);
+    const tabWidth = Math.max(120, Math.floor((this.panelWidth - tabsPadding * 2 - totalGapWidth) / numTabs));
 
     tabsBar.x = tabsPadding;
     tabsBar.y = tabsPadding;
@@ -224,13 +280,121 @@ export class LoadsReferencePanel {
     this.handleText.x = this.handleWidth / 2;
     this.handleText.y = Math.floor(this.handleHeight / 2);
 
-    // Image area below tabs
-    const maxImageWidthForPanel = this.panelWidth - imagePaddingX * 2;
-    const maxImageHeightForPanel = this.panelHeight - imageTop - imagePaddingBottom;
-    const scaleForPanel = Math.min(1, maxImageWidthForPanel / srcW, maxImageHeightForPanel / srcH);
-    this.image.setScale(scaleForPanel);
-    this.image.x = Math.floor(this.panelWidth / 2);
-    this.image.y = Math.floor(imageTop + maxImageHeightForPanel / 2);
+    // Content area below tabs (image or cards)
+    if (isCardsPage) {
+      // Hide image, show cards container
+      this.image.setVisible(false);
+      this.cardsContainer.setVisible(true);
+      
+      // Position cards container
+      this.cardsContainer.x = imagePaddingX;
+      this.cardsContainer.y = imageTop;
+      
+      // Render cards content
+      this.renderCardsContent();
+    } else {
+      // Show image, hide cards container
+      this.image.setVisible(true);
+      this.cardsContainer.setVisible(false);
+      
+      // Image area below tabs
+      const source = this.scene.textures.get(this.pages[this.activePageIndex].key).getSourceImage() as
+        | HTMLImageElement
+        | HTMLCanvasElement
+        | ImageBitmap;
+      const srcW: number = source.width;
+      const srcH: number = source.height;
+      
+      const maxImageWidthForPanel = this.panelWidth - imagePaddingX * 2;
+      const maxImageHeightForPanel = this.panelHeight - imageTop - imagePaddingBottom;
+      const scaleForPanel = Math.min(1, maxImageWidthForPanel / srcW, maxImageHeightForPanel / srcH);
+      this.image.setScale(scaleForPanel);
+      this.image.x = Math.floor(this.panelWidth / 2);
+      this.image.y = Math.floor(imageTop + maxImageHeightForPanel / 2);
+    }
+  }
+  
+  /**
+   * Render the Cards tab content showing all players' demand cards
+   */
+  private renderCardsContent(): void {
+    // Clear existing cards content
+    this.cardsContainer.removeAll(true);
+    
+    if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
+      const noDataText = this.scene.add.text(
+        10, 10,
+        "No player data available",
+        { fontSize: "14px", color: "#94a3b8", fontFamily: UI_FONT_FAMILY }
+      );
+      this.cardsContainer.add(noDataText);
+      return;
+    }
+    
+    const contentPadding = 12;
+    const maxContentWidth = this.panelWidth - contentPadding * 2 - 24; // Leave room for padding
+    let yOffset = 0;
+    
+    // Render each player's cards
+    this.gameState.players.forEach((player, playerIndex) => {
+      // Player name header
+      const playerNameText = this.scene.add.text(
+        0, yOffset,
+        `${player.name}`,
+        { 
+          fontSize: "16px", 
+          fontStyle: "bold",
+          color: player.color || "#ffffff", 
+          fontFamily: UI_FONT_FAMILY 
+        }
+      );
+      this.cardsContainer.add(playerNameText);
+      yOffset += 24;
+      
+      // Render cards
+      const cards = player.hand || [];
+      if (cards.length === 0) {
+        const noCardsText = this.scene.add.text(
+          10, yOffset,
+          "(No cards)",
+          { fontSize: "12px", color: "#64748b", fontFamily: UI_FONT_FAMILY, fontStyle: "italic" }
+        );
+        this.cardsContainer.add(noCardsText);
+        yOffset += 20;
+      } else {
+        cards.forEach((card: any, cardIndex: number) => {
+          if (!card) return;
+          
+          // Card header with card number
+          const cardHeaderText = this.scene.add.text(
+            10, yOffset,
+            `Card ${cardIndex + 1}:`,
+            { fontSize: "12px", color: "#94a3b8", fontFamily: UI_FONT_FAMILY, fontStyle: "bold" }
+          );
+          this.cardsContainer.add(cardHeaderText);
+          yOffset += 16;
+          
+          // Each demand (city + resource + payment)
+          const demands = card.demands || [];
+          demands.forEach((demand: any, demandIndex: number) => {
+            if (!demand) return;
+            
+            const demandText = this.scene.add.text(
+              15, yOffset,
+              `• ${demand.resource} to ${demand.city} - ECU ${demand.payment}M`,
+              { fontSize: "11px", color: "#e2e8f0", fontFamily: UI_FONT_FAMILY }
+            );
+            this.cardsContainer.add(demandText);
+            yOffset += 14;
+          });
+          
+          yOffset += 6; // Gap between cards
+        });
+      }
+      
+      // Gap between players
+      yOffset += 12;
+    });
   }
 
   destroy(): void {

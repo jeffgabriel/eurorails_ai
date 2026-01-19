@@ -428,34 +428,26 @@ export class PlayerService {
       // });
 
       const players = result.rows.map((row) => {
-        // Security: Only include hand data for the requesting user's own player
-        // If requestingUserId is provided, only show that player's hand
-        // Otherwise, hide all hands (for backward compatibility, but not secure)
+        // Issue #176: Demand cards are public in the board game, so show ALL hands
+        // Handle both null and empty array cases
+        const handArray = row.hand || [];
         let handCards: any[] = [];
         
-        if (requestingUserId && row.user_id === requestingUserId) {
-          // This is the requesting user's player - show their hand
-          // Handle both null and empty array cases
-          const handArray = row.hand || [];
-          if (!Array.isArray(handArray)) {
-            console.error(`Invalid hand data for player ${row.id}:`, handArray);
-            handCards = [];
-          } else {
-            handCards = handArray.map((cardId: number) => {
-              // Reconcile in-memory deck state after server restarts:
-              // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
-              demandDeckService.ensureCardIsDealt(cardId);
-              const card = demandDeckService.getCard(cardId);
-              if (!card) {
-                console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
-                return null;
-              }
-              return card;
-            }).filter(Boolean); // Remove any null entries
-          }
-        } else {
-          // This is another player's data - hide their hand for security
+        if (!Array.isArray(handArray)) {
+          console.error(`Invalid hand data for player ${row.id}:`, handArray);
           handCards = [];
+        } else {
+          handCards = handArray.map((cardId: number) => {
+            // Reconcile in-memory deck state after server restarts:
+            // ensure cards present in DB hands are considered dealt and removed from draw/discard piles.
+            demandDeckService.ensureCardIsDealt(cardId);
+            const card = demandDeckService.getCard(cardId);
+            if (!card) {
+              console.error(`Failed to find card with ID ${cardId} for player ${row.id}`);
+              return null;
+            }
+            return card;
+          }).filter(Boolean); // Remove any null entries
         }
 
         // Normalize trainType from database (legacy values like "Freight" may exist)
