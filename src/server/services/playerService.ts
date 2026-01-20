@@ -383,6 +383,7 @@ export class PlayerService {
                     name,
                     color,
                     money,
+                    debt_owed,
                     train_type as "trainType",
                     position_x,
                     position_y,
@@ -488,6 +489,7 @@ export class PlayerService {
           ...row,
           userId: row.user_id || undefined,  // Map user_id to userId (optional for backward compatibility)
           trainType,
+          debtOwed: row.debt_owed || 0,  // Map debt_owed to debtOwed
           trainState: {
             position:
               row.position_x !== null
@@ -780,7 +782,7 @@ export class PlayerService {
     city: string,
     loadType: LoadType,
     cardId: number
-  ): Promise<{ payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard }> {
+  ): Promise<{ payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard; debtRepayment?: number; remainingDebt?: number }> {
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
@@ -788,7 +790,7 @@ export class PlayerService {
       await client.query("BEGIN");
 
       const playerRowResult = await client.query(
-        `SELECT id, money, hand, loads, current_turn_number as "turnNumber"
+        `SELECT id, money, debt_owed, hand, loads, current_turn_number as "turnNumber"
          FROM players
          WHERE game_id = $1 AND user_id = $2
          LIMIT 1
@@ -801,6 +803,7 @@ export class PlayerService {
 
       const playerId: string = playerRowResult.rows[0].id as string;
       const currentMoney: number = playerRowResult.rows[0].money as number;
+      const currentDebt: number = playerRowResult.rows[0].debt_owed as number || 0;
       const currentHand: unknown = playerRowResult.rows[0].hand;
       const currentLoads: unknown = playerRowResult.rows[0].loads;
       const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
@@ -864,6 +867,18 @@ export class PlayerService {
         throw new Error("Invalid payment");
       }
 
+      // Debt repayment logic (Mercy Rules):
+      // "The player must pay back double the borrowed amount from all delivery payoffs until fully repaid."
+      // Repayment is automatic and prioritized: payment first goes to debt, remainder to player's money.
+      // Calculate how much of the payment goes to debt (as much as needed, up to the full debt)
+      const repayment = Math.min(payment, currentDebt);
+      // Net payment is what's left after repaying debt
+      const netPayment = payment - repayment;
+      // Update money with only the net payment
+      const updatedMoney = currentMoney + netPayment;
+      // Reduce the player's total debt
+      const updatedDebt = currentDebt - repayment;
+
       const newCard = demandDeckService.drawCard();
       if (!newCard) {
         throw new Error("Failed to draw new card");
@@ -871,13 +886,12 @@ export class PlayerService {
       drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
-      const updatedMoney = currentMoney + payment;
 
       await client.query(
         `UPDATE players
-         SET money = $1, hand = $2, loads = $3
-         WHERE game_id = $4 AND id = $5`,
-        [updatedMoney, updatedHandIds, updatedLoads, gameId, playerId]
+         SET money = $1, hand = $2, loads = $3, debt_owed = $4
+         WHERE game_id = $5 AND id = $6`,
+        [updatedMoney, updatedHandIds, updatedLoads, updatedDebt, gameId, playerId]
       );
 
       // Discard the fulfilled demand card into the deck discard pile.
@@ -886,13 +900,14 @@ export class PlayerService {
       discardedCardId = cardId;
 
       // Persist server-authored action log for this turn (used for undo).
-      const deliverAction: TurnActionDeliver = {
+      const deliverAction: import("../../shared/types/GameTypes").TurnActionDeliver = {
         kind: "deliver",
         city,
         loadType,
         cardIdUsed: cardId,
         newCardIdDrawn: newCard.id,
         payment,
+        ...(repayment > 0 && { debtRepayment: repayment }), // Only include if debt was repaid
       };
       await client.query(
         `
@@ -905,7 +920,13 @@ export class PlayerService {
       );
 
       await client.query("COMMIT");
-      return { payment, updatedMoney, updatedLoads, newCard };
+      return { 
+        payment, 
+        updatedMoney, 
+        updatedLoads, 
+        newCard,
+        ...(repayment > 0 && { debtRepayment: repayment, remainingDebt: updatedDebt })
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       // Best-effort compensation for in-memory deck mutations.
@@ -925,6 +946,146 @@ export class PlayerService {
           // ignore
         }
       }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Borrow money from the bank for the authenticated user's player.
+   *
+   * Rules:
+   * - Player can borrow 1-20 ECU per action
+   * - Debt incurred is 2x the borrowed amount
+   * - Must be player's turn
+   * - Transaction is logged in turn_actions
+   *
+   * @param gameId - The game ID
+   * @param userId - The user ID of the borrower
+   * @param amount - Amount to borrow (1-20 ECU)
+   * @returns Object with updatedMoney, debtIncurred, and totalDebt
+   * @throws Error if validation fails or not player's turn
+   */
+  /**
+   * Handles the borrowing of money for a user, incurring debt.
+   * 
+   * Per the Mercy Rules: "A player may borrow up to ECU 20 million from the bank."
+   * Borrowing X amount increases player's money by X and debt by 2X (double repayment).
+   * 
+   * This operation is atomic via a database transaction and validates:
+   * - Player exists in the game
+   * - It is the player's turn
+   * - Amount is a valid integer between 1 and 20 (inclusive)
+   * 
+   * The borrow action is logged in turn_actions for potential undo support.
+   * 
+   * @param gameId - The UUID of the game
+   * @param userId - The UUID of the user performing the borrow
+   * @param amount - The amount of ECU to borrow (1-20 million)
+   * @returns Object containing:
+   *   - updatedMoney: New money balance after borrowing
+   *   - debtIncurred: Amount of debt added (2X the borrowed amount)
+   *   - totalDebt: Total debt_owed after this transaction
+   * @throws {Error} If validation fails, player not found, not player's turn, or invalid amount
+   */
+  static async borrowForUser(
+    gameId: string,
+    userId: string,
+    amount: number
+  ): Promise<{ updatedMoney: number; debtIncurred: number; totalDebt: number }> {
+    const client = await db.connect();
+    try {
+      // Input validation
+      if (!Number.isInteger(amount) || amount < 1 || amount > 20) {
+        throw new Error("Amount must be an integer between 1 and 20");
+      }
+
+      await client.query("BEGIN");
+
+      // Fetch and lock player row
+      const playerRowResult = await client.query(
+        `SELECT id, money, debt_owed, current_turn_number as "turnNumber"
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId]
+      );
+      if (playerRowResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const playerId: string = playerRowResult.rows[0].id as string;
+      const currentMoney: number = playerRowResult.rows[0].money as number;
+      const currentDebt: number = playerRowResult.rows[0].debt_owed as number || 0;
+      const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
+
+      // Validate it's the player's turn
+      const gameRow = await client.query(
+        `SELECT current_player_index
+         FROM games
+         WHERE id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId]
+      );
+      if (gameRow.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+      const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
+      
+      const currentPlayerQuery = await client.query(
+        `SELECT id
+         FROM players
+         WHERE game_id = $1
+         ORDER BY created_at ASC
+         OFFSET $2
+         LIMIT 1`,
+        [gameId, currentPlayerIndex]
+      );
+      if (currentPlayerQuery.rows.length === 0) {
+        throw new Error("Current player not found");
+      }
+      const currentPlayerId = currentPlayerQuery.rows[0].id as string;
+      
+      if (playerId !== currentPlayerId) {
+        throw new Error("Not your turn");
+      }
+
+      // Calculate new values
+      const debtIncurred = amount * 2;
+      const updatedMoney = currentMoney + amount;
+      const totalDebt = currentDebt + debtIncurred;
+
+      // Update player money and debt
+      await client.query(
+        `UPDATE players
+         SET money = $1, debt_owed = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3`,
+        [updatedMoney, totalDebt, playerId]
+      );
+
+      // Log the borrow action
+      const borrowAction: import("../../shared/types/GameTypes").TurnActionBorrow = {
+        kind: "borrow",
+        amount,
+        debtIncurred
+      };
+
+      await client.query(
+        `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+         VALUES ($1, $2, $3, $4::jsonb)
+         ON CONFLICT (player_id, game_id, turn_number)
+         DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP
+        `,
+        [playerId, gameId, turnNumber, JSON.stringify([borrowAction])]
+      );
+
+      await client.query("COMMIT");
+      return { updatedMoney, debtIncurred, totalDebt };
+    } catch (error) {
+      await client.query("ROLLBACK");
       throw error;
     } finally {
       client.release();

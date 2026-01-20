@@ -442,6 +442,19 @@ export class LoadDialogScene extends Scene {
             this.onUpdateHandDisplay();
             this.uiManager.setupUIOverlay();
             
+            // Show success notification with debt repayment info if applicable
+            let notificationMessage = `Delivered ${load.type} to ${this.city.name}!`;
+            if (delivered && typeof delivered.payment === 'number') {
+                // Check if there was debt repayment (from PlayerStateService response)
+                if (delivered.debtRepayment && delivered.debtRepayment > 0) {
+                    // Original payment was load.payment, but net received is delivered.payment after debt repayment
+                    notificationMessage = `Delivered ${load.type} to ${this.city.name}! Earned ${load.payment}M, Repaid ${delivered.debtRepayment}M debt, Net: ${delivered.payment}M`;
+                } else {
+                    notificationMessage = `Delivered ${load.type} to ${this.city.name}! Earned ${delivered.payment}M`;
+                }
+            }
+            this.uiManager.showHandToast(notificationMessage);
+            
             // Close dialog after successful delivery
             this.closeDialog();
         } catch (error) {

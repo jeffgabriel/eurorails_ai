@@ -444,12 +444,31 @@ export class PlayerStateService {
      * - Server-authoritative: compute payment + validate demand server-side
      * - Updates local state only after success
      */
+    /**
+     * Deliver a load to a city, fulfilling a demand card.
+     * 
+     * If the player has outstanding debt, the payment is automatically applied to debt repayment first.
+     * The net payment (after debt repayment) is added to the player's money.
+     * 
+     * This method calls the backend API, which handles:
+     * - Validating the delivery (correct city, load, and card)
+     * - Calculating debt repayment (if debt_owed > 0)
+     * - Updating money and debt
+     * - Drawing a new demand card
+     * - Broadcasting state to all players
+     * 
+     * @param city - The name of the city where the delivery is made
+     * @param loadType - The type of load being delivered
+     * @param cardId - The ID of the demand card being fulfilled
+     * @param gameId - The UUID of the current game
+     * @returns Object containing payment, newCardId, and optional debtRepayment/remainingDebt, or null on failure
+     */
     public async deliverLoad(
         city: string,
         loadType: LoadType,
         cardId: number,
         gameId: string
-    ): Promise<{ payment: number; newCardId: number } | null> {
+    ): Promise<{ payment: number; newCardId: number; debtRepayment?: number; remainingDebt?: number } | null> {
         if (!this.localPlayer || !this.localPlayerId) {
             console.error('Cannot deliver load: no local player');
             return null;
@@ -476,7 +495,14 @@ export class PlayerStateService {
                 return null;
             }
 
-            const result: { payment: number; updatedMoney: number; updatedLoads: LoadType[]; newCard: DemandCard } = await response.json();
+            const result: { 
+                payment: number; 
+                updatedMoney: number; 
+                updatedLoads: LoadType[]; 
+                newCard: DemandCard;
+                debtRepayment?: number;
+                remainingDebt?: number;
+            } = await response.json();
             if (
                 !result?.newCard ||
                 typeof result.payment !== 'number' ||
@@ -505,9 +531,90 @@ export class PlayerStateService {
             // The socket patch will update the hand with the authoritative server state
             // Manually updating here causes duplicates when the patch arrives
 
-            return { payment: result.payment, newCardId: result.newCard.id };
+            // Update debt if applicable
+            if (typeof result.remainingDebt === 'number') {
+                this.localPlayer.debtOwed = result.remainingDebt;
+            }
+
+            return { 
+                payment: result.payment, 
+                newCardId: result.newCard.id,
+                debtRepayment: result.debtRepayment,
+                remainingDebt: result.remainingDebt
+            };
         } catch (error) {
             console.error('Error delivering load:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Borrow money from the bank for the local player
+     * 
+     * Rules:
+     * - Player can borrow 1-20 ECU per action
+     * - Debt incurred is 2x the borrowed amount
+     * - Must be player's turn
+     * 
+     * @param gameId - The game ID
+     * @param amount - Amount to borrow (1-20 ECU)
+     * @returns Object with updatedMoney, debtIncurred, and totalDebt, or null on error
+     */
+    /**
+     * Borrow money from the bank (Mercy Rule mechanic).
+     * 
+     * Calls the backend API to borrow an amount (1-20 ECU), which:
+     * - Increases player's money by the borrowed amount
+     * - Increases debt_owed by double the borrowed amount (2X repayment)
+     * 
+     * Updates local player state with the new money and debt values.
+     * This action is only allowed on the player's turn and is validated by the backend.
+     * 
+     * @param gameId - The UUID of the current game
+     * @param amount - Amount to borrow in millions of ECU (1-20)
+     * @returns Object with updatedMoney, debtIncurred, and totalDebt, or null on failure
+     */
+    public async borrowMoney(
+        gameId: string,
+        amount: number
+    ): Promise<{ updatedMoney: number; debtIncurred: number; totalDebt: number } | null> {
+        if (!this.localPlayer || !this.localPlayerId) {
+            console.error('Cannot borrow money: no local player');
+            return null;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/borrow`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId: gameId,
+                    amount: amount
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Failed to borrow money:', errorData);
+                return null;
+            }
+
+            const result: { updatedMoney: number; debtIncurred: number; totalDebt: number } = await response.json();
+            if (
+                typeof result.updatedMoney !== 'number' ||
+                typeof result.debtIncurred !== 'number' ||
+                typeof result.totalDebt !== 'number'
+            ) {
+                console.error('Invalid borrow response from server');
+                return null;
+            }
+
+            // Update money and debt (server-authoritative)
+            this.localPlayer.money = result.updatedMoney;
+            this.localPlayer.debtOwed = result.totalDebt;
+
+            return result;
+        } catch (error) {
+            console.error('Error borrowing money:', error);
             return null;
         }
     }

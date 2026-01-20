@@ -50,6 +50,7 @@ export interface Player {
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
     cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
+    debtOwed: number;  // Amount player owes to bank (in millions ECU)
 }
 
 export interface TrainState {
@@ -227,4 +228,29 @@ export interface PlayerTrackState {
     totalCost: number;
     turnBuildCost: number;
     lastBuildTimestamp: Date;
+}
+
+// Turn Action Types for tracking player actions during their turn
+export interface TurnActionDeliver {
+    kind: "deliver";
+    city: string;
+    loadType: LoadType;
+    cardIdUsed: number;
+    newCardIdDrawn: number;
+    payment: number;
+    debtRepayment?: number;  // Amount of payment applied to debt repayment
+}
+
+export interface TurnActionMove {
+    kind: "move";
+    from: { row: number; col: number; x?: number; y?: number } | null;
+    to: { row: number; col: number; x?: number; y?: number };
+    ownersPaid: Array<{ playerId: string; amount: number }>;
+    feeTotal: number;
+}
+
+export interface TurnActionBorrow {
+    kind: "borrow";
+    amount: number;  // Amount borrowed from bank
+    debtIncurred: number;  // Amount of debt added (2x borrowed amount)
 }

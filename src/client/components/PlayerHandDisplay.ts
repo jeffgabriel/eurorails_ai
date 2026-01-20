@@ -1,6 +1,7 @@
 import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
@@ -13,6 +14,7 @@ export class PlayerHandDisplay {
   private onUndo: () => void;
   private canUndo: () => boolean;
   private gameStateService: GameStateService | null = null;
+  private playerStateService: PlayerStateService | null = null;
   private mapRenderer: MapRenderer;
   private trainInteractionManager: TrainInteractionManager;
   private trackDrawingManager: TrackDrawingManager;
@@ -36,7 +38,8 @@ export class PlayerHandDisplay {
     mapRenderer: MapRenderer,
     trainInteractionManager: TrainInteractionManager,
     trackDrawingManager: TrackDrawingManager,
-    gameStateService?: GameStateService
+    gameStateService?: GameStateService,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -44,6 +47,7 @@ export class PlayerHandDisplay {
     this.onUndo = onUndo;
     this.canUndo = canUndo;
     this.gameStateService = gameStateService || null;
+    this.playerStateService = playerStateService || null;
     this.mapRenderer = mapRenderer;
     this.trainInteractionManager = trainInteractionManager;
     this.trackDrawingManager = trackDrawingManager;
@@ -195,11 +199,13 @@ export class PlayerHandDisplay {
     statusBar.add(statusBarBg);
 
     // Add player name and money
+    const statusString = `${currentPlayer.name} | Money: ECU ${currentPlayer.money}M`;
+    
     const statusText = this.scene.add
       .text(
         20,
         this.STATUS_BAR_HEIGHT / 2,
-        `${currentPlayer.name} | Money: ECU ${currentPlayer.money}M`,
+        statusString,
         {
           color: "#ffffff",
           fontSize: "18px",
@@ -210,7 +216,63 @@ export class PlayerHandDisplay {
       .setOrigin(0, 0.5);
 
     statusBar.add(statusText);
+    
+    // Add debt indicator in red if player has debt (more visible)
+    if (currentPlayer.debtOwed && currentPlayer.debtOwed > 0) {
+      const debtText = this.scene.add
+        .text(
+          statusText.x + statusText.width + 10, // Position right after status text with a small gap
+          this.STATUS_BAR_HEIGHT / 2,
+          `| Debt: ECU ${currentPlayer.debtOwed}M`,
+          {
+            color: "#ef4444", // Red color for debt
+            fontSize: "18px",
+            fontStyle: "bold",
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(0, 0.5);
+      
+      statusBar.add(debtText);
+    }
 
+    // Add Borrow Money button (only show on player's turn)
+    const isPlayerTurn = this.gameState.currentPlayerIndex >= 0 &&
+      this.gameState.players[this.gameState.currentPlayerIndex]?.id === currentPlayer.id;
+    
+    if (isPlayerTurn) {
+      const borrowButtonX = this.scene.scale.width - 180;
+      const borrowButtonY = this.STATUS_BAR_HEIGHT / 2;
+      
+      const borrowBg = this.scene.add.rectangle(
+        borrowButtonX,
+        borrowButtonY,
+        140,
+        30,
+        0x22c55e,
+        0.9
+      );
+      borrowBg.setInteractive({ useHandCursor: true });
+      
+      const borrowText = this.scene.add.text(
+        borrowButtonX,
+        borrowButtonY,
+        '💰 Borrow Money',
+        {
+          color: "#ffffff",
+          fontSize: "14px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+        }
+      ).setOrigin(0.5, 0.5);
+      
+      borrowBg.on('pointerover', () => borrowBg.setFillStyle(0x16a34a));
+      borrowBg.on('pointerout', () => borrowBg.setFillStyle(0x22c55e));
+      borrowBg.on('pointerdown', () => this.openBorrowMoneyDialog());
+      
+      statusBar.add([borrowBg, borrowText]);
+    }
+    
     // Add mini train icon
     if (currentPlayer.trainType) {
       const trainType = currentPlayer.trainType
@@ -283,6 +345,32 @@ export class PlayerHandDisplay {
 
   public isHandCollapsed(): boolean {
     return this.isCollapsed;
+  }
+
+  private openBorrowMoneyDialog(): void {
+    const localPlayer = this.playerStateService.getLocalPlayer();
+    if (!localPlayer) {
+      console.error('Cannot open borrow dialog: no local player');
+      return;
+    }
+
+    // Launch the BorrowMoneyDialogScene
+    this.scene.scene.launch('BorrowMoneyDialogScene', {
+      player: localPlayer,
+      gameState: this.gameState,
+      playerStateService: this.playerStateService,
+      onClose: () => {
+        // Scene will stop itself
+      },
+      onSuccess: async () => {
+        // Refresh the UI to show updated money and debt
+        if (this.currentContainer) {
+          await this.update(this.lastDrawingMode, this.lastTrackCost, this.currentContainer);
+        }
+        // Also update the train card to reflect new money
+        this.updateTrainCardLoads();
+      }
+    });
   }
 
   public updateTrainCardLoads(): void {

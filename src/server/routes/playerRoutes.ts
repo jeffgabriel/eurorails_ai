@@ -618,6 +618,77 @@ router.post('/deliver-load', authenticateToken, async (req, res) => {
     }
 });
 
+// Borrow money from the bank
+router.post('/borrow', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, amount } = req.body as {
+            gameId?: string;
+            amount?: number;
+        };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId || typeof amount !== 'number') {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId and amount are required'
+            });
+        }
+
+        if (!Number.isInteger(amount) || amount < 1 || amount > 20) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'Amount must be an integer between 1 and 20'
+            });
+        }
+
+        const result = await PlayerService.borrowForUser(
+            gameId,
+            userId,
+            amount
+        );
+
+        // Broadcast updated player state
+        const publicPlayers = await PlayerService.getPlayers(gameId, '');
+        const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+        if (updatedPlayer) {
+            await emitStatePatch(gameId, { players: [updatedPlayer] } as any);
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'UNAUTHORIZED') {
+            return res.status(401).json({ error: 'UNAUTHORIZED', details: message });
+        }
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (
+            message.includes('Amount must be') ||
+            message.includes('Invalid') ||
+            message.includes('Validation')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({
+            error: 'Server error',
+            details: message
+        });
+    }
+});
+
 // Move train and settle opponent track-usage fees (authenticated, server-authoritative on fees)
 router.post('/move-train', authenticateToken, async (req, res) => {
     try {

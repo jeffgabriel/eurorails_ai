@@ -155,6 +155,7 @@ export class LobbyService {
         name: username,
         color: data.creatorColor || '#ff0000',
         money: 50,
+        debtOwed: 0,
         trainType: TrainType.Freight,
         turnNumber: 1,
         trainState: {
@@ -330,6 +331,7 @@ export class LobbyService {
           name: username,
           color: playerColor!,
           money: 50,
+          debtOwed: 0,
           trainType: TrainType.Freight,
           turnNumber: 1,
           trainState: {
@@ -446,6 +448,7 @@ export class LobbyService {
       name: row.name,
       color: row.color,
       money: 50, // Default for lobby view
+      debtOwed: 0, // Default for lobby view
       trainType: TrainType.Freight, // Default for lobby view
       turnNumber: 1, // Default for lobby view
       trainState: {

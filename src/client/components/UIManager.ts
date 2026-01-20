@@ -326,7 +326,8 @@ export class UIManager {
       this.mapRenderer,
       this.trainInteractionManager,
       this.trackDrawingManager,
-      this.gameStateService
+      this.gameStateService,
+      this.playerStateService
     );
 
     // Record track segments immediately when they are built (uncommitted),
