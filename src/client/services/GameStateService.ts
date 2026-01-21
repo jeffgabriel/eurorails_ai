@@ -1,4 +1,4 @@
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, BorrowResult } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
 import { TrainType } from '../../shared/types/GameTypes';
@@ -458,12 +458,7 @@ export class GameStateService {
      * Server-authoritative: validates it's your turn, amount constraints.
      * Returns borrowed amount, debt incurred, and updated balances.
      */
-    public async borrowMoney(gameId: string, amount: number): Promise<{
-        borrowedAmount: number;
-        debtIncurred: number;
-        updatedMoney: number;
-        updatedDebtOwed: number;
-    } | null> {
+    public async borrowMoney(gameId: string, amount: number): Promise<BorrowResult | null> {
         try {
             const { authenticatedFetch } = await import('./authenticatedFetch');
             const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/borrow`, {
@@ -481,6 +476,15 @@ export class GameStateService {
             }
 
             const data = await response.json();
+
+            // Validate response data
+            if (typeof data.borrowedAmount !== 'number' ||
+                typeof data.debtIncurred !== 'number' ||
+                typeof data.updatedMoney !== 'number' ||
+                typeof data.updatedDebtOwed !== 'number') {
+                console.error('Invalid borrow response from server');
+                return null;
+            }
 
             // Update local player state with new money and debt
             const localPlayerId = this.getLocalPlayerId();

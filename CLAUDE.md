@@ -341,9 +341,12 @@ Load Management
 Mercy Rules (For Beginners or Trapped Players)
 Sometimes, a player may become trapped and unable to build or move. If discarding cards does not help, try these rules:
 Borrowing
-	•	A player may borrow up to ECU 20 million from the bank.
+	•	A player may borrow 1-20 ECU (any integer amount) from the bank.
+	•	Borrowing can only be done during your turn.
 	•	The borrowed amount can be used immediately for building track or paying track use fees.
-	•	The player must pay back double the borrowed amount from all delivery payoffs until fully repaid.
+	•	Debt is incurred at 2x the borrowed amount (e.g., borrow 10M → owe 20M debt).
+	•	100% of delivery payoffs go toward debt repayment first; any remainder goes to the player.
+	•	Debt affects victory: net worth (cash minus debt) must be at least ECU 250M to win.
 Late Payment of Use Fees
 	•	A player may use another player’s track and pay the track usage fee later using money from delivery payoffs.
 Backtracking
