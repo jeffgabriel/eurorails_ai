@@ -324,7 +324,7 @@ describe('Drag Interaction Scenarios', () => {
     return {
       ...state,
       isDragging: state.isDragging || shouldDrag,
-      lastPosition: state.isDragging ? { x, y } : state.lastPosition
+      lastPosition: (state.isDragging || shouldDrag) ? { x, y } : state.lastPosition
     };
   };
 

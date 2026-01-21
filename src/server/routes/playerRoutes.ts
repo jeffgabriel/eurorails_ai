@@ -892,10 +892,10 @@ router.post('/borrow', authenticateToken, async (req, res) => {
             });
         }
 
-        if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+        if (typeof amount !== 'number' || !Number.isFinite(amount) || !Number.isInteger(amount)) {
             return res.status(400).json({
                 error: 'Validation error',
-                details: 'amount is required and must be a number'
+                details: 'amount is required and must be an integer'
             });
         }
 

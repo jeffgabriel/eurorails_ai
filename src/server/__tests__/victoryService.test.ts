@@ -222,7 +222,55 @@ describe('VictoryService Integration Tests', () => {
       const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Insufficient money');
+      expect(result.error).toContain('Insufficient funds');
+    });
+
+    it('should reject victory when player has debt reducing net worth below threshold', async () => {
+      // Player has 260M cash but 20M debt = 240M net worth (< 250M threshold)
+      await runQuery(async (client) => {
+        await client.query('UPDATE players SET money = 260, debt_owed = 20 WHERE id = $1', [playerId1]);
+      });
+
+      const claimedCities: MajorCityCoordinate[] = [
+        { name: 'City1', row: 10, col: 20 },
+        { name: 'City2', row: 15, col: 25 },
+        { name: 'City3', row: 20, col: 30 },
+        { name: 'City4', row: 25, col: 35 },
+        { name: 'City5', row: 30, col: 40 },
+        { name: 'City6', row: 35, col: 45 },
+        { name: 'City7', row: 40, col: 50 },
+      ];
+
+      const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Insufficient funds');
+      expect(result.error).toContain('240M');
+      expect(result.error).toContain('260M cash');
+      expect(result.error).toContain('20M debt');
+    });
+
+    it('should accept victory when player has debt but net worth meets threshold', async () => {
+      // Player has 280M cash and 20M debt = 260M net worth (>= 250M threshold)
+      await runQuery(async (client) => {
+        await client.query('UPDATE players SET money = 280, debt_owed = 20 WHERE id = $1', [playerId1]);
+      });
+
+      const claimedCities: MajorCityCoordinate[] = [
+        { name: 'City1', row: 10, col: 20 },
+        { name: 'City2', row: 15, col: 25 },
+        { name: 'City3', row: 20, col: 30 },
+        { name: 'City4', row: 25, col: 35 },
+        { name: 'City5', row: 30, col: 40 },
+        { name: 'City6', row: 35, col: 45 },
+        { name: 'City7', row: 40, col: 50 },
+      ];
+
+      const result = await VictoryService.declareVictory(gameId, playerId1, claimedCities);
+
+      expect(result.success).toBe(true);
+      expect(result.victoryState).toBeDefined();
+      expect(result.victoryState?.triggered).toBe(true);
     });
 
     it('should reject victory with fewer than 7 unique cities', async () => {

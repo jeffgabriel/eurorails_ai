@@ -1,5 +1,5 @@
 import { TrackSegment } from '../../shared/types/TrackTypes';
-import { majorCityGroups } from '../config/mapConfig';
+import { majorCityGroups, mapConfig } from '../config/mapConfig';
 
 export interface MajorCityConnection {
   name: string;
@@ -78,6 +78,21 @@ export class VictoryService {
       for (let i = 0; i < cityNodesInGraph.length; i++) {
         for (let j = i + 1; j < cityNodesInGraph.length; j++) {
           addEdge(cityNodesInGraph[i], cityNodesInGraph[j]);
+        }
+      }
+    }
+
+    // Add implicit edges for ferry connections
+    // When both endpoints of a ferry are in the track, they're connected
+    if (mapConfig?.ferryConnections) {
+      for (const ferry of mapConfig.ferryConnections) {
+        const point1 = ferry.connections[0];
+        const point2 = ferry.connections[1];
+        const key1 = `${point1.row},${point1.col}`;
+        const key2 = `${point2.row},${point2.col}`;
+
+        if (graph.has(key1) && graph.has(key2)) {
+          addEdge(key1, key2);
         }
       }
     }
