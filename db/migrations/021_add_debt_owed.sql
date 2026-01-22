@@ -9,5 +9,9 @@ ALTER TABLE players
 ADD COLUMN IF NOT EXISTS debt_owed INTEGER NOT NULL DEFAULT 0;
 
 -- Add constraint to prevent negative debt
-ALTER TABLE players
-ADD CONSTRAINT players_debt_owed_non_negative CHECK (debt_owed >= 0);
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'players_debt_owed_non_negative' AND table_name = 'players') THEN
+        ALTER TABLE players ADD CONSTRAINT players_debt_owed_non_negative CHECK (debt_owed >= 0);
+    END IF;
+END $$;
