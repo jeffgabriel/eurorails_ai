@@ -455,49 +455,20 @@ export class GameStateService {
 
     /**
      * Borrow money from the bank (Mercy Rule).
+     * Delegates to PlayerStateService for per-player operations.
      * Server-authoritative: validates it's your turn, amount constraints.
      * Returns borrowed amount, debt incurred, and updated balances.
      */
     public async borrowMoney(gameId: string, amount: number): Promise<BorrowResult | null> {
+        if (!this.playerStateService) {
+            console.error('Cannot borrow money: PlayerStateService not available');
+            return null;
+        }
+
         try {
-            const { authenticatedFetch } = await import('./authenticatedFetch');
-            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/borrow`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    gameId,
-                    amount
-                })
-            });
-
-            if (!response.ok) {
-                const errorData: any = await response.json().catch(() => ({}));
-                console.error('Borrow failed:', errorData);
-                return null;
-            }
-
-            const data = await response.json();
-
-            // Validate response data
-            if (typeof data.borrowedAmount !== 'number' ||
-                typeof data.debtIncurred !== 'number' ||
-                typeof data.updatedMoney !== 'number' ||
-                typeof data.updatedDebtOwed !== 'number') {
-                console.error('Invalid borrow response from server');
-                return null;
-            }
-
-            // Update local player state with new money and debt
-            const localPlayerId = this.getLocalPlayerId();
-            if (localPlayerId) {
-                const idx = this.gameState.players.findIndex(p => p.id === localPlayerId);
-                if (idx >= 0) {
-                    this.gameState.players[idx].money = data.updatedMoney;
-                    this.gameState.players[idx].debtOwed = data.updatedDebtOwed;
-                }
-            }
-
+            const result = await this.playerStateService.borrowMoney(gameId, amount);
             this.notifyStateChange();
-            return data;
+            return result;
         } catch (error) {
             console.error('Borrow failed:', error);
             return null;
