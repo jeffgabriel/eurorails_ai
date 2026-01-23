@@ -855,6 +855,89 @@ describe('PlayerService Integration Tests', () => {
             // The card should no longer be considered dealt after undo.
             expect(demandDeckService.returnDealtCardToTop(delivered.newCard.id)).toBe(false);
         });
+
+        it('should correctly undo delivery when debt was repaid from the payoff', async () => {
+            demandDeckService.reset();
+
+            const userId = uuidv4();
+            await db.query(
+                'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+                [userId, `user_${userId.slice(0, 8)}`, `user_${userId.slice(0, 8)}@test.local`, 'hash']
+            );
+
+            const playerId = uuidv4();
+            const player = {
+                id: playerId,
+                userId,
+                name: 'UndoDebtDeliverer',
+                color: '#111111',
+                money: 100,
+                trainType: TrainType.Freight,
+                turnNumber: 1,
+                trainState: {
+                    position: {x: 0, y: 0, row: 0, col: 0},
+                    movementHistory: [],
+                    remainingMovement: 9,
+                    loads: [] as LoadType[]
+                },
+                hand: []
+            };
+            await PlayerService.createPlayer(gameId, player as any);
+
+            const playerRow = await db.query('SELECT hand FROM players WHERE id = $1', [playerId]);
+            const cardId: number = playerRow.rows[0].hand[0];
+            const card = demandDeckService.getCard(cardId);
+            expect(card).toBeTruthy();
+            if (!card) throw new Error('Expected demand card to exist');
+
+            const demand = card.demands[0];
+
+            // Set player with debt (40M) and load
+            await db.query(
+                'UPDATE players SET loads = $1, money = $2, debt_owed = $3 WHERE id = $4',
+                [[demand.resource], 100, 40, playerId]
+            );
+
+            // Deliver load - the payment should partially repay the debt
+            const delivered = await PlayerService.deliverLoadForUser(
+                gameId,
+                userId,
+                demand.city,
+                demand.resource,
+                cardId
+            );
+
+            // Verify debt repayment logic: payment goes to debt first
+            const expectedRepayment = Math.min(demand.payment, 40);
+            const expectedNetPayment = demand.payment - expectedRepayment;
+            expect(delivered.repayment).toBe(expectedRepayment);
+            expect(delivered.updatedMoney).toBe(100 + expectedNetPayment);
+            expect(delivered.updatedDebtOwed).toBe(40 - expectedRepayment);
+            expect(delivered.updatedLoads).toEqual([]);
+
+            // Undo the delivery
+            const undone = await PlayerService.undoLastActionForUser(gameId, userId);
+            expect(undone.kind).toBe('deliver');
+            if (undone.kind !== 'deliver') throw new Error('Expected deliver undo');
+
+            // Verify undo restored debt and money correctly:
+            // - Debt should be restored (40M)
+            // - Money should have net payment removed (back to 100M)
+            expect(undone.updatedDebtOwed).toBe(40);
+            expect(undone.updatedMoney).toBe(100);
+            expect(undone.updatedLoads).toEqual([demand.resource]);
+            expect(undone.removedCardId).toBe(delivered.newCard.id);
+            expect(undone.restoredCard.id).toBe(cardId);
+
+            // Verify database state
+            const after = await db.query('SELECT money, debt_owed, loads, hand FROM players WHERE id = $1', [playerId]);
+            expect(after.rows[0].money).toBe(100);
+            expect(after.rows[0].debt_owed).toBe(40);
+            expect(after.rows[0].loads).toEqual([demand.resource]);
+            expect(after.rows[0].hand).toHaveLength(3);
+            expect(after.rows[0].hand).toContain(cardId);
+            expect(after.rows[0].hand).not.toContain(delivered.newCard.id);
+        });
     });
 
     describe('Discard hand (skip turn)', () => {

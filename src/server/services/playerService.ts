@@ -15,6 +15,7 @@ type TurnActionDeliver = {
   cardIdUsed: number;
   newCardIdDrawn: number;
   payment: number;
+  repayment: number;
 };
 
 type TurnActionMove = {
@@ -900,6 +901,7 @@ export class PlayerService {
         cardIdUsed: cardId,
         newCardIdDrawn: newCard.id,
         payment,
+        repayment,
       };
       await client.query(
         `
@@ -1291,7 +1293,7 @@ export class PlayerService {
     gameId: string,
     userId: string
   ): Promise<
-    | { kind: "deliver"; updatedMoney: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
+    | { kind: "deliver"; updatedMoney: number; updatedDebtOwed: number; updatedLoads: LoadType[]; restoredCard: DemandCard; removedCardId: number }
     | { kind: "move"; updatedMoney: number; restoredPosition: { row: number; col: number; x?: number; y?: number }; ownersReversed: Array<{ playerId: string; amount: number }>; feeTotal: number }
   > {
     const client = await db.connect();
@@ -1299,7 +1301,7 @@ export class PlayerService {
       await client.query("BEGIN");
 
       const playerRowResult = await client.query(
-        `SELECT id, money, hand, loads, current_turn_number as "turnNumber", position_row, position_col, position_x, position_y
+        `SELECT id, money, debt_owed as "debtOwed", hand, loads, current_turn_number as "turnNumber", position_row, position_col, position_x, position_y
          FROM players
          WHERE game_id = $1 AND user_id = $2
          LIMIT 1
@@ -1312,6 +1314,7 @@ export class PlayerService {
 
       const playerId: string = playerRowResult.rows[0].id as string;
       const currentMoney: number = playerRowResult.rows[0].money as number;
+      const currentDebtOwed: number = Number(playerRowResult.rows[0].debtOwed ?? 0);
       const currentHand: unknown = playerRowResult.rows[0].hand;
       const currentLoads: unknown = playerRowResult.rows[0].loads;
       const turnNumber: number = Number(playerRowResult.rows[0].turnNumber ?? 1);
@@ -1462,6 +1465,7 @@ export class PlayerService {
       const removedCardId = Number(last.newCardIdDrawn);
       const restoredCardId = Number(last.cardIdUsed);
       const payment = Number(last.payment);
+      const repayment = Number(last.repayment ?? 0);
       const loadType = last.loadType as LoadType;
 
       if (!handIds.includes(removedCardId)) {
@@ -1476,9 +1480,14 @@ export class PlayerService {
         throw new Error("Invalid demand card on action");
       }
 
-      const updatedMoney = currentMoney - payment;
-      if (!Number.isFinite(updatedMoney)) {
-        throw new Error("Invalid money update");
+      // Undo debt repayment and money changes:
+      // - If debt was repaid, restore it (add back repayment to debt)
+      // - Subtract the net payment (payment - repayment) that went to money
+      const netPayment = payment - repayment;
+      const updatedMoney = currentMoney - netPayment;
+      const updatedDebtOwed = currentDebtOwed + repayment;
+      if (!Number.isFinite(updatedMoney) || !Number.isFinite(updatedDebtOwed)) {
+        throw new Error("Invalid money or debt update");
       }
 
       const updatedHandIds = handIds.map((id) => (id === removedCardId ? restoredCardId : id));
@@ -1498,9 +1507,9 @@ export class PlayerService {
 
       await client.query(
         `UPDATE players
-         SET money = $1, hand = $2, loads = $3
-         WHERE game_id = $4 AND id = $5`,
-        [updatedMoney, updatedHandIds, updatedLoads, gameId, playerId]
+         SET money = $1, hand = $2, loads = $3, debt_owed = $4
+         WHERE game_id = $5 AND id = $6`,
+        [updatedMoney, updatedHandIds, updatedLoads, updatedDebtOwed, gameId, playerId]
       );
 
       const remainingActions = actions.slice(0, actions.length - 1);
@@ -1512,7 +1521,7 @@ export class PlayerService {
       );
 
       await client.query("COMMIT");
-      return { kind: "deliver", updatedMoney, updatedLoads, restoredCard, removedCardId };
+      return { kind: "deliver", updatedMoney, updatedDebtOwed, updatedLoads, restoredCard, removedCardId };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

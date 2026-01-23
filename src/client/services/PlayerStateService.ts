@@ -540,6 +540,7 @@ export class PlayerStateService {
             if (kind === 'deliver') {
                 if (
                     typeof result?.updatedMoney !== 'number' ||
+                    typeof result?.updatedDebtOwed !== 'number' ||
                     !Array.isArray(result?.updatedLoads) ||
                     typeof result?.removedCardId !== 'number' ||
                     !result?.restoredCard
@@ -558,6 +559,7 @@ export class PlayerStateService {
                 }
 
                 this.localPlayer.money = result.updatedMoney;
+                this.localPlayer.debtOwed = result.updatedDebtOwed;
                 this.localPlayer.trainState.loads = result.updatedLoads;
                 this.localPlayer.hand = (this.localPlayer.hand || [])
                     .filter((card: any) => card.id !== result.removedCardId);
