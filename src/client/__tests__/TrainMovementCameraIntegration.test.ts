@@ -92,7 +92,10 @@ describe('Train Movement and Camera Panning Integration', () => {
 
     mockTrainSpriteManager = {
       setSpriteAlpha: jest.fn(),
-      resetAllSpriteAlpha: jest.fn()
+      resetAllSpriteAlpha: jest.fn(),
+      getSprite: jest.fn().mockReturnValue({
+        setPosition: jest.fn()
+      })
     };
 
     mockPlayerStateService = {};
