@@ -66,6 +66,16 @@ export class LoadsReferencePanel {
   private contentMaskGraphics: Phaser.GameObjects.Graphics | null = null;
   private contentMask: Phaser.Display.Masks.GeometryMask | null = null;
 
+  // Scrollbar state
+  private scrollOffset: number = 0;
+  private maxScrollOffset: number = 0;
+  private contentAreaHeight: number = 0;
+  private scrollbarTrack: Phaser.GameObjects.Rectangle | null = null;
+  private scrollbarThumb: Phaser.GameObjects.Rectangle | null = null;
+  private isDraggingThumb: boolean = false;
+  private dragStartY: number = 0;
+  private dragStartOffset: number = 0;
+
   constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState) {
     this.scene = scene;
     this.pages = pages;
@@ -190,6 +200,38 @@ export class LoadsReferencePanel {
 
     this.handleContainer.add([this.handleBg, this.handleText]);
 
+    // Create scrollbar (track and thumb)
+    this.scrollbarTrack = this.scene.add.rectangle(0, 0, 8, 100, 0x334155, 1).setOrigin(0);
+    this.scrollbarTrack.setInteractive({ useHandCursor: true });
+    this.scrollbarTrack.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.onTrackClick(pointer));
+
+    this.scrollbarThumb = this.scene.add.rectangle(0, 0, 8, 50, 0x64748b, 1).setOrigin(0);
+    this.scrollbarThumb.setInteractive({ useHandCursor: true, draggable: true });
+
+    // Thumb drag handlers
+    this.scrollbarThumb.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.isDraggingThumb = true;
+      this.dragStartY = pointer.y;
+      this.dragStartOffset = this.scrollOffset;
+    });
+
+    this.scene.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
+      if (this.isDraggingThumb) {
+        this.onThumbDrag(pointer);
+      }
+    });
+
+    this.scene.input.on("pointerup", () => {
+      this.isDraggingThumb = false;
+    });
+
+    // Mouse wheel scrolling on the content area
+    this.scene.input.on("wheel", (pointer: Phaser.Input.Pointer, gameObjects: any[], deltaX: number, deltaY: number) => {
+      if (this.isPointerOverContent(pointer)) {
+        this.onMouseWheel(deltaY);
+      }
+    });
+
     this.root.add([
       this.background,
       tabsBar,
@@ -197,6 +239,8 @@ export class LoadsReferencePanel {
       this.cardsContainer,
       this.resourceGridContainer,
       this.cityGridContainer,
+      this.scrollbarTrack,
+      this.scrollbarThumb,
       this.handleContainer,
     ]);
 
@@ -373,8 +417,21 @@ export class LoadsReferencePanel {
     // Content area below tabs - show only the active content type
     const contentPaddingX = imagePaddingX;
     const contentTop = imageTop;
-    const contentWidth = this.panelWidth - contentPaddingX * 2 - this.handleWidth;
+    const scrollbarWidth = 12;
+    const contentWidth = this.panelWidth - contentPaddingX * 2 - this.handleWidth - scrollbarWidth;
     const contentHeight = this.panelHeight - contentTop - imagePaddingBottom;
+
+    // Position scrollbar (right side of content area, before handle)
+    if (this.scrollbarTrack) {
+      this.scrollbarTrack.x = this.panelWidth - this.handleWidth - scrollbarWidth;
+      this.scrollbarTrack.y = contentTop;
+      this.scrollbarTrack.height = contentHeight;
+      this.scrollbarTrack.width = 8;
+    }
+    if (this.scrollbarThumb) {
+      this.scrollbarThumb.x = this.panelWidth - this.handleWidth - scrollbarWidth;
+      this.scrollbarThumb.width = 8;
+    }
 
     // Update mask to clip content to panel bounds (world coordinates)
     if (this.contentMaskGraphics) {
@@ -386,18 +443,24 @@ export class LoadsReferencePanel {
       this.contentMaskGraphics.fillRect(maskX, maskY, contentWidth, contentHeight);
     }
 
-    // Hide all content containers first
+    // Hide all content containers and scrollbar first
     this.image.setVisible(false);
     this.cardsContainer.setVisible(false);
     this.resourceGridContainer.setVisible(false);
     this.cityGridContainer.setVisible(false);
+    if (this.scrollbarTrack) this.scrollbarTrack.setVisible(false);
+    if (this.scrollbarThumb) this.scrollbarThumb.setVisible(false);
 
     if (pageType === "cards") {
       // Show cards container
       this.cardsContainer.setVisible(true);
       this.cardsContainer.x = contentPaddingX;
-      this.cardsContainer.y = contentTop;
+      this.cardsContainer.y = contentTop - this.scrollOffset;
       this.renderCardsContent();
+
+      // Calculate cards content height (approximate based on rendered content)
+      const cardsContentHeight = this.cardsContainer.getBounds().height || contentHeight;
+      this.updateScrollbar(cardsContentHeight, contentHeight);
     } else if (pageType === "resource") {
       // Show resource grid
       this.resourceGridContainer.setVisible(true);
@@ -410,6 +473,11 @@ export class LoadsReferencePanel {
         this.resourceGridHitArea.width = contentWidth;
         this.resourceGridHitArea.height = contentHeight;
       }
+
+      // Calculate content height and update scrollbar
+      const gridHeight = this.resourceScrollPanel?.height || 0;
+      this.updateScrollbar(gridHeight, contentHeight);
+      this.updateContentPosition();
     } else if (pageType === "city") {
       // Show city grid
       this.cityGridContainer.setVisible(true);
@@ -422,6 +490,11 @@ export class LoadsReferencePanel {
         this.cityGridHitArea.width = contentWidth;
         this.cityGridHitArea.height = contentHeight;
       }
+
+      // Calculate content height and update scrollbar
+      const gridHeight = this.cityScrollPanel?.height || 0;
+      this.updateScrollbar(gridHeight, contentHeight);
+      this.updateContentPosition();
     } else {
       // Show image (default for "image" type)
       const pageKey = activePage?.key || "loads-reference-page-1";
@@ -593,9 +666,11 @@ export class LoadsReferencePanel {
     gridSizer.layout();
 
     // RexUI uses center origin - offset by half width/height to align top-left with container origin
+    // Add 50px vertical offset to account for search bar
     const gridWidth = gridSizer.width;
     const gridHeight = gridSizer.height;
-    gridSizer.setPosition(gridWidth / 2, gridHeight / 2);
+    const searchBarOffset = 50;
+    gridSizer.setPosition(gridWidth / 2, gridHeight / 2 + searchBarOffset);
 
     // Store reference for later cleanup
     this.resourceScrollPanel = gridSizer;
@@ -604,7 +679,7 @@ export class LoadsReferencePanel {
   }
 
   /**
-   * Create a GridSizer containing ResourceCells
+   * Create a GridSizer containing ResourceCells (3 columns x 10 rows)
    */
   private createResourceGridSizer(): any {
     const rexUI = (this.scene as any).rexUI;
@@ -613,24 +688,24 @@ export class LoadsReferencePanel {
     const columns = 3;
     const rows = Math.ceil(this.filteredResources.length / columns);
 
-    console.log(`[LoadsReferencePanel] Creating grid: ${this.filteredResources.length} resources, ${columns} columns, ${rows} rows`);
-
-    const gridSizer = rexUI.add.gridSizer({
+    // Use GridSizer with fixed 3 columns
+    const sizer = rexUI.add.gridSizer({
       column: columns,
       row: rows,
       columnProportions: 1,
-      space: { column: 6, row: 6 },
+      rowProportions: 1,
+      space: { column: 12, row: 12 },
     });
 
-    // Add ResourceCell for each resource with explicit row/column
+    // Add ResourceCell for each resource
     this.filteredResources.forEach((resource, index) => {
+      const cell = this.createResourceCell(resource);
       const col = index % columns;
       const row = Math.floor(index / columns);
-      const cell = this.createResourceCell(resource);
-      gridSizer.add(cell, { column: col, row: row, expand: true });
+      sizer.add(cell, { column: col, row: row, padding: { left: 4, right: 4, top: 4, bottom: 4 } });
     });
 
-    return gridSizer;
+    return sizer;
   }
 
   /**
@@ -681,8 +756,8 @@ export class LoadsReferencePanel {
       iconContainer.add(icon, { align: "center", expand: false });
     }
 
-    // Resource name and count text
-    const text = this.scene.add.text(0, 0, `${resource.name}-${resource.count}`, {
+    // Resource name text
+    const text = this.scene.add.text(0, 0, resource.name, {
       fontSize: "12px",
       color: "#e2e8f0",
       fontFamily: UI_FONT_FAMILY,
@@ -697,7 +772,7 @@ export class LoadsReferencePanel {
 
     cell.addBackground(cellBg);
     cell.add(iconContainer, { align: "center", padding: { top: 8 } });
-    cell.add(text, { align: "center", padding: { bottom: 8 } });
+    cell.add(text, { align: "center", padding: { left: 8, right: 8, bottom: 8 } });
 
     // Store resource data for tooltip
     (cell as any).__resourceData = resource;
@@ -743,7 +818,7 @@ export class LoadsReferencePanel {
     const cityList = resource.cities.length > 0
       ? resource.cities.join("\n")
       : "No cities available";
-    const tooltipText = this.scene.add.text(0, 0, `Available in:\n${cityList}`, {
+    const tooltipText = this.scene.add.text(0, 0, `Count: ${resource.count}\n\nAvailable in:\n${cityList}`, {
       fontSize: "12px",
       color: "#e2e8f0",
       fontFamily: UI_FONT_FAMILY,
@@ -840,9 +915,11 @@ export class LoadsReferencePanel {
     gridSizer.layout();
 
     // RexUI uses center origin - offset by half width/height to align top-left with container origin
+    // Add 50px vertical offset to account for search bar
     const gridWidth = gridSizer.width;
     const gridHeight = gridSizer.height;
-    gridSizer.setPosition(gridWidth / 2, gridHeight / 2);
+    const searchBarOffset = 50;
+    gridSizer.setPosition(gridWidth / 2, gridHeight / 2 + searchBarOffset);
 
     // Store reference for later cleanup
     this.cityScrollPanel = gridSizer;
@@ -851,7 +928,7 @@ export class LoadsReferencePanel {
   }
 
   /**
-   * Create a GridSizer containing CityCells
+   * Create a GridSizer containing CityCells (3 columns x 18 rows)
    */
   private createCityGridSizer(): any {
     const rexUI = (this.scene as any).rexUI;
@@ -860,22 +937,24 @@ export class LoadsReferencePanel {
     const columns = 3;
     const rows = Math.ceil(this.filteredCities.length / columns);
 
-    const gridSizer = rexUI.add.gridSizer({
+    // Use GridSizer with fixed 3 columns
+    const sizer = rexUI.add.gridSizer({
       column: columns,
       row: rows,
       columnProportions: 1,
-      space: { column: 6, row: 6 },
+      rowProportions: 1,
+      space: { column: 12, row: 12 },
     });
 
-    // Add CityCell for each city with explicit row/column
+    // Add CityCell for each city
     this.filteredCities.forEach((city, index) => {
+      const cell = this.createCityCell(city);
       const col = index % columns;
       const row = Math.floor(index / columns);
-      const cell = this.createCityCell(city);
-      gridSizer.add(cell, { column: col, row: row, expand: true });
+      sizer.add(cell, { column: col, row: row, padding: { left: 4, right: 4, top: 4, bottom: 4 } });
     });
 
-    return gridSizer;
+    return sizer;
   }
 
   /**
@@ -915,7 +994,7 @@ export class LoadsReferencePanel {
     // Add resource icons (up to maxIcons)
     const resourcesToShow = city.resources.slice(0, maxIcons);
     for (const resourceName of resourcesToShow) {
-      const iconKey = `loads/${resourceName}`;
+      const iconKey = `load-${resourceName.toLowerCase()}`;
       if (this.scene.textures.exists(iconKey)) {
         const icon = this.scene.add.image(0, 0, iconKey).setDisplaySize(iconSize, iconSize);
         iconsRow.add(icon, { align: "center" });
@@ -939,7 +1018,7 @@ export class LoadsReferencePanel {
     });
 
     cell.addBackground(cellBg);
-    cell.add(nameText, { align: "center", padding: { top: 8 } });
+    cell.add(nameText, { align: "center", padding: { left: 8, right: 8, top: 8 } });
     cell.add(iconsRow, { align: "center", padding: { bottom: 8 } });
 
     // Store city data for camera navigation
@@ -1069,24 +1148,19 @@ export class LoadsReferencePanel {
     const q = query.toLowerCase().trim();
     const activePage = this.pages[this.activePageIndex];
 
+    // Reset scroll when filtering
+    this.scrollOffset = 0;
+
     if (activePage?.type === "resource") {
-      // Filter resources by name or associated cities
+      // Filter resources by name only
       this.filteredResources = q
-        ? this.resourceData.filter(
-            (r) =>
-              r.name.toLowerCase().includes(q) ||
-              r.cities.some((c) => c.toLowerCase().includes(q))
-          )
+        ? this.resourceData.filter((r) => r.name.toLowerCase().includes(q))
         : [...this.resourceData];
       this.rebuildResourceGrid();
     } else if (activePage?.type === "city") {
-      // Filter cities by name or associated resources
+      // Filter cities by name only
       this.filteredCities = q
-        ? this.cityData.filter(
-            (c) =>
-              c.name.toLowerCase().includes(q) ||
-              c.resources.some((r) => r.toLowerCase().includes(q))
-          )
+        ? this.cityData.filter((c) => c.name.toLowerCase().includes(q))
         : [...this.cityData];
       this.rebuildCityGrid();
     }
@@ -1128,9 +1202,13 @@ export class LoadsReferencePanel {
     gridSizer.layout();
 
     // RexUI uses center origin - offset by half width/height
+    // Add 50px vertical offset to account for search bar
+    // Use minimum x-position to keep single results visible
     const gridWidth = gridSizer.width;
     const gridHeight = gridSizer.height;
-    gridSizer.setPosition(gridWidth / 2, gridHeight / 2);
+    const searchBarOffset = 50;
+    const minXOffset = 75; // Half cell width + padding to keep single results visible
+    gridSizer.setPosition(Math.max(gridWidth / 2, minXOffset), gridHeight / 2 + searchBarOffset);
 
     this.resourceScrollPanel = gridSizer;
     this.resourceGridContainer.add(gridSizer);
@@ -1175,9 +1253,13 @@ export class LoadsReferencePanel {
     gridSizer.layout();
 
     // RexUI uses center origin - offset by half width/height
+    // Add 50px vertical offset to account for search bar
+    // Use minimum x-position to keep single results visible
     const gridWidth = gridSizer.width;
     const gridHeight = gridSizer.height;
-    gridSizer.setPosition(gridWidth / 2, gridHeight / 2);
+    const searchBarOffset = 50;
+    const minXOffset = 75; // Half cell width + padding to keep single results visible
+    gridSizer.setPosition(Math.max(gridWidth / 2, minXOffset), gridHeight / 2 + searchBarOffset);
 
     this.cityScrollPanel = gridSizer;
     this.cityGridContainer.add(gridSizer);
@@ -1269,6 +1351,9 @@ export class LoadsReferencePanel {
     this.filteredResources = [...this.resourceData];
     this.filteredCities = [...this.cityData];
 
+    // Reset scroll position when switching tabs
+    this.scrollOffset = 0;
+
     this.layout();
     this.updateTabStyles();
   }
@@ -1285,6 +1370,181 @@ export class LoadsReferencePanel {
     this.tabActiveIndicators.forEach((indicator) => {
       indicator.setFillStyle(0x94a3b8, 1);
     });
+  }
+
+  /**
+   * Check if pointer is over the content area
+   */
+  private isPointerOverContent(pointer: Phaser.Input.Pointer): boolean {
+    if (!this.isOpen) return false;
+
+    const activePage = this.pages[this.activePageIndex];
+    const pageType = activePage?.type || "image";
+    if (pageType !== "resource" && pageType !== "city" && pageType !== "cards") return false;
+
+    // Get content area bounds in world coordinates
+    const tabsPadding = 12;
+    const tabHeight = 40;
+    const imageTop = tabsPadding + tabHeight + 12;
+    const imagePaddingX = 12;
+    const imagePaddingBottom = 12;
+
+    const contentX = this.root.x + imagePaddingX;
+    const contentY = this.root.y + imageTop;
+    const contentWidth = this.panelWidth - imagePaddingX * 2 - this.handleWidth;
+    const contentHeight = this.panelHeight - imageTop - imagePaddingBottom;
+
+    return (
+      pointer.x >= contentX &&
+      pointer.x <= contentX + contentWidth &&
+      pointer.y >= contentY &&
+      pointer.y <= contentY + contentHeight
+    );
+  }
+
+  /**
+   * Handle mouse wheel scrolling
+   */
+  private onMouseWheel(deltaY: number): void {
+    const scrollSpeed = 30;
+    const newOffset = this.scrollOffset + (deltaY > 0 ? scrollSpeed : -scrollSpeed);
+    this.setScrollOffset(newOffset);
+  }
+
+  /**
+   * Handle click on scrollbar track
+   */
+  private onTrackClick(pointer: Phaser.Input.Pointer): void {
+    if (!this.scrollbarTrack || !this.scrollbarThumb) return;
+
+    const trackBounds = this.scrollbarTrack.getBounds();
+    const thumbHeight = this.scrollbarThumb.height;
+    const clickY = pointer.y - trackBounds.y;
+
+    // Calculate scroll offset based on click position
+    const trackScrollRange = trackBounds.height - thumbHeight;
+    if (trackScrollRange <= 0) return;
+
+    const ratio = Math.max(0, Math.min(1, clickY / trackBounds.height));
+    const newOffset = ratio * this.maxScrollOffset;
+    this.setScrollOffset(newOffset);
+  }
+
+  /**
+   * Handle thumb drag
+   */
+  private onThumbDrag(pointer: Phaser.Input.Pointer): void {
+    if (!this.scrollbarTrack || !this.scrollbarThumb) return;
+
+    const deltaY = pointer.y - this.dragStartY;
+    const trackHeight = this.scrollbarTrack.height;
+    const thumbHeight = this.scrollbarThumb.height;
+    const trackScrollRange = trackHeight - thumbHeight;
+
+    if (trackScrollRange <= 0) return;
+
+    const offsetDelta = (deltaY / trackScrollRange) * this.maxScrollOffset;
+    const newOffset = this.dragStartOffset + offsetDelta;
+    this.setScrollOffset(newOffset);
+  }
+
+  /**
+   * Set scroll offset and update content position
+   */
+  private setScrollOffset(offset: number): void {
+    this.scrollOffset = Math.max(0, Math.min(this.maxScrollOffset, offset));
+    this.updateContentPosition();
+    this.updateScrollbarThumbPosition();
+  }
+
+  /**
+   * Update the vertical position of content based on scroll offset
+   */
+  private updateContentPosition(): void {
+    const activePage = this.pages[this.activePageIndex];
+    const pageType = activePage?.type || "image";
+
+    const tabsPadding = 12;
+    const tabHeight = 40;
+    const contentTop = tabsPadding + tabHeight + 12;
+    const searchBarOffset = 50; // Offset to account for search bar
+    const minXOffset = 75; // Half cell width + padding to keep single results visible
+
+    if (pageType === "resource" && this.resourceScrollPanel) {
+      const gridHeight = this.resourceScrollPanel.height || 0;
+      const gridWidth = this.resourceScrollPanel.width || 0;
+      this.resourceScrollPanel.setPosition(
+        Math.max(gridWidth / 2, minXOffset),
+        gridHeight / 2 + searchBarOffset - this.scrollOffset
+      );
+    } else if (pageType === "city" && this.cityScrollPanel) {
+      const gridHeight = this.cityScrollPanel.height || 0;
+      const gridWidth = this.cityScrollPanel.width || 0;
+      this.cityScrollPanel.setPosition(
+        Math.max(gridWidth / 2, minXOffset),
+        gridHeight / 2 + searchBarOffset - this.scrollOffset
+      );
+    } else if (pageType === "cards") {
+      // Cards container uses top-left origin
+      this.cardsContainer.y = contentTop - this.scrollOffset;
+    }
+  }
+
+  /**
+   * Update scrollbar thumb position based on scroll offset
+   */
+  private updateScrollbarThumbPosition(): void {
+    if (!this.scrollbarTrack || !this.scrollbarThumb) return;
+
+    const trackHeight = this.scrollbarTrack.height;
+    const thumbHeight = this.scrollbarThumb.height;
+    const trackScrollRange = trackHeight - thumbHeight;
+
+    if (this.maxScrollOffset <= 0) {
+      this.scrollbarThumb.y = this.scrollbarTrack.y;
+      return;
+    }
+
+    const ratio = this.scrollOffset / this.maxScrollOffset;
+    this.scrollbarThumb.y = this.scrollbarTrack.y + ratio * trackScrollRange;
+  }
+
+  /**
+   * Calculate max scroll offset based on content height
+   */
+  private calculateMaxScrollOffset(contentHeight: number, visibleHeight: number): void {
+    this.contentAreaHeight = visibleHeight;
+    this.maxScrollOffset = Math.max(0, contentHeight - visibleHeight);
+
+    // Clamp current scroll offset
+    if (this.scrollOffset > this.maxScrollOffset) {
+      this.scrollOffset = this.maxScrollOffset;
+    }
+  }
+
+  /**
+   * Update scrollbar visibility and size based on content
+   */
+  private updateScrollbar(contentHeight: number, visibleHeight: number): void {
+    if (!this.scrollbarTrack || !this.scrollbarThumb) return;
+
+    this.calculateMaxScrollOffset(contentHeight, visibleHeight);
+
+    // Hide scrollbar if content fits
+    const needsScrollbar = contentHeight > visibleHeight;
+    this.scrollbarTrack.setVisible(needsScrollbar);
+    this.scrollbarThumb.setVisible(needsScrollbar);
+
+    if (!needsScrollbar) return;
+
+    // Calculate thumb height proportional to visible/total ratio
+    const ratio = visibleHeight / contentHeight;
+    const trackHeight = this.scrollbarTrack.height;
+    const minThumbHeight = 30;
+    const thumbHeight = Math.max(minThumbHeight, trackHeight * ratio);
+    this.scrollbarThumb.height = thumbHeight;
+
+    this.updateScrollbarThumbPosition();
   }
 }
 
