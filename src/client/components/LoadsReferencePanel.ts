@@ -62,6 +62,10 @@ export class LoadsReferencePanel {
   private searchInput: HTMLInputElement | null = null;
   private noResultsText: Phaser.GameObjects.Text | null = null;
 
+  // Mask to clip grid content to panel bounds
+  private contentMaskGraphics: Phaser.GameObjects.Graphics | null = null;
+  private contentMask: Phaser.Display.Masks.GeometryMask | null = null;
+
   constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState) {
     this.scene = scene;
     this.pages = pages;
@@ -150,6 +154,16 @@ export class LoadsReferencePanel {
     this.cityGridContainer.add(this.cityGridHitArea);
     this.cityGridContainer.sendToBack(this.cityGridHitArea);
 
+    // Create mask graphics to clip content to panel bounds
+    // The mask is created in world space and positioned in layout()
+    this.contentMaskGraphics = this.scene.add.graphics();
+    this.contentMask = this.contentMaskGraphics.createGeometryMask();
+
+    // Apply mask to grid containers and cards container
+    this.resourceGridContainer.setMask(this.contentMask);
+    this.cityGridContainer.setMask(this.contentMask);
+    this.cardsContainer.setMask(this.contentMask);
+
     // Load resource/city data asynchronously
     this.loadResourceData();
 
@@ -235,9 +249,8 @@ export class LoadsReferencePanel {
 
     if (pageType === "resource" || pageType === "city" || pageType === "cards") {
       // For interactive tables and cards, use fixed dimensions
-      // Slightly larger than image pages for better table display
       scaledW = 380;
-      scaledH = 350;
+      scaledH = 625;
     } else {
       // Determine panel size based on scaled image size (for image pages)
       const pageKey = activePage?.key || "loads-reference-page-1";
@@ -362,6 +375,16 @@ export class LoadsReferencePanel {
     const contentTop = imageTop;
     const contentWidth = this.panelWidth - contentPaddingX * 2 - this.handleWidth;
     const contentHeight = this.panelHeight - contentTop - imagePaddingBottom;
+
+    // Update mask to clip content to panel bounds (world coordinates)
+    if (this.contentMaskGraphics) {
+      this.contentMaskGraphics.clear();
+      // Draw filled rectangle at the content area position in world space
+      const maskX = this.root.x + contentPaddingX;
+      const maskY = this.root.y + contentTop;
+      this.contentMaskGraphics.fillStyle(0xffffff);
+      this.contentMaskGraphics.fillRect(maskX, maskY, contentWidth, contentHeight);
+    }
 
     // Hide all content containers first
     this.image.setVisible(false);
@@ -1195,6 +1218,14 @@ export class LoadsReferencePanel {
       this.cityScrollPanel.destroy();
       this.cityScrollPanel = null;
     }
+
+    // Clean up mask
+    if (this.contentMaskGraphics) {
+      this.contentMaskGraphics.destroy();
+      this.contentMaskGraphics = null;
+    }
+    this.contentMask = null;
+
     if (this.root) {
       this.root.destroy(true);
     }
