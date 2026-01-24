@@ -40,3 +40,11 @@
 3. **Filter vs highlight**: Filtering provides a cleaner UX when searching through many items, reducing visual clutter.
 
 4. **No table zoom**: The scrollbar with content masking provides adequate navigation; zoom would add complexity without significant benefit given the readable icon/text sizes.
+
+## Architecture Notes
+
+### Data Source
+- Uses existing `/api/loads/state` endpoint via `api.getLoadState()` instead of fetching raw config files
+- `LoadState[]` response provides: `loadType`, `cities`, `totalCount`, `availableCount`
+- Transformation to `ResourceTableEntry[]` is done client-side (simple mapping)
+- `transformToCityData()` utility converts resource data to city-based view for "By City" tab

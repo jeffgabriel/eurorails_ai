@@ -2,12 +2,11 @@ import Phaser from "phaser";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { GameState } from "../../shared/types/GameTypes";
 import {
-  parseResourceData,
   transformToCityData,
   ResourceTableEntry,
   CityTableEntry,
-  LoadConfiguration,
 } from "../utils/loadDataTransformer";
+import { api } from "../lobby/shared/api";
 
 type LoadsReferencePage = {
   key: string;
@@ -606,19 +605,22 @@ export class LoadsReferencePanel {
   }
 
   /**
-   * Load resource/city data from configuration file and transform it
+   * Load resource/city data from API and transform it
    */
   private async loadResourceData(): Promise<void> {
     try {
-      const response = await fetch("/configuration/load_cities.json");
-      if (!response.ok) {
-        console.error("Failed to load load_cities.json:", response.status);
-        return;
-      }
-      const config: LoadConfiguration = await response.json();
+      // Use existing API instead of fetching raw config
+      const loadStates = await api.getLoadState();
 
-      // Transform data using utility functions
-      this.resourceData = parseResourceData(config);
+      // Transform LoadState[] to ResourceTableEntry[]
+      this.resourceData = loadStates.map(state => ({
+        name: state.loadType,
+        cities: state.cities,
+        count: state.totalCount,
+        iconKey: `load-${state.loadType.toLowerCase()}`
+      })).sort((a, b) => a.name.localeCompare(b.name));
+
+      // Transform to city-based view
       this.cityData = transformToCityData(this.resourceData);
 
       // Initialize filtered arrays with full data
