@@ -1260,7 +1260,7 @@ export class LoadsReferencePanel {
     const gridWidth = gridSizer.width;
     const gridHeight = gridSizer.height;
     const searchBarOffset = 50;
-    const minXOffset = 75; // Half cell width + padding to keep single results visible
+    const minXOffset = 125; // Larger offset for city cells to keep single results visible
     gridSizer.setPosition(Math.max(gridWidth / 2, minXOffset), gridHeight / 2 + searchBarOffset);
 
     this.cityScrollPanel = gridSizer;
@@ -1470,20 +1470,21 @@ export class LoadsReferencePanel {
     const tabHeight = 40;
     const contentTop = tabsPadding + tabHeight + 12;
     const searchBarOffset = 50; // Offset to account for search bar
-    const minXOffset = 75; // Half cell width + padding to keep single results visible
+    const minXOffsetResource = 75; // Half cell width + padding to keep single results visible
+    const minXOffsetCity = 125; // Larger offset for city cells
 
     if (pageType === "resource" && this.resourceScrollPanel) {
       const gridHeight = this.resourceScrollPanel.height || 0;
       const gridWidth = this.resourceScrollPanel.width || 0;
       this.resourceScrollPanel.setPosition(
-        Math.max(gridWidth / 2, minXOffset),
+        Math.max(gridWidth / 2, minXOffsetResource),
         gridHeight / 2 + searchBarOffset - this.scrollOffset
       );
     } else if (pageType === "city" && this.cityScrollPanel) {
       const gridHeight = this.cityScrollPanel.height || 0;
       const gridWidth = this.cityScrollPanel.width || 0;
       this.cityScrollPanel.setPosition(
-        Math.max(gridWidth / 2, minXOffset),
+        Math.max(gridWidth / 2, minXOffsetCity),
         gridHeight / 2 + searchBarOffset - this.scrollOffset
       );
     } else if (pageType === "cards") {
