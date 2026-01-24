@@ -866,4 +866,64 @@ router.post('/restart', authenticateToken, async (req, res) => {
     }
 });
 
+// Borrow money from the bank (Mercy Rule) - authenticated, server-authoritative
+router.post('/borrow', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, amount } = req.body as { gameId?: string; amount?: number };
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                message: 'Authentication required',
+                details: 'Authentication required'
+            });
+        }
+
+        if (!gameId) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'gameId is required'
+            });
+        }
+
+        if (typeof amount !== 'number' || !Number.isFinite(amount) || !Number.isInteger(amount)) {
+            return res.status(400).json({
+                error: 'Validation error',
+                details: 'amount is required and must be an integer'
+            });
+        }
+
+        const result = await PlayerService.borrowForUser(gameId, userId, amount);
+
+        // Broadcast updated public player state (do not leak hand)
+        const publicPlayers = await PlayerService.getPlayers(gameId, '');
+        const updatedPlayer = publicPlayers.find(p => p.userId === userId);
+        if (updatedPlayer) {
+            const { hand: _hand, ...playerWithoutHand } = updatedPlayer as any;
+            await emitStatePatch(gameId, { players: [playerWithoutHand] } as any);
+        }
+
+        return res.status(200).json(result);
+    } catch (error: any) {
+        const message = error?.message || 'An unexpected error occurred';
+
+        if (message === 'Player not found in game') {
+            return res.status(404).json({ error: 'Not found', details: message });
+        }
+        if (message === 'Not your turn') {
+            return res.status(403).json({ error: 'Forbidden', details: message });
+        }
+        if (
+            message.includes('Amount must be') ||
+            message.includes('Invalid') ||
+            message.includes('integer')
+        ) {
+            return res.status(400).json({ error: 'Validation error', details: message });
+        }
+
+        return res.status(500).json({ error: 'Server error', details: message });
+    }
+});
+
 export default router; 
