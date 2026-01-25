@@ -561,9 +561,9 @@ export class PlayerStateService {
                 this.localPlayer.money = result.updatedMoney;
                 this.localPlayer.debtOwed = result.updatedDebtOwed;
                 this.localPlayer.trainState.loads = result.updatedLoads;
-                this.localPlayer.hand = (this.localPlayer.hand || [])
-                    .filter((card: any) => card.id !== result.removedCardId);
-                this.localPlayer.hand.push(result.restoredCard);
+                // Hand will be updated via socket patch (server is authoritative)
+                // Do not manually update hand here to avoid race condition duplicates (Issue #195)
+                // The server broadcasts the updated hand via state:patch after undo
                 return true;
             }
 
