@@ -1001,4 +1001,52 @@ describe('TrainMovementManager City Direction Reversal', () => {
     // Forward movement should always be allowed
     expect(manager.canMoveTo(forwardPoint)).toMatchObject({ canMove: true });
   });
+
+  it('prevents reversal after undo to non-city position using lastTraversedEdge', () => {
+    // Setup: Player moved from A to B (both Clear terrain), then undid back to A
+    const pointA = { row: 5, col: 5, terrain: TerrainType.Clear, x: 100, y: 100, id: 'A' };
+    const pointB = { row: 5, col: 6, terrain: TerrainType.Clear, x: 150, y: 100, id: 'B' };
+    const pointC = { row: 5, col: 4, terrain: TerrainType.Clear, x: 50, y: 100, id: 'C' }; // Opposite direction from B
+    
+    // Player is at A after undoing movement from A->B
+    player.trainState.position = pointA;
+    player.trainState.remainingMovement = 9;
+    player.trainState.movementHistory = []; // History cleared by undo
+    player.trainState.lastTraversedEdge = {
+      from: pointA,
+      to: pointB,
+      cost: 1
+    };
+    
+    // Mock getGridPointAtPosition to return the actual terrain
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === pointA.row && col === pointA.col) return pointA;
+      if (row === pointB.row && col === pointB.col) return pointB;
+      if (row === pointC.row && col === pointC.col) return pointC;
+      return null;
+    }) as any);
+    
+    // Add track data so movement calculation works
+    const playerTrackState: PlayerTrackState = {
+      playerId: player.id,
+      gameId: 'test-game',
+      segments: [
+        { from: pointA, to: pointB, cost: 1 },
+        { from: pointB, to: pointA, cost: 1 },
+        { from: pointA, to: pointC, cost: 1 },
+        { from: pointC, to: pointA, cost: 1 }
+      ],
+      totalCost: 4,
+      turnBuildCost: 0,
+      lastBuildTimestamp: new Date()
+    };
+    const trackMap = new Map();
+    trackMap.set(player.id, playerTrackState);
+    manager.updateTrackData(trackMap);
+    
+    // Try to reverse to C (opposite direction from lastTraversedEdge A->B) - should be blocked (not at city)
+    const result = manager.canMoveTo(pointC);
+    expect(result.canMove).toBe(false);
+    expect(result.message).toContain('reverse at cities');
+  });
 }); 

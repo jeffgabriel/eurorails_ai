@@ -186,7 +186,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 
@@ -273,7 +274,8 @@ export class PlayerStateService {
                     position: null,
                     remainingMovement: 0,
                     movementHistory: [],
-                    loads: []
+                    loads: [],
+                    lastTraversedEdge: undefined
                 };
             }
             this.localPlayer.trainState.position = { x: to.x, y: to.y, row: to.row, col: to.col };
@@ -307,7 +309,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 
@@ -493,7 +496,8 @@ export class PlayerStateService {
                     position: null,
                     remainingMovement: 0,
                     movementHistory: [],
-                    loads: []
+                    loads: [],
+                    lastTraversedEdge: undefined
                 };
             }
             this.localPlayer.trainState.loads = result.updatedLoads;
@@ -554,7 +558,8 @@ export class PlayerStateService {
                         position: null,
                         remainingMovement: 0,
                         movementHistory: [],
-                        loads: []
+                        loads: [],
+                        lastTraversedEdge: undefined
                     };
                 }
 
@@ -583,7 +588,8 @@ export class PlayerStateService {
                         position: null,
                         remainingMovement: 0,
                         movementHistory: [],
-                        loads: []
+                        loads: [],
+                        lastTraversedEdge: undefined
                     };
                 }
 
@@ -665,7 +671,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 

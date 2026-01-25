@@ -253,6 +253,8 @@ export class MovementExecutor {
           refreshedPlayer.trainState.movementHistory = [];
         }
         refreshedPlayer.trainState.movementHistory.push(movementSegment);
+        // Clear lastTraversedEdge since we now have real history
+        refreshedPlayer.trainState.lastTraversedEdge = undefined;
       }
 
       // Update train position visually without re-posting (already persisted by move-train)

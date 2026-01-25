@@ -89,7 +89,9 @@ router.post('/create', async (req, res) => {
             trainState: {
                 position: null,  // Now properly typed as Point | null
                 remainingMovement: 0,
-                movementHistory: []
+                movementHistory: [],
+                loads: [],
+                lastTraversedEdge: undefined
             }
         };
 
