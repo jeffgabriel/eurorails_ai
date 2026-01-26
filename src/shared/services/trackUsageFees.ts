@@ -1,5 +1,5 @@
 import { PlayerTrackState, TrackSegment } from "../types/TrackTypes";
-import { getMajorCityGroups, MajorCityGroup } from "./majorCityGroups";
+import { getMajorCityGroups, MajorCityGroup, getFerryEdges, FerryEdge } from "./majorCityGroups";
 
 export type Node = { row: number; col: number };
 
@@ -57,11 +57,12 @@ export type BuildUnionGraphResult = {
 
 /**
  * Build a union adjacency graph from all players' track segments and add public major-city
- * internal connectivity edges (ownerless).
+ * internal connectivity edges (ownerless) and ferry connections (ownerless).
  */
 export function buildUnionTrackGraph(args: {
   allTracks: PlayerTrackState[];
   majorCityGroups?: MajorCityGroup[];
+  ferryEdges?: FerryEdge[];
 }): BuildUnionGraphResult {
   const adjacency = new Map<string, Set<string>>();
   const edgeOwners = new Map<string, Set<string>>();
@@ -80,6 +81,7 @@ export function buildUnionTrackGraph(args: {
     }
   }
 
+  // Add major city internal connectivity (public/ownerless edges)
   const cities = args.majorCityGroups ?? getMajorCityGroups();
   for (const city of cities) {
     const centerKey = nodeKey(city.center);
@@ -88,6 +90,16 @@ export function buildUnionTrackGraph(args: {
       addUndirectedEdge(adjacency, centerKey, outpostKey);
       // Ownerless/public edge: do not add to edgeOwners map
     }
+  }
+
+  // Add ferry connections (public/ownerless edges)
+  // Ferry edges allow trains to traverse ferry routes for pathfinding
+  const ferries = args.ferryEdges ?? getFerryEdges();
+  for (const ferry of ferries) {
+    const pointAKey = nodeKey(ferry.pointA);
+    const pointBKey = nodeKey(ferry.pointB);
+    addUndirectedEdge(adjacency, pointAKey, pointBKey);
+    // Ownerless/public edge: do not add to edgeOwners map
   }
 
   return { adjacency, edgeOwners };
@@ -128,10 +140,12 @@ export function computeTrackUsageForMove(args: {
   to: Node;
   currentPlayerId: string;
   majorCityGroups?: MajorCityGroup[];
+  ferryEdges?: FerryEdge[];
 }): TrackUsageComputation {
   const { adjacency, edgeOwners } = buildUnionTrackGraph({
     allTracks: args.allTracks,
     majorCityGroups: args.majorCityGroups,
+    ferryEdges: args.ferryEdges,
   });
 
   const startKey = nodeKey(args.from);

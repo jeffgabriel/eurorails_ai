@@ -49,6 +49,7 @@ export class TrackNetworkService {
     /**
      * Checks if two points in the network are connected
      * Uses breadth-first search
+     * Considers both regular track edges and ferry connections
      */
     isConnected(network: TrackNetwork, from: Milepost, to: Milepost): boolean {
         if (!network.nodes.has(from) || !network.nodes.has(to)) {
@@ -65,11 +66,21 @@ export class TrackNetworkService {
                 return true;
             }
 
+            // Check regular track edges
             const neighbors = network.edges.get(current) || new Set<Milepost>();
             for (const neighbor of neighbors) {
                 if (!visited.has(neighbor)) {
                     visited.add(neighbor);
                     queue.push(neighbor);
+                }
+            }
+
+            // Check ferry edges (virtual connections across ferry routes)
+            if (network.ferryEdges) {
+                const ferryNeighbor = network.ferryEdges.get(current);
+                if (ferryNeighbor && !visited.has(ferryNeighbor)) {
+                    visited.add(ferryNeighbor);
+                    queue.push(ferryNeighbor);
                 }
             }
         }
@@ -81,6 +92,7 @@ export class TrackNetworkService {
      * Finds a path between two points in the network
      * Returns array of mileposts or null if no path exists
      * Uses A* search algorithm for optimal path finding
+     * Considers both regular track edges and ferry connections
      */
     findPath(network: TrackNetwork, from: Milepost, to: Milepost): Milepost[] | null {
         if (!network.nodes.has(from) || !network.nodes.has(to)) {
@@ -108,8 +120,24 @@ export class TrackNetworkService {
                 return path;
             }
 
-            const neighbors = network.edges.get(current) || new Set<Milepost>();
-            for (const next of neighbors) {
+            // Collect all neighbors (track edges + ferry edges)
+            const allNeighbors: Milepost[] = [];
+
+            // Regular track edges
+            const trackNeighbors = network.edges.get(current) || new Set<Milepost>();
+            for (const neighbor of trackNeighbors) {
+                allNeighbors.push(neighbor);
+            }
+
+            // Ferry edges (virtual connections across ferry routes)
+            if (network.ferryEdges) {
+                const ferryNeighbor = network.ferryEdges.get(current);
+                if (ferryNeighbor) {
+                    allNeighbors.push(ferryNeighbor);
+                }
+            }
+
+            for (const next of allNeighbors) {
                 const newCost = costSoFar.get(current)! + this.estimateDistance(current, next);
 
                 if (!costSoFar.has(next) || newCost < costSoFar.get(next)!) {

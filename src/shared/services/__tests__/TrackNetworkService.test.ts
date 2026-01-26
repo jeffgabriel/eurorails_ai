@@ -132,16 +132,16 @@ describe('TrackNetworkService', () => {
         it('should correctly serialize and deserialize a network', () => {
             let original = service.addTrackSegment(network, city1, clear1);
             original = service.addTrackSegment(original, clear1, city2);
-            
+
             const serialized = service.serializeNetwork(original);
             const deserialized = service.deserializeNetwork(serialized, mileposts);
-            
+
             // Check nodes
             expect(deserialized.nodes.size).toBe(original.nodes.size);
             for (const node of original.nodes) {
                 expect(deserialized.nodes.has(node)).toBe(true);
             }
-            
+
             // Check edges
             expect(deserialized.edges.size).toBe(original.edges.size);
             for (const [from, toSet] of original.edges) {
@@ -151,6 +151,80 @@ describe('TrackNetworkService', () => {
                     expect(deserializedToSet?.has(to)).toBe(true);
                 }
             }
+        });
+    });
+
+    describe('ferry edge support', () => {
+        let ferryPort1: Milepost;
+        let ferryPort2: Milepost;
+
+        beforeEach(() => {
+            ferryPort1 = {
+                id: 'ferry1',
+                x: 0,
+                y: 10,
+                type: TerrainType.Clear
+            };
+            ferryPort2 = {
+                id: 'ferry2',
+                x: 100,
+                y: 10,
+                type: TerrainType.Clear
+            };
+            mileposts.set('ferry1', ferryPort1);
+            mileposts.set('ferry2', ferryPort2);
+        });
+
+        it('isConnected returns true when connected via ferry edge', () => {
+            // Build track from city1 to ferry port 1
+            let updated = service.addTrackSegment(network, city1, ferryPort1);
+            // Build track from ferry port 2 to city2
+            updated = service.addTrackSegment(updated, ferryPort2, city2);
+            // Add ferry edges (bidirectional)
+            const ferryEdges = new Map<Milepost, Milepost>();
+            ferryEdges.set(ferryPort1, ferryPort2);
+            ferryEdges.set(ferryPort2, ferryPort1);
+            updated = { ...updated, ferryEdges };
+
+            // Should be connected via ferry
+            expect(service.isConnected(updated, city1, city2)).toBe(true);
+        });
+
+        it('isConnected returns false without ferry edge even when both ferry ports are in network', () => {
+            // Build track from city1 to ferry port 1
+            let updated = service.addTrackSegment(network, city1, ferryPort1);
+            // Build track from ferry port 2 to city2
+            updated = service.addTrackSegment(updated, ferryPort2, city2);
+            // No ferry edges - ferryEdges is undefined
+
+            // Should NOT be connected without ferry edge
+            expect(service.isConnected(updated, city1, city2)).toBe(false);
+        });
+
+        it('isConnected handles undefined ferryEdges gracefully', () => {
+            const updated = service.addTrackSegment(network, city1, clear1);
+            // ferryEdges is undefined by default
+            expect(service.isConnected(updated, city1, clear1)).toBe(true);
+            expect(service.isConnected(updated, city1, city2)).toBe(false);
+        });
+
+        it('findPath finds path through ferry connection', () => {
+            // Build track from city1 to ferry port 1
+            let updated = service.addTrackSegment(network, city1, ferryPort1);
+            // Build track from ferry port 2 to city2
+            updated = service.addTrackSegment(updated, ferryPort2, city2);
+            // Add ferry edges
+            const ferryEdges = new Map<Milepost, Milepost>();
+            ferryEdges.set(ferryPort1, ferryPort2);
+            ferryEdges.set(ferryPort2, ferryPort1);
+            updated = { ...updated, ferryEdges };
+
+            const path = service.findPath(updated, city1, city2);
+            expect(path).not.toBeNull();
+            expect(path).toContain(city1);
+            expect(path).toContain(ferryPort1);
+            expect(path).toContain(ferryPort2);
+            expect(path).toContain(city2);
         });
     });
 }); 

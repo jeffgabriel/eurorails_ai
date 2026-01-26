@@ -835,9 +835,15 @@ export class GameScene extends Phaser.Scene {
         actualOtherSide.row,
         actualOtherSide.col
       );
-      
+
       // Set flag to halve movement for this turn
       player.trainState.justCrossedFerry = true;
+
+      // Clear movement history after ferry crossing.
+      // The ferry crossing is a "reset" of the movement context - the train is now
+      // on a different side of the water, and previous movement history is no longer
+      // relevant for reversal detection rules.
+      player.trainState.movementHistory = [];
 
       // Clear ferry state after successful crossing
       player.trainState.ferryState = undefined;

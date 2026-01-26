@@ -982,23 +982,505 @@ describe('TrainMovementManager City Direction Reversal', () => {
     // Player moving forward should not be blocked
     player.trainState.position = { ...majorCity };
     player.trainState.movementHistory = [
-      { 
-        from: { ...prevPoint, terrain: TerrainType.Clear }, 
-        to: { ...majorCity }, 
-        cost: 0 
+      {
+        from: { ...prevPoint, terrain: TerrainType.Clear },
+        to: { ...majorCity },
+        cost: 0
       }
     ];
-    
-    const forwardPoint = { 
-      row: 10, 
-      col: 11, 
-      x: 0, 
-      y: 0, 
-      terrain: TerrainType.Clear, 
-      id: 'forward1' 
+
+    const forwardPoint = {
+      row: 10,
+      col: 11,
+      x: 0,
+      y: 0,
+      terrain: TerrainType.Clear,
+      id: 'forward1'
     } as GridPoint;
-    
+
     // Forward movement should always be allowed
     expect(manager.canMoveTo(forwardPoint)).toMatchObject({ canMove: true });
+  });
+});
+
+describe('TrainMovementManager Ferry-City Integration', () => {
+  let gameState: GameState;
+  let player: Player;
+  let manager: TrainMovementManager;
+
+  // Dublin-like ferry-city: both a city and a ferry port
+  let dublinFerryCity: GridPoint;
+  // Holyhead: the other side of the ferry
+  let holyheadFerryPort: GridPoint;
+  // Adjacent point to Dublin (inland)
+  let inlandPoint: GridPoint;
+  // Point beyond Holyhead
+  let walesPoint: GridPoint;
+  let ferryConnection: FerryConnection;
+
+  beforeEach(() => {
+    // Create Dublin as a ferry-city (like in the real game: city + ferry port)
+    const dublinFerryPoint: FerryPoint = {
+      row: 20, col: 5, x: 200, y: 50, id: 'dublin-ferry', terrain: TerrainType.FerryPort
+    };
+    const holyheadFerryPoint: FerryPoint = {
+      row: 20, col: 15, x: 200, y: 150, id: 'holyhead-ferry', terrain: TerrainType.FerryPort
+    };
+
+    ferryConnection = {
+      Name: 'Dublin-Holyhead Ferry',
+      connections: [dublinFerryPoint, holyheadFerryPoint],
+      cost: 4
+    };
+
+    // Dublin: a ferry port that is also a city (isFerryCity scenario)
+    dublinFerryCity = {
+      row: 20, col: 5, x: 200, y: 50, id: 'dublin',
+      terrain: TerrainType.FerryPort,
+      ferryConnection: ferryConnection,
+      city: {
+        type: TerrainType.MediumCity,
+        name: 'Dublin',
+        availableLoads: ['Potatoes']
+      }
+    } as GridPoint;
+
+    holyheadFerryPort = {
+      row: 20, col: 15, x: 200, y: 150, id: 'holyhead',
+      terrain: TerrainType.FerryPort,
+      ferryConnection: ferryConnection
+    } as GridPoint;
+
+    inlandPoint = {
+      row: 21, col: 5, x: 210, y: 50, id: 'inland',
+      terrain: TerrainType.Clear
+    } as GridPoint;
+
+    walesPoint = {
+      row: 20, col: 16, x: 200, y: 160, id: 'wales',
+      terrain: TerrainType.Clear
+    } as GridPoint;
+
+    player = {
+      id: 'test-player',
+      name: 'Test Player',
+      color: '#FF0000',
+      trainType: TrainType.Freight,
+      money: 100,
+      trainState: {
+        position: { ...dublinFerryCity },
+        remainingMovement: 5, // Half rate after ferry crossing
+        movementHistory: [],
+        loads: [],
+        ferryState: undefined,
+        justCrossedFerry: false
+      },
+      hand: [],
+      turnNumber: 1
+    } as unknown as Player;
+
+    gameState = {
+      id: 'test-game',
+      players: [player],
+      currentPlayerIndex: 0,
+      status: 'active',
+      maxPlayers: 4
+    } as GameState;
+
+    manager = new TrainMovementManager(gameState);
+
+    // Mock getGridPointAtPosition
+    jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+      if (row === dublinFerryCity.row && col === dublinFerryCity.col) return dublinFerryCity;
+      if (row === holyheadFerryPort.row && col === holyheadFerryPort.col) return holyheadFerryPort;
+      if (row === inlandPoint.row && col === inlandPoint.col) return inlandPoint;
+      if (row === walesPoint.row && col === walesPoint.col) return walesPoint;
+      return null;
+    }) as any);
+  });
+
+  describe('Ferry return trip detection (isMovingBackAcrossFerry)', () => {
+    it('allows moving back across ferry from ferry port', () => {
+      // Player is at Dublin ferry port, wants to move back to Holyhead (the other ferry end)
+      player.trainState.position = { ...dublinFerryCity };
+      player.trainState.remainingMovement = 9;
+      player.trainState.movementHistory = [
+        { from: { ...holyheadFerryPort }, to: { ...dublinFerryCity }, cost: 0 }
+      ];
+      player.trainState.justCrossedFerry = false; // Not using justCrossedFerry flag
+
+      // Add track data for valid path
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...holyheadFerryPort }, to: { ...dublinFerryCity }, cost: 1 }
+        ],
+        totalCost: 1,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Moving back to Holyhead should be allowed (ferry return trip)
+      const result = manager.canMoveTo(holyheadFerryPort);
+      // The ferry port ends movement immediately
+      expect(result.canMove).toBe(true);
+    });
+
+    it('identifies ferry connection endpoints correctly', () => {
+      // Test the isMovingBackAcrossFerry helper method
+      const isMovingBack = (manager as any).isMovingBackAcrossFerry(
+        dublinFerryCity, // from: Dublin ferry port
+        holyheadFerryPort // to: Holyhead (other side of ferry)
+      );
+      expect(isMovingBack).toBe(true);
+    });
+
+    it('returns false when moving to non-ferry destination', () => {
+      const isMovingBack = (manager as any).isMovingBackAcrossFerry(
+        dublinFerryCity, // from: Dublin ferry port
+        inlandPoint // to: inland (not the ferry's other end)
+      );
+      expect(isMovingBack).toBe(false);
+    });
+
+    it('returns false when current position is not a ferry port', () => {
+      const isMovingBack = (manager as any).isMovingBackAcrossFerry(
+        inlandPoint, // from: not a ferry port
+        dublinFerryCity // to: Dublin
+      );
+      expect(isMovingBack).toBe(false);
+    });
+  });
+
+  describe('justCrossedFerry flag bypasses reversal detection', () => {
+    it('allows reversal when justCrossedFerry is true', () => {
+      // Player just crossed ferry to Holyhead and wants to reverse
+      player.trainState.position = { ...holyheadFerryPort };
+      player.trainState.remainingMovement = 5; // Half rate
+      player.trainState.justCrossedFerry = true;
+      player.trainState.movementHistory = [
+        // Stale history from before crossing - should be ignored due to justCrossedFerry
+        { from: { ...inlandPoint }, to: { ...dublinFerryCity }, cost: 0 }
+      ];
+
+      // Add track data
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...dublinFerryCity }, to: { ...holyheadFerryPort }, cost: 1 }
+        ],
+        totalCost: 1,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Moving back to Dublin should be allowed because justCrossedFerry is true
+      const result = manager.canMoveTo(dublinFerryCity);
+      expect(result.canMove).toBe(true);
+    });
+
+    it('skips reversal check entirely when justCrossedFerry is true', () => {
+      // Player is at a clear terrain point after ferry crossing
+      player.trainState.position = { ...walesPoint };
+      player.trainState.remainingMovement = 4;
+      player.trainState.justCrossedFerry = true;
+      player.trainState.movementHistory = [
+        { from: { ...holyheadFerryPort }, to: { ...walesPoint }, cost: 0 }
+      ];
+
+      // Add track data for bidirectional movement
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...holyheadFerryPort }, to: { ...walesPoint }, cost: 1 },
+          { from: { ...walesPoint }, to: { ...holyheadFerryPort }, cost: 1 }
+        ],
+        totalCost: 2,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Even though we're at clear terrain, reversal should be allowed
+      // because justCrossedFerry bypasses the reversal check entirely
+      const result = manager.canMoveTo(holyheadFerryPort);
+      expect(result.canMove).toBe(true);
+    });
+  });
+
+  describe('Ferry-city combination (Dublin/Belfast scenario)', () => {
+    it('treats ferry-city as both ferry port and city', () => {
+      // Dublin has both city data and ferry connection
+      expect(dublinFerryCity.city).toBeDefined();
+      expect(dublinFerryCity.ferryConnection).toBeDefined();
+      expect(dublinFerryCity.terrain).toBe(TerrainType.FerryPort);
+    });
+
+    it('ends movement when arriving at ferry-city', () => {
+      // Player approaching Dublin from inland
+      player.trainState.position = { ...inlandPoint };
+      player.trainState.remainingMovement = 9;
+      player.trainState.movementHistory = [];
+
+      const result = manager.canMoveTo(dublinFerryCity);
+
+      // Should end movement at ferry port
+      expect(result.canMove).toBe(true);
+      expect(result.endMovement).toBe(true);
+      expect(player.trainState.remainingMovement).toBe(0);
+    });
+
+    it('sets ferry state when arriving at ferry-city', () => {
+      player.trainState.position = { ...inlandPoint };
+      player.trainState.remainingMovement = 9;
+      player.trainState.ferryState = undefined;
+
+      manager.canMoveTo(dublinFerryCity);
+
+      expect(player.trainState.ferryState).toBeDefined();
+      expect(player.trainState.ferryState!.status).toBe('just_arrived');
+      expect(player.trainState.ferryState!.ferryConnection).toBe(ferryConnection);
+    });
+
+    it('allows reversal at ferry-city due to city terrain', () => {
+      // Player at Dublin, wants to reverse direction
+      // Ferry ports allow reversal, but this tests that the city aspect also allows it
+      player.trainState.position = { ...dublinFerryCity };
+      player.trainState.remainingMovement = 9;
+      player.trainState.ferryState = {
+        status: 'ready_to_cross',
+        ferryConnection: ferryConnection,
+        currentSide: ferryConnection.connections[0],
+        otherSide: ferryConnection.connections[1]
+      };
+      player.trainState.movementHistory = [
+        { from: { ...inlandPoint }, to: { ...dublinFerryCity }, cost: 0 }
+      ];
+
+      // Add track data
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...inlandPoint }, to: { ...dublinFerryCity }, cost: 1 },
+          { from: { ...dublinFerryCity }, to: { ...inlandPoint }, cost: 1 }
+        ],
+        totalCost: 2,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Reversal should be allowed at ferry port
+      const result = manager.canMoveTo(inlandPoint);
+      expect(result.canMove).toBe(true);
+    });
+  });
+
+  describe('Integration: complete ferry crossing scenario', () => {
+    it('simulates Belfast scenario: cross ferry, pick up load, reverse at ferry port', () => {
+      // Scenario from bug report:
+      // 1. Player crossed ferry to Dublin (a ferry-city)
+      // 2. Picked up potatoes at Dublin
+      // 3. Has no track beyond the ferry port on this side
+      // 4. Wants to move to adjacent point or back across ferry
+      // This should be allowed at ferry port (reversal is permitted)
+
+      // Player is at Dublin ferry-city after crossing
+      player.trainState.position = { ...dublinFerryCity };
+      player.trainState.remainingMovement = 9; // Full movement (not half-rate for this test)
+      player.trainState.justCrossedFerry = true; // Just crossed this turn
+      player.trainState.movementHistory = []; // Cleared after ferry crossing
+      player.trainState.ferryState = {
+        status: 'ready_to_cross',
+        ferryConnection: ferryConnection,
+        currentSide: ferryConnection.connections[0],
+        otherSide: ferryConnection.connections[1]
+      };
+
+      // Player can move to adjacent inland point (even without extensive track)
+      // Since justCrossedFerry is true, reversal detection is bypassed
+      const result = manager.canMoveTo(inlandPoint);
+      expect(result.canMove).toBe(true);
+    });
+
+    it('validates movement at ferry port with empty history due to ferry crossing', () => {
+      // When justCrossedFerry is true, movement history is cleared
+      // Movement should still work because reversal check is bypassed
+      player.trainState.position = { ...dublinFerryCity };
+      player.trainState.remainingMovement = 9;
+      player.trainState.justCrossedFerry = true;
+      player.trainState.movementHistory = []; // Cleared by GameScene after crossing
+
+      // Add track to inland so there's a valid path
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...dublinFerryCity }, to: { ...inlandPoint }, cost: 1 }
+        ],
+        totalCost: 1,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Even with empty movement history, moves should work
+      const result = manager.canMoveTo(inlandPoint);
+      expect(result.canMove).toBe(true);
+    });
+
+    it('allows reversal at ferry port for return trip when track exists', () => {
+      // Player at Dublin ferry port, wants to move back inland (reversal)
+      // The isMovingBackAcrossFerry check allows reversal at ferry ports
+      player.trainState.position = { ...dublinFerryCity };
+      player.trainState.remainingMovement = 9;
+      player.trainState.justCrossedFerry = false;
+      player.trainState.movementHistory = [
+        // Came from inland
+        { from: { ...inlandPoint }, to: { ...dublinFerryCity }, cost: 0 }
+      ];
+
+      // Add track for the reversal path
+      const playerTrackState: PlayerTrackState = {
+        playerId: player.id,
+        gameId: 'test-game',
+        segments: [
+          { from: { ...inlandPoint }, to: { ...dublinFerryCity }, cost: 1 },
+          { from: { ...dublinFerryCity }, to: { ...inlandPoint }, cost: 1 }
+        ],
+        totalCost: 2,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+      const trackMap = new Map();
+      trackMap.set(player.id, playerTrackState);
+      manager.updateTrackData(trackMap);
+
+      // Reversal at ferry port should be allowed (ferry ports allow reversal like cities)
+      const result = manager.canMoveTo(inlandPoint);
+      expect(result.canMove).toBe(true);
+    });
+
+    it('ferry return trip bypasses reversal detection via isMovingBackAcrossFerry', () => {
+      // Create a closer ferry connection for testing
+      const nearFerryPointA: FerryPoint = {
+        row: 20, col: 5, x: 200, y: 50, id: 'near-ferry-a', terrain: TerrainType.FerryPort
+      };
+      const nearFerryPointB: FerryPoint = {
+        row: 20, col: 6, x: 200, y: 60, id: 'near-ferry-b', terrain: TerrainType.FerryPort
+      };
+      const nearFerryConnection: FerryConnection = {
+        Name: 'Near Ferry',
+        connections: [nearFerryPointA, nearFerryPointB],
+        cost: 2
+      };
+
+      const nearPortA: GridPoint = {
+        row: 20, col: 5, x: 200, y: 50, id: 'near-a',
+        terrain: TerrainType.FerryPort,
+        ferryConnection: nearFerryConnection
+      } as GridPoint;
+
+      const nearPortB: GridPoint = {
+        row: 20, col: 6, x: 200, y: 60, id: 'near-b',
+        terrain: TerrainType.FerryPort,
+        ferryConnection: nearFerryConnection
+      } as GridPoint;
+
+      // Update mock to return these points
+      jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+        if (row === 20 && col === 5) return nearPortA;
+        if (row === 20 && col === 6) return nearPortB;
+        return null;
+      }) as any);
+
+      // Player at port A, came from port B (crossed ferry)
+      player.trainState.position = { ...nearPortA };
+      player.trainState.remainingMovement = 9;
+      player.trainState.justCrossedFerry = false;
+      player.trainState.movementHistory = [
+        { from: { ...nearPortB }, to: { ...nearPortA }, cost: 0 }
+      ];
+
+      // isMovingBackAcrossFerry should detect this and allow the move
+      // even without justCrossedFerry flag
+      const result = manager.canMoveTo(nearPortB);
+      expect(result.canMove).toBe(true);
+      expect(result.endMovement).toBe(true); // Ferry ports end movement
+    });
+
+    it('does NOT set ferry state when returning across ferry (prevents teleport loop)', () => {
+      // Bug scenario: Player crosses ferry A->B, then clicks A to return.
+      // Previously, arriving at A would set ferryState with otherSide=B,
+      // causing the train to teleport back to B next turn (infinite loop).
+      // Fix: When returning across a ferry, do NOT set ferry state.
+
+      const nearFerryPointA: FerryPoint = {
+        row: 20, col: 5, x: 200, y: 50, id: 'near-ferry-a', terrain: TerrainType.FerryPort
+      };
+      const nearFerryPointB: FerryPoint = {
+        row: 20, col: 6, x: 200, y: 60, id: 'near-ferry-b', terrain: TerrainType.FerryPort
+      };
+      const nearFerryConnection: FerryConnection = {
+        Name: 'Near Ferry',
+        connections: [nearFerryPointA, nearFerryPointB],
+        cost: 2
+      };
+
+      const nearPortA: GridPoint = {
+        row: 20, col: 5, x: 200, y: 50, id: 'near-a',
+        terrain: TerrainType.FerryPort,
+        ferryConnection: nearFerryConnection
+      } as GridPoint;
+
+      const nearPortB: GridPoint = {
+        row: 20, col: 6, x: 200, y: 60, id: 'near-b',
+        terrain: TerrainType.FerryPort,
+        ferryConnection: nearFerryConnection
+      } as GridPoint;
+
+      jest.spyOn(manager as any, 'getGridPointAtPosition').mockImplementation(((row: number, col: number) => {
+        if (row === 20 && col === 5) return nearPortA;
+        if (row === 20 && col === 6) return nearPortB;
+        return null;
+      }) as any);
+
+      // Player at port B (e.g., Stranraer), wants to return to port A (e.g., Belfast)
+      player.trainState.position = { ...nearPortB };
+      player.trainState.remainingMovement = 9;
+      player.trainState.ferryState = undefined; // No active ferry state
+      player.trainState.justCrossedFerry = false;
+
+      // Move to port A (crossing back)
+      const result = manager.canMoveTo(nearPortA);
+      expect(result.canMove).toBe(true);
+      expect(result.endMovement).toBe(true);
+
+      // CRITICAL: Ferry state should NOT be set for return trips
+      // If it were set, the player would teleport back to port B next turn
+      expect(player.trainState.ferryState).toBeUndefined();
+
+      // BUT justCrossedFerry SHOULD be set so half-speed applies next turn
+      expect(player.trainState.justCrossedFerry).toBe(true);
+
+      // Movement history should be cleared after ferry crossing
+      expect(player.trainState.movementHistory).toEqual([]);
+    });
   });
 }); 
