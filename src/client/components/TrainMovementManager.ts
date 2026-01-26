@@ -292,7 +292,7 @@ export class TrainMovementManager {
         ? currentPlayer.trainState.movementHistory[
             currentPlayer.trainState.movementHistory.length - 1
           ]
-        : null;
+        : currentPlayer.trainState.lastTraversedEdge || null;
     // console.debug("lastTrackSegment", lastTrackSegment);
 
     // Check reversal rules:
@@ -318,14 +318,27 @@ export class TrainMovementManager {
       const proposedFirst = proposedSegments && proposedSegments.length > 0 ? proposedSegments[0] : null;
       const lastTraversed = lastMoveSegments && lastMoveSegments.length > 0 ? lastMoveSegments[lastMoveSegments.length - 1] : null;
 
-      // Preferred: path-based reversal (works for multi-milepost moves).
-      // Fallback: if we can't compute path segments, approximate reversal by comparing the
-      // proposed direction vs the last move's overall direction.
-      const isReversal =
-        (proposedFirst && lastTraversed)
-          ? (this.sameGridPosition(proposedFirst.from, lastTraversed.to) &&
-             this.sameGridPosition(proposedFirst.to, lastTraversed.from))
-          : this.isReversalByDirectionFallback(priorPosition, point, lastTrackSegment);
+      // Detect reversal using two methods:
+      // 1. Exact edge reversal: traversing the same edge backwards (A->B then B->A)
+      // 2. Direction change: moving in opposite direction from same starting point (A->B then A->C where C is opposite direction)
+      let isReversal = false;
+      
+      if (proposedFirst && lastTraversed) {
+        // Check for exact edge reversal
+        const isExactReversal = this.sameGridPosition(proposedFirst.from, lastTraversed.to) &&
+                                this.sameGridPosition(proposedFirst.to, lastTraversed.from);
+        
+        // Also check for direction change at the same position
+        // This handles the case where we're back at the starting position and trying to move in a different direction
+        const isDirectionChange = this.sameGridPosition(priorPosition, lastTrackSegment.from) &&
+                                   !this.sameGridPosition(point, lastTrackSegment.to) &&
+                                   this.isReversalByDirectionFallback(priorPosition, point, lastTrackSegment);
+        
+        isReversal = isExactReversal || isDirectionChange;
+      } else {
+        // Fallback: approximate reversal by comparing directions
+        isReversal = this.isReversalByDirectionFallback(priorPosition, point, lastTrackSegment);
+      }
 
       if (isReversal) {
         const currentGridPoint = this.getGridPointAtPosition(

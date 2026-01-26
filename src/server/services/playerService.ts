@@ -547,6 +547,8 @@ export class PlayerService {
           position: { x: 0, y: 0, row: 0, col: 0 },
           movementHistory: [],
           remainingMovement: 9,
+          loads: [],
+          lastTraversedEdge: undefined
         },
         hand: [],
         loads: [],

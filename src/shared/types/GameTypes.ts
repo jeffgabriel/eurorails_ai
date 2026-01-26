@@ -79,6 +79,11 @@ export interface TrainState {
      * Loaded from server on page refresh to ensure "once per turn" fee tracking persists.
      */
     paidOpponentIds?: string[];
+    /**
+     * Preserves the last traversed edge for reversal detection even when movementHistory is empty.
+     * Used after undo operations to maintain directional context.
+     */
+    lastTraversedEdge?: TrackSegment;
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';

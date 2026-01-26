@@ -1271,7 +1271,8 @@ export class GameScene extends Phaser.Scene {
               position: null,
               remainingMovement: 0,
               movementHistory: [],
-              loads: []
+              loads: [],
+              lastTraversedEdge: undefined
             };
           }
         } else {
