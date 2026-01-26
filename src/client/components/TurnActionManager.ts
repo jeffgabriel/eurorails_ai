@@ -1,9 +1,10 @@
-import { GameState, Point, Player } from "../../shared/types/GameTypes";
+import { GameState, Point, Player, TerrainType } from "../../shared/types/GameTypes";
 import { TrackDrawingManager } from "./TrackDrawingManager";
 import { LoadService } from "../services/LoadService";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { TrackSegment } from "../../shared/types/TrackTypes";
+import { mapConfig } from "../config/mapConfig";
 
 type TrainPositionUpdater = {
   updateTrainPosition(
@@ -214,9 +215,24 @@ export class TurnActionManager {
           return false;
         }
 
-        // Undo movement history step (best-effort)
-        if (Array.isArray(player.trainState.movementHistory) && player.trainState.movementHistory.length > 0) {
-          player.trainState.movementHistory.pop();
+        // Pop from movement history and preserve last traversed edge for reversal detection
+        const poppedSegment = Array.isArray(player.trainState.movementHistory) && player.trainState.movementHistory.length > 0
+          ? player.trainState.movementHistory.pop()
+          : undefined;
+
+        // Preserve last traversed edge for reversal detection unless we're at a city/ferry where reversal is allowed
+        const pos = action.previousPosition;
+        const restoredGridPoint = mapConfig.points.find(
+          (point) => point.row === pos.row && point.col === pos.col
+        );
+        const isAtCityOrFerry = restoredGridPoint && 
+          [TerrainType.MajorCity, TerrainType.MediumCity, TerrainType.SmallCity, TerrainType.FerryPort]
+          .includes(restoredGridPoint.terrain);
+        
+        if (!isAtCityOrFerry && poppedSegment) {
+          player.trainState.lastTraversedEdge = poppedSegment;
+        } else {
+          player.trainState.lastTraversedEdge = undefined;
         }
 
         // Restore movement + ferry-related transient state (client-only)
@@ -224,7 +240,6 @@ export class TurnActionManager {
         player.trainState.ferryState = action.previousFerryState;
         player.trainState.justCrossedFerry = action.previousJustCrossedFerry;
 
-        const pos = action.previousPosition;
         await this.trainPositionUpdater.updateTrainPosition(
           player.id,
           pos.x,
