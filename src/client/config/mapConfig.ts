@@ -173,6 +173,16 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
   };
   point1.ferryConnection = ferryConnection;
   point2.ferryConnection = ferryConnection;
+
+  // Set isFerryCity flag for ferry ports that also have city data (Dublin, Belfast)
+  // These hybrid locations function as both ferry ports AND cities
+  if (point1.city) {
+    point1.isFerryCity = true;
+  }
+  if (point2.city) {
+    point2.isFerryCity = true;
+  }
+
   point1.terrain = TerrainType.FerryPort;
   point2.terrain = TerrainType.FerryPort;
 

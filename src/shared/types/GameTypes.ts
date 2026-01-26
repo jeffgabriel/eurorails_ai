@@ -176,6 +176,12 @@ export interface GridPoint extends Point {
     ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
     ocean?: string;
+    /**
+     * Flag for locations that are both ferry ports AND cities (Dublin, Belfast).
+     * These hybrid locations allow trains to both use ferry connections AND
+     * load/unload goods like a regular city.
+     */
+    isFerryCity?: boolean;
     // Runtime properties (client-side only)
     sprite?: any; // Phaser sprite object
     tracks?: Array<{ playerId: string }>;

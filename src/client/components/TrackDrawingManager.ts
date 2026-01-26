@@ -1400,13 +1400,31 @@ export class TrackDrawingManager {
         if (!trackState) return false;
 
         // First check if the point is directly part of any existing segment
-        const isDirectlyConnected = trackState.segments.some(segment => 
+        const isDirectlyConnected = trackState.segments.some(segment =>
             (segment.from.row === point.row && segment.from.col === point.col) ||
             (segment.to.row === point.row && segment.to.col === point.col)
         );
 
         if (isDirectlyConnected) {
             return true;
+        }
+
+        // Check ferry connection: if this point is a ferry port, check if the player
+        // has track to the OTHER side of the ferry connection (virtual connectivity)
+        if (point.terrain === TerrainType.FerryPort && point.ferryConnection) {
+            const otherEnd = point.ferryConnection.connections.find(p =>
+                p.row !== point.row || p.col !== point.col
+            );
+            if (otherEnd) {
+                // Check if the other side is connected to the player's network
+                const otherEndConnected = trackState.segments.some(segment =>
+                    (segment.from.row === otherEnd.row && segment.from.col === otherEnd.col) ||
+                    (segment.to.row === otherEnd.row && segment.to.col === otherEnd.col)
+                );
+                if (otherEndConnected) {
+                    return true;
+                }
+            }
         }
 
         // If we're currently building track, also check if the point is connected

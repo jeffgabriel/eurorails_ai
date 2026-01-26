@@ -70,14 +70,28 @@ export class CityArrivalHandler {
   }
 
   /**
-   * Check if a grid point is a city (major, medium, or small).
+   * Check if a grid point is a city (major, medium, small, or ferry-city hybrid).
+   *
+   * Ferry-city hybrids (Dublin, Belfast) are locations with TerrainType.FerryPort
+   * that also have city data attached. These function as both ferry ports AND cities,
+   * allowing trains to load/unload goods.
    */
   public isCity(gridPoint: GridPoint): boolean {
-    return (
+    // Standard city terrain check
+    const isCityTerrain = (
       gridPoint.terrain === TerrainType.MajorCity ||
       gridPoint.terrain === TerrainType.MediumCity ||
       gridPoint.terrain === TerrainType.SmallCity
     );
+
+    // Ferry-city hybrid check (Dublin, Belfast)
+    // These are ferry ports that also function as cities
+    const isFerryCity = (
+      gridPoint.terrain === TerrainType.FerryPort &&
+      gridPoint.city !== undefined
+    );
+
+    return isCityTerrain || isFerryCity;
   }
 
   /**
