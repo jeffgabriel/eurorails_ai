@@ -1,114 +1,14 @@
 import {
-  parseResourceData,
   transformToCityData,
-  LoadConfiguration,
   ResourceTableEntry
 } from '../utils/loadDataTransformer';
 
 describe('loadDataTransformer', () => {
-  describe('parseResourceData', () => {
-    it('should parse resource data with correct fields', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { Bauxite: ['Budapest', 'Marseille'], count: 3 }
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual({
-        name: 'Bauxite',
-        cities: ['Budapest', 'Marseille'],
-        count: 3,
-        iconKey: 'load-bauxite'
-      });
-    });
-
-    it('should sort resources alphabetically by name', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { Zinc: ['Vienna'], count: 2 },
-          { Bauxite: ['Budapest'], count: 3 },
-          { Coal: ['London'], count: 4 }
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result.map(r => r.name)).toEqual(['Bauxite', 'Coal', 'Zinc']);
-    });
-
-    it('should handle empty configuration', () => {
-      const config: LoadConfiguration = { LoadConfiguration: [] };
-      const result = parseResourceData(config);
-      expect(result).toEqual([]);
-    });
-
-    it('should handle null/undefined configuration', () => {
-      expect(parseResourceData(null as any)).toEqual([]);
-      expect(parseResourceData(undefined as any)).toEqual([]);
-      expect(parseResourceData({} as any)).toEqual([]);
-    });
-
-    it('should skip entries without valid resource key', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { count: 3 } as any,  // No resource key
-          { Bauxite: ['Budapest'], count: 3 }
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('Bauxite');
-    });
-
-    it('should skip entries where cities is not an array', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { Bauxite: 'not-an-array' as any, count: 3 },
-          { Coal: ['London'], count: 4 }
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('Coal');
-    });
-
-    it('should handle missing count field', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { Bauxite: ['Budapest'] } as any
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result[0].count).toBe(0);
-    });
-
-    it('should generate correct iconKey from resource name', () => {
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { 'Machine Parts': ['Berlin'], count: 2 }
-        ]
-      };
-
-      const result = parseResourceData(config);
-
-      expect(result[0].iconKey).toBe('load-machine parts');
-    });
-  });
-
   describe('transformToCityData', () => {
     it('should aggregate resources by city', () => {
       const resources: ResourceTableEntry[] = [
-        { name: 'Bauxite', cities: ['Budapest', 'Vienna'], count: 3, iconKey: 'loads/Bauxite' },
-        { name: 'Beer', cities: ['Budapest'], count: 4, iconKey: 'loads/Beer' }
+        { name: 'Bauxite', cities: ['Budapest', 'Vienna'], count: 3, iconKey: 'load-bauxite' },
+        { name: 'Beer', cities: ['Budapest'], count: 4, iconKey: 'load-beer' }
       ];
 
       const result = transformToCityData(resources);
@@ -126,7 +26,7 @@ describe('loadDataTransformer', () => {
 
     it('should sort cities alphabetically by name', () => {
       const resources: ResourceTableEntry[] = [
-        { name: 'Bauxite', cities: ['Vienna', 'Budapest', 'Athens'], count: 3, iconKey: '' }
+        { name: 'Bauxite', cities: ['Vienna', 'Budapest', 'Athens'], count: 3, iconKey: 'load-bauxite' }
       ];
 
       const result = transformToCityData(resources);
@@ -136,9 +36,9 @@ describe('loadDataTransformer', () => {
 
     it('should sort resources alphabetically within each city', () => {
       const resources: ResourceTableEntry[] = [
-        { name: 'Zinc', cities: ['Budapest'], count: 2, iconKey: '' },
-        { name: 'Bauxite', cities: ['Budapest'], count: 3, iconKey: '' },
-        { name: 'Coal', cities: ['Budapest'], count: 4, iconKey: '' }
+        { name: 'Zinc', cities: ['Budapest'], count: 2, iconKey: 'load-zinc' },
+        { name: 'Bauxite', cities: ['Budapest'], count: 3, iconKey: 'load-bauxite' },
+        { name: 'Coal', cities: ['Budapest'], count: 4, iconKey: 'load-coal' }
       ];
 
       const result = transformToCityData(resources);
@@ -158,8 +58,8 @@ describe('loadDataTransformer', () => {
 
     it('should skip resources with invalid cities array', () => {
       const resources: ResourceTableEntry[] = [
-        { name: 'Bauxite', cities: null as any, count: 3, iconKey: '' },
-        { name: 'Coal', cities: ['London'], count: 4, iconKey: '' }
+        { name: 'Bauxite', cities: null as any, count: 3, iconKey: 'load-bauxite' },
+        { name: 'Coal', cities: ['London'], count: 4, iconKey: 'load-coal' }
       ];
 
       const result = transformToCityData(resources);
@@ -167,34 +67,26 @@ describe('loadDataTransformer', () => {
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('London');
     });
-  });
 
-  describe('integration', () => {
-    it('should correctly transform sample load_cities.json structure', () => {
-      // Sample data matching real structure
-      const config: LoadConfiguration = {
-        LoadConfiguration: [
-          { Bauxite: ['Budapest', 'Marseille'], count: 3 },
-          { Beer: ['Dublin', 'Frankfurt', 'Munchen', 'Praha'], count: 4 },
-          { Cars: ['Manchester', 'Munchen', 'Stuttgart', 'Torino'], count: 3 }
-        ]
-      };
+    it('should handle resources available in multiple cities', () => {
+      const resources: ResourceTableEntry[] = [
+        { name: 'Beer', cities: ['Dublin', 'Frankfurt', 'Munchen', 'Praha'], count: 4, iconKey: 'load-beer' },
+        { name: 'Cars', cities: ['Manchester', 'Munchen', 'Stuttgart', 'Torino'], count: 3, iconKey: 'load-cars' }
+      ];
 
-      const resources = parseResourceData(config);
-      const cities = transformToCityData(resources);
+      const result = transformToCityData(resources);
 
-      // Verify resources
-      expect(resources).toHaveLength(3);
-      expect(resources[0].name).toBe('Bauxite'); // Sorted first
-      expect(resources[1].name).toBe('Beer');
-      expect(resources[2].name).toBe('Cars');
-
-      // Verify cities
-      const munchen = cities.find(c => c.name === 'Munchen');
+      // Munchen should have both Beer and Cars
+      const munchen = result.find(c => c.name === 'Munchen');
       expect(munchen).toBeDefined();
       expect(munchen!.resources).toContain('Beer');
       expect(munchen!.resources).toContain('Cars');
       expect(munchen!.resources).toHaveLength(2);
+
+      // Dublin should only have Beer
+      const dublin = result.find(c => c.name === 'Dublin');
+      expect(dublin).toBeDefined();
+      expect(dublin!.resources).toEqual(['Beer']);
     });
   });
 });

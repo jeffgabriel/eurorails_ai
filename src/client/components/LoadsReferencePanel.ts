@@ -474,7 +474,9 @@ export class LoadsReferencePanel {
       }
 
       // Calculate content height and update scrollbar
-      const gridHeight = this.resourceScrollPanel?.height || 0;
+      // Add buffer to ensure last row is fully visible when scrolled
+      const scrollBuffer = 80;
+      const gridHeight = (this.resourceScrollPanel?.height || 0) + scrollBuffer;
       this.updateScrollbar(gridHeight, contentHeight);
       this.updateContentPosition();
     } else if (pageType === "city") {
@@ -491,7 +493,9 @@ export class LoadsReferencePanel {
       }
 
       // Calculate content height and update scrollbar
-      const gridHeight = this.cityScrollPanel?.height || 0;
+      // Add buffer to ensure last row is fully visible when scrolled
+      const scrollBuffer = 80;
+      const gridHeight = (this.cityScrollPanel?.height || 0) + scrollBuffer;
       this.updateScrollbar(gridHeight, contentHeight);
       this.updateContentPosition();
     } else {
@@ -718,10 +722,14 @@ export class LoadsReferencePanel {
   private createResourceCell(resource: ResourceTableEntry): any {
     const rexUI = (this.scene as any).rexUI;
 
+    // Fixed cell dimensions for consistent grid layout
+    const cellWidth = 100;
+    const cellHeight = 70;
+
     // Cell background with border
     const cellBg = rexUI.add.roundRectangle({
-      width: 110,
-      height: 70,
+      width: cellWidth,
+      height: cellHeight,
       radius: 6,
       color: 0x1e293b,
       strokeColor: 0x334155,
@@ -732,12 +740,12 @@ export class LoadsReferencePanel {
     const iconSize = 24;
     const iconBgRadius = 16;
 
-    // Create circular background for icon
+    // Create circular background for icon (white background)
     const iconBg = rexUI.add.roundRectangle({
       width: iconBgRadius * 2,
       height: iconBgRadius * 2,
       radius: iconBgRadius,
-      color: 0x334155,
+      color: 0xffffff,
     });
 
     // Resource icon (if texture exists)
@@ -746,16 +754,14 @@ export class LoadsReferencePanel {
       icon = this.scene.add.image(0, 0, resource.iconKey).setDisplaySize(iconSize, iconSize);
     }
 
-    // Create a container sizer for the icon with background
-    const iconContainer = rexUI.add.sizer({
-      orientation: "y",
+    // Create an OverlapSizer to properly center the icon over the background
+    const iconContainer = rexUI.add.overlapSizer({
       width: iconBgRadius * 2,
       height: iconBgRadius * 2,
     });
-    iconContainer.addBackground(iconBg);
+    iconContainer.add(iconBg, { key: 'bg', align: 'center', expand: false });
     if (icon) {
-      // Overlay pattern: add icon on top of background container
-      iconContainer.add(icon, { align: "center", expand: false });
+      iconContainer.add(icon, { key: 'icon', align: 'center', expand: false });
     }
 
     // Resource name text
@@ -767,24 +773,26 @@ export class LoadsReferencePanel {
     }).setOrigin(0.5);
 
     // Create main cell sizer (vertical layout: icon on top, text below)
+    // Use fixed size to ensure consistent cell dimensions
     const cell = rexUI.add.sizer({
       orientation: "y",
       space: { item: 6 },
+      width: cellWidth,
+      height: cellHeight,
     });
 
     cell.addBackground(cellBg);
     cell.add(iconContainer, { align: "center", padding: { top: 8 } });
-    cell.add(text, { align: "center", padding: { left: 8, right: 8, bottom: 8 } });
+    cell.add(text, { align: "center", padding: { left: 4, right: 4, bottom: 8 } });
 
     // Store resource data for tooltip
     (cell as any).__resourceData = resource;
 
     // Make cell interactive for tooltip display
     cell.setInteractive({ useHandCursor: true });
-    cell.on("pointerdown", () => {
-      // Get the cell's world position for tooltip placement
-      const bounds = cell.getBounds();
-      this.showResourceTooltip(resource, bounds.right + 10, bounds.centerY);
+    cell.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      // Use pointer position for accurate tooltip placement (accounts for scroll)
+      this.showResourceTooltip(resource, pointer.x, pointer.y);
     });
 
     // Hover effect
@@ -801,8 +809,8 @@ export class LoadsReferencePanel {
   /**
    * Show tooltip with list of cities where resource is available
    * @param resource - The resource data
-   * @param x - X position for tooltip
-   * @param y - Y position for tooltip
+   * @param x - X position for tooltip (pointer world X)
+   * @param y - Y position for tooltip (pointer world Y)
    */
   private showResourceTooltip(resource: ResourceTableEntry, x: number, y: number): void {
     // Hide any existing tooltip
@@ -810,11 +818,6 @@ export class LoadsReferencePanel {
 
     const rexUI = (this.scene as any).rexUI;
     if (!rexUI) return;
-
-    // Convert world coordinates to local coordinates relative to root container
-    const rootBounds = this.root.getBounds();
-    const localX = x - rootBounds.x;
-    const localY = y - rootBounds.y;
 
     // Create tooltip text content
     const cityList = resource.cities.length > 0
@@ -843,21 +846,41 @@ export class LoadsReferencePanel {
       strokeWidth: 1,
     });
 
-    // Create tooltip container at local coordinates
+    // Convert world coordinates to local coordinates relative to root container
+    // Use root.x/y directly instead of getBounds() which includes scrolled content
+    let localX = x - this.root.x + 20; // Offset to the right of click
+    let localY = y - this.root.y;
+
+    // Horizontal bounds check - keep tooltip within panel
+    const panelWidth = this.panelWidth - this.handleWidth;
+    if (localX + tooltipWidth / 2 > panelWidth - 10) {
+      // Position to the left of the click instead
+      localX = x - this.root.x - tooltipWidth / 2 - 20;
+    }
+    // Ensure doesn't go off left edge
+    if (localX - tooltipWidth / 2 < 10) {
+      localX = tooltipWidth / 2 + 10;
+    }
+
+    // Vertical bounds check - keep tooltip within panel
+    const panelHeight = this.panelHeight;
+    if (localY + tooltipHeight / 2 > panelHeight - 10) {
+      // Move tooltip up so it stays within panel
+      localY = panelHeight - tooltipHeight / 2 - 10;
+    }
+    // Ensure doesn't go off top edge
+    if (localY - tooltipHeight / 2 < 60) { // Account for tabs
+      localY = tooltipHeight / 2 + 60;
+    }
+
+    // Create tooltip container at adjusted local coordinates
     this.tooltipContainer = this.scene.add.container(localX, localY);
     this.tooltipContainer.setDepth(100_001);
 
-    // Add background and text to container
+    // Add background and text to container (centered on container position)
     this.tooltipContainer.add(tooltipBg);
     tooltipText.setPosition(-tooltipWidth / 2 + padding, -tooltipHeight / 2 + padding);
     this.tooltipContainer.add(tooltipText);
-
-    // Ensure tooltip stays within panel bounds (using local coordinates)
-    const panelWidth = rootBounds.width;
-    if (localX + tooltipWidth / 2 > panelWidth - 20) {
-      // Position to the left of the cell instead
-      this.tooltipContainer.x = localX - tooltipWidth - 20;
-    }
 
     // Add tooltip to root container
     this.root.add(this.tooltipContainer);
@@ -967,20 +990,24 @@ export class LoadsReferencePanel {
   private createCityCell(city: CityTableEntry): any {
     const rexUI = (this.scene as any).rexUI;
 
-    // Cell background with border
+    // Fixed cell dimensions for consistent grid layout
+    const cellWidth = 100;
+    const cellHeight = 60;
+
+    // Cell background with border (white background)
     const cellBg = rexUI.add.roundRectangle({
-      width: 110,
-      height: 60,
+      width: cellWidth,
+      height: cellHeight,
       radius: 6,
-      color: 0x1e293b,
+      color: 0xffffff,
       strokeColor: 0x334155,
       strokeWidth: 1,
     });
 
-    // City name (uppercase, bold, centered)
+    // City name (uppercase, bold, centered, black text)
     const nameText = this.scene.add.text(0, 0, city.name.toUpperCase(), {
       fontSize: "11px",
-      color: "#e2e8f0",
+      color: "#1e293b",
       fontFamily: UI_FONT_FAMILY,
       fontStyle: "bold",
     }).setOrigin(0.5);
@@ -1007,20 +1034,23 @@ export class LoadsReferencePanel {
     if (city.resources.length > maxIcons) {
       const moreText = this.scene.add.text(0, 0, `+${city.resources.length - maxIcons}`, {
         fontSize: "10px",
-        color: "#94a3b8",
+        color: "#64748b",
         fontFamily: UI_FONT_FAMILY,
       }).setOrigin(0.5);
       iconsRow.add(moreText, { align: "center" });
     }
 
     // Create main cell sizer (vertical layout: name on top, icons below)
+    // Use fixed size to ensure consistent cell dimensions
     const cell = rexUI.add.sizer({
       orientation: "y",
       space: { item: 4 },
+      width: cellWidth,
+      height: cellHeight,
     });
 
     cell.addBackground(cellBg);
-    cell.add(nameText, { align: "center", padding: { left: 8, right: 8, top: 8 } });
+    cell.add(nameText, { align: "center", padding: { left: 4, right: 4, top: 8 } });
     cell.add(iconsRow, { align: "center", padding: { bottom: 8 } });
 
     // Store city data for camera navigation
@@ -1034,12 +1064,12 @@ export class LoadsReferencePanel {
       this.navigateToCity(city.name);
     });
 
-    // Hover effect
+    // Hover effect (lighter grey on hover for white cells)
     cell.on("pointerover", () => {
-      cellBg.setFillStyle(0x334155);
+      cellBg.setFillStyle(0xe2e8f0);
     });
     cell.on("pointerout", () => {
-      cellBg.setFillStyle(0x1e293b);
+      cellBg.setFillStyle(0xffffff);
     });
 
     return cell;
