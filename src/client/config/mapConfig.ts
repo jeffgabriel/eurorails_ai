@@ -63,7 +63,10 @@ const points: GridPoint[] = [];
     const { x, y } = calculateWorldCoordinates(col, row);
     // Build the GridPoint directly
     let cityData: any = undefined;
-    if ((mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port") && mp.Name) {
+    // Only actual cities get cityData - ferry ports do NOT get city data
+    // Dublin and Belfast are "Small City" type in gridPoints.json, so they correctly get cityData
+    // Later, ferry processing converts them to FerryPort terrain and sets isFerryCity=true
+    if ((mp.Type === "Small City" || mp.Type === "Medium City") && mp.Name) {
       cityData = {
         type: terrain,
         name: mp.Name,
