@@ -2832,14 +2832,6 @@
     "Ocean": "Atlantic Ocean"
   },
   {
-    "Id": "ff324dc2-2881-484d-959c-5122d797c189",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 21,
-    "GridY": 6,
-    "Ocean": null
-  },
-  {
     "Id": "ff324dc2-2771-484d-959c-5122d797c189",
     "Type": "Milepost",
     "Name": null,
@@ -3861,14 +3853,6 @@
     "Name": null,
     "GridX": 26,
     "GridY": 48,
-    "Ocean": null
-  },
-  {
-    "Id": "5907077d-1e26-41a7-a970-83b53751063f",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 26,
-    "GridY": 7,
     "Ocean": null
   },
   {
@@ -5069,14 +5053,6 @@
     "Name": null,
     "GridX": 30,
     "GridY": 7,
-    "Ocean": null
-  },
-  {
-    "Id": "3970e246-3ff9-48b9-aa05-13ad424e1793",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 30,
-    "GridY": 13,
     "Ocean": null
   },
   {
@@ -6805,14 +6781,6 @@
     "Name": null,
     "GridX": 35,
     "GridY": 46,
-    "Ocean": null
-  },
-  {
-    "Id": "0a44da35-a896-420a-bdc4-687e8d90aacf",
-    "Type": "Milepost",
-    "Name": null,
-    "GridX": 36,
-    "GridY": 25,
     "Ocean": null
   },
   {

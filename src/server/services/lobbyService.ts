@@ -161,7 +161,8 @@ export class LobbyService {
           position: null,
           movementHistory: [],
           remainingMovement: 9,
-          loads: []
+          loads: [],
+          lastTraversedEdge: undefined
         },
         hand: []  // Empty - PlayerService will draw cards server-side
       };

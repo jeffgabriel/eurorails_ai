@@ -45,6 +45,7 @@ export interface Player {
     name: string;
     color: string;  // Hex color code
     money: number;
+    debtOwed?: number;  // Amount remaining to repay (already doubled from borrowed amount)
     trainType: TrainType;
     turnNumber: number;
     trainState: TrainState;
@@ -78,6 +79,11 @@ export interface TrainState {
      * Loaded from server on page refresh to ensure "once per turn" fee tracking persists.
      */
     paidOpponentIds?: string[];
+    /**
+     * Preserves the last traversed edge for reversal detection even when movementHistory is empty.
+     * Used after undo operations to maintain directional context.
+     */
+    lastTraversedEdge?: TrackSegment;
 }
 
 export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';
@@ -227,4 +233,14 @@ export interface PlayerTrackState {
     totalCost: number;
     turnBuildCost: number;
     lastBuildTimestamp: Date;
+}
+
+/**
+ * Result of borrowing money from the bank (Mercy Rule)
+ */
+export interface BorrowResult {
+    borrowedAmount: number;      // Amount borrowed (same as request)
+    debtIncurred: number;        // Amount added to debt (2x borrowed)
+    updatedMoney: number;        // New player money balance
+    updatedDebtOwed: number;     // New total debt owed
 }

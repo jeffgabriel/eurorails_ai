@@ -1,4 +1,4 @@
-import { Player, TrainState } from '../../shared/types/GameTypes';
+import { Player, TrainState, BorrowResult } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { config } from '../config/apiConfig';
@@ -186,7 +186,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 
@@ -273,7 +274,8 @@ export class PlayerStateService {
                     position: null,
                     remainingMovement: 0,
                     movementHistory: [],
-                    loads: []
+                    loads: [],
+                    lastTraversedEdge: undefined
                 };
             }
             this.localPlayer.trainState.position = { x: to.x, y: to.y, row: to.row, col: to.col };
@@ -307,7 +309,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 
@@ -493,7 +496,8 @@ export class PlayerStateService {
                     position: null,
                     remainingMovement: 0,
                     movementHistory: [],
-                    loads: []
+                    loads: [],
+                    lastTraversedEdge: undefined
                 };
             }
             this.localPlayer.trainState.loads = result.updatedLoads;
@@ -540,6 +544,7 @@ export class PlayerStateService {
             if (kind === 'deliver') {
                 if (
                     typeof result?.updatedMoney !== 'number' ||
+                    typeof result?.updatedDebtOwed !== 'number' ||
                     !Array.isArray(result?.updatedLoads) ||
                     typeof result?.removedCardId !== 'number' ||
                     !result?.restoredCard
@@ -553,15 +558,17 @@ export class PlayerStateService {
                         position: null,
                         remainingMovement: 0,
                         movementHistory: [],
-                        loads: []
+                        loads: [],
+                        lastTraversedEdge: undefined
                     };
                 }
 
                 this.localPlayer.money = result.updatedMoney;
+                this.localPlayer.debtOwed = result.updatedDebtOwed;
                 this.localPlayer.trainState.loads = result.updatedLoads;
-                this.localPlayer.hand = (this.localPlayer.hand || [])
-                    .filter((card: any) => card.id !== result.removedCardId);
-                this.localPlayer.hand.push(result.restoredCard);
+                // Hand will be updated via socket patch (server is authoritative)
+                // Do not manually update hand here to avoid race condition duplicates (Issue #195)
+                // The server broadcasts the updated hand via state:patch after undo
                 return true;
             }
 
@@ -581,7 +588,8 @@ export class PlayerStateService {
                         position: null,
                         remainingMovement: 0,
                         movementHistory: [],
-                        loads: []
+                        loads: [],
+                        lastTraversedEdge: undefined
                     };
                 }
 
@@ -599,6 +607,57 @@ export class PlayerStateService {
     }
 
     /**
+     * Borrow money from the bank (Mercy Rule)
+     * Server-authoritative: API call first, update local state only after success
+     *
+     * @param gameId - The game ID
+     * @param amount - Amount to borrow (1-20 ECU)
+     * @returns BorrowResult on success, null on failure
+     */
+    public async borrowMoney(gameId: string, amount: number): Promise<BorrowResult | null> {
+        if (!this.localPlayer || !this.localPlayerId) {
+            console.error('Cannot borrow money: no local player');
+            return null;
+        }
+
+        try {
+            const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/borrow`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    gameId,
+                    amount
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                console.error('Failed to borrow money:', errorData);
+                throw new Error(errorData.message || errorData.details || 'Failed to borrow money');
+            }
+
+            const result: BorrowResult = await response.json();
+            if (
+                typeof result?.borrowedAmount !== 'number' ||
+                typeof result?.debtIncurred !== 'number' ||
+                typeof result?.updatedMoney !== 'number' ||
+                typeof result?.updatedDebtOwed !== 'number'
+            ) {
+                console.error('Invalid borrow response from server');
+                return null;
+            }
+
+            // Update local state after success (server-authoritative)
+            this.localPlayer.money = result.updatedMoney;
+            this.localPlayer.debtOwed = result.updatedDebtOwed;
+
+            return result;
+        } catch (error) {
+            console.error('Error borrowing money:', error);
+            throw error; // Re-throw to allow UI to handle the error
+        }
+    }
+
+    /**
      * Update the local player's train state
      */
     public updateTrainState(trainState: Partial<TrainState>): void {
@@ -612,7 +671,8 @@ export class PlayerStateService {
                 position: null,
                 remainingMovement: 0,
                 movementHistory: [],
-                loads: []
+                loads: [],
+                lastTraversedEdge: undefined
             };
         }
 

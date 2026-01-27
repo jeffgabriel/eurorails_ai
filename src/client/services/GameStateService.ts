@@ -1,4 +1,4 @@
-import { GameState } from '../../shared/types/GameTypes';
+import { GameState, BorrowResult } from '../../shared/types/GameTypes';
 import { PlayerStateService } from './PlayerStateService';
 import { config } from '../config/apiConfig';
 import { TrainType } from '../../shared/types/GameTypes';
@@ -450,6 +450,28 @@ export class GameStateService {
             return { ok: true };
         } catch (error) {
             return { ok: false, errorMessage: 'Restart failed' };
+        }
+    }
+
+    /**
+     * Borrow money from the bank (Mercy Rule).
+     * Delegates to PlayerStateService for per-player operations.
+     * Server-authoritative: validates it's your turn, amount constraints.
+     * Returns borrowed amount, debt incurred, and updated balances.
+     */
+    public async borrowMoney(gameId: string, amount: number): Promise<BorrowResult | null> {
+        if (!this.playerStateService) {
+            console.error('Cannot borrow money: PlayerStateService not available');
+            return null;
+        }
+
+        try {
+            const result = await this.playerStateService.borrowMoney(gameId, amount);
+            this.notifyStateChange();
+            return result;
+        } catch (error) {
+            console.error('Borrow failed:', error);
+            return null;
         }
     }
 }
