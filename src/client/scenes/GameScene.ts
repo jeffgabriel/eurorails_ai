@@ -579,10 +579,10 @@ export class GameScene extends Phaser.Scene {
     uiCamera.setScroll(0, 0);
     uiCamera.ignore([this.mapContainer]); // UI camera ignores the map
 
-    // Static slideout reference panel with Cards tab (issue #176)
+    // Static slideout reference panel with interactive tables (issue #192)
     this.loadsReferencePanel = new LoadsReferencePanel(this, [
-      { key: "loads-reference-page-1", label: "Loads Available", type: "image" },
-      { key: "loads-reference-page-2", label: "Cities and Loads", type: "image" },
+      { key: "by-resource", label: "By Resource", type: "resource" }, // Interactive resource table
+      { key: "by-city", label: "By City", type: "city" }, // Interactive city table
       { key: "player-cards", label: "Cards", type: "cards" }, // Dynamic content showing all players' hands
     ], this.gameState);
     this.loadsReferencePanel.create();

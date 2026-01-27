@@ -141,6 +141,11 @@ export class CameraController {
         // Add zoom controls with adjusted limits and throttling
         let lastWheelTime = 0;
         this.scene.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
+            // Skip zoom if pointer is over interactive UI elements (e.g., scrollable panels)
+            if (gameObjects && gameObjects.length > 0) {
+                return;
+            }
+
             const now = Date.now();
             // Throttle zoom updates to every 32ms
             if (now - lastWheelTime >= 32) {
