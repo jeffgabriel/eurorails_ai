@@ -181,6 +181,8 @@ export interface GridPoint extends Point {
     ferryConnection?: FerryConnection;  // Updated to use full FerryConnection type
     city?: CityData;
     ocean?: string;
+    /** Display name for the point (ferry ports, etc.) - separate from city data */
+    name?: string;
     /**
      * Flag for locations that are both ferry ports AND cities (Dublin, Belfast).
      * These hybrid locations allow trains to both use ferry connections AND

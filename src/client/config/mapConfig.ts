@@ -87,6 +87,8 @@ const points: GridPoint[] = [];
       terrain,
       id: mp.Id,
       city: cityData,
+      // Set name for ferry ports (separate from city data for display purposes)
+      ...(mp.Type === "Ferry Port" && mp.Name ? { name: mp.Name } : {}),
       // Set ocean if present
       ...(mp.Ocean ? { ocean: mp.Ocean } : {})
     };
