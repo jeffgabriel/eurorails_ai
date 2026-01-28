@@ -847,6 +847,12 @@ export class GameScene extends Phaser.Scene {
 
       // Clear ferry state after successful crossing
       player.trainState.ferryState = undefined;
+
+      // Check if the ferry destination is a city (Dublin/Belfast are ferry-city hybrids)
+      // If so, trigger city arrival to show the load dialog
+      if (actualOtherSide.city) {
+        await this.uiManager.triggerCityArrival(player, actualOtherSide);
+      }
     }
     
     // If status was already 'ready_to_cross', it means the player didn't move last turn

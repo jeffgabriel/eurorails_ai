@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState } from "../../shared/types/GameTypes";
+import { GameState, GridPoint, Player } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { MapRenderer } from "./MapRenderer";
 import { TrainMovementManager } from "./TrainMovementManager";
@@ -430,6 +430,14 @@ export class UIManager {
 
   public resetTrainMovementMode(): void {
     this.trainInteractionManager.resetTrainMovementMode();
+  }
+
+  /**
+   * Trigger city arrival handling for a player at a grid point.
+   * Used for ferry-city arrivals (Dublin/Belfast) at turn start.
+   */
+  public async triggerCityArrival(player: Player, gridPoint: GridPoint): Promise<void> {
+    await this.trainInteractionManager.triggerCityArrival(player, gridPoint);
   }
 
   public setupUIOverlay(): void {
