@@ -63,7 +63,10 @@ const points: GridPoint[] = [];
     const { x, y } = calculateWorldCoordinates(col, row);
     // Build the GridPoint directly
     let cityData: any = undefined;
-    if ((mp.Type === "Small City" || mp.Type === "Medium City" || mp.Type === "Ferry Port") && mp.Name) {
+    // Only actual cities get cityData - ferry ports do NOT get city data
+    // Dublin and Belfast are "Small City" type in gridPoints.json, so they correctly get cityData
+    // Later, ferry processing converts them to FerryPort terrain and sets isFerryCity=true
+    if ((mp.Type === "Small City" || mp.Type === "Medium City") && mp.Name) {
       cityData = {
         type: terrain,
         name: mp.Name,
@@ -84,6 +87,8 @@ const points: GridPoint[] = [];
       terrain,
       id: mp.Id,
       city: cityData,
+      // Set name for ferry ports (separate from city data for display purposes)
+      ...(mp.Type === "Ferry Port" && mp.Name ? { name: mp.Name } : {}),
       // Set ocean if present
       ...(mp.Ocean ? { ocean: mp.Ocean } : {})
     };
@@ -173,6 +178,16 @@ const ferryConnections: FerryConnection[] = ferryPoints.ferryPoints.map(ferry =>
   };
   point1.ferryConnection = ferryConnection;
   point2.ferryConnection = ferryConnection;
+
+  // Set isFerryCity flag for ferry ports that also have city data (Dublin, Belfast)
+  // These hybrid locations function as both ferry ports AND cities
+  if (point1.city) {
+    point1.isFerryCity = true;
+  }
+  if (point2.city) {
+    point2.isFerryCity = true;
+  }
+
   point1.terrain = TerrainType.FerryPort;
   point2.terrain = TerrainType.FerryPort;
 

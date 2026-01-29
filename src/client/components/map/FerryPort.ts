@@ -26,7 +26,7 @@ export class FerryPort extends MapElement {
       this.x + MapRenderer.GRID_MARGIN,
       this.y + MapRenderer.GRID_MARGIN,
       "ferry-port"
-    ).setName(`ferryPort--${this.point.city?.name}`);
+    ).setName(`ferryPort--${this.point.name || this.point.city?.name}`);
     sprite.setScale(1);
     sprite.setOrigin(0.5, 0.5);
     this.scene.textures.get('ferry-port').setFilter(Phaser.Textures.FilterMode.LINEAR);
@@ -65,7 +65,7 @@ export class FerryPort extends MapElement {
     const portName = this.scene.add.text(
       textX + MapRenderer.GRID_MARGIN,
       textY + MapRenderer.GRID_MARGIN,
-      this.point.city?.name || "Port", // Use city name if available, otherwise "Port"
+      this.point.name || this.point.city?.name || "Port", // Use point name, then city name, otherwise "Port"
       {
         color: "#000000",
         fontSize: "7px", // Smaller than small city (8px)

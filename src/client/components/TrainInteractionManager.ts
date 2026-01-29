@@ -377,6 +377,16 @@ export class TrainInteractionManager {
     await this.cityArrivalHandler.handleArrival(currentPlayer, nearestMilepost);
   }
 
+  /**
+   * Public method to trigger city arrival handling (e.g., for ferry-city arrivals at turn start).
+   * Shows the load dialog if the player arrives at a city with loads available.
+   */
+  public async triggerCityArrival(player: Player, gridPoint: GridPoint): Promise<void> {
+    if (this.cityArrivalHandler.isCity(gridPoint)) {
+      await this.cityArrivalHandler.handleArrival(player, gridPoint);
+    }
+  }
+
   public async enterTrainMovementMode(): Promise<void> {
     await this.movementModeController.enterMovementMode();
   }

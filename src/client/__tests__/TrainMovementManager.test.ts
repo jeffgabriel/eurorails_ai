@@ -982,22 +982,22 @@ describe('TrainMovementManager City Direction Reversal', () => {
     // Player moving forward should not be blocked
     player.trainState.position = { ...majorCity };
     player.trainState.movementHistory = [
-      { 
-        from: { ...prevPoint, terrain: TerrainType.Clear }, 
-        to: { ...majorCity }, 
-        cost: 0 
+      {
+        from: { ...prevPoint, terrain: TerrainType.Clear },
+        to: { ...majorCity },
+        cost: 0
       }
     ];
-    
-    const forwardPoint = { 
-      row: 10, 
-      col: 11, 
-      x: 0, 
-      y: 0, 
-      terrain: TerrainType.Clear, 
-      id: 'forward1' 
+
+    const forwardPoint = {
+      row: 10,
+      col: 11,
+      x: 0,
+      y: 0,
+      terrain: TerrainType.Clear,
+      id: 'forward1'
     } as GridPoint;
-    
+
     // Forward movement should always be allowed
     expect(manager.canMoveTo(forwardPoint)).toMatchObject({ canMove: true });
   });

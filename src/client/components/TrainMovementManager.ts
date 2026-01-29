@@ -115,6 +115,29 @@ export class TrainMovementManager {
     ].includes(terrain);
   }
 
+  /**
+   * Check if the destination is the other side of a ferry from the current position.
+   * Used to allow movement back across a ferry that was just crossed.
+   */
+  private isMovingBackAcrossFerry(from: Point, to: GridPoint): boolean {
+    // Check if current position is a ferry port
+    const fromGridPoint = this.getGridPointAtPosition(from.row, from.col);
+    if (!fromGridPoint?.ferryConnection) return false;
+
+    // Check if destination is the other side of this ferry
+    const [pointA, pointB] = fromGridPoint.ferryConnection.connections;
+    const isDestOtherSide =
+      (pointA.row === to.row && pointA.col === to.col) ||
+      (pointB.row === to.row && pointB.col === to.col);
+
+    // Make sure we're not already at the destination (same ferry port)
+    const isCurrentEnd =
+      (pointA.row === from.row && pointA.col === from.col) ||
+      (pointB.row === from.row && pointB.col === from.col);
+
+    return isDestOtherSide && isCurrentEnd;
+  }
+
   private sameGridPosition(a: Point, b: Point): boolean {
     return a.row === b.row && a.col === b.col;
   }
@@ -251,13 +274,17 @@ export class TrainMovementManager {
     // Convert current position to GridPoint
     const priorPosition = currentPlayer.trainState.position;
 
-    // Calculate distance for this move
-    const distance = this.calculateDistance(
+    // Check for ferry return trip FIRST - ferry crossings have special movement rules
+    // When moving back across a ferry, the move costs 0 (you're just initiating the crossing)
+    const isMovingBackAcrossFerryEarly = this.isMovingBackAcrossFerry(priorPosition, point);
+
+    // Calculate distance for this move (0 for ferry crossings)
+    const distance = isMovingBackAcrossFerryEarly ? 0 : this.calculateDistance(
       currentPlayer.trainState.position,
       point
     );
-    // Check movement points
-    if (!this.hasEnoughMovement(currentPlayer, point)) {
+    // Check movement points (ferry crossings bypass this check since distance is 0)
+    if (!isMovingBackAcrossFerryEarly && !this.hasEnoughMovement(currentPlayer, point)) {
       console.log("Not enough movement points remaining");
       return { canMove: false, endMovement: false, message: "Not enough movement points remaining", distance };
     }
@@ -275,7 +302,14 @@ export class TrainMovementManager {
     // Check reversal rules:
     // If the first segment of the proposed path traverses the most recently-traversed edge backwards,
     // then this is a reversal and is only allowed at a city or ferry port.
-    if (lastTrackSegment) {
+    //
+    // Special case: If we just crossed a ferry, skip reversal detection entirely.
+    // The movementHistory may contain stale data from before the ferry crossing,
+    // and we should allow the player to move freely at the new ferry destination.
+    const justCrossedFerry = currentPlayer.trainState.justCrossedFerry === true;
+
+    // Use already-computed ferry return trip check from above
+    if (lastTrackSegment && !justCrossedFerry && !isMovingBackAcrossFerryEarly) {
       const proposedSegments = this.getMovementCostSegments(priorPosition, point, currentPlayer.id);
       const lastMoveSegments = this.getMovementCostSegments(
         lastTrackSegment.from,
@@ -334,9 +368,15 @@ export class TrainMovementManager {
     // If arriving at a ferry port, set up ferry state and end movement
     if (point.terrain === TerrainType.FerryPort) {
       currentPlayer.trainState.remainingMovement = 0;
-      
-      // Set ferry state if ferry connection exists
-      if (point.ferryConnection) {
+
+      // Check if this is a ferry return trip (crossing from one ferry port to the other)
+      // In that case, we should NOT set up a new ferry crossing - the player has
+      // completed their crossing and should stay at this ferry port
+      // Use the already-computed value from early in the method
+      const isReturnTrip = isMovingBackAcrossFerryEarly;
+
+      // Set ferry state if ferry connection exists AND this is NOT a return trip
+      if (point.ferryConnection && !isReturnTrip) {
         const [from, to] = point.ferryConnection.connections;
         // Determine which end is the current point and which is the other side
         const isCurrentFrom = from.row === point.row && from.col === point.col;
@@ -346,6 +386,13 @@ export class TrainMovementManager {
           currentSide: isCurrentFrom ? from : to,
           otherSide: isCurrentFrom ? to : from,
         };
+      } else if (isReturnTrip) {
+        // For return trips, we don't set ferry state (to prevent teleportation),
+        // but we DO need to set justCrossedFerry so half-speed applies next turn.
+        // The ferry crossing is complete when the return trip move happens.
+        currentPlayer.trainState.justCrossedFerry = true;
+        // Clear movement history since we're at a new location after ferry crossing
+        currentPlayer.trainState.movementHistory = [];
       }
       return { canMove: true, endMovement: true, message: "Ferry port reached - ending movement", distance };
     }
