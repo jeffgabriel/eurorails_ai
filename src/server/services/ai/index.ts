@@ -17,6 +17,7 @@ export {
 } from './aiConfig';
 
 // Services
+export { AIService, getAIService } from './aiService';
 export { AIPlanner, getAIPlanner } from './aiPlanner';
 export { AIPathfinder, getAIPathfinder } from './aiPathfinder';
 export { AIEvaluator, getAIEvaluator } from './aiEvaluator';
