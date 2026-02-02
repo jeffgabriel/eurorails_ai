@@ -3,6 +3,7 @@ import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
+import { AIDifficulty, AIPersonality } from '../../shared/types/GameTypes';
 
 // Extend the Request type to include requestId (needed for this file)
 declare global {
@@ -51,6 +52,17 @@ interface BulkDeleteGamesRequest {
   gameIds: string[];
   mode: 'soft' | 'hard';
 }
+
+interface AddAIPlayerRequest {
+  difficulty: AIDifficulty;
+  personality: AIPersonality;
+}
+
+// Valid AI difficulty and personality values
+const VALID_DIFFICULTIES: AIDifficulty[] = ['easy', 'medium', 'hard'];
+const VALID_PERSONALITIES: AIPersonality[] = [
+  'optimizer', 'network_builder', 'opportunist', 'blocker', 'steady_hand', 'chaos_agent'
+];
 
 // GET /api/lobby/my-games - List games for current user
 router.get('/my-games', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
@@ -434,10 +446,84 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
   });
 }));
 
+// POST /api/lobby/games/:id/ai-player - Add an AI player to a game
+router.post('/games/:id/ai-player', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId } = req.params;
+  const userId = req.user!.id;
+  const { difficulty, personality }: AddAIPlayerRequest = req.body;
+
+  logLobbyOperation('Add AI player request', { gameId, userId, difficulty, personality }, req);
+
+  // Validate UUID format
+  if (!validateUUID(gameId, 'gameId', res)) {
+    return;
+  }
+
+  // Validate difficulty
+  if (!difficulty || !VALID_DIFFICULTIES.includes(difficulty)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid difficulty value',
+      details: `difficulty must be one of: ${VALID_DIFFICULTIES.join(', ')}`
+    });
+    return;
+  }
+
+  // Validate personality
+  if (!personality || !VALID_PERSONALITIES.includes(personality)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid personality value',
+      details: `personality must be one of: ${VALID_PERSONALITIES.join(', ')}`
+    });
+    return;
+  }
+
+  const aiPlayer = await LobbyService.addAIPlayer(gameId, userId, difficulty, personality);
+
+  logLobbyOperation('AI player added successfully', {
+    gameId,
+    playerId: aiPlayer.id,
+    name: aiPlayer.name,
+    difficulty,
+    personality
+  }, req);
+
+  res.status(201).json({
+    success: true,
+    data: aiPlayer
+  });
+}));
+
+// DELETE /api/lobby/games/:id/ai-player/:playerId - Remove an AI player from a game
+router.delete('/games/:id/ai-player/:playerId', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId, playerId } = req.params;
+  const userId = req.user!.id;
+
+  logLobbyOperation('Remove AI player request', { gameId, userId, playerId }, req);
+
+  // Validate UUID format
+  if (!validateUUID(gameId, 'gameId', res)) {
+    return;
+  }
+  if (!validateUUID(playerId, 'playerId', res)) {
+    return;
+  }
+
+  await LobbyService.removeAIPlayer(gameId, userId, playerId);
+
+  logLobbyOperation('AI player removed successfully', { gameId, playerId }, req);
+
+  res.status(200).json({
+    success: true,
+    message: 'AI player removed successfully'
+  });
+}));
+
 // GET /api/lobby/health - Health check endpoint
 router.get('/health', asyncHandler(async (req: Request, res: Response) => {
   logLobbyOperation('Health check', { service: 'lobby-api' }, req);
-  
+
   res.status(200).json({
     success: true,
     message: 'Lobby service is healthy',

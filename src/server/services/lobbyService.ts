@@ -2,8 +2,15 @@ import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
 import { PlayerService } from './playerService';
-import { TrainType } from '../../shared/types/GameTypes';
+import { TrainType, AIDifficulty, AIPersonality } from '../../shared/types/GameTypes';
 import type { Player as GamePlayer } from '../../shared/types/GameTypes';
+
+// AI Player name pool for generating unique names
+const AI_NAMES = [
+  'Heinrich', 'Marie', 'Franz', 'Helga', 'Otto', 'Ingrid',
+  'Klaus', 'Greta', 'Wilhelm', 'Brunhilde', 'Gustav', 'Liesel',
+  'Wolfgang', 'Frieda', 'Dieter', 'Ursula', 'Hans', 'Petra'
+];
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -104,6 +111,18 @@ export class NotGameCreatorError extends LobbyError {
 export class InsufficientPlayersError extends LobbyError {
   constructor(message: string = 'Need at least 2 players to start the game') {
     super(message, 'INSUFFICIENT_PLAYERS', 400);
+  }
+}
+
+export class NotAIPlayerError extends LobbyError {
+  constructor(message: string = 'This player is not an AI player') {
+    super(message, 'NOT_AI_PLAYER', 400);
+  }
+}
+
+export class PlayerNotFoundError extends LobbyError {
+  constructor(message: string = 'Player not found') {
+    super(message, 'PLAYER_NOT_FOUND', 404);
   }
 }
 
@@ -425,7 +444,7 @@ export class LobbyService {
   }
 
   /**
-   * Get players in a game (for lobby - includes isOnline status)
+   * Get players in a game (for lobby - includes isOnline status and AI fields)
    */
   static async getGamePlayers(gameId: string): Promise<(GamePlayer & { isOnline: boolean })[]> {
     // Input validation
@@ -434,13 +453,14 @@ export class LobbyService {
     }
 
     const result = await db.query(
-      `SELECT id, user_id, name, color, is_online, game_id 
-       FROM players 
-       WHERE game_id = $1 
+      `SELECT id, user_id, name, color, is_online, game_id,
+              is_ai, ai_difficulty, ai_personality
+       FROM players
+       WHERE game_id = $1
        ORDER BY created_at`,
       [gameId]
     );
-    
+
     return result.rows.map(row => ({
       id: row.id,
       userId: row.user_id,
@@ -457,6 +477,10 @@ export class LobbyService {
       },
       hand: [], // Lobby doesn't show hands - this will be loaded when game starts
       isOnline: row.is_online || false, // Include isOnline for lobby
+      // AI player fields
+      isAI: row.is_ai || false,
+      aiDifficulty: row.ai_difficulty as AIDifficulty | undefined,
+      aiPersonality: row.ai_personality as AIPersonality | undefined,
     }));
   }
 
@@ -932,6 +956,227 @@ export class LobbyService {
           );
         }
       }
+    }
+  }
+
+  /**
+   * Add an AI player to a game
+   * Only the game creator can add AI players
+   * Cannot add AI players to games already in progress
+   * Maximum 6 total players (humans + AI combined)
+   */
+  static async addAIPlayer(
+    gameId: string,
+    creatorUserId: string,
+    difficulty: AIDifficulty,
+    personality: AIPersonality
+  ): Promise<GamePlayer> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+    if (!creatorUserId) {
+      throw new LobbyError('creatorUserId is required', 'MISSING_USER_ID', 400);
+    }
+
+    const client = await db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // Verify game exists and get game info
+      const gameResult = await client.query(
+        `SELECT g.*, g.created_by as creator_user_id
+         FROM games g
+         WHERE g.id = $1`,
+        [gameId]
+      );
+
+      if (gameResult.rows.length === 0) {
+        throw new GameNotFoundError();
+      }
+
+      const game = gameResult.rows[0];
+
+      // Verify the requesting user is the game creator
+      if (game.creator_user_id !== creatorUserId) {
+        throw new NotGameCreatorError();
+      }
+
+      // Check if game is already in progress
+      if (game.status !== 'setup') {
+        throw new GameAlreadyStartedError();
+      }
+
+      // Check if game is full
+      const playerCountResult = await client.query(
+        'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
+        [gameId]
+      );
+
+      const playerCount = parseInt(playerCountResult.rows[0].count);
+      if (playerCount >= game.max_players) {
+        throw new GameFullError();
+      }
+
+      // Get existing player names to generate a unique AI name
+      const existingNamesResult = await client.query(
+        'SELECT name FROM players WHERE game_id = $1',
+        [gameId]
+      );
+      const existingNames = existingNamesResult.rows.map(row => row.name);
+
+      // Find an available AI name
+      const availableNames = AI_NAMES.filter(name => !existingNames.includes(name));
+      const aiName = availableNames.length > 0
+        ? availableNames[Math.floor(Math.random() * availableNames.length)]
+        : `AI_${playerCount + 1}`;
+
+      // Get available colors
+      const usedColorsResult = await client.query(
+        'SELECT color FROM players WHERE game_id = $1',
+        [gameId]
+      );
+      const usedColors = usedColorsResult.rows.map(row => row.color);
+      const allColors = ['#ff0000', '#00ff00', '#0000ff', '#ffff00', '#ff00ff', '#00ffff'];
+      const availableColors = allColors.filter(color => !usedColors.includes(color));
+      const aiColor = availableColors.length > 0 ? availableColors[0] : allColors[0];
+
+      // Create the AI player
+      const aiPlayer: GamePlayer = {
+        id: uuidv4(),
+        userId: undefined, // AI players don't have a user ID
+        name: aiName,
+        color: aiColor,
+        money: 50,
+        trainType: TrainType.Freight,
+        turnNumber: 1,
+        trainState: {
+          position: null,
+          movementHistory: [],
+          remainingMovement: 9,
+          loads: []
+        },
+        hand: [], // Empty - PlayerService will draw cards server-side
+        isAI: true,
+        aiDifficulty: difficulty,
+        aiPersonality: personality
+      };
+
+      // Use PlayerService.createPlayer() to ensure cards are drawn properly
+      await PlayerService.createPlayer(gameId, aiPlayer, client);
+
+      await client.query('COMMIT');
+
+      // Emit socket event to notify other players in the lobby
+      try {
+        const players = await LobbyService.getGamePlayers(gameId);
+        await emitLobbyUpdated(gameId, 'player-joined', players);
+      } catch (socketError) {
+        // Log error but don't fail the operation
+        console.error('Failed to emit lobby update:', socketError);
+      }
+
+      // Return the created AI player with full fields
+      return {
+        ...aiPlayer,
+        isOnline: true, // AI players are always "online"
+      } as GamePlayer;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Remove an AI player from a game
+   * Only the game creator can remove AI players
+   * Cannot remove AI players from games already in progress
+   * Can only remove AI players (not human players)
+   */
+  static async removeAIPlayer(
+    gameId: string,
+    creatorUserId: string,
+    playerId: string
+  ): Promise<void> {
+    // Input validation
+    if (!gameId || gameId.trim().length === 0) {
+      throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    }
+    if (!creatorUserId) {
+      throw new LobbyError('creatorUserId is required', 'MISSING_USER_ID', 400);
+    }
+    if (!playerId || playerId.trim().length === 0) {
+      throw new LobbyError('playerId is required', 'MISSING_PLAYER_ID', 400);
+    }
+
+    const client = await db.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // Verify game exists and get game info
+      const gameResult = await client.query(
+        `SELECT g.*, g.created_by as creator_user_id
+         FROM games g
+         WHERE g.id = $1`,
+        [gameId]
+      );
+
+      if (gameResult.rows.length === 0) {
+        throw new GameNotFoundError();
+      }
+
+      const game = gameResult.rows[0];
+
+      // Verify the requesting user is the game creator
+      if (game.creator_user_id !== creatorUserId) {
+        throw new NotGameCreatorError();
+      }
+
+      // Check if game is already in progress
+      if (game.status !== 'setup') {
+        throw new GameAlreadyStartedError();
+      }
+
+      // Verify the player exists and is an AI player
+      const playerResult = await client.query(
+        'SELECT id, is_ai FROM players WHERE game_id = $1 AND id = $2',
+        [gameId, playerId]
+      );
+
+      if (playerResult.rows.length === 0) {
+        throw new PlayerNotFoundError();
+      }
+
+      const player = playerResult.rows[0];
+      if (!player.is_ai) {
+        throw new NotAIPlayerError();
+      }
+
+      // Delete the AI player
+      await client.query(
+        'DELETE FROM players WHERE game_id = $1 AND id = $2',
+        [gameId, playerId]
+      );
+
+      await client.query('COMMIT');
+
+      // Emit socket event to notify other players in the lobby
+      try {
+        const players = await LobbyService.getGamePlayers(gameId);
+        await emitLobbyUpdated(gameId, 'player-left', players);
+      } catch (socketError) {
+        // Log error but don't fail the operation
+        console.error('Failed to emit lobby update:', socketError);
+      }
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }
