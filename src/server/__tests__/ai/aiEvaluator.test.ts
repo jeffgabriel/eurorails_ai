@@ -139,7 +139,7 @@ describe('AIEvaluator', () => {
       const card = createMockDemandCard(20);
       const playerWithPosition = createMockPlayer({
         trainState: {
-          position: { x: 100, y: 100 },
+          position: { x: 100, y: 100, row: 10, col: 10 },
           remainingMovement: 9,
           movementHistory: [],
           loads: [],

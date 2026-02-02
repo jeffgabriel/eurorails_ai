@@ -209,7 +209,7 @@ describe('AIPathfinder', () => {
       const player = createMockPlayer();
       const trackMap = new Map<string, TrackSegment[]>();
       trackMap.set(player.id, [
-        createSegment({ x: 0, y: 0 }, { x: 10, y: 10 }, player.id),
+        createSegment(createMockPoint(0, 0), createMockPoint(10, 10), player.id),
       ]);
       const gameState = createMockGameState({ allTrack: trackMap });
 

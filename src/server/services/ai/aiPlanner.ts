@@ -3,15 +3,19 @@
  * Strategic decision-making for AI players
  */
 
-import { AIDifficulty, AIPersonality, Player } from '../../../shared/types/GameTypes';
+import { AIDifficulty, AIPersonality, Player, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
 import {
   AIConfig,
   AITurnPlan,
   TurnOption,
   RankedOption,
-  AIGameState
+  AIGameState,
+  PersonalityParams,
+  DifficultyParams
 } from './types';
-import { AI_DIFFICULTY_CONFIG, AI_PERSONALITY_CONFIG } from './aiConfig';
+import { AI_DIFFICULTY_CONFIG, AI_PERSONALITY_CONFIG, AI_BUILD_BUDGET_PER_TURN } from './aiConfig';
+import { getAIPathfinder } from './aiPathfinder';
+import { getAIEvaluator } from './aiEvaluator';
 
 export class AIPlanner {
   /**
@@ -95,21 +99,289 @@ export class AIPlanner {
     config: AIConfig
   ): TurnOption[] {
     const options: TurnOption[] = [];
+    const pathfinder = getAIPathfinder();
+    const evaluator = getAIEvaluator();
 
-    // TODO: Implement in BE-002
-    // - Generate build options
-    // - Generate movement options
-    // - Generate pickup/delivery options
-    // - Generate upgrade options
-    // - Add pass option
+    // 1. Generate delivery options (highest priority if we have loads)
+    const deliveryOptions = this.generateDeliveryOptions(player, gameState, evaluator);
+    options.push(...deliveryOptions);
 
-    // Stub: return basic pass option
+    // 2. Generate pickup options (if we have capacity)
+    const pickupOptions = this.generatePickupOptions(player, gameState, evaluator);
+    options.push(...pickupOptions);
+
+    // 3. Generate movement options (if not at optimal location)
+    const movementOptions = this.generateMovementOptions(player, gameState, config);
+    options.push(...movementOptions);
+
+    // 4. Generate build options (if we have money and it's strategic)
+    const buildOptions = this.generateBuildOptions(player, gameState, pathfinder, config);
+    options.push(...buildOptions);
+
+    // 5. Generate upgrade options (if beneficial)
+    const upgradeOptions = this.generateUpgradeOptions(player, config);
+    options.push(...upgradeOptions);
+
+    // 6. Always add pass option as fallback
     options.push({
       type: 'pass',
       priority: 0,
       expectedValue: 0,
-      details: {},
+      details: {
+        reason: 'No better options available',
+      },
     });
+
+    return options;
+  }
+
+  /**
+   * Generate delivery options based on current loads and demand cards
+   */
+  private generateDeliveryOptions(
+    player: Player,
+    gameState: AIGameState,
+    evaluator: ReturnType<typeof getAIEvaluator>
+  ): TurnOption[] {
+    const options: TurnOption[] = [];
+    const loads = player.trainState.loads || [];
+
+    if (loads.length === 0) {
+      return options;
+    }
+
+    // Check each demand card for deliverable loads
+    for (const card of player.hand || []) {
+      for (const demand of card.demands) {
+        // Check if we have the required load
+        if (loads.includes(demand.resource)) {
+          const cardScore = evaluator.scoreDemandCard(card, player, gameState);
+
+          options.push({
+            type: 'deliver',
+            priority: 10, // High priority
+            expectedValue: demand.payment,
+            details: {
+              loadType: demand.resource,
+              destinationCity: demand.city,
+              payout: demand.payment,
+              roi: demand.payment, // Already have the load
+              cardScore,
+              immediatePayout: demand.payment,
+            },
+          });
+        }
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * Generate pickup options based on available loads and train capacity
+   */
+  private generatePickupOptions(
+    player: Player,
+    gameState: AIGameState,
+    evaluator: ReturnType<typeof getAIEvaluator>
+  ): TurnOption[] {
+    const options: TurnOption[] = [];
+    const currentLoads = player.trainState.loads || [];
+    const capacity = TRAIN_PROPERTIES[player.trainType].capacity;
+
+    // Check if we have capacity
+    if (currentLoads.length >= capacity) {
+      return options;
+    }
+
+    // Find loads we need based on demand cards
+    const neededLoads = new Set<string>();
+    for (const card of player.hand || []) {
+      for (const demand of card.demands) {
+        if (!currentLoads.includes(demand.resource)) {
+          neededLoads.add(demand.resource);
+        }
+      }
+    }
+
+    // Check available loads at current location or nearby
+    for (const [cityName, availableLoads] of gameState.availableLoads) {
+      for (const loadType of availableLoads) {
+        if (neededLoads.has(loadType)) {
+          // Find the demand card that wants this load
+          const relevantCard = (player.hand || []).find(card =>
+            card.demands.some(d => d.resource === loadType)
+          );
+          const relevantDemand = relevantCard?.demands.find(d => d.resource === loadType);
+          const payout = relevantDemand?.payment || 0;
+
+          options.push({
+            type: 'pickup',
+            priority: 8,
+            expectedValue: payout * 0.5, // Discount for not yet delivered
+            details: {
+              loadType,
+              sourceCity: cityName,
+              potentialPayout: payout,
+              flexibility: 1.2,
+            },
+          });
+        }
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * Generate movement options based on goals
+   */
+  private generateMovementOptions(
+    player: Player,
+    gameState: AIGameState,
+    config: AIConfig
+  ): TurnOption[] {
+    const options: TurnOption[] = [];
+
+    if (!player.trainState.position) {
+      return options;
+    }
+
+    // Movement toward delivery destinations
+    for (const card of player.hand || []) {
+      for (const demand of card.demands) {
+        const hasLoad = player.trainState.loads?.includes(demand.resource);
+        if (hasLoad) {
+          // Move toward delivery destination
+          options.push({
+            type: 'move',
+            priority: 7,
+            expectedValue: demand.payment * 0.3, // Partial value for moving closer
+            details: {
+              destination: demand.city,
+              purpose: 'delivery',
+              distance: 10, // Placeholder
+            },
+          });
+        }
+      }
+    }
+
+    // Movement toward pickup locations
+    for (const [cityName, loads] of gameState.availableLoads) {
+      const hasCapacity = (player.trainState.loads?.length || 0) <
+        TRAIN_PROPERTIES[player.trainType].capacity;
+      if (hasCapacity) {
+        options.push({
+          type: 'move',
+          priority: 5,
+          expectedValue: 5,
+          details: {
+            destination: cityName,
+            purpose: 'pickup',
+            distance: 10, // Placeholder
+          },
+        });
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * Generate build options for track expansion
+   */
+  private generateBuildOptions(
+    player: Player,
+    gameState: AIGameState,
+    pathfinder: ReturnType<typeof getAIPathfinder>,
+    config: AIConfig
+  ): TurnOption[] {
+    const options: TurnOption[] = [];
+
+    // Check if player can afford to build
+    const buildBudget = Math.min(player.money, AI_BUILD_BUDGET_PER_TURN);
+    if (buildBudget < 1) {
+      return options;
+    }
+
+    // Get build recommendations from pathfinder
+    const buildCandidates = pathfinder.evaluateTrackBuildOptions(player, gameState);
+
+    for (const candidate of buildCandidates.slice(0, 5)) {
+      if (candidate.cost <= buildBudget) {
+        options.push({
+          type: 'build',
+          priority: 6,
+          expectedValue: candidate.strategicValue,
+          details: {
+            targetRow: candidate.targetPoint.row,
+            targetCol: candidate.targetPoint.col,
+            cost: candidate.cost,
+            connectsMajorCity: candidate.connectsMajorCity,
+            connectivity: candidate.strategicValue,
+            futureValue: candidate.strategicValue * 1.5,
+          },
+        });
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * Generate train upgrade options
+   */
+  private generateUpgradeOptions(
+    player: Player,
+    config: AIConfig
+  ): TurnOption[] {
+    const options: TurnOption[] = [];
+    const upgradeCost = 20; // ECU 20M to upgrade
+
+    if (player.money < upgradeCost) {
+      return options;
+    }
+
+    const currentTrain = player.trainType;
+
+    // Determine possible upgrades
+    const possibleUpgrades: Array<{ to: TrainType; benefit: string; value: number }> = [];
+
+    switch (currentTrain) {
+      case TrainType.Freight:
+        possibleUpgrades.push(
+          { to: TrainType.FastFreight, benefit: 'speed', value: 8 },
+          { to: TrainType.HeavyFreight, benefit: 'capacity', value: 10 }
+        );
+        break;
+      case TrainType.FastFreight:
+        possibleUpgrades.push(
+          { to: TrainType.Superfreight, benefit: 'capacity', value: 12 }
+        );
+        break;
+      case TrainType.HeavyFreight:
+        possibleUpgrades.push(
+          { to: TrainType.Superfreight, benefit: 'speed', value: 12 }
+        );
+        break;
+      // Superfreight - no upgrades available
+    }
+
+    for (const upgrade of possibleUpgrades) {
+      options.push({
+        type: 'upgrade',
+        priority: 4,
+        expectedValue: upgrade.value,
+        details: {
+          fromTrain: currentTrain,
+          toTrain: upgrade.to,
+          benefit: upgrade.benefit,
+          cost: upgradeCost,
+          efficiency: upgrade.value / upgradeCost,
+        },
+      });
+    }
 
     return options;
   }
@@ -189,6 +461,7 @@ export class AIPlanner {
 
   /**
    * Select final actions from ranked options
+   * Supports selecting multiple compatible actions per turn
    */
   private selectActions(
     rankedOptions: RankedOption[],
@@ -198,9 +471,49 @@ export class AIPlanner {
       return [];
     }
 
-    // For now, select the top-scoring option
-    // TODO: Implement multi-action selection in BE-002
-    return [rankedOptions[0]];
+    const selectedActions: RankedOption[] = [];
+    const usedTypes = new Set<string>();
+
+    // A turn typically consists of: move + (pickup/deliver) + build/upgrade
+    // Select best option for each action type
+
+    // First, select the highest-value delivery or pickup
+    const deliveryOption = rankedOptions.find(o =>
+      (o.type === 'deliver' || o.type === 'pickup') && !usedTypes.has(o.type)
+    );
+    if (deliveryOption) {
+      selectedActions.push(deliveryOption);
+      usedTypes.add(deliveryOption.type);
+    }
+
+    // Next, select movement if needed
+    const moveOption = rankedOptions.find(o =>
+      o.type === 'move' && !usedTypes.has('move')
+    );
+    if (moveOption && moveOption.score > 0) {
+      selectedActions.push(moveOption);
+      usedTypes.add('move');
+    }
+
+    // Finally, select build or upgrade (mutually exclusive with same budget)
+    const buildOrUpgrade = rankedOptions.find(o =>
+      (o.type === 'build' || o.type === 'upgrade') &&
+      !usedTypes.has('build') && !usedTypes.has('upgrade')
+    );
+    if (buildOrUpgrade) {
+      selectedActions.push(buildOrUpgrade);
+      usedTypes.add(buildOrUpgrade.type);
+    }
+
+    // If nothing selected, take the top option
+    if (selectedActions.length === 0) {
+      selectedActions.push(rankedOptions[0]);
+    }
+
+    // Sort by priority for execution order
+    selectedActions.sort((a, b) => b.priority - a.priority);
+
+    return selectedActions;
   }
 
   /**
@@ -225,8 +538,72 @@ export class AIPlanner {
     option: TurnOption,
     personality: PersonalityParams
   ): string {
-    // TODO: Implement personality-specific reasoning in BE-002
-    return `${option.type} action with expected value ${option.expectedValue}.`;
+    const value = option.expectedValue;
+    const details = option.details;
+
+    // Generate base description
+    let baseReason = '';
+    switch (option.type) {
+      case 'deliver':
+        baseReason = `Deliver ${details.loadType} to ${details.destinationCity} for ${details.payout}M`;
+        break;
+      case 'pickup':
+        baseReason = `Pick up ${details.loadType} at ${details.sourceCity}`;
+        break;
+      case 'move':
+        baseReason = `Move toward ${details.destination} for ${details.purpose}`;
+        break;
+      case 'build':
+        baseReason = `Build track toward row ${details.targetRow}, col ${details.targetCol}`;
+        break;
+      case 'upgrade':
+        baseReason = `Upgrade from ${details.fromTrain} to ${details.toTrain}`;
+        break;
+      case 'pass':
+        baseReason = 'Wait this turn';
+        break;
+      default:
+        baseReason = `${option.type} action`;
+    }
+
+    // Add personality-flavored commentary
+    const style = personality.commentaryStyle;
+    let commentary = '';
+
+    switch (style) {
+      case 'analytical':
+        const roi = details.roi || (value > 0 ? 'positive' : 'neutral');
+        commentary = `. ROI: ${roi}. Expected value: ${value}M.`;
+        break;
+      case 'strategic':
+        const futureValue = details.futureValue || 'moderate';
+        commentary = `. Strategic value: ${futureValue}. Building toward objectives.`;
+        break;
+      case 'reactive':
+        commentary = value > 10 ? `. Seizing opportunity!` : `. Adapting to situation.`;
+        break;
+      case 'competitive':
+        const denial = (details.opponentDenial as number) || 0;
+        commentary = denial > 0 ? `. Blocking opponent access.` : `. Maintaining competitive position.`;
+        break;
+      case 'methodical':
+        const risk = (details.risk as number) || 0;
+        commentary = risk < 0.3 ? `. Safe and steady progress.` : `. Calculated risk.`;
+        break;
+      case 'humorous':
+        const funnyReasons = [
+          ` Because... why not?`,
+          ` The algorithm approves.`,
+          ` Trust the process.`,
+          ` Chaos theory at work.`,
+        ];
+        commentary = funnyReasons[Math.floor(Math.random() * funnyReasons.length)];
+        break;
+      default:
+        commentary = `. Expected value: ${value}M.`;
+    }
+
+    return baseReason + commentary;
   }
 }
 
