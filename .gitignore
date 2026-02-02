@@ -34,4 +34,10 @@ coverage/
 # Test results
 test-results/
 
+# Playwright
+playwright-report/
+playwright/.cache/
+e2e/screenshots/*.png
+!e2e/screenshots/.gitkeep
+
 .npm-cache/

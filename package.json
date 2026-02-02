@@ -15,6 +15,10 @@
     "test:all": "NODE_ENV=test RUN_INTEGRATION_TESTS=true DB_ENV=test npm test",
     "test": "jest",
     "test:coverage": "jest --coverage",
+    "test:e2e": "npx playwright test",
+    "test:e2e:ui": "npx playwright test --ui",
+    "test:e2e:headed": "npx playwright test --headed",
+    "test:e2e:debug": "npx playwright test --debug",
     "debug": "npx nodemon --exec \"node --inspect -r ts-node/register src/server/index.ts\""
   },
   "keywords": [],
@@ -89,6 +93,7 @@
   "devDependencies": {
     "@babel/preset-env": "^7.26.9",
     "@babel/preset-typescript": "^7.26.0",
+    "@playwright/test": "^1.58.1",
     "@tailwindcss/postcss": "^4.1.12",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
