@@ -78,10 +78,12 @@ module.exports = {
       testEnvironment: 'node',
       testMatch: [
         '<rootDir>/src/client/__tests__/lobby/lobby.integration.test.ts',
-        '<rootDir>/src/client/__tests__/lobby/lobby.e2e.database.test.ts'
+        '<rootDir>/src/client/__tests__/lobby/lobby.e2e.database.test.ts',
+        '<rootDir>/src/server/__tests__/integration/**/*.test.ts'
       ],
       setupFiles: ['<rootDir>/src/server/__tests__/setupFiles.ts'],
       setupFilesAfterEnv: ['<rootDir>/src/server/__tests__/setup.ts'],
+      testTimeout: 45000, // Extended timeout for AI turn tests
       transform: {
         '^.+\\.(ts|tsx)$': [
           'ts-jest',
