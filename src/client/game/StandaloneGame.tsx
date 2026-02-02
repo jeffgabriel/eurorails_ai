@@ -1,11 +1,14 @@
 // game/StandaloneGame.tsx - React wrapper for the standalone game
 import { useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
+import { GameAIOverlay } from '../components/ai';
+import { useAIStore } from '../lobby/store/ai.store';
 
 export function StandaloneGame() {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<any>(null);
   const { id: gameId } = useParams<{ id: string }>();
+  const clearAIState = useAIStore((state) => state.clearAIState);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -43,29 +46,35 @@ export function StandaloneGame() {
 
     // Cleanup on unmount
     return () => {
+      // Clear AI state when leaving the game
+      clearAIState();
+
       // Destroy the Phaser game instance to prevent memory leaks
       if (gameRef.current) {
         gameRef.current.destroy(true);
         gameRef.current = null;
       }
-      
+
       // Remove the game container
       const gameContainer = document.getElementById('game-container');
       if (gameContainer && containerRef.current) {
         containerRef.current.removeChild(gameContainer);
       }
     };
-  }, [gameId]);
+  }, [gameId, clearAIState]);
 
   return (
-    <div 
-      ref={containerRef} 
+    <div
+      ref={containerRef}
       className="size-full"
-      style={{ 
+      style={{
         minHeight: '100vh',
         background: '#0b0e14',
         position: 'relative'
       }}
-    />
+    >
+      {/* AI Overlay components rendered on top of the Phaser game */}
+      <GameAIOverlay />
+    </div>
   );
 }

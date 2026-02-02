@@ -70,6 +70,7 @@ export class LeaderboardManager {
     const playerEntries = this.gameState.players
       .map((player, index) => {
         const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
+        const isAIPlayer = player.isAI === true;
         const entryY = LEADERBOARD_PADDING + 30 + index * 20;
         const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
 
@@ -77,6 +78,8 @@ export class LeaderboardManager {
 
         // Create subtle background highlight for current player
         if (isCurrentPlayer) {
+          // Use different color for AI player turn
+          const bgColor = isAIPlayer ? 0x4488aa : 0x888888;
           // Subtle background highlight - light gray with low opacity
           const entryBg = this.scene.add
             .rectangle(
@@ -84,7 +87,7 @@ export class LeaderboardManager {
               entryY + 1, // Small inset to keep within bounds
               LEADERBOARD_WIDTH - 4, // Reduced width to account for insets
               18, // Reduced height to account for insets
-              0x888888,
+              bgColor,
               0.3 // Lower opacity for subtlety
             )
             .setOrigin(0, 0);
@@ -101,17 +104,35 @@ export class LeaderboardManager {
         }
 
         // Create icon for current player (slightly larger but subtle)
+        // For AI players, show a bot icon; for humans, show the arrow
         let iconText;
         if (isCurrentPlayer) {
+          const icon = isAIPlayer ? "🤖" : "►";
+          const iconSize = isAIPlayer ? "12px" : "16px";
           iconText = this.scene.add
             .text(
               entryX + 5,
               entryY + 2,
-              "►",
+              icon,
               {
                 color: "#ffffff", // Keep white for subtlety
-                fontSize: "16px", // Slightly larger but not too prominent
+                fontSize: iconSize,
                 fontStyle: "bold",
+                fontFamily: UI_FONT_FAMILY,
+              }
+            )
+            .setOrigin(0, 0);
+          elements.push(iconText);
+        } else if (isAIPlayer) {
+          // Show bot icon for AI players even when not their turn
+          iconText = this.scene.add
+            .text(
+              entryX + 5,
+              entryY + 2,
+              "🤖",
+              {
+                color: "#aaaaaa",
+                fontSize: "10px",
                 fontFamily: UI_FONT_FAMILY,
               }
             )
@@ -119,10 +140,14 @@ export class LeaderboardManager {
           elements.push(iconText);
         }
 
+        // Adjust text position based on whether there's an icon
+        const hasIcon = isCurrentPlayer || isAIPlayer;
+        const textOffset = hasIcon ? 25 : 5;
+
         // Create player text - keep mostly the same, just bold for active player
         const playerText = this.scene.add
           .text(
-            entryX + (isCurrentPlayer ? 25 : 5),
+            entryX + textOffset,
             entryY + 2,
             player.name,
             {
