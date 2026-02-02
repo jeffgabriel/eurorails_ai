@@ -23,7 +23,11 @@ import { Checkbox } from '../../components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { CreateGameModal } from './CreateGameModal';
 import { JoinGameModal } from './JoinGameModal';
+import { AddAIPlayerModal } from './AddAIPlayerModal';
 import { GameRow } from './GameRow';
+import { AIPlayerCard } from './AIPlayerCard';
+import { Bot } from 'lucide-react';
+import type { AIDifficulty, AIPersonality } from '../../shared/types';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
 import { getErrorMessage, api } from '../../shared/api';
@@ -34,6 +38,9 @@ export function LobbyPage() {
   const { gameId } = useParams<{ gameId?: string }>();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
+  const [showAddAIModal, setShowAddAIModal] = useState(false);
+  const [isAddingAI, setIsAddingAI] = useState(false);
+  const [availableColors, setAvailableColors] = useState<string[]>([]);
 
   // Active game delete/transfer dialog state
   const [activeDeleteGameId, setActiveDeleteGameId] = useState<string | null>(null);
@@ -177,6 +184,43 @@ export function LobbyPage() {
   const handleLogout = () => {
     logout();
     toast.info('Logged out successfully');
+  };
+
+  const handleOpenAddAIModal = async () => {
+    if (!currentGame) return;
+    try {
+      const { colors } = await api.getAvailableColors(currentGame.id);
+      setAvailableColors(colors);
+      setShowAddAIModal(true);
+    } catch {
+      toast.error('Failed to load available colors');
+    }
+  };
+
+  const handleAddAIPlayer = async (difficulty: AIDifficulty, personality: AIPersonality) => {
+    if (!currentGame) return;
+    setIsAddingAI(true);
+    try {
+      await api.addAIPlayer(currentGame.id, { difficulty, personality });
+      toast.success('AI player added!');
+      // The socket will update the player list automatically
+    } catch (error) {
+      toast.error('Failed to add AI player');
+      throw error;
+    } finally {
+      setIsAddingAI(false);
+    }
+  };
+
+  const handleRemoveAIPlayer = async (playerId: string) => {
+    if (!currentGame) return;
+    try {
+      await api.removeAIPlayer(currentGame.id, playerId);
+      toast.success('AI player removed');
+      // The socket will update the player list automatically
+    } catch {
+      toast.error('Failed to remove AI player');
+    }
   };
 
   const canStartGame = currentGame && 
@@ -516,11 +560,26 @@ export function LobbyPage() {
                 <Separator />
 
                 <div>
-                  <h3 className="font-semibold mb-4 flex items-center gap-2">
-                    <Users className="size-4" />
-                    Players ({(players?.length || 0)}/{currentGame.maxPlayers})
-                  </h3>
-                  
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <Users className="size-4" />
+                      Players ({(players?.length || 0)}/{currentGame.maxPlayers})
+                    </h3>
+
+                    {/* Add AI Player button - only for game creator */}
+                    {currentGame.createdBy === user?.id && currentGame.status === 'setup' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleOpenAddAIModal}
+                        disabled={(players?.length || 0) >= currentGame.maxPlayers || isLoading}
+                      >
+                        <Bot className="size-4 mr-2" />
+                        Add AI Player
+                      </Button>
+                    )}
+                  </div>
+
                   <div className="space-y-2">
                     {!players || players.length === 0 ? (
                       <p className="text-muted-foreground text-center py-4">
@@ -528,7 +587,15 @@ export function LobbyPage() {
                       </p>
                     ) : (
                       players.map((player) => (
-                        <GameRow key={player.id} player={player} />
+                        player.isAI ? (
+                          <AIPlayerCard
+                            key={player.id}
+                            player={player}
+                            onRemove={handleRemoveAIPlayer}
+                          />
+                        ) : (
+                          <GameRow key={player.id} player={player} />
+                        )
                       ))
                     )}
                   </div>
@@ -584,14 +651,22 @@ export function LobbyPage() {
       </div>
 
       {/* Modals */}
-      <CreateGameModal 
+      <CreateGameModal
         open={showCreateModal}
         onOpenChange={setShowCreateModal}
       />
-      
-      <JoinGameModal 
+
+      <JoinGameModal
         open={showJoinModal}
         onOpenChange={setShowJoinModal}
+      />
+
+      <AddAIPlayerModal
+        open={showAddAIModal}
+        onOpenChange={setShowAddAIModal}
+        onAddAIPlayer={handleAddAIPlayer}
+        isLoading={isAddingAI}
+        availableColors={availableColors}
       />
 
       {/* Active game owner delete/transfer dialog */}

@@ -10,7 +10,9 @@ import type {
   CreateGameForm,
   JoinGameForm,
   MyGamesResponse,
-  ID
+  ID,
+  AIDifficulty,
+  AIPersonality
 } from './types';
 import type { LoadState, LoadType } from '../../../shared/types/LoadTypes';
 import { config, debug } from './config';
@@ -216,6 +218,21 @@ class ApiClient {
     await this.request<{ success: boolean; message: string }>(`/api/lobby/games/bulk-delete`, {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  // AI Player endpoints
+  async addAIPlayer(gameId: ID, data: { difficulty: AIDifficulty; personality: AIPersonality }): Promise<{ player: Player }> {
+    const response = await this.request<{ success: boolean; data: Player }>(`/api/lobby/games/${gameId}/ai-player`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return { player: response.data };
+  }
+
+  async removeAIPlayer(gameId: ID, playerId: ID): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/ai-player/${playerId}`, {
+      method: 'DELETE',
     });
   }
 
