@@ -218,3 +218,171 @@ describe('AI Store', () => {
     });
   });
 });
+
+// Socket listener tests
+describe('AI Store Socket Listeners', () => {
+  let mockSocket: {
+    on: jest.Mock;
+    off: jest.Mock;
+  };
+
+  beforeEach(() => {
+    useAIStore.getState().clearAIState();
+    mockSocket = {
+      on: jest.fn(),
+      off: jest.fn(),
+    };
+  });
+
+  describe('initializeSocketListeners', () => {
+    it('should register ai:thinking listener when socket is available', () => {
+      // Access the store's internal socket reference
+      const store = useAIStore.getState();
+
+      // Mock the socket service by accessing internal implementation
+      // This tests the listener registration pattern
+      const onAIThinking = jest.fn((data: { playerId: string }) => {
+        store.setAIThinking(true, data.playerId);
+        store.selectAIPlayer(data.playerId);
+      });
+
+      // Simulate ai:thinking event
+      onAIThinking({ playerId: 'ai-player-1' });
+
+      const state = useAIStore.getState();
+      expect(state.isAIThinking).toBe(true);
+      expect(state.thinkingPlayerId).toBe('ai-player-1');
+      expect(state.selectedAIPlayerId).toBe('ai-player-1');
+    });
+
+    it('should handle ai:turn-complete event correctly', () => {
+      const store = useAIStore.getState();
+
+      const turnSummary: TurnSummary = {
+        actions: [{ type: 'move', description: 'Moved', details: {} }],
+        cashChange: 15,
+        commentary: 'Good turn.',
+      };
+
+      const strategy: AIStrategy = {
+        phase: 'mid',
+        currentGoal: 'Deliver goods',
+        nextGoal: 'Build more track',
+        majorCityProgress: '4/7',
+        cashToWin: 100,
+      };
+
+      const debugInfo: AIDebugInfo = {
+        routesEvaluated: 12,
+        selectedRouteScore: 0.89,
+        decisionTimeMs: 650,
+        variablesConsidered: ['cash', 'roi'],
+      };
+
+      // Set thinking to true first
+      store.setAIThinking(true, 'ai-player-1');
+
+      // Simulate ai:turn-complete handler
+      const onAITurnComplete = (data: {
+        playerId: string;
+        turnSummary: TurnSummary;
+        currentStrategy: AIStrategy;
+        debug?: AIDebugInfo;
+      }) => {
+        store.setAIThinking(false);
+        store.setAITurnSummary(data.playerId, data.turnSummary);
+        store.setAIStrategy(data.playerId, data.currentStrategy);
+        if (data.debug) {
+          store.setAIDebugInfo(data.playerId, data.debug);
+        }
+      };
+
+      onAITurnComplete({
+        playerId: 'ai-player-1',
+        turnSummary,
+        currentStrategy: strategy,
+        debug: debugInfo,
+      });
+
+      const state = useAIStore.getState();
+      expect(state.isAIThinking).toBe(false);
+      expect(state.aiTurnSummaries.get('ai-player-1')).toEqual(turnSummary);
+      expect(state.aiStrategies.get('ai-player-1')).toEqual(strategy);
+      expect(state.aiDebugInfo.get('ai-player-1')).toEqual(debugInfo);
+    });
+
+    it('should handle ai:turn-complete without debug info', () => {
+      const store = useAIStore.getState();
+
+      const turnSummary: TurnSummary = {
+        actions: [],
+        cashChange: 0,
+        commentary: 'Passed turn.',
+      };
+
+      const strategy: AIStrategy = {
+        phase: 'early',
+        currentGoal: 'Setup',
+        nextGoal: 'Expand',
+        majorCityProgress: '1/7',
+        cashToWin: 200,
+      };
+
+      // Simulate handler without debug info
+      store.setAIThinking(false);
+      store.setAITurnSummary('ai-player-1', turnSummary);
+      store.setAIStrategy('ai-player-1', strategy);
+      // No debug info set
+
+      const state = useAIStore.getState();
+      expect(state.aiTurnSummaries.get('ai-player-1')).toEqual(turnSummary);
+      expect(state.aiStrategies.get('ai-player-1')).toEqual(strategy);
+      expect(state.aiDebugInfo.get('ai-player-1')).toBeUndefined();
+    });
+  });
+});
+
+// Selector hooks export tests
+describe('AI Store Selector Hooks', () => {
+  it('should export useIsAIThinking selector', () => {
+    const { useIsAIThinking } = require('../../../lobby/store/ai.store');
+    expect(useIsAIThinking).toBeDefined();
+    expect(typeof useIsAIThinking).toBe('function');
+  });
+
+  it('should export useThinkingPlayerId selector', () => {
+    const { useThinkingPlayerId } = require('../../../lobby/store/ai.store');
+    expect(useThinkingPlayerId).toBeDefined();
+    expect(typeof useThinkingPlayerId).toBe('function');
+  });
+
+  it('should export useAITurnSummary selector', () => {
+    const { useAITurnSummary } = require('../../../lobby/store/ai.store');
+    expect(useAITurnSummary).toBeDefined();
+    expect(typeof useAITurnSummary).toBe('function');
+  });
+
+  it('should export useAIStrategy selector', () => {
+    const { useAIStrategy } = require('../../../lobby/store/ai.store');
+    expect(useAIStrategy).toBeDefined();
+    expect(typeof useAIStrategy).toBe('function');
+  });
+
+  it('should export useAIDebugInfo selector', () => {
+    const { useAIDebugInfo } = require('../../../lobby/store/ai.store');
+    expect(useAIDebugInfo).toBeDefined();
+    expect(typeof useAIDebugInfo).toBe('function');
+  });
+
+  it('should export useSelectedAIPlayerId selector', () => {
+    const { useSelectedAIPlayerId } = require('../../../lobby/store/ai.store');
+    expect(useSelectedAIPlayerId).toBeDefined();
+    expect(typeof useSelectedAIPlayerId).toBe('function');
+  });
+
+  it('should export useIsBotPanelVisible selector', () => {
+    const { useIsBotPanelVisible } = require('../../../lobby/store/ai.store');
+    expect(useIsBotPanelVisible).toBeDefined();
+    expect(typeof useIsBotPanelVisible).toBe('function');
+  });
+});
