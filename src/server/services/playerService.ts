@@ -1,5 +1,5 @@
 import { db } from "../db/index";
-import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE } from "../../shared/types/GameTypes";
+import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, AIDifficulty, AIPersonality } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -39,6 +39,10 @@ interface PlayerRow {
   position_col: number | null;
   loads: string[];
   camera_state: any;
+  // AI player fields
+  is_ai: boolean;
+  ai_difficulty: string | null;
+  ai_personality: string | null;
 }
 
 export class PlayerService {
@@ -170,9 +174,10 @@ export class PlayerService {
             INSERT INTO players (
                 id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
-                current_turn_number, hand, loads, camera_state
+                current_turn_number, hand, loads, camera_state,
+                is_ai, ai_difficulty, ai_personality
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         `;
     const values = [
       player.id,
@@ -189,7 +194,10 @@ export class PlayerService {
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
       player.trainState.loads || [],
-      player.cameraState || null
+      player.cameraState || null,
+      player.isAI || false,
+      player.aiDifficulty || null,
+      player.aiPersonality || null
     ];
     try {
       await useClient.query(query, values);
@@ -395,7 +403,10 @@ export class PlayerService {
                     ta.actions as "turnActions",
                     hand,
                     loads,
-                    camera_state
+                    camera_state,
+                    is_ai as "isAI",
+                    ai_difficulty as "aiDifficulty",
+                    ai_personality as "aiPersonality"
                 FROM players
                 LEFT JOIN LATERAL (
                     SELECT movement_path
@@ -508,6 +519,10 @@ export class PlayerService {
           },
           hand: handCards,
           cameraState: row.camera_state || undefined,  // Per-player camera state
+          // AI player fields
+          isAI: row.isAI || false,
+          aiDifficulty: row.aiDifficulty as AIDifficulty | undefined,
+          aiPersonality: row.aiPersonality as AIPersonality | undefined,
         };
       });
 

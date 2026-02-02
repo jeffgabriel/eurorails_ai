@@ -9,6 +9,16 @@ export enum PlayerColor {
     BROWN = '#8B4513'   // Using saddle brown for better visibility
 }
 
+// AI Player types
+export type AIDifficulty = 'easy' | 'medium' | 'hard';
+export type AIPersonality =
+    | 'optimizer'
+    | 'network_builder'
+    | 'opportunist'
+    | 'blocker'
+    | 'steady_hand'
+    | 'chaos_agent';
+
 export enum TrainType {
     Freight = 'freight',           // 2 loads, 9 mileposts
     FastFreight = 'fast_freight',  // 2 loads, 12 mileposts
@@ -51,6 +61,10 @@ export interface Player {
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
     cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
+    // AI player fields
+    isAI?: boolean;  // True if this is an AI-controlled player
+    aiDifficulty?: AIDifficulty;  // AI skill level (easy, medium, hard)
+    aiPersonality?: AIPersonality;  // AI playstyle personality
 }
 
 export interface TrainState {

@@ -1,6 +1,16 @@
 // shared/types.ts
 export type ID = string;
 
+// AI Player types
+export type AIDifficulty = 'easy' | 'medium' | 'hard';
+export type AIPersonality =
+    | 'optimizer'
+    | 'network_builder'
+    | 'opportunist'
+    | 'blocker'
+    | 'steady_hand'
+    | 'chaos_agent';
+
 export interface User {
   id: ID;
   username: string;
@@ -22,6 +32,10 @@ export interface Player {
   name: string;
   color: string;
   isOnline: boolean;
+  // AI player fields
+  isAI?: boolean;
+  aiDifficulty?: AIDifficulty;
+  aiPersonality?: AIPersonality;
 }
 
 export interface Game {
