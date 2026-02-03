@@ -5,6 +5,7 @@
 import { getAITrackBuilder, AITrackBuilder } from '../../services/ai/aiTrackBuilder';
 import { TrackService } from '../../services/trackService';
 import { db } from '../../db';
+import { TerrainType } from '../../../shared/types/GameTypes';
 
 // Mock dependencies
 jest.mock('../../db', () => ({
@@ -63,8 +64,8 @@ describe('AITrackBuilder', () => {
 
     it('should avoid other players track segments', () => {
       const otherPlayerTrack = [{
-        from: { x: 0, y: 0, row: 50, col: 31, terrain: 0 },
-        to: { x: 0, y: 0, row: 51, col: 31, terrain: 0 },
+        from: { x: 0, y: 0, row: 50, col: 31, terrain: TerrainType.Clear },
+        to: { x: 0, y: 0, row: 51, col: 31, terrain: TerrainType.Clear },
         cost: 1,
       }];
 
@@ -80,8 +81,8 @@ describe('AITrackBuilder', () => {
 
     it('should reuse existing track at zero cost', () => {
       const existingTrack = [{
-        from: { x: 0, y: 0, row: 50, col: 30, terrain: 0 },
-        to: { x: 0, y: 0, row: 50, col: 31, terrain: 0 },
+        from: { x: 0, y: 0, row: 50, col: 30, terrain: TerrainType.Clear },
+        to: { x: 0, y: 0, row: 50, col: 31, terrain: TerrainType.Clear },
         cost: 1,
       }];
 
@@ -140,8 +141,8 @@ describe('AITrackBuilder', () => {
         playerId: mockPlayerId,
         gameId: mockGameId,
         segments: [{
-          from: { x: 0, y: 0, row: 35, col: 50, terrain: 0 },
-          to: { x: 0, y: 0, row: 35, col: 51, terrain: 0 },
+          from: { x: 0, y: 0, row: 35, col: 50, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 35, col: 51, terrain: TerrainType.Clear },
           cost: 1,
         }],
         totalCost: 1,

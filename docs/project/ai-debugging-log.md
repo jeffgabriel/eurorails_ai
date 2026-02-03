@@ -149,9 +149,65 @@ Found milepost at (51,3): terrain=1 (Mountain)
 
 ---
 
+---
+
+## 2026-02-02: Refactored AITrackBuilder to Use Shared Utilities
+
+**Motivation:** After implementing AITrackBuilder for server-side track pathfinding, code review identified duplicate logic across multiple files:
+- AITrackBuilder.isAdjacent() - hex grid adjacency
+- TrackDrawingManager.isAdjacent() - same logic
+- TrackBuildingService.calculateNewSegmentCost() - terrain costs
+- All used the same TERRAIN_COSTS constants
+
+### Refactoring: Created Shared Hex Grid Utility
+
+**New File:** `src/shared/utils/hexGridUtils.ts`
+
+Contains:
+- `isAdjacentHexGrid(point1, point2)` - hex grid adjacency check
+- `getHexNeighborOffsets()` - possible neighbor offsets to check
+- `calculateTerrainBuildCost(terrain)` - terrain-based build costs
+- `hexGridHeuristic(from, to)` - A* heuristic for pathfinding
+- `TERRAIN_BUILD_COSTS` - shared constant for terrain costs (ECU)
+- `TRACK_BUILD_BUDGET_PER_TURN` - 20M per turn budget constant
+
+### Files Updated:
+1. **src/server/services/ai/aiTrackBuilder.ts**
+   - Removed duplicate TERRAIN_COSTS and BUILD_BUDGET_PER_TURN
+   - Updated `isAdjacent()` to use `isAdjacentHexGrid()`
+   - Updated `getNeighbors()` to use `getHexNeighborOffsets()`
+   - Updated `calculateSegmentCost()` to use `calculateTerrainBuildCost()`
+   - Updated `heuristic()` to use `hexGridHeuristic()`
+
+2. **src/shared/services/TrackBuildingService.ts**
+   - Removed duplicate terrainCosts object
+   - Updated to import and use `TERRAIN_BUILD_COSTS`
+   - Updated TURN_BUDGET to use `TRACK_BUILD_BUDGET_PER_TURN`
+
+3. **src/client/components/TrackDrawingManager.ts**
+   - Removed ~40 lines of duplicate `isAdjacent()` logic
+   - Removed duplicate TERRAIN_COSTS object
+   - Updated to import and use shared utilities
+
+### Test Results:
+```
+✓ AITrackBuilder tests: 10 passed
+✓ TrackBuildingService tests: 10 passed
+✓ Server build: Success
+```
+
+### Benefits:
+- Single source of truth for hex grid logic
+- Consistent terrain costs across client/server
+- Easier to maintain and update game rules
+- Reduced risk of logic drift between implementations
+
+---
+
 ## Lessons Learned
 
 1. **Always verify database schema before writing queries** - Don't assume column names from type definitions
 2. **Check how data is stored vs. how it's used** - Card IDs vs. card objects caught us
 3. **Add detailed logging early** - The console logs helped identify exactly where failures occurred
 4. **Test with manual trigger scripts** - `scripts/trigger-ai-turn.ts` was invaluable for debugging without full game flow
+5. **Extract shared utilities early** - Duplicate logic across client/server should be moved to shared directory

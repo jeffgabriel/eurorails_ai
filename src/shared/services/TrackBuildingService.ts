@@ -3,6 +3,7 @@ import { Result, Ok, Err } from "neverthrow";
 import { TrackNetworkService } from "./TrackNetworkService";
 import { Milepost, TerrainType } from "../types/GameTypes";
 import { TrackBuildOptions } from "../types/TrackTypes";
+import { TERRAIN_BUILD_COSTS, TRACK_BUILD_BUDGET_PER_TURN } from "../utils/hexGridUtils";
 
 export enum TrackBuildError {
     INVALID_CONNECTION = 'INVALID_CONNECTION',
@@ -12,7 +13,7 @@ export enum TrackBuildError {
 export class TrackBuildingService {
     private networkService: TrackNetworkService;
     private mileposts: Map<string, Milepost>;
-    private readonly TURN_BUDGET = 20; // 20 million per turn
+    private readonly TURN_BUDGET = TRACK_BUILD_BUDGET_PER_TURN;
     
     // For tracking player networks in tests
     private playerNetworks: Map<string, TrackNetwork> = new Map();
@@ -29,19 +30,8 @@ export class TrackBuildingService {
     }
 
     private calculateNewSegmentCost(from: Milepost, to: Milepost, network: TrackNetwork): number {
-        // Return cost based on terrain type
-        const terrainCosts: { [key in TerrainType]: number } = {
-            [TerrainType.Clear]: 1,
-            [TerrainType.Mountain]: 2,
-            [TerrainType.Alpine]: 5,
-            [TerrainType.SmallCity]: 3,
-            [TerrainType.MediumCity]: 3,
-            [TerrainType.MajorCity]: 5,
-            [TerrainType.FerryPort]: 0,
-            [TerrainType.Water]: 0
-        };
-        
-        return terrainCosts[to.type] || 1;
+        // Use shared terrain costs from hexGridUtils.ts
+        return TERRAIN_BUILD_COSTS[to.type] || 1;
     }
 
     private async getPlayerNetwork(playerId: string, gameId: string): Promise<TrackNetwork> {

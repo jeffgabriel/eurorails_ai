@@ -4,6 +4,7 @@ import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
+import { TERRAIN_BUILD_COSTS, TRACK_BUILD_BUDGET_PER_TURN, isAdjacentHexGrid } from '../../shared/utils/hexGridUtils';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -31,17 +32,9 @@ export class TrackDrawingManager {
     
     // Track building costs
     // Turn build budget (defaults to 20M, can be reduced to 15M after crossgrade)
-    private turnBuildLimit: number = 20;
-    private readonly TERRAIN_COSTS: { [key in TerrainType]: number } = {
-        [TerrainType.Clear]: 1,
-        [TerrainType.Mountain]: 2,
-        [TerrainType.Alpine]: 5,
-        [TerrainType.SmallCity]: 3,
-        [TerrainType.MediumCity]: 3,
-        [TerrainType.MajorCity]: 5,
-        [TerrainType.Water]: 0,
-        [TerrainType.FerryPort]: 0
-    };
+    private turnBuildLimit: number = TRACK_BUILD_BUDGET_PER_TURN;
+    // Use shared terrain costs from hexGridUtils.ts
+    private readonly TERRAIN_COSTS = TERRAIN_BUILD_COSTS;
 
     private gameStateService: any; // Using 'any' to avoid circular dependency
     private trackService: TrackService;
@@ -1228,48 +1221,8 @@ export class TrackDrawingManager {
     }
 
     private isAdjacent(point1: GridPoint, point2: GridPoint): boolean {
-        // Prevent null/undefined points
-        if (!point1 || !point2) {
-            return false;
-        }
-
-        // Calculate differences
-        const rowDiff = point2.row - point1.row;  // Use directed difference
-        const colDiff = point2.col - point1.col;  // Use directed difference
-
-        // Same row adjacency - must be consecutive columns
-        if (rowDiff === 0) {
-            const isAdjacent = Math.abs(colDiff) === 1;
-            return isAdjacent;
-        }
-
-        // Must be adjacent rows
-        if (Math.abs(rowDiff) !== 1) {
-            return false;
-        }
-
-        // For hex grid:
-        // Even rows can connect to: (row+1, col) and (row+1, col-1)
-        // Odd rows can connect to: (row+1, col) and (row+1, col+1)
-        const isFromOddRow = point1.row % 2 === 1;
-
-        let isAdjacent: boolean;
-        if (rowDiff === 1) {  // Moving down
-            if (isFromOddRow) {
-                isAdjacent = colDiff === 0 || colDiff === 1;
-            } else {
-                isAdjacent = colDiff === 0 || colDiff === -1;
-            }
-        } else {  // Moving up (rowDiff === -1)
-            const isToOddRow = point2.row % 2 === 1;
-            if (isToOddRow) {
-                isAdjacent = colDiff === 0 || colDiff === -1;
-            } else {
-                isAdjacent = colDiff === 0 || colDiff === 1;
-            }
-        }
-
-        return isAdjacent;
+        // Use shared hex grid adjacency from hexGridUtils.ts
+        return isAdjacentHexGrid(point1, point2);
     }
 
     private calculateTrackCost(from: GridPoint, to: GridPoint): number {

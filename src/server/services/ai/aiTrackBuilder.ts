@@ -10,6 +10,14 @@ import { TrackSegment, PlayerTrackState } from '../../../shared/types/TrackTypes
 import { TrackService } from '../trackService';
 import { getMajorCityGroups, getAllCityCoordinates } from '../../../shared/services/majorCityGroups';
 import { getWaterCrossingExtraCost } from '../../../shared/config/waterCrossings';
+import {
+  isAdjacentHexGrid,
+  getHexNeighborOffsets,
+  calculateTerrainBuildCost,
+  hexGridHeuristic,
+  TERRAIN_BUILD_COSTS,
+  TRACK_BUILD_BUDGET_PER_TURN,
+} from '../../../shared/utils/hexGridUtils';
 
 // Load grid points from configuration
 import gridPointsConfig from '../../../../configuration/gridPoints.json';
@@ -40,21 +48,7 @@ interface Milepost {
   isOcean: boolean;
 }
 
-/**
- * Terrain costs for building track (in ECU millions)
- */
-const TERRAIN_COSTS: Record<TerrainType, number> = {
-  [TerrainType.Clear]: 1,
-  [TerrainType.Mountain]: 2,
-  [TerrainType.Alpine]: 5,
-  [TerrainType.SmallCity]: 3,
-  [TerrainType.MediumCity]: 3,
-  [TerrainType.MajorCity]: 5,
-  [TerrainType.Water]: 0,  // Impassable
-  [TerrainType.FerryPort]: 0,
-};
-
-const BUILD_BUDGET_PER_TURN = 20;  // 20M per turn maximum
+// Terrain costs and budget are imported from shared/utils/hexGridUtils.ts
 
 /**
  * AI Track Builder Service
@@ -152,63 +146,23 @@ export class AITrackBuilder {
 
   /**
    * Check if two grid points are adjacent in the hex grid
+   * Uses shared utility from hexGridUtils.ts
    */
   private isAdjacent(p1: Milepost, p2: Milepost): boolean {
-    const rowDiff = p2.row - p1.row;
-    const colDiff = p2.col - p1.col;
-
-    // Same row adjacency - must be consecutive columns
-    if (rowDiff === 0) {
-      return Math.abs(colDiff) === 1;
-    }
-
-    // Must be adjacent rows
-    if (Math.abs(rowDiff) !== 1) {
-      return false;
-    }
-
-    // Hex grid adjacency:
-    // Even rows can connect to: (row+1, col) and (row+1, col-1)
-    // Odd rows can connect to: (row+1, col) and (row+1, col+1)
-    const isFromOddRow = p1.row % 2 === 1;
-
-    if (rowDiff === 1) {  // Moving down
-      if (isFromOddRow) {
-        return colDiff === 0 || colDiff === 1;
-      } else {
-        return colDiff === 0 || colDiff === -1;
-      }
-    } else {  // Moving up (rowDiff === -1)
-      const isToOddRow = p2.row % 2 === 1;
-      if (isToOddRow) {
-        return colDiff === 0 || colDiff === -1;
-      } else {
-        return colDiff === 0 || colDiff === 1;
-      }
-    }
+    return isAdjacentHexGrid(p1, p2);
   }
 
   /**
    * Get all adjacent mileposts for a given point
+   * Uses shared hex neighbor offsets from hexGridUtils.ts
    */
   private getNeighbors(milepost: Milepost): Milepost[] {
     const neighbors: Milepost[] = [];
+    const offsets = getHexNeighborOffsets();
 
-    // Check all possible adjacent coordinates
-    const checkOffsets = [
-      { row: 0, col: -1 },   // Left
-      { row: 0, col: 1 },    // Right
-      { row: -1, col: -1 },  // Upper left
-      { row: -1, col: 0 },   // Upper
-      { row: -1, col: 1 },   // Upper right
-      { row: 1, col: -1 },   // Lower left
-      { row: 1, col: 0 },    // Lower
-      { row: 1, col: 1 },    // Lower right
-    ];
-
-    for (const offset of checkOffsets) {
-      const neighborRow = milepost.row + offset.row;
-      const neighborCol = milepost.col + offset.col;
+    for (const offset of offsets) {
+      const neighborRow = milepost.row + offset.rowDelta;
+      const neighborCol = milepost.col + offset.colDelta;
       const key = `${neighborRow},${neighborCol}`;
       const neighbor = this.gridByCoord.get(key);
 
@@ -222,23 +176,19 @@ export class AITrackBuilder {
 
   /**
    * Calculate the cost to build track to a milepost
+   * Uses shared terrain cost calculation from hexGridUtils.ts
    */
   private calculateSegmentCost(from: Milepost, to: Milepost): number {
-    const baseCost = TERRAIN_COSTS[to.terrain] || 1;
-
-    // Add water crossing costs if applicable
-    // This would require loading river/lake data - simplified for now
-    // const waterCost = getWaterCrossingExtraCost(from, to);
-
-    return baseCost;
+    // Use shared terrain cost calculation
+    return calculateTerrainBuildCost(to.terrain);
   }
 
   /**
    * Calculate heuristic distance for A* (Manhattan distance adapted for hex)
+   * Uses shared heuristic from hexGridUtils.ts
    */
   private heuristic(from: Milepost, to: Milepost): number {
-    // Simple Manhattan distance on grid
-    return Math.abs(from.row - to.row) + Math.abs(from.col - to.col);
+    return hexGridHeuristic(from, to);
   }
 
   /**
@@ -374,7 +324,7 @@ export class AITrackBuilder {
     playerId: string,
     targetRow: number,
     targetCol: number,
-    budget: number = BUILD_BUDGET_PER_TURN
+    budget: number = TRACK_BUILD_BUDGET_PER_TURN
   ): Promise<{ segments: TrackSegment[]; cost: number } | null> {
     // Get current player's track
     const playerTrack = await TrackService.getTrackState(gameId, playerId);
