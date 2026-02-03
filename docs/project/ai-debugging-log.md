@@ -105,41 +105,40 @@ Note: No `turn_number` column in games table.
 
 ## 2026-02-02: Track Building Cannot Work - No Segment Calculation
 
-### Issue 8: AIPathfinder returns empty segments
+### Issue 8: AIPathfinder returns empty segments (FIXED)
 - **Location:** `src/server/services/ai/aiPathfinder.ts:224`
 - **Problem:** `evaluateTrackBuildOptions()` returns build recommendations with empty segment arrays:
   ```typescript
   segments: [], // Would need map data to fill actual segments
   ```
-- **Root Cause:** The server doesn't have access to the grid/map data needed to calculate valid track segments. Track segment calculation is done client-side in TrackDrawingManager.
-- **Impact:** AI cannot build track - it only knows WHERE to build, not HOW
-- **Required:** Either:
-  1. Port the track segment calculation logic to the server
-  2. Have AI use the same API/socket mechanism as human clients
-  3. Load grid data server-side and implement pathfinding
+- **Root Cause:** The server doesn't have access to the grid/map data needed to calculate valid track segments.
+- **Fix:** Created `src/server/services/ai/aiTrackBuilder.ts`:
+  - Loads `configuration/gridPoints.json` server-side
+  - Implements hex grid adjacency calculation (matching client logic)
+  - Uses A* pathfinding to calculate optimal paths between mileposts
+  - Calculates terrain costs and respects turn budget (20M)
+  - Updated `aiService.ts` to use `AITrackBuilder.buildTrackToTarget()` in `executeBuildAction()`
 
 ### Issue 9: Existing service methods use userId, not playerId
 - **Location:** `src/server/services/playerService.ts`
 - **Problem:** Methods like `moveTrainForUser()` and `deliverLoadForUser()` lookup players by `userId`, but AI players have `userId = null`
 - **Impact:** Cannot reuse existing service methods for AI execution
-- **Fix:** Create AI-specific execution methods that work with `playerId` directly
+- **Fix:** Created AI-specific execution methods in `aiService.ts` that work with `playerId` directly
 
-**Status:** PARTIALLY WORKING
+**Status:** WORKING
 
 ### What Works Now:
 - ✅ Pickup loads - adds to player.loads array
 - ✅ Deliver loads - removes load, pays money, handles debt repayment
-- ✅ Move to major cities - uses getMajorCityGroups() for coordinate lookup
+- ✅ Move to all cities - uses `getCityCoordinates()` for Major/Medium/Small cities
 - ✅ Upgrade train - updates train_type and deducts money
-
-### What Doesn't Work:
-- ❌ Build track - needs segment calculation from grid data
-- ❌ Move to medium/small cities - only major cities have coordinate lookup
+- ✅ Build track - uses `AITrackBuilder` for pathfinding and segment calculation
 
 ### Tested Results:
 ```
 Otto picked up Beer at Dublin -> loads: ["Beer"]
 Otto delivered Beer to Lisboa for 46M -> money: 45M → 91M, loads: []
+AI built 3 segments for 5M, 15M remaining
 ```
 
 ---

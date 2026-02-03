@@ -91,3 +91,55 @@ export function getFerryEdges(): FerryEdge[] {
   return edges;
 }
 
+/**
+ * City coordinate lookup for all city types (Major, Medium, Small).
+ * Used by AI for movement destination resolution.
+ */
+export type CityCoordinate = {
+  cityName: string;
+  cityType: 'Major City' | 'Medium City' | 'Small City';
+  row: number;
+  col: number;
+};
+
+/**
+ * Get coordinates for all cities in the game.
+ * Includes Major Cities (center point), Medium Cities, and Small Cities.
+ */
+export function getAllCityCoordinates(): Map<string, CityCoordinate> {
+  const cityMap = new Map<string, CityCoordinate>();
+
+  for (const raw of mileposts as any[]) {
+    const type = String(raw?.Type ?? "");
+    const name = raw?.Name ? String(raw.Name) : null;
+    const col = typeof raw?.GridX === "number" ? raw.GridX : null;
+    const row = typeof raw?.GridY === "number" ? raw.GridY : null;
+
+    if (!name || row === null || col === null) continue;
+
+    // Include Major City (center), Medium City, and Small City
+    if (type === "Major City" || type === "Medium City" || type === "Small City") {
+      // Only store the first occurrence (for major cities, this is the center)
+      if (!cityMap.has(name)) {
+        cityMap.set(name, {
+          cityName: name,
+          cityType: type as CityCoordinate['cityType'],
+          row,
+          col,
+        });
+      }
+    }
+  }
+
+  return cityMap;
+}
+
+/**
+ * Look up coordinates for a city by name.
+ * Returns undefined if city not found.
+ */
+export function getCityCoordinates(cityName: string): CityCoordinate | undefined {
+  const allCities = getAllCityCoordinates();
+  return allCities.get(cityName);
+}
+

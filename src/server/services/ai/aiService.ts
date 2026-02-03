@@ -19,7 +19,10 @@ import { getAIConfig, AI_DIFFICULTY_CONFIG, AI_TURN_TIMEOUT_MS } from './aiConfi
 import { emitToGame, emitStatePatch } from '../socketService';
 import { db } from '../../db';
 import { demandDeckService } from '../demandDeckService';
-import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getCityCoordinates } from '../../../shared/services/majorCityGroups';
+import { getAITrackBuilder } from './aiTrackBuilder';
+import { TrackService } from '../trackService';
+import { PlayerTrackState } from '../../../shared/types/TrackTypes';
 
 /**
  * AI Service class - orchestrates AI turn execution
@@ -389,8 +392,7 @@ export class AIService {
 
   /**
    * Execute a track building action
-   * NOTE: Currently limited - requires grid data to calculate actual segments
-   * For now, we skip track building until grid data is available server-side
+   * Uses AITrackBuilder to calculate path and build track segments
    */
   private async executeBuildAction(
     gameId: string,
@@ -398,14 +400,93 @@ export class AIService {
     action: AIAction,
     player: Player
   ): Promise<void> {
-    // Track building requires calculating actual segments from grid data
-    // The AIPathfinder returns empty segments arrays because it lacks map data
-    // TODO: Either port grid data to server or have AI use client-like API
-    console.log(`AI ${playerId} track build skipped - segment calculation not implemented`);
-    console.log(`  Target: row ${action.details.targetRow}, col ${action.details.targetCol}`);
+    const targetRow = action.details.targetRow as number;
+    const targetCol = action.details.targetCol as number;
 
-    // Don't deduct money since we're not actually building
-    // This will be fixed when proper track building is implemented
+    if (targetRow === undefined || targetCol === undefined) {
+      console.log(`AI ${playerId} build skipped - no target coordinates`);
+      return;
+    }
+
+    console.log(`AI ${playerId} building track towards (${targetRow}, ${targetCol})`);
+
+    // Get current player money
+    const moneyResult = await db.query(
+      `SELECT money FROM players WHERE id = $1`,
+      [playerId]
+    );
+    const currentMoney = moneyResult.rows[0]?.money || 0;
+
+    // Calculate available budget (max 20M per turn, limited by money)
+    const turnBudget = Math.min(20, currentMoney);
+
+    if (turnBudget <= 0) {
+      console.log(`AI ${playerId} build skipped - no money (${currentMoney}M)`);
+      return;
+    }
+
+    // Use AITrackBuilder to calculate path and segments
+    const trackBuilder = getAITrackBuilder();
+    const result = await trackBuilder.buildTrackToTarget(
+      gameId,
+      playerId,
+      targetRow,
+      targetCol,
+      turnBudget
+    );
+
+    if (!result || result.segments.length === 0) {
+      console.log(`AI ${playerId} build skipped - no valid path to (${targetRow}, ${targetCol})`);
+      return;
+    }
+
+    console.log(`AI ${playerId} building ${result.segments.length} segments for ${result.cost}M`);
+
+    // Get existing track state or create empty one
+    let trackState = await TrackService.getTrackState(gameId, playerId);
+    if (!trackState) {
+      trackState = {
+        playerId,
+        gameId,
+        segments: [],
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(),
+      };
+    }
+
+    // Add new segments
+    trackState.segments.push(...result.segments);
+    trackState.totalCost += result.cost;
+    trackState.turnBuildCost += result.cost;
+    trackState.lastBuildTimestamp = new Date();
+
+    // Save track state
+    await TrackService.saveTrackState(gameId, playerId, trackState);
+
+    // Deduct money from player
+    const newMoney = currentMoney - result.cost;
+    await db.query(
+      `UPDATE players SET money = $1 WHERE id = $2`,
+      [newMoney, playerId]
+    );
+
+    console.log(`AI ${playerId} built track: ${result.cost}M spent, ${newMoney}M remaining`);
+
+    // Emit state patch for money update
+    await emitStatePatch(gameId, {
+      players: [{
+        id: playerId,
+        money: newMoney,
+      } as any],
+    });
+
+    // Emit track:updated event (same as trackRoutes.ts)
+    emitToGame(gameId, 'track:updated', {
+      gameId,
+      playerId,
+      timestamp: Date.now(),
+    });
   }
 
   /**
@@ -428,18 +509,15 @@ export class AIService {
       targetRow = destination.row;
       targetCol = destination.col;
     } else if (typeof destination === 'string') {
-      // Look up city coordinates from major city groups
-      const majorCities = getMajorCityGroups();
-      const cityGroup = majorCities.find(g => g.cityName === destination);
+      // Look up city coordinates (includes Major, Medium, and Small cities)
+      const cityCoords = getCityCoordinates(destination);
 
-      if (cityGroup) {
-        targetRow = cityGroup.center.row;
-        targetCol = cityGroup.center.col;
-        console.log(`AI ${playerId} looked up ${destination} -> row ${targetRow}, col ${targetCol}`);
+      if (cityCoords) {
+        targetRow = cityCoords.row;
+        targetCol = cityCoords.col;
+        console.log(`AI ${playerId} looked up ${destination} (${cityCoords.cityType}) -> row ${targetRow}, col ${targetCol}`);
       } else {
-        // City not found in major cities - skip for now
-        // TODO: Add medium/small city lookup
-        console.log(`AI ${playerId} move skipped - city "${destination}" not found in major cities`);
+        console.log(`AI ${playerId} move skipped - city "${destination}" not found`);
         return;
       }
     }
