@@ -18,6 +18,7 @@ import { getAICommentary } from './aiCommentary';
 import { getAIConfig, AI_DIFFICULTY_CONFIG, AI_TURN_TIMEOUT_MS } from './aiConfig';
 import { emitToGame, emitStatePatch } from '../socketService';
 import { db } from '../../db';
+import { demandDeckService } from '../demandDeckService';
 
 /**
  * AI Service class - orchestrates AI turn execution
@@ -31,6 +32,9 @@ export class AIService {
    */
   async executeAITurn(gameId: string, playerId: string): Promise<AITurnResult> {
     const startTime = Date.now();
+    console.log(`\n========== AI TURN START ==========`);
+    console.log(`Game: ${gameId}`);
+    console.log(`Player: ${playerId}`);
 
     // 1. Emit ai:thinking event to notify clients
     this.emitThinking(gameId, playerId);
@@ -38,9 +42,21 @@ export class AIService {
     try {
       // 2. Retrieve game state and AI player data
       const { gameState, player } = await this.getGameStateAndPlayer(gameId, playerId);
+      console.log(`AI Player: ${player.name} (${player.aiDifficulty}/${player.aiPersonality})`);
+      console.log(`Money: ${player.money}M`);
+      console.log(`Train position: ${JSON.stringify(player.trainState.position)}`);
+      console.log(`Loads: ${JSON.stringify(player.trainState.loads)}`);
+      console.log(`Hand (card IDs): ${JSON.stringify(player.hand)}`);
+      console.log(`Available loads cities: ${gameState.availableLoads.size}`);
 
       if (!player.isAI) {
         throw new Error('Player is not an AI');
+      }
+
+      // 2b. If AI has no train position, auto-place at a starting major city
+      if (!player.trainState.position) {
+        console.log(`No train position - placing at starting city...`);
+        await this.placeAITrainAtStartingCity(gameId, playerId, player);
       }
 
       // 3. Load AI configuration
@@ -52,8 +68,14 @@ export class AIService {
       await this.applyThinkingDelay(config);
 
       // 5. Plan the turn using AIPlanner
+      console.log(`Planning turn...`);
       const planner = getAIPlanner();
       const plan = planner.planTurn(gameState, player, config);
+      console.log(`Plan generated: ${plan.actions.length} actions`);
+      console.log(`Plan reasoning: ${plan.reasoning}`);
+      for (const action of plan.actions) {
+        console.log(`  - ${action.type}: ${action.description}`);
+      }
 
       // 6. Execute the planned actions
       const executedActions = await this.executeActions(gameId, playerId, plan, player);
@@ -66,6 +88,10 @@ export class AIService {
       // 8. Emit ai:turn-complete event
       this.emitTurnComplete(gameId, playerId, turnSummary, strategy, debugInfo);
 
+      console.log(`AI turn completed in ${Date.now() - startTime}ms`);
+      console.log(`Executed ${executedActions.length} actions`);
+      console.log(`========== AI TURN END ==========\n`);
+
       return {
         success: true,
         actions: executedActions,
@@ -74,6 +100,7 @@ export class AIService {
         debugInfo,
       };
     } catch (error) {
+      console.error(`========== AI TURN FAILED ==========`);
       console.error(`AI turn execution failed for player ${playerId}:`, error);
 
       // Return failed result
@@ -136,11 +163,13 @@ export class AIService {
     gameId: string,
     playerId: string
   ): Promise<{ gameState: AIGameState; player: Player }> {
-    // Get all players in the game
+    // Get all players in the game using correct column names
     const playersResult = await db.query(
       `SELECT
-        id, name, color, money, train_type, train_state, hand,
-        user_id, is_ai, ai_difficulty, ai_personality, turn_number
+        id, name, color, money, train_type as "trainType",
+        position_x, position_y, position_row, position_col,
+        loads, hand, user_id, is_ai, ai_difficulty, ai_personality,
+        current_turn_number as "turnNumber"
        FROM players
        WHERE game_id = $1
        ORDER BY created_at ASC`,
@@ -151,20 +180,42 @@ export class AIService {
       throw new Error('No players found in game');
     }
 
-    const players: Player[] = playersResult.rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      color: row.color,
-      money: row.money,
-      trainType: row.train_type,
-      trainState: row.train_state || { position: null, remainingMovement: 0, movementHistory: [], loads: [] },
-      hand: row.hand || [],
-      userId: row.user_id,
-      isAI: row.is_ai,
-      aiDifficulty: row.ai_difficulty,
-      aiPersonality: row.ai_personality,
-      turnNumber: row.turn_number,
-    }));
+    const players: Player[] = playersResult.rows.map((row) => {
+      // Build trainState from individual position columns
+      const hasPosition = row.position_row !== null && row.position_col !== null;
+      const trainState = {
+        position: hasPosition ? {
+          row: row.position_row,
+          col: row.position_col,
+          x: row.position_x || 0,
+          y: row.position_y || 0,
+        } : null,
+        remainingMovement: 0,
+        movementHistory: [],
+        loads: row.loads || [],
+      };
+
+      // Convert card IDs to full DemandCard objects for AI planning
+      const cardIds: number[] = row.hand || [];
+      const handCards = cardIds
+        .map((cardId: number) => demandDeckService.getCard(cardId))
+        .filter((card): card is NonNullable<typeof card> => card !== undefined);
+
+      return {
+        id: row.id,
+        name: row.name,
+        color: row.color,
+        money: row.money,
+        trainType: row.trainType,
+        trainState,
+        hand: handCards,
+        userId: row.user_id,
+        isAI: row.is_ai,
+        aiDifficulty: row.ai_difficulty,
+        aiPersonality: row.ai_personality,
+        turnNumber: row.turnNumber || 1,
+      };
+    });
 
     const player = players.find((p) => p.id === playerId);
     if (!player) {
@@ -173,7 +224,7 @@ export class AIService {
 
     // Get game state
     const gameResult = await db.query(
-      `SELECT current_player_index, turn_number FROM games WHERE id = $1`,
+      `SELECT current_player_index FROM games WHERE id = $1`,
       [gameId]
     );
 
@@ -181,7 +232,8 @@ export class AIService {
       throw new Error('Game not found');
     }
 
-    const turnNumber = gameResult.rows[0].turn_number || 1;
+    // Calculate global turn number from player turn numbers (use max across all players)
+    const turnNumber = Math.max(...players.map(p => p.turnNumber || 1), 1);
 
     // Get all track segments
     const trackResult = await db.query(
@@ -194,8 +246,20 @@ export class AIService {
       allTrack.set(row.player_id, row.segments || []);
     }
 
-    // Build available loads map (simplified - would need proper load management)
+    // Build available loads map from LoadService configuration
+    const { LoadService } = await import('../loadService');
+    const loadService = LoadService.getInstance();
+    const allLoadStates = await loadService.getAllLoadStates();
+
     const availableLoads = new Map<string, string[]>();
+    for (const loadState of allLoadStates) {
+      // For each city that has this load type, add it to the map
+      for (const city of loadState.cities) {
+        const existing = availableLoads.get(city) || [];
+        existing.push(loadState.loadType);
+        availableLoads.set(city, existing);
+      }
+    }
 
     const gameState: AIGameState = {
       players,
@@ -217,6 +281,52 @@ export class AIService {
     if (delay > 0) {
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
+  }
+
+  /**
+   * Place AI train at a starting major city
+   * According to game rules, each player chooses any city to start their train
+   * For AI, we'll choose a strategic major city based on their demand cards
+   */
+  private async placeAITrainAtStartingCity(
+    gameId: string,
+    playerId: string,
+    player: Player
+  ): Promise<void> {
+    // Major cities in EuroRails - good starting positions
+    const majorCities = [
+      { name: 'London', row: 10, col: 5 },
+      { name: 'Paris', row: 16, col: 9 },
+      { name: 'Berlin', row: 12, col: 18 },
+      { name: 'Roma', row: 24, col: 18 },
+      { name: 'Madrid', row: 24, col: 3 },
+      { name: 'Wien', row: 18, col: 21 },
+      { name: 'Warszawa', row: 10, col: 24 },
+    ];
+
+    // Pick a random major city to start (could be made smarter based on demand cards)
+    const startCity = majorCities[Math.floor(Math.random() * majorCities.length)];
+
+    // Update the player's train position in the database using individual columns
+    await db.query(
+      `UPDATE players
+       SET position_row = $1, position_col = $2, position_x = $3, position_y = $4
+       WHERE id = $5 AND game_id = $6`,
+      [startCity.row, startCity.col, 0, 0, playerId, gameId]
+    );
+
+    // Update the player object in memory
+    player.trainState.position = { row: startCity.row, col: startCity.col, x: 0, y: 0 };
+
+    console.log(`AI player ${player.name} placed train at ${startCity.name} (${startCity.row}, ${startCity.col})`);
+
+    // Emit state patch to update clients
+    await emitStatePatch(gameId, {
+      players: [{
+        id: playerId,
+        trainState: player.trainState,
+      } as any],
+    });
   }
 
   /**
