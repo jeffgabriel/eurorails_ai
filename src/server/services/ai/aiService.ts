@@ -19,6 +19,7 @@ import { getAIConfig, AI_DIFFICULTY_CONFIG, AI_TURN_TIMEOUT_MS } from './aiConfi
 import { emitToGame, emitStatePatch } from '../socketService';
 import { db } from '../../db';
 import { demandDeckService } from '../demandDeckService';
+import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
 
 /**
  * AI Service class - orchestrates AI turn execution
@@ -388,6 +389,8 @@ export class AIService {
 
   /**
    * Execute a track building action
+   * NOTE: Currently limited - requires grid data to calculate actual segments
+   * For now, we skip track building until grid data is available server-side
    */
   private async executeBuildAction(
     gameId: string,
@@ -395,85 +398,273 @@ export class AIService {
     action: AIAction,
     player: Player
   ): Promise<void> {
-    const cost = (action.details.cost as number) || 0;
+    // Track building requires calculating actual segments from grid data
+    // The AIPathfinder returns empty segments arrays because it lacks map data
+    // TODO: Either port grid data to server or have AI use client-like API
+    console.log(`AI ${playerId} track build skipped - segment calculation not implemented`);
+    console.log(`  Target: row ${action.details.targetRow}, col ${action.details.targetCol}`);
 
-    // Update player money
-    await db.query(
-      `UPDATE players SET money = money - $1 WHERE id = $2`,
-      [cost, playerId]
-    );
-
-    // Emit state patch for money change
-    await emitStatePatch(gameId, {
-      players: [{ id: playerId, money: player.money - cost } as any],
-    });
-
-    // Note: Actual track building would require integration with TrackService
-    // For now, we just deduct the money
+    // Don't deduct money since we're not actually building
+    // This will be fixed when proper track building is implemented
   }
 
   /**
-   * Execute a movement action
+   * Execute a movement action - update train position in database
+   * NOTE: This is simplified movement that teleports to destination.
+   * Full implementation would need pathfinding and track validation.
    */
   private async executeMoveAction(
     gameId: string,
     playerId: string,
     action: AIAction
   ): Promise<void> {
-    // Movement would be handled by TrainMovementService
-    // For now, this is a placeholder
-    console.log(`AI ${playerId} moving to ${action.details.destination}`);
+    const destination = action.details.destination as { row: number; col: number } | string;
+
+    // Parse destination - could be object or string like "Budapest"
+    let targetRow: number | null = null;
+    let targetCol: number | null = null;
+
+    if (typeof destination === 'object' && destination !== null) {
+      targetRow = destination.row;
+      targetCol = destination.col;
+    } else if (typeof destination === 'string') {
+      // Look up city coordinates from major city groups
+      const majorCities = getMajorCityGroups();
+      const cityGroup = majorCities.find(g => g.cityName === destination);
+
+      if (cityGroup) {
+        targetRow = cityGroup.center.row;
+        targetCol = cityGroup.center.col;
+        console.log(`AI ${playerId} looked up ${destination} -> row ${targetRow}, col ${targetCol}`);
+      } else {
+        // City not found in major cities - skip for now
+        // TODO: Add medium/small city lookup
+        console.log(`AI ${playerId} move skipped - city "${destination}" not found in major cities`);
+        return;
+      }
+    }
+
+    if (targetRow === null || targetCol === null) {
+      console.log(`AI ${playerId} move skipped - invalid destination`);
+      return;
+    }
+
+    // NOTE: This is simplified - it teleports the train without validating track connectivity
+    // Full implementation would need to:
+    // 1. Check if there's a valid path on player's track
+    // 2. Calculate movement cost
+    // 3. Pay track usage fees for other players' track
+    // For now, we just update position (useful for initial placement)
+
+    // Update position in database
+    await db.query(
+      `UPDATE players
+       SET position_row = $1, position_col = $2
+       WHERE id = $3 AND game_id = $4`,
+      [targetRow, targetCol, playerId, gameId]
+    );
+
+    console.log(`AI ${playerId} moved to row ${targetRow}, col ${targetCol}`);
+
+    // Emit state patch
+    await emitStatePatch(gameId, {
+      players: [{
+        id: playerId,
+        trainState: {
+          position: { row: targetRow, col: targetCol, x: 0, y: 0 },
+        },
+      } as any],
+    });
   }
 
   /**
-   * Execute a load pickup action
+   * Execute a load pickup action - add load to player's train
    */
   private async executePickupAction(
     gameId: string,
     playerId: string,
     action: AIAction
   ): Promise<void> {
-    // Pickup would be handled by LoadService
-    // For now, this is a placeholder
-    console.log(`AI ${playerId} picking up ${action.details.loadType} at ${action.details.sourceCity}`);
+    const loadType = action.details.loadType as string;
+    const sourceCity = action.details.sourceCity as string;
+
+    if (!loadType) {
+      console.log(`AI ${playerId} pickup skipped - no load type specified`);
+      return;
+    }
+
+    // Get current loads
+    const playerResult = await db.query(
+      `SELECT loads, train_type FROM players WHERE id = $1`,
+      [playerId]
+    );
+
+    if (playerResult.rows.length === 0) {
+      console.log(`AI ${playerId} pickup failed - player not found`);
+      return;
+    }
+
+    const currentLoads: string[] = playerResult.rows[0].loads || [];
+    const trainType = playerResult.rows[0].train_type;
+
+    // Check capacity (Freight/FastFreight = 2, Heavy/Super = 3)
+    const capacity = (trainType === 'HeavyFreight' || trainType === 'Superfreight') ? 3 : 2;
+
+    if (currentLoads.length >= capacity) {
+      console.log(`AI ${playerId} pickup skipped - train at capacity (${currentLoads.length}/${capacity})`);
+      return;
+    }
+
+    // Add load to player
+    const newLoads = [...currentLoads, loadType];
+    await db.query(
+      `UPDATE players SET loads = $1 WHERE id = $2`,
+      [newLoads, playerId]
+    );
+
+    console.log(`AI ${playerId} picked up ${loadType} at ${sourceCity}`);
+
+    // Emit state patch
+    await emitStatePatch(gameId, {
+      players: [{
+        id: playerId,
+        trainState: { loads: newLoads },
+      } as any],
+    });
   }
 
   /**
-   * Execute a delivery action
+   * Execute a delivery action - deliver load, get paid, draw new card
    */
   private async executeDeliverAction(
     gameId: string,
     playerId: string,
     action: AIAction
   ): Promise<void> {
+    const loadType = action.details.loadType as string;
+    const destinationCity = action.details.destinationCity as string;
     const payout = (action.details.payout as number) || 0;
+    const cardId = action.details.cardId as number;
 
-    // Update player money
-    await db.query(
-      `UPDATE players SET money = money + $1 WHERE id = $2`,
-      [payout, playerId]
+    if (!loadType || !payout) {
+      console.log(`AI ${playerId} delivery skipped - missing load type or payout`);
+      return;
+    }
+
+    // Get current player state
+    const playerResult = await db.query(
+      `SELECT money, loads, hand, debt_owed FROM players WHERE id = $1`,
+      [playerId]
     );
 
-    // Emit state patch
-    const result = await db.query(`SELECT money FROM players WHERE id = $1`, [playerId]);
-    const newMoney = result.rows[0]?.money || 0;
+    if (playerResult.rows.length === 0) {
+      console.log(`AI ${playerId} delivery failed - player not found`);
+      return;
+    }
 
+    const currentMoney = playerResult.rows[0].money || 0;
+    const currentLoads: string[] = playerResult.rows[0].loads || [];
+    const currentHand: number[] = playerResult.rows[0].hand || [];
+    const currentDebt = playerResult.rows[0].debt_owed || 0;
+
+    // Check if player has the load
+    const loadIndex = currentLoads.indexOf(loadType);
+    if (loadIndex === -1) {
+      console.log(`AI ${playerId} delivery skipped - doesn't have ${loadType}`);
+      return;
+    }
+
+    // Remove load from train
+    const newLoads = [...currentLoads];
+    newLoads.splice(loadIndex, 1);
+
+    // Handle debt repayment (Mercy Rule)
+    const repayment = Math.min(payout, currentDebt);
+    const netPayment = payout - repayment;
+    const newMoney = currentMoney + netPayment;
+    const newDebt = currentDebt - repayment;
+
+    // Draw new card if we have a card to replace
+    let newHand = currentHand;
+    if (cardId && currentHand.includes(cardId)) {
+      const newCard = demandDeckService.drawCard();
+      if (newCard) {
+        newHand = currentHand.map(id => id === cardId ? newCard.id : id);
+        demandDeckService.discardCard(cardId);
+      }
+    }
+
+    // Update database
+    await db.query(
+      `UPDATE players SET money = $1, loads = $2, hand = $3, debt_owed = $4 WHERE id = $5`,
+      [newMoney, newLoads, newHand, newDebt, playerId]
+    );
+
+    console.log(`AI ${playerId} delivered ${loadType} to ${destinationCity} for ${payout}M (net: ${netPayment}M after ${repayment}M debt repayment)`);
+
+    // Emit state patch
     await emitStatePatch(gameId, {
-      players: [{ id: playerId, money: newMoney } as any],
+      players: [{
+        id: playerId,
+        money: newMoney,
+        trainState: { loads: newLoads },
+      } as any],
     });
   }
 
   /**
-   * Execute a load drop action
+   * Execute a load drop action - remove load from train, optionally leave at city
    */
   private async executeDropAction(
     gameId: string,
     playerId: string,
     action: AIAction
   ): Promise<void> {
-    // Drop would be handled by LoadService
-    // For now, this is a placeholder
-    console.log(`AI ${playerId} dropping ${action.details.loadType} at ${action.details.city}`);
+    const loadType = action.details.loadType as string;
+    const city = action.details.city as string;
+
+    if (!loadType) {
+      console.log(`AI ${playerId} drop skipped - no load type specified`);
+      return;
+    }
+
+    // Get current loads
+    const playerResult = await db.query(
+      `SELECT loads FROM players WHERE id = $1`,
+      [playerId]
+    );
+
+    if (playerResult.rows.length === 0) {
+      console.log(`AI ${playerId} drop failed - player not found`);
+      return;
+    }
+
+    const currentLoads: string[] = playerResult.rows[0].loads || [];
+    const loadIndex = currentLoads.indexOf(loadType);
+
+    if (loadIndex === -1) {
+      console.log(`AI ${playerId} drop skipped - doesn't have ${loadType}`);
+      return;
+    }
+
+    // Remove load
+    const newLoads = [...currentLoads];
+    newLoads.splice(loadIndex, 1);
+
+    await db.query(
+      `UPDATE players SET loads = $1 WHERE id = $2`,
+      [newLoads, playerId]
+    );
+
+    console.log(`AI ${playerId} dropped ${loadType} at ${city || 'current location'}`);
+
+    // Emit state patch
+    await emitStatePatch(gameId, {
+      players: [{
+        id: playerId,
+        trainState: { loads: newLoads },
+      } as any],
+    });
   }
 
   /**
@@ -485,13 +676,33 @@ export class AIService {
     action: AIAction
   ): Promise<void> {
     const toTrain = action.details.toTrain as string;
+    const fromTrain = action.details.fromTrain as string;
     const cost = 20; // Upgrade always costs 20M
+
+    if (!toTrain) {
+      console.log(`AI ${playerId} upgrade skipped - no target train type specified`);
+      return;
+    }
+
+    // Check if player has enough money
+    const moneyCheck = await db.query(
+      `SELECT money FROM players WHERE id = $1`,
+      [playerId]
+    );
+    const currentMoney = moneyCheck.rows[0]?.money || 0;
+
+    if (currentMoney < cost) {
+      console.log(`AI ${playerId} upgrade skipped - insufficient funds (${currentMoney}M < ${cost}M)`);
+      return;
+    }
 
     // Update player train type and money
     await db.query(
       `UPDATE players SET train_type = $1, money = money - $2 WHERE id = $3`,
       [toTrain, cost, playerId]
     );
+
+    console.log(`AI ${playerId} upgraded from ${fromTrain || 'unknown'} to ${toTrain} for ${cost}M`);
 
     // Emit state patch
     const result = await db.query(
