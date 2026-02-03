@@ -610,27 +610,74 @@ export class PlayerService {
     currentPlayerIndex: number
   ): Promise<void> {
     const query = `
-            UPDATE games 
+            UPDATE games
             SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
     await db.query(query, [currentPlayerIndex, gameId]);
-    
+
     // Emit turn change event to all clients in the game room
     const { getSocketIO } = await import('./socketService');
     const io = getSocketIO();
     if (io) {
-      // Get the player ID for the current player (internal query - doesn't need hand data)
+      // Get the player ID and AI status for the current player (internal query - doesn't need hand data)
       // Query players in same order as getPlayers (ORDER BY created_at ASC for consistency)
       const playerQuery = await db.query(
-        'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+        'SELECT id, is_ai FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
         [gameId, currentPlayerIndex]
       );
       // Validate that we have a valid player at this index
       if (playerQuery.rows && playerQuery.rows.length > 0 && currentPlayerIndex >= 0) {
-        const currentPlayerId = playerQuery.rows[0]?.id;
+        const currentPlayer = playerQuery.rows[0];
+        const currentPlayerId = currentPlayer?.id;
+        const isAI = currentPlayer?.is_ai;
+
         const { emitTurnChange } = await import('./socketService');
         emitTurnChange(gameId, currentPlayerIndex, currentPlayerId);
+
+        // If the new current player is an AI, trigger AI turn execution
+        if (isAI) {
+          console.log(`\n>>> Next player is AI (${currentPlayerId}) - triggering AI turn...`);
+          const { getAIService } = await import('./ai/aiService');
+          const { AI_TURN_TIMEOUT_MS } = await import('./ai/aiConfig');
+
+          // Execute AI turn with timeout in the background
+          const executeAITurn = async () => {
+            const aiService = getAIService();
+
+            // Create timeout promise
+            const timeoutPromise = new Promise<{ timedOut: true }>((resolve) => {
+              setTimeout(() => resolve({ timedOut: true }), AI_TURN_TIMEOUT_MS);
+            });
+
+            // Create AI turn promise
+            const aiTurnPromise = aiService.executeAITurn(gameId, currentPlayerId)
+              .then((result) => ({ timedOut: false, result }));
+
+            // Race between AI turn and timeout
+            const outcome = await Promise.race([aiTurnPromise, timeoutPromise]);
+
+            if ('timedOut' in outcome && outcome.timedOut) {
+              console.warn(`AI turn timed out for player ${currentPlayerId} after ${AI_TURN_TIMEOUT_MS}ms`);
+            }
+
+            // Get the total number of players
+            const countQuery = await db.query(
+              'SELECT COUNT(*) as count FROM players WHERE game_id = $1',
+              [gameId]
+            );
+            const playerCount = parseInt(countQuery.rows[0].count, 10);
+
+            // Advance to next player
+            const nextIndex = (currentPlayerIndex + 1) % playerCount;
+            await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex);
+          };
+
+          // Fire and forget - errors are logged
+          executeAITurn().catch((error: Error) => {
+            console.error(`AI turn execution failed for player ${currentPlayerId}:`, error);
+          });
+        }
       } else {
         console.warn(`No player found at index ${currentPlayerIndex} for game ${gameId}`);
       }
@@ -1539,6 +1586,121 @@ export class PlayerService {
 
       await client.query("COMMIT");
       return { kind: "deliver", updatedMoney, updatedDebtOwed, updatedLoads, restoredCard, removedCardId };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * End the authenticated user's turn and advance to the next player.
+   * If the next player is AI, triggers automatic AI turn execution.
+   *
+   * Server-authoritative:
+   * - Validate it's the player's turn
+   * - Increment players.current_turn_number for the current player
+   * - Advance games.current_player_index to the next player
+   * - Trigger AI turn execution if next player is AI
+   *
+   * All operations are wrapped in a transaction for consistency.
+   */
+  static async endTurnForUser(
+    gameId: string,
+    userId: string
+  ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerIsAI: boolean }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Get game state with lock
+      const gameResult = await client.query(
+        `SELECT current_player_index, status FROM games WHERE id = $1 FOR UPDATE`,
+        [gameId]
+      );
+
+      if (gameResult.rows.length === 0) {
+        throw new Error("Game not found");
+      }
+
+      if (gameResult.rows[0].status !== 'active') {
+        throw new Error("Game is not active");
+      }
+
+      const currentPlayerIndex = gameResult.rows[0].current_player_index;
+
+      // Get all players in order
+      const playersResult = await client.query(
+        `SELECT id, user_id, name, is_ai
+         FROM players
+         WHERE game_id = $1
+         ORDER BY created_at ASC`,
+        [gameId]
+      );
+
+      if (playersResult.rows.length === 0) {
+        throw new Error("No players found in game");
+      }
+
+      const players = playersResult.rows;
+      const playerCount = players.length;
+      const currentPlayer = players[currentPlayerIndex];
+
+      if (!currentPlayer) {
+        throw new Error("Invalid game state: current player not found");
+      }
+
+      // Verify it's the user's turn
+      if (currentPlayer.user_id !== userId) {
+        throw new Error("Not your turn");
+      }
+
+      // Increment current player's turn number
+      await client.query(
+        `UPDATE players
+         SET current_turn_number = COALESCE(current_turn_number, 1) + 1
+         WHERE id = $1`,
+        [currentPlayer.id]
+      );
+
+      // Calculate next player index
+      const nextIndex = (currentPlayerIndex + 1) % playerCount;
+      const nextPlayer = players[nextIndex];
+
+      // Update game's current player index
+      await client.query(
+        `UPDATE games
+         SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2`,
+        [nextIndex, gameId]
+      );
+
+      await client.query("COMMIT");
+
+      // Emit socket events AFTER commit
+      try {
+        const { emitTurnChange } = await import("./socketService");
+        emitTurnChange(gameId, nextIndex, nextPlayer.id);
+      } catch {
+        // Socket is best-effort; clients will fall back to polling
+      }
+
+      // If next player is AI, trigger AI turn execution (after transaction committed)
+      if (nextPlayer.is_ai) {
+        const { GameService } = await import("./gameService");
+        // Execute AI turn in background - don't await, let it run async
+        GameService['executeAITurnWithTimeout'](gameId, nextPlayer.id)
+          .catch((error: Error) => {
+            console.error(`AI turn execution failed for player ${nextPlayer.id}:`, error);
+          });
+      }
+
+      return {
+        currentPlayerIndex: nextIndex,
+        nextPlayerId: nextPlayer.id,
+        nextPlayerIsAI: nextPlayer.is_ai || false,
+      };
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

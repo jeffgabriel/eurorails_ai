@@ -73,6 +73,60 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
     }
 });
 
+// End the current player's turn and advance to the next player
+// If the next player is an AI, this triggers automatic AI turn execution
+router.post('/:gameId/end-turn', authenticateToken, async (req, res) => {
+    try {
+        const { gameId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required to end turn'
+            });
+        }
+
+        // Use PlayerService.endTurnForUser which handles everything in a transaction
+        const { PlayerService } = await import('../services/playerService');
+        const result = await PlayerService.endTurnForUser(gameId, userId);
+
+        return res.status(200).json({
+            success: true,
+            currentPlayerIndex: result.currentPlayerIndex,
+            nextPlayerId: result.nextPlayerId,
+            nextPlayerIsAI: result.nextPlayerIsAI
+        });
+    } catch (error: any) {
+        console.error('Error in /:gameId/end-turn route:', error);
+
+        // Handle specific errors
+        if (error.message === 'Not your turn') {
+            return res.status(403).json({
+                error: 'NOT_YOUR_TURN',
+                details: error.message
+            });
+        }
+        if (error.message === 'Player not found in game') {
+            return res.status(404).json({
+                error: 'PLAYER_NOT_FOUND',
+                details: error.message
+            });
+        }
+        if (error.message === 'Game not found') {
+            return res.status(404).json({
+                error: 'GAME_NOT_FOUND',
+                details: error.message
+            });
+        }
+
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
 // Update camera state (per-player)
 router.post('/updateCameraState', authenticateToken, async (req, res) => {
     try {

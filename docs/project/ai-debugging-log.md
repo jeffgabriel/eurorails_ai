@@ -284,3 +284,67 @@ Tests:       275 passed, 275 total
 5. **Extract shared utilities early** - Duplicate logic across client/server should be moved to shared directory
 6. **Validate game rules at execution layer** - Even if the planner generates legal actions, the execution layer should enforce rules as a safety net
 7. **Check actual game data coordinates** - City coordinates in tests must match the real milepost data (Berlin is at 24,52 not 12,18)
+8. **Verify API routes exist before testing** - Integration tests may reference routes that don't exist yet
+
+---
+
+## 2026-02-02: AI Turns Never Triggered - Missing End-Turn Route
+
+**Symptom:** In game `5c1c17e3-1d3f-45e8-9ac8-508e6cc17e11`, AI bots Marie and Liesel had:
+- `current_turn_number = 1` (never incremented)
+- No position (null `position_row`, `position_col`)
+- No track built
+- Still at starting money (50M)
+
+Meanwhile human player had `current_turn_number = 4` and had built 13 track segments.
+
+### Issue 14: Missing `/api/games/:gameId/end-turn` Route
+- **Location:** `src/server/routes/gameRoutes.ts` - route did not exist
+- **Problem:** The integration tests and client expected a `/api/games/:gameId/end-turn` POST endpoint to end a human player's turn and trigger AI execution, but this route was never created
+- **Evidence:**
+  - Tests in `aiTurn.test.ts` referenced `.post(\`/api/games/${testGame.id}/end-turn\`)`
+  - These tests were failing with 404 errors
+  - No route handler existed in any route file
+- **Impact:**
+  - Human players could not end their turns normally (only via discardHand which is a special action)
+  - AI turns were never triggered because `GameService.endTurn()` was never called
+  - AI players remained stuck at turn 1 indefinitely
+
+### Fix Applied
+
+**Route:** Added `POST /api/games/:gameId/end-turn` to `gameRoutes.ts`
+
+**Service Method:** Added `PlayerService.endTurnForUser()` to `playerService.ts`:
+```typescript
+static async endTurnForUser(gameId: string, userId: string): Promise<{
+  currentPlayerIndex: number;
+  nextPlayerId: string;
+  nextPlayerIsAI: boolean;
+}> {
+  // All operations in a transaction:
+  // 1. Validate game is active
+  // 2. Validate it's the user's turn
+  // 3. Increment current player's turn number
+  // 4. Advance game's current_player_index
+  // 5. Emit socket events AFTER commit
+  // 6. Trigger AI turn execution if next player is AI
+}
+```
+
+### Design Decision: Following `discardHandForUser` Pattern
+After code graph analysis, initial implementation had issues:
+- No transaction (race conditions)
+- Socket event timing issues
+- Direct DB queries instead of using proper service method
+
+Fixed by creating `endTurnForUser()` following the same transaction pattern as `discardHandForUser()`:
+- Uses `BEGIN/COMMIT/ROLLBACK` transaction
+- Acquires row lock with `FOR UPDATE`
+- Emits socket events AFTER transaction commits
+- Triggers AI execution asynchronously after commit
+
+### Test Results
+```
+✓ should emit ai:thinking event when AI turn starts (5055 ms)
+✓ should automatically execute AI turn when human player ends turn (5048 ms)
+```
