@@ -57,10 +57,14 @@ export class AIService {
         throw new Error('Player is not an AI');
       }
 
-      // 2b. If AI has no train position, auto-place at a starting major city
-      if (!player.trainState.position) {
-        console.log(`No train position - placing at starting city...`);
+      // 2b. If AI has no train position and we're past initial building phase, place at a starting city
+      // According to game rules, trains cannot be placed or moved until turn 3 (after initial building)
+      const turnNumber = player.turnNumber || 1;
+      if (!player.trainState.position && turnNumber > 2) {
+        console.log(`No train position and turn ${turnNumber} - placing at starting city...`);
         await this.placeAITrainAtStartingCity(gameId, playerId, player);
+      } else if (!player.trainState.position) {
+        console.log(`AI ${player.name} is in initial building phase (turn ${turnNumber}) - no train placement yet`);
       }
 
       // 3. Load AI configuration
@@ -288,16 +292,65 @@ export class AIService {
   }
 
   /**
-   * Place AI train at a starting major city
+   * Check if a player has track connected to a specific location
+   * Returns true if the player's track network reaches the given row/col
+   */
+  private async hasTrackConnectionTo(
+    gameId: string,
+    playerId: string,
+    targetRow: number,
+    targetCol: number
+  ): Promise<boolean> {
+    // Get player's track
+    const trackState = await TrackService.getTrackState(gameId, playerId);
+    if (!trackState || !trackState.segments || trackState.segments.length === 0) {
+      return false;
+    }
+
+    // Check if any segment endpoint touches the target location
+    for (const segment of trackState.segments) {
+      // Check if either endpoint of the segment is at or near the target
+      if (
+        (segment.from.row === targetRow && segment.from.col === targetCol) ||
+        (segment.to.row === targetRow && segment.to.col === targetCol)
+      ) {
+        return true;
+      }
+    }
+
+    // Also check if target is within a major city - major cities have a red area
+    // For now, check if any segment connects to a milepost within 1 hex of target
+    for (const segment of trackState.segments) {
+      const fromDist = Math.abs(segment.from.row - targetRow) + Math.abs(segment.from.col - targetCol);
+      const toDist = Math.abs(segment.to.row - targetRow) + Math.abs(segment.to.col - targetCol);
+      if (fromDist <= 1 || toDist <= 1) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Place AI train at a starting location connected to their track network
    * According to game rules, each player chooses any city to start their train
-   * For AI, we'll choose a strategic major city based on their demand cards
+   * The train MUST be placed at a location connected to the player's track
    */
   private async placeAITrainAtStartingCity(
     gameId: string,
     playerId: string,
     player: Player
   ): Promise<void> {
-    // Major cities in EuroRails - good starting positions
+    // Get player's track to find a connected location
+    const trackState = await TrackService.getTrackState(gameId, playerId);
+
+    if (!trackState || !trackState.segments || trackState.segments.length === 0) {
+      console.log(`AI ${player.name} cannot place train - no track built yet`);
+      return; // Cannot place train without track
+    }
+
+    // Find a valid starting point from the track network
+    // Prefer major cities if connected, otherwise use any track endpoint
     const majorCities = [
       { name: 'London', row: 10, col: 5 },
       { name: 'Paris', row: 16, col: 9 },
@@ -308,21 +361,43 @@ export class AIService {
       { name: 'Warszawa', row: 10, col: 24 },
     ];
 
-    // Pick a random major city to start (could be made smarter based on demand cards)
-    const startCity = majorCities[Math.floor(Math.random() * majorCities.length)];
+    // Check if any major city is connected
+    let startPosition: { name: string; row: number; col: number } | null = null;
 
-    // Update the player's train position in the database using individual columns
+    for (const city of majorCities) {
+      if (await this.hasTrackConnectionTo(gameId, playerId, city.row, city.col)) {
+        startPosition = city;
+        break;
+      }
+    }
+
+    // If no major city is connected, use the first track segment endpoint
+    if (!startPosition && trackState.segments.length > 0) {
+      const firstSegment = trackState.segments[0];
+      startPosition = {
+        name: 'track endpoint',
+        row: firstSegment.from.row,
+        col: firstSegment.from.col,
+      };
+    }
+
+    if (!startPosition) {
+      console.log(`AI ${player.name} cannot find valid starting position`);
+      return;
+    }
+
+    // Update the player's train position in the database
     await db.query(
       `UPDATE players
        SET position_row = $1, position_col = $2, position_x = $3, position_y = $4
        WHERE id = $5 AND game_id = $6`,
-      [startCity.row, startCity.col, 0, 0, playerId, gameId]
+      [startPosition.row, startPosition.col, 0, 0, playerId, gameId]
     );
 
     // Update the player object in memory
-    player.trainState.position = { row: startCity.row, col: startCity.col, x: 0, y: 0 };
+    player.trainState.position = { row: startPosition.row, col: startPosition.col, x: 0, y: 0 };
 
-    console.log(`AI player ${player.name} placed train at ${startCity.name} (${startCity.row}, ${startCity.col})`);
+    console.log(`AI player ${player.name} placed train at ${startPosition.name} (${startPosition.row}, ${startPosition.col})`);
 
     // Emit state patch to update clients
     await emitStatePatch(gameId, {
@@ -335,6 +410,7 @@ export class AIService {
 
   /**
    * Execute the planned actions using game services
+   * Validates that actions are legal according to game rules
    */
   private async executeActions(
     gameId: string,
@@ -345,8 +421,24 @@ export class AIService {
     const executedActions: AIAction[] = [];
     let cashChange = 0;
 
+    // Check if we're in the initial building phase (turns 1-2)
+    const turnNumber = player.turnNumber || 1;
+    const isInitialBuildingPhase = turnNumber <= 2;
+
     for (const action of plan.actions) {
       try {
+        // During initial building phase, only 'build' and 'pass' actions are allowed
+        if (isInitialBuildingPhase && !['build', 'pass'].includes(action.type)) {
+          console.log(`AI ${playerId} action '${action.type}' blocked - initial building phase (turn ${turnNumber})`);
+          continue;
+        }
+
+        // During initial building phase, upgrades are not allowed either
+        if (isInitialBuildingPhase && action.type === 'upgrade') {
+          console.log(`AI ${playerId} upgrade blocked - initial building phase (turn ${turnNumber})`);
+          continue;
+        }
+
         switch (action.type) {
           case 'build':
             await this.executeBuildAction(gameId, playerId, action, player);
@@ -491,8 +583,7 @@ export class AIService {
 
   /**
    * Execute a movement action - update train position in database
-   * NOTE: This is simplified movement that teleports to destination.
-   * Full implementation would need pathfinding and track validation.
+   * Validates that the AI has track connecting to the destination
    */
   private async executeMoveAction(
     gameId: string,
@@ -527,12 +618,12 @@ export class AIService {
       return;
     }
 
-    // NOTE: This is simplified - it teleports the train without validating track connectivity
-    // Full implementation would need to:
-    // 1. Check if there's a valid path on player's track
-    // 2. Calculate movement cost
-    // 3. Pay track usage fees for other players' track
-    // For now, we just update position (useful for initial placement)
+    // Validate track connectivity - AI must have track to this location
+    const hasConnection = await this.hasTrackConnectionTo(gameId, playerId, targetRow, targetCol);
+    if (!hasConnection) {
+      console.log(`AI ${playerId} move blocked - no track connection to (${targetRow}, ${targetCol})`);
+      return;
+    }
 
     // Update position in database
     await db.query(
@@ -557,6 +648,7 @@ export class AIService {
 
   /**
    * Execute a load pickup action - add load to player's train
+   * Validates that the AI has track to the source city and their train is there
    */
   private async executePickupAction(
     gameId: string,
@@ -571,9 +663,9 @@ export class AIService {
       return;
     }
 
-    // Get current loads
+    // Get current player state including position
     const playerResult = await db.query(
-      `SELECT loads, train_type FROM players WHERE id = $1`,
+      `SELECT loads, train_type, position_row, position_col FROM players WHERE id = $1`,
       [playerId]
     );
 
@@ -582,8 +674,37 @@ export class AIService {
       return;
     }
 
-    const currentLoads: string[] = playerResult.rows[0].loads || [];
-    const trainType = playerResult.rows[0].train_type;
+    const row = playerResult.rows[0];
+    const currentLoads: string[] = row.loads || [];
+    const trainType = row.train_type;
+    const trainRow = row.position_row;
+    const trainCol = row.position_col;
+
+    // Validate train is positioned (can't pickup without a placed train)
+    if (trainRow === null || trainCol === null) {
+      console.log(`AI ${playerId} pickup blocked - train not placed yet`);
+      return;
+    }
+
+    // Validate pickup location matches source city
+    if (sourceCity) {
+      const cityCoords = getCityCoordinates(sourceCity);
+      if (cityCoords) {
+        // Check if train is at or near the source city (within 1 hex for city centers)
+        const distance = Math.abs(trainRow - cityCoords.row) + Math.abs(trainCol - cityCoords.col);
+        if (distance > 1) {
+          console.log(`AI ${playerId} pickup blocked - train at (${trainRow},${trainCol}) not at ${sourceCity} (${cityCoords.row},${cityCoords.col})`);
+          return;
+        }
+      }
+    }
+
+    // Validate track connection to current position
+    const hasConnection = await this.hasTrackConnectionTo(gameId, playerId, trainRow, trainCol);
+    if (!hasConnection) {
+      console.log(`AI ${playerId} pickup blocked - no track connection to current position (${trainRow}, ${trainCol})`);
+      return;
+    }
 
     // Check capacity (Freight/FastFreight = 2, Heavy/Super = 3)
     const capacity = (trainType === 'HeavyFreight' || trainType === 'Superfreight') ? 3 : 2;
@@ -613,6 +734,7 @@ export class AIService {
 
   /**
    * Execute a delivery action - deliver load, get paid, draw new card
+   * Validates that the AI has track to the destination and their train is there
    */
   private async executeDeliverAction(
     gameId: string,
@@ -629,9 +751,9 @@ export class AIService {
       return;
     }
 
-    // Get current player state
+    // Get current player state including position
     const playerResult = await db.query(
-      `SELECT money, loads, hand, debt_owed FROM players WHERE id = $1`,
+      `SELECT money, loads, hand, debt_owed, position_row, position_col FROM players WHERE id = $1`,
       [playerId]
     );
 
@@ -640,10 +762,39 @@ export class AIService {
       return;
     }
 
-    const currentMoney = playerResult.rows[0].money || 0;
-    const currentLoads: string[] = playerResult.rows[0].loads || [];
-    const currentHand: number[] = playerResult.rows[0].hand || [];
-    const currentDebt = playerResult.rows[0].debt_owed || 0;
+    const row = playerResult.rows[0];
+    const currentMoney = row.money || 0;
+    const currentLoads: string[] = row.loads || [];
+    const currentHand: number[] = row.hand || [];
+    const currentDebt = row.debt_owed || 0;
+    const trainRow = row.position_row;
+    const trainCol = row.position_col;
+
+    // Validate train is positioned (can't deliver without a placed train)
+    if (trainRow === null || trainCol === null) {
+      console.log(`AI ${playerId} delivery blocked - train not placed yet`);
+      return;
+    }
+
+    // Validate delivery location matches destination city
+    if (destinationCity) {
+      const cityCoords = getCityCoordinates(destinationCity);
+      if (cityCoords) {
+        // Check if train is at or near the destination city (within 1 hex for city centers)
+        const distance = Math.abs(trainRow - cityCoords.row) + Math.abs(trainCol - cityCoords.col);
+        if (distance > 1) {
+          console.log(`AI ${playerId} delivery blocked - train at (${trainRow},${trainCol}) not at ${destinationCity} (${cityCoords.row},${cityCoords.col})`);
+          return;
+        }
+      }
+    }
+
+    // Validate track connection to current position
+    const hasConnection = await this.hasTrackConnectionTo(gameId, playerId, trainRow, trainCol);
+    if (!hasConnection) {
+      console.log(`AI ${playerId} delivery blocked - no track connection to current position (${trainRow}, ${trainCol})`);
+      return;
+    }
 
     // Check if player has the load
     const loadIndex = currentLoads.indexOf(loadType);

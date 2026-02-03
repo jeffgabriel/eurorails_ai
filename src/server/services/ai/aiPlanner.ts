@@ -102,6 +102,33 @@ export class AIPlanner {
     const pathfinder = getAIPathfinder();
     const evaluator = getAIEvaluator();
 
+    // Check if we're in the initial building phase (first 2 turns)
+    // During this phase, players can ONLY build track - no movement, pickup, delivery, or upgrades
+    const turnNumber = player.turnNumber || 1;
+    const isInitialBuildingPhase = turnNumber <= 2;
+
+    if (isInitialBuildingPhase) {
+      console.log(`AI ${player.id} is in initial building phase (turn ${turnNumber}) - only building allowed`);
+
+      // During initial building phase, only generate build options
+      const buildOptions = this.generateBuildOptions(player, gameState, pathfinder, config);
+      options.push(...buildOptions);
+
+      // Add pass option as fallback (if no money to build)
+      options.push({
+        type: 'pass',
+        priority: 0,
+        expectedValue: 0,
+        details: {
+          reason: 'Initial building phase - no money remaining for track',
+        },
+      });
+
+      return options;
+    }
+
+    // Regular gameplay (turn 3+) - all options available
+
     // 1. Generate delivery options (highest priority if we have loads)
     const deliveryOptions = this.generateDeliveryOptions(player, gameState, evaluator);
     options.push(...deliveryOptions);
