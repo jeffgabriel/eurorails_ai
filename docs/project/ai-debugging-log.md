@@ -136,9 +136,15 @@ Note: No `turn_number` column in games table.
 
 ### Tested Results:
 ```
+# Earlier manual tests (pickup/delivery)
 Otto picked up Beer at Dublin -> loads: ["Beer"]
 Otto delivered Beer to Lisboa for 46M -> money: 45M → 91M, loads: []
-AI built 3 segments for 5M, 15M remaining
+
+# Integration tests (aiTrackBuilderIntegration.test.ts)
+Built 3 segments for 4M (starting from scratch)
+Saved and verified track state in database
+Extended with 6 new segments for 7M (using existing track as starting point)
+Found milepost at (51,3): terrain=1 (Mountain)
 ```
 
 ---
