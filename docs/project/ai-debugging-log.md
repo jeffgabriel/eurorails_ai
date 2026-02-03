@@ -204,6 +204,77 @@ Contains:
 
 ---
 
+---
+
+## 2026-02-02: AI Players Breaking Game Rules (Gaining Money During Initial Building Phase)
+
+**Symptom:** AI players (Helga, Ingrid) gained money (73M and 44M respectively) after only 2 turns when they should only be building track. According to Eurorails rules, the initial building phase (turns 1-2) allows ONLY track building - no movement, pickup, delivery, or upgrades until turn 3.
+
+### Issue 10: AI train placed at major city during turn 1
+- **Location:** `src/server/services/ai/aiService.ts:61-64`
+- **Problem:** `placeAITrainAtStartingCity()` was called regardless of turn number, placing AI trains at major cities immediately
+- **Impact:** AI could pickup loads from the city they were placed at without building any track
+- **Fix:** Only place train after initial building phase:
+  ```typescript
+  const turnNumber = player.turnNumber || 1;
+  if (!player.trainState.position && turnNumber > 2) {
+    await this.placeAITrainAtStartingCity(gameId, playerId, player);
+  }
+  ```
+
+### Issue 11: No action filtering during initial building phase
+- **Location:** `src/server/services/ai/aiService.ts:339-391` - `executeActions()`
+- **Problem:** All action types were executed without checking if player was in initial building phase
+- **Fix:** Added phase check before action execution:
+  ```typescript
+  const isInitialBuildingPhase = turnNumber <= 2;
+  if (isInitialBuildingPhase && !['build', 'pass'].includes(action.type)) {
+    console.log(`AI ${playerId} action '${action.type}' blocked - initial building phase`);
+    continue;
+  }
+  ```
+
+### Issue 12: No track connectivity validation for movement
+- **Location:** `src/server/services/ai/aiService.ts:497-556` - `executeMoveAction()`
+- **Problem:** AI could teleport to any city without having track connecting to it
+- **Fix:** Added `hasTrackConnectionTo()` helper and validation before movement
+
+### Issue 13: No track connectivity validation for pickup/delivery
+- **Location:** `src/server/services/ai/aiService.ts:561-691`
+- **Problem:** `executePickupAction()` and `executeDeliverAction()` didn't validate:
+  - Train is positioned (not null)
+  - Train is at the correct city
+  - Player has track connection to current position
+- **Fix:** Added all three validations to both methods
+
+### New Helper Method: `hasTrackConnectionTo()`
+```typescript
+private async hasTrackConnectionTo(
+  gameId: string,
+  playerId: string,
+  targetRow: number,
+  targetCol: number
+): Promise<boolean>
+```
+Checks if player's track network reaches a given location by examining all segment endpoints.
+
+### Test Fix Required
+- **File:** `src/server/__tests__/ai/aiService.test.ts`
+- **Problem:** Delivery test mock used wrong Berlin coordinates (12,18) instead of actual (24,52)
+- **Fix:** Updated mock to use correct coordinates, added TrackService import and mock
+
+### Commits:
+- `8dd753a` - fix(ai): enforce game rules during AI turn execution
+- `c504410` - fix(test): update AI service test mocks for rule enforcement
+
+### Test Results:
+```
+Test Suites: 8 passed, 8 total
+Tests:       275 passed, 275 total
+```
+
+---
+
 ## Lessons Learned
 
 1. **Always verify database schema before writing queries** - Don't assume column names from type definitions
@@ -211,3 +282,5 @@ Contains:
 3. **Add detailed logging early** - The console logs helped identify exactly where failures occurred
 4. **Test with manual trigger scripts** - `scripts/trigger-ai-turn.ts` was invaluable for debugging without full game flow
 5. **Extract shared utilities early** - Duplicate logic across client/server should be moved to shared directory
+6. **Validate game rules at execution layer** - Even if the planner generates legal actions, the execution layer should enforce rules as a safety net
+7. **Check actual game data coordinates** - City coordinates in tests must match the real milepost data (Berlin is at 24,52 not 12,18)

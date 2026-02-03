@@ -9,6 +9,7 @@ import { getAICommentary } from '../../services/ai/aiCommentary';
 import { getAIConfig } from '../../services/ai/aiConfig';
 import { emitToGame, emitStatePatch } from '../../services/socketService';
 import { db } from '../../db';
+import { TrackService } from '../../services/trackService';
 import { Player, TrainType, PlayerColor, TerrainType, Point } from '../../../shared/types/GameTypes';
 import { AITurnPlan, AIGameState } from '../../services/ai/types';
 import { AIAction } from '../../../shared/types/AITypes';
@@ -527,7 +528,11 @@ describe('AIService', () => {
     });
 
     it('should execute deliver action and add payout', async () => {
-      // Setup mock to return player with the load and hand
+      // Berlin is at (24, 52) based on the mileposts data
+      const berlinRow = 24;
+      const berlinCol = 52;
+
+      // Setup mock to return player with the load, hand, and position
       (db.query as jest.Mock).mockImplementation((sql: string, params?: any[]) => {
         // Return game/player data for initial setup
         if (sql.includes('FROM games')) {
@@ -541,8 +546,8 @@ describe('AIService', () => {
               color: '#FF0000',
               money: 50,
               train_type: 'Freight',
-              position_row: 5,
-              position_col: 5,
+              position_row: berlinRow,
+              position_col: berlinCol,
               position_x: 100,
               position_y: 100,
               loads: ['Cars'],  // Has the load
@@ -551,17 +556,36 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turnNumber: 3,
+              turnNumber: 3,  // Turn 3 = past initial building phase
             }],
           };
         }
-        // Return player data for delivery check
+        // Return player data for delivery check (includes position now)
         if (sql.includes('money, loads, hand, debt_owed')) {
           return {
-            rows: [{ money: 50, loads: ['Cars'], hand: [1, 2, 3], debt_owed: 0 }],
+            rows: [{
+              money: 50,
+              loads: ['Cars'],
+              hand: [1, 2, 3],
+              debt_owed: 0,
+              position_row: berlinRow,
+              position_col: berlinCol,
+            }],
           };
         }
         return { rows: [] };
+      });
+
+      // Mock TrackService to return track segments connected to Berlin
+      (TrackService.getTrackState as jest.Mock).mockResolvedValue({
+        playerId: mockPlayerId,
+        gameId: mockGameId,
+        segments: [
+          { from: { row: berlinRow, col: berlinCol - 1 }, to: { row: berlinRow, col: berlinCol } },  // Track to Berlin
+        ],
+        totalCost: 5,
+        turnBuildCost: 5,
+        lastBuildTimestamp: new Date(),
       });
 
       const deliverAction: AIAction = {
