@@ -16,6 +16,8 @@ import { AIAction } from '../../../shared/types/AITypes';
 // Mock dependencies
 jest.mock('../../services/ai/aiPlanner');
 jest.mock('../../services/ai/aiCommentary');
+jest.mock('../../services/ai/aiTrackBuilder');
+jest.mock('../../services/trackService');
 jest.mock('../../services/socketService');
 jest.mock('../../db');
 
@@ -487,24 +489,85 @@ describe('AIService', () => {
     });
 
     it('should execute build action and deduct cost', async () => {
-      const buildAction: AIAction = { type: 'build', description: 'Building track', details: { cost: 10 } };
+      // Import and mock the track builder
+      const { getAITrackBuilder } = require('../../services/ai/aiTrackBuilder');
+      const { TrackService } = require('../../services/trackService');
+
+      // Mock the track builder to return segments
+      (getAITrackBuilder as jest.Mock).mockReturnValue({
+        buildTrackToTarget: jest.fn().mockResolvedValue({
+          segments: [{ from: { row: 5, col: 5 }, to: { row: 6, col: 5 }, cost: 1 }],
+          cost: 10,
+        }),
+      });
+
+      // Mock TrackService
+      (TrackService.getTrackState as jest.Mock).mockResolvedValue(null);
+      (TrackService.saveTrackState as jest.Mock).mockResolvedValue(undefined);
+
+      const buildAction: AIAction = {
+        type: 'build',
+        description: 'Building track',
+        details: { targetRow: 10, targetCol: 10, cost: 10 },
+      };
       (getAIPlanner as jest.Mock).mockReturnValue({
         planTurn: jest.fn().mockReturnValue(createMockPlan({ actions: [buildAction] })),
       });
 
       await service.executeAITurn(mockGameId, mockPlayerId);
 
+      // Verify TrackService.saveTrackState was called
+      expect(TrackService.saveTrackState).toHaveBeenCalled();
+
+      // Verify money was updated
       expect(db.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE players SET money = money - $1'),
-        [10, mockPlayerId]
+        expect.stringContaining('UPDATE players SET money'),
+        expect.arrayContaining([40, mockPlayerId])  // 50 - 10 = 40
       );
     });
 
     it('should execute deliver action and add payout', async () => {
+      // Setup mock to return player with the load and hand
+      (db.query as jest.Mock).mockImplementation((sql: string, params?: any[]) => {
+        // Return game/player data for initial setup
+        if (sql.includes('FROM games')) {
+          return { rows: [{ current_player_index: 0 }] };
+        }
+        if (sql.includes('FROM players') && sql.includes('ORDER BY')) {
+          return {
+            rows: [{
+              id: mockPlayerId,
+              name: 'AI Player',
+              color: '#FF0000',
+              money: 50,
+              train_type: 'Freight',
+              position_row: 5,
+              position_col: 5,
+              position_x: 100,
+              position_y: 100,
+              loads: ['Cars'],  // Has the load
+              hand: [1, 2, 3],
+              user_id: null,
+              is_ai: true,
+              ai_difficulty: 'easy',
+              ai_personality: 'optimizer',
+              turnNumber: 3,
+            }],
+          };
+        }
+        // Return player data for delivery check
+        if (sql.includes('money, loads, hand, debt_owed')) {
+          return {
+            rows: [{ money: 50, loads: ['Cars'], hand: [1, 2, 3], debt_owed: 0 }],
+          };
+        }
+        return { rows: [] };
+      });
+
       const deliverAction: AIAction = {
         type: 'deliver',
         description: 'Delivering cargo',
-        details: { payout: 25, loadType: 'Cars', destinationCity: 'Berlin' },
+        details: { payout: 25, loadType: 'Cars', destinationCity: 'Berlin', cardId: 1 },
       };
       (getAIPlanner as jest.Mock).mockReturnValue({
         planTurn: jest.fn().mockReturnValue(createMockPlan({ actions: [deliverAction] })),
@@ -512,9 +575,10 @@ describe('AIService', () => {
 
       await service.executeAITurn(mockGameId, mockPlayerId);
 
+      // Verify money was updated with absolute value (50 + 25 = 75)
       expect(db.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE players SET money = money + $1'),
-        [25, mockPlayerId]
+        expect.stringContaining('UPDATE players SET money'),
+        expect.arrayContaining([75])
       );
     });
 
