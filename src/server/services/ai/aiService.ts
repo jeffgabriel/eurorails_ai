@@ -425,59 +425,81 @@ export class AIService {
     const turnNumber = player.turnNumber || 1;
     const isInitialBuildingPhase = turnNumber <= 2;
 
-    for (const action of plan.actions) {
+    console.log(`[executeActions] Starting execution of ${plan.actions.length} planned actions for AI ${playerId}`);
+    console.log(`[executeActions] Turn ${turnNumber}, isInitialBuildingPhase: ${isInitialBuildingPhase}`);
+
+    for (let i = 0; i < plan.actions.length; i++) {
+      const action = plan.actions[i];
+      console.log(`[executeActions] Action ${i + 1}/${plan.actions.length}: ${action.type} - ${action.description}`);
+      console.log(`[executeActions] Action details:`, JSON.stringify(action.details));
+
       try {
         // During initial building phase, only 'build' and 'pass' actions are allowed
         if (isInitialBuildingPhase && !['build', 'pass'].includes(action.type)) {
-          console.log(`AI ${playerId} action '${action.type}' blocked - initial building phase (turn ${turnNumber})`);
+          console.log(`[executeActions] Action '${action.type}' BLOCKED - initial building phase (turn ${turnNumber})`);
           continue;
         }
 
         // During initial building phase, upgrades are not allowed either
         if (isInitialBuildingPhase && action.type === 'upgrade') {
-          console.log(`AI ${playerId} upgrade blocked - initial building phase (turn ${turnNumber})`);
+          console.log(`[executeActions] Upgrade BLOCKED - initial building phase (turn ${turnNumber})`);
           continue;
         }
 
         switch (action.type) {
           case 'build':
+            console.log(`[executeActions] Executing BUILD action...`);
             await this.executeBuildAction(gameId, playerId, action, player);
             cashChange -= (action.details.cost as number) || 0;
+            console.log(`[executeActions] BUILD completed, cashChange: ${cashChange}`);
             break;
 
           case 'move':
+            console.log(`[executeActions] Executing MOVE action...`);
             await this.executeMoveAction(gameId, playerId, action);
+            console.log(`[executeActions] MOVE completed`);
             break;
 
           case 'pickup':
+            console.log(`[executeActions] Executing PICKUP action...`);
             await this.executePickupAction(gameId, playerId, action);
+            console.log(`[executeActions] PICKUP completed`);
             break;
 
           case 'deliver':
+            console.log(`[executeActions] Executing DELIVER action...`);
             await this.executeDeliverAction(gameId, playerId, action);
             cashChange += (action.details.payout as number) || 0;
+            console.log(`[executeActions] DELIVER completed, cashChange: ${cashChange}`);
             break;
 
           case 'drop':
+            console.log(`[executeActions] Executing DROP action...`);
             await this.executeDropAction(gameId, playerId, action);
+            console.log(`[executeActions] DROP completed`);
             break;
 
           case 'upgrade':
+            console.log(`[executeActions] Executing UPGRADE action...`);
             await this.executeUpgradeAction(gameId, playerId, action);
             cashChange -= 20; // Upgrade cost is always 20M
+            console.log(`[executeActions] UPGRADE completed, cashChange: ${cashChange}`);
             break;
 
           default:
-            // Pass or unknown action - do nothing
+            console.log(`[executeActions] Action type '${action.type}' - no execution (pass/unknown)`);
             break;
         }
 
         executedActions.push(action);
+        console.log(`[executeActions] Action ${i + 1} completed successfully`);
       } catch (error) {
-        console.error(`Failed to execute AI action ${action.type}:`, error);
+        console.error(`[executeActions] FAILED to execute action ${action.type}:`, error);
         // Continue with other actions even if one fails
       }
     }
+
+    console.log(`[executeActions] Finished executing ${executedActions.length}/${plan.actions.length} actions`);
 
     return executedActions;
   }

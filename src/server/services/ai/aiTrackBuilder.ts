@@ -73,8 +73,9 @@ export class AITrackBuilder {
     for (const point of gridPoints) {
       const terrain = this.parseTerrainType(point.Type);
 
-      // Skip water points - they're not buildable
-      if (terrain === TerrainType.Water || point.Ocean) {
+      // Skip only pure water points - ferry ports and coastal cities are buildable
+      // Note: point.Ocean indicates the point is coastal, NOT that it's water
+      if (terrain === TerrainType.Water) {
         continue;
       }
 
@@ -208,8 +209,10 @@ export class AITrackBuilder {
     const start = this.gridByCoord.get(startKey);
     const target = this.gridByCoord.get(targetKey);
 
+    console.log(`[AITrackBuilder.findPath] Looking up start=${startKey} found=${!!start}, target=${targetKey} found=${!!target}`);
+
     if (!start || !target) {
-      console.log(`AITrackBuilder: Start or target not found: ${startKey} -> ${targetKey}`);
+      console.log(`[AITrackBuilder.findPath] FAILED: Start or target not in grid! start=${startKey}(${!!start}), target=${targetKey}(${!!target})`);
       return null;
     }
 
@@ -236,7 +239,16 @@ export class AITrackBuilder {
     gScore.set(startKey, 0);
     fScore.set(startKey, this.heuristic(start, target));
 
-    while (openSet.size > 0) {
+    // Debug: Check starting point neighbors
+    const startNeighbors = this.getNeighbors(start);
+    console.log(`[A* DEBUG] Start ${startKey} has ${startNeighbors.length} neighbors: ${startNeighbors.map(n => `(${n.row},${n.col})`).join(', ')}`);
+    console.log(`[A* DEBUG] Start terrain: ${start.terrain}, Target terrain: ${target.terrain}`);
+
+    let iterations = 0;
+    const maxIterations = 10000;
+
+    while (openSet.size > 0 && iterations < maxIterations) {
+      iterations++;
       // Get node with lowest fScore
       let currentKey = '';
       let lowestF = Infinity;
@@ -303,6 +315,10 @@ export class AITrackBuilder {
     }
 
     // No path found
+    console.log(`[A* DEBUG] Loop ended after ${iterations} iterations. OpenSet size: ${openSet.size}, gScore entries: ${gScore.size}`);
+    if (iterations >= maxIterations) {
+      console.log(`[A* DEBUG] Hit max iterations limit!`);
+    }
     return null;
   }
 
@@ -340,14 +356,17 @@ export class AITrackBuilder {
     }
 
     // Find a starting point - endpoint of existing track or major city
+    console.log(`[AITrackBuilder] Finding starting point. Existing segments: ${existingSegments.length}, target: (${targetRow}, ${targetCol})`);
     let startPoint = this.findBestStartingPoint(existingSegments, targetRow, targetCol);
 
     if (!startPoint) {
-      console.log(`AITrackBuilder: No valid starting point found`);
+      console.log(`[AITrackBuilder] No valid starting point found`);
       return null;
     }
+    console.log(`[AITrackBuilder] Starting point: (${startPoint.row}, ${startPoint.col})`);
 
     // Find path
+    console.log(`[AITrackBuilder] Finding path from (${startPoint.row},${startPoint.col}) to (${targetRow},${targetCol})...`);
     const result = this.findPath(
       startPoint.row,
       startPoint.col,
@@ -358,19 +377,21 @@ export class AITrackBuilder {
     );
 
     if (!result) {
-      console.log(`AITrackBuilder: No path found from (${startPoint.row},${startPoint.col}) to (${targetRow},${targetCol})`);
+      console.log(`[AITrackBuilder] No path found from (${startPoint.row},${startPoint.col}) to (${targetRow},${targetCol})`);
       return null;
     }
+    console.log(`[AITrackBuilder] Path found with ${result.path.length} nodes, cost: ${result.cost}`);
 
     // Check budget
     if (result.cost > budget) {
-      console.log(`AITrackBuilder: Path cost ${result.cost} exceeds budget ${budget}`);
+      console.log(`[AITrackBuilder] Path cost ${result.cost} exceeds budget ${budget}, returning partial`);
       // Return partial path within budget
       return this.getPartialPath(result.path, budget, existingSegments);
     }
 
     // Convert path to segments
     const segments = this.pathToSegments(result.path, existingSegments);
+    console.log(`[AITrackBuilder] Converted to ${segments.length} segments`);
 
     return { segments, cost: result.cost };
   }
@@ -385,11 +406,18 @@ export class AITrackBuilder {
   ): { row: number; col: number } | null {
     if (existingSegments.length === 0) {
       // No existing track - need to start from a major city
+      // IMPORTANT: Don't pick the target city itself as the starting point!
       const majorCities = getMajorCityGroups();
       let bestCity: { row: number; col: number } | null = null;
       let bestDistance = Infinity;
 
       for (const city of majorCities) {
+        // Skip if this city IS the target (can't build from A to A)
+        if (city.center.row === targetRow && city.center.col === targetCol) {
+          console.log(`[findBestStartingPoint] Skipping ${city.cityName} - it's the target itself`);
+          continue;
+        }
+
         const dist = Math.abs(city.center.row - targetRow) + Math.abs(city.center.col - targetCol);
         if (dist < bestDistance) {
           bestDistance = dist;
@@ -397,6 +425,7 @@ export class AITrackBuilder {
         }
       }
 
+      console.log(`[findBestStartingPoint] Selected starting city at (${bestCity?.row}, ${bestCity?.col}), distance to target: ${bestDistance}`);
       return bestCity;
     }
 

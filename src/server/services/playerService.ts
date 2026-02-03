@@ -1687,12 +1687,37 @@ export class PlayerService {
       }
 
       // If next player is AI, trigger AI turn execution (after transaction committed)
+      console.log(`[endTurnForUser] Next player ${nextPlayer.name} (${nextPlayer.id}) is_ai: ${nextPlayer.is_ai}`);
       if (nextPlayer.is_ai) {
-        const { GameService } = await import("./gameService");
-        // Execute AI turn in background - don't await, let it run async
-        GameService['executeAITurnWithTimeout'](gameId, nextPlayer.id)
+        console.log(`[endTurnForUser] Triggering AI turn for player ${nextPlayer.name}`);
+        // Import and call AIService directly instead of via GameService private method
+        const { getAIService } = await import("./ai/aiService");
+        const { AI_TURN_TIMEOUT_MS } = await import("./ai/aiConfig");
+        const aiService = getAIService();
+
+        // Execute AI turn in background with timeout - don't await, let it run async
+        const aiTurnPromise = aiService.executeAITurn(gameId, nextPlayer.id);
+        const timeoutPromise = new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), AI_TURN_TIMEOUT_MS)
+        );
+
+        Promise.race([aiTurnPromise, timeoutPromise])
+          .then(async (result) => {
+            if (result === null) {
+              console.warn(`[endTurnForUser] AI turn timed out for ${nextPlayer.name} after ${AI_TURN_TIMEOUT_MS}ms`);
+            } else {
+              console.log(`[endTurnForUser] AI turn completed for ${nextPlayer.name}`);
+            }
+            // After AI turn, recursively advance to next player
+            try {
+              const { GameService } = await import("./gameService");
+              await GameService.endTurn(gameId);
+            } catch (err) {
+              console.error(`[endTurnForUser] Failed to advance turn after AI:`, err);
+            }
+          })
           .catch((error: Error) => {
-            console.error(`AI turn execution failed for player ${nextPlayer.id}:`, error);
+            console.error(`[endTurnForUser] AI turn execution failed for player ${nextPlayer.id}:`, error);
           });
       }
 

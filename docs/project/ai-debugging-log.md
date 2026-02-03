@@ -348,3 +348,90 @@ Fixed by creating `endTurnForUser()` following the same transaction pattern as `
 ✓ should emit ai:thinking event when AI turn starts (5055 ms)
 ✓ should automatically execute AI turn when human player ends turn (5048 ms)
 ```
+
+---
+
+## 2026-02-03: Client Using Wrong Endpoint for Turn Ending
+
+**Symptom:** After creating the `/api/games/:gameId/end-turn` endpoint, AI turns still weren't being triggered in live games. Database showed AI players stuck at `current_turn_number = 1` while human player had `current_turn_number = 7`.
+
+### Issue 15: Client calling wrong API endpoint
+- **Location:** `src/client/services/GameStateService.ts:74-109` - `nextPlayerTurn()`
+- **Problem:** Client was calling `/api/players/updateCurrentPlayer` which only updates the player index but does NOT:
+  - Increment the current player's turn number
+  - Trigger AI turn execution
+- **Validation:** Used compounds CLI to confirm:
+  - `/api/players/updateCurrentPlayer` (playerRoutes.ts:269-310) only calls `updateCurrentPlayerIndex()` and emits socket events
+  - New `/api/games/:gameId/end-turn` (gameRoutes.ts:78-128) calls `endTurnForUser()` which properly advances turns and triggers AI
+
+### Fix Applied
+Updated `GameStateService.nextPlayerTurn()` to use the correct endpoint:
+```typescript
+// Before (wrong):
+const response = await authenticatedFetch(`${config.apiBaseUrl}/api/players/updateCurrentPlayer`, {
+    method: 'POST',
+    body: JSON.stringify({ gameId, currentPlayerIndex: nextPlayerIndex })
+});
+
+// After (correct):
+const response = await authenticatedFetch(`${config.apiBaseUrl}/api/games/${this.gameState.id}/end-turn`, {
+    method: 'POST'
+});
+```
+
+### Why This Wasn't Caught Earlier
+- Server-side tests mocked the endpoint directly
+- Integration tests for AI turn triggering worked because they called the endpoint directly
+- The client code was never updated when the new endpoint was created
+- The old endpoint "worked" in that turns advanced, just without AI execution
+
+### Test Results
+```
+Test Suites: 18 passed, 18 total
+Tests:       431 passed, 431 total
+```
+
+### Issue 16: Wrong API path - `/api/games` vs `/api/game`
+- **Location:** `src/client/services/GameStateService.ts:87`
+- **Problem:** Client was calling `/api/games/:gameId/end-turn` but routes are mounted at `/api/game` (singular)
+- **Symptom:** Server returned HTML 404 page, causing JSON parse error: `Unexpected token '<', "<!DOCTYPE "...`
+- **Fix:** Changed URL from `/api/games/` to `/api/game/`
+
+---
+
+## 2026-02-03: AI Track Building Failing - Start Point = Target Point
+
+**Symptom:** AI turns were executing but builds were being skipped with "no valid path" errors:
+```
+AI cfe636c1-0047-48fd-b739-9c2df032d239 build skipped - no valid path to (29, 32)
+```
+
+### Issue 17: findBestStartingPoint returning target city as starting point
+- **Location:** `src/server/services/ai/aiTrackBuilder.ts:388-408` - `findBestStartingPoint()`
+- **Problem:** When AI has no existing track, the method finds the closest major city to the target. But if the target IS a major city (Paris at 29,32), it would return that same city as the starting point.
+- **Impact:** Pathfinder tried to find route from Paris to Paris (same location), which returned null
+- **Root Cause:** AI planner generated target coordinates that happened to be Paris (29,32). The `findBestStartingPoint` didn't exclude the target itself.
+- **Fix:** Added check to skip cities at the target location:
+  ```typescript
+  if (city.center.row === targetRow && city.center.col === targetCol) {
+    continue; // Skip - can't build from A to A
+  }
+  ```
+
+### Issue 18: Ferry ports and coastal cities excluded from pathfinding grid
+- **Location:** `src/server/services/ai/aiTrackBuilder.ts:77` - `initialize()`
+- **Problem:** Grid initialization skipped ANY point with `Ocean` field set:
+  ```typescript
+  if (terrain === TerrainType.Water || point.Ocean) {
+    continue;  // This wrongly skips ferry ports!
+  }
+  ```
+- **Impact:** All ferry ports (Dover, Calais, Harwich, etc.) and coastal cities were missing from the pathfinder's grid. The A* algorithm could only explore 77 nodes before running out of options because England was completely disconnected from continental Europe.
+- **Root Cause:** `point.Ocean` indicates the point is *coastal* (near an ocean), not that it IS water. Ferry ports like Dover have `Ocean: "English Channel"`.
+- **Evidence:** Debug showed only 77 nodes explored, starting from London (20,31). Should have found path to Paris (29,32) via Dover-Calais ferry.
+- **Fix:** Only skip pure water terrain, not coastal points:
+  ```typescript
+  if (terrain === TerrainType.Water) {
+    continue;  // Only skip actual water, not coastal points
+  }
+  ```

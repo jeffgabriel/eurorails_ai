@@ -5,6 +5,8 @@ import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
 import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
 
+console.log('🎮 [gameRoutes] Module loaded - routes being registered');
+
 const router = express.Router();
 
 // Get game state
@@ -76,11 +78,14 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
 // End the current player's turn and advance to the next player
 // If the next player is an AI, this triggers automatic AI turn execution
 router.post('/:gameId/end-turn', authenticateToken, async (req, res) => {
+    console.log(`[end-turn route] Request received for game ${req.params.gameId}`);
     try {
         const { gameId } = req.params;
         const userId = req.user?.id;
+        console.log(`[end-turn route] gameId=${gameId}, userId=${userId}`);
 
         if (!userId) {
+            console.log(`[end-turn route] Unauthorized - no userId`);
             return res.status(401).json({
                 error: 'UNAUTHORIZED',
                 details: 'Authentication required to end turn'
@@ -88,8 +93,10 @@ router.post('/:gameId/end-turn', authenticateToken, async (req, res) => {
         }
 
         // Use PlayerService.endTurnForUser which handles everything in a transaction
+        console.log(`[end-turn route] Calling PlayerService.endTurnForUser...`);
         const { PlayerService } = await import('../services/playerService');
         const result = await PlayerService.endTurnForUser(gameId, userId);
+        console.log(`[end-turn route] endTurnForUser result:`, JSON.stringify(result));
 
         return res.status(200).json({
             success: true,
