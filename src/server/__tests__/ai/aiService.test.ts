@@ -100,7 +100,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -171,7 +171,7 @@ describe('AIService', () => {
               is_ai: false,
               ai_difficulty: null,
               ai_personality: null,
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -208,7 +208,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -244,7 +244,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -304,7 +304,7 @@ describe('AIService', () => {
                   is_ai: true,
                   ai_difficulty: difficulty,
                   ai_personality: 'optimizer',
-                  turn_number: 3,
+                  turnNumber: 3,
                 }],
               });
             }
@@ -352,7 +352,7 @@ describe('AIService', () => {
                   is_ai: true,
                   ai_difficulty: 'easy',
                   ai_personality: personality,
-                  turn_number: 3,
+                  turnNumber: 3,
                 }],
               });
             }
@@ -463,7 +463,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -627,7 +627,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
@@ -676,7 +676,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 1,
+              turnNumber: 1,
             }],
           });
         }
@@ -712,7 +712,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 5,
+              turnNumber: 5,
             }],
           });
         }
@@ -748,7 +748,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 10,
+              turnNumber: 10,
             }],
           });
         }
@@ -784,7 +784,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 6,
+              turnNumber: 6,
             }],
           });
         }
@@ -822,7 +822,7 @@ describe('AIService', () => {
               is_ai: true,
               ai_difficulty: 'easy',
               ai_personality: 'optimizer',
-              turn_number: 3,
+              turnNumber: 3,
             }],
           });
         }
