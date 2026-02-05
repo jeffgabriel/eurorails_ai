@@ -5,12 +5,25 @@ import type { GameState } from '../../shared/types/GameTypes';
 import { AuthService } from './authService';
 import { db } from '../db';
 import { GameService } from './gameService';
+import { ChatService } from './chatService';
+import { rateLimitService } from './rateLimitService';
+import { gameChatLimitService } from './gameChatLimitService';
+import { moderationService } from './moderationService';
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
 
 const PRESENCE_HEARTBEAT_MS = 60_000;
 const PRESENCE_STALE_INTERVAL = '5 minutes';
+
+/**
+ * Create deterministic DM room ID (both users join same room)
+ * Sort user IDs alphabetically for consistency
+ */
+function createDMRoomId(userId1: string, userId2: string, gameId: string): string {
+  const sorted = [userId1, userId2].sort();
+  return `game:${gameId}:dm:${sorted[0]}:${sorted[1]}`;
+}
 
 async function nextServerSeq(gameId: string): Promise<number> {
   const result = await db.query(
@@ -268,6 +281,210 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         socket.emit('error', {
           code: 'ACTION_PATCH_FAILED',
           message: 'Failed to broadcast action update. Please retry.',
+        });
+      }
+    });
+
+    // ====== CHAT EVENTS ======
+
+    /**
+     * Join game chat rooms
+     */
+    socket.on('join-game-chat', async (data: { gameId: string; userId: string }) => {
+      if (!data || !data.gameId || !data.userId) {
+        console.warn(`Invalid join-game-chat data from client ${socket.id}`);
+        return;
+      }
+
+      const { gameId, userId: requestUserId } = data;
+
+      // Verify user is authenticated and matches request
+      if (!userId || userId !== requestUserId) {
+        socket.emit('chat-error', {
+          error: 'UNAUTHORIZED',
+          message: 'Authentication required',
+        });
+        return;
+      }
+
+      try {
+        // Join game chat room
+        socket.join(`game:${gameId}:chat`);
+        
+        // Get all players in game to set up DM rooms
+        const players = await ChatService.getGamePlayers(gameId);
+        
+        // Join DM room with each other player
+        for (const player of players) {
+          if (player.userId !== userId) {
+            const dmRoom = createDMRoomId(userId, player.userId, gameId);
+            socket.join(dmRoom);
+          }
+        }
+
+        socket.emit('chat-joined', { gameId });
+        console.log(`[Chat] User ${userId} joined chat for game ${gameId}`);
+      } catch (error) {
+        console.error('[Chat] Error joining game chat:', error);
+        socket.emit('chat-error', {
+          error: 'JOIN_FAILED',
+          message: 'Failed to join chat',
+        });
+      }
+    });
+
+    /**
+     * Send chat message
+     */
+    socket.on('send-chat-message', async (data: {
+      tempId: string;
+      gameId: string;
+      recipientType: 'game' | 'player';
+      recipientId: string;
+      messageText: string;
+    }) => {
+      if (!data || !data.gameId || !data.recipientType || !data.messageText) {
+        console.warn(`Invalid send-chat-message data from client ${socket.id}`);
+        return;
+      }
+
+      const { tempId, gameId, recipientType, recipientId, messageText } = data;
+
+      // Verify user is authenticated
+      if (!userId) {
+        socket.emit('message-error', {
+          tempId,
+          error: 'not_verified',
+          message: 'Authentication required',
+        });
+        return;
+      }
+
+      try {
+        // Validate message length (500 Unicode characters)
+        if (messageText.length > 500) {
+          socket.emit('message-error', {
+            tempId,
+            error: 'message_too_long',
+            message: 'Message cannot exceed 500 characters',
+          });
+          return;
+        }
+
+        // Trim message
+        const trimmedMessage = messageText.trim();
+        if (trimmedMessage.length === 0) {
+          socket.emit('message-error', {
+            tempId,
+            error: 'empty_message',
+            message: 'Message cannot be empty',
+          });
+          return;
+        }
+
+        // 1. Validate chat permissions
+        const validation = await ChatService.validateChatPermissions(
+          userId,
+          recipientType,
+          recipientId,
+          gameId
+        );
+
+        if (!validation.valid) {
+          socket.emit('message-error', {
+            tempId,
+            error: validation.error,
+            message: validation.details || 'Permission denied',
+          });
+          return;
+        }
+
+        // 2. Check rate limit
+        const rateCheck = await rateLimitService.checkUserLimit(userId, gameId);
+        if (!rateCheck.allowed) {
+          socket.emit('message-error', {
+            tempId,
+            error: 'rate_limited',
+            message: `You are sending messages too quickly. Please wait ${rateCheck.retryAfter} seconds.`,
+            retryAfter: rateCheck.retryAfter,
+          });
+          return;
+        }
+
+        // 3. Check game limit
+        const gameLimitOk = await gameChatLimitService.checkGameLimit(gameId);
+        if (!gameLimitOk) {
+          socket.emit('message-error', {
+            tempId,
+            error: 'game_limit_reached',
+            message: 'This game has reached its message limit (1000). Chat is now disabled.',
+          });
+          return;
+        }
+
+        // 4. Run content moderation
+        if (moderationService.isReady()) {
+          const moderationResult = await moderationService.checkMessage(trimmedMessage);
+          if (!moderationResult.isAppropriate) {
+            socket.emit('message-error', {
+              tempId,
+              error: 'inappropriate_content',
+              message: 'Your message was flagged by our content moderation system. Please revise and try again.',
+            });
+            return;
+          }
+        }
+
+        // 5. Store message
+        const messageId = await ChatService.storeMessage({
+          gameId,
+          senderUserId: userId,
+          recipientType,
+          recipientId,
+          messageText: trimmedMessage,
+        });
+
+        // 6. Update rate limit and game count
+        await rateLimitService.recordMessage(userId, gameId);
+        await gameChatLimitService.incrementGameCount(gameId);
+
+        // 7. Get sender username
+        const senderUsername = await ChatService.getSenderUsername(userId);
+
+        // 8. Emit confirmation to sender
+        socket.emit('message-sent', {
+          tempId,
+          messageId,
+          timestamp: new Date().toISOString(),
+        });
+
+        // 9. Broadcast to recipients
+        const messageData = {
+          id: messageId,
+          senderUserId: userId,
+          senderUsername: senderUsername || 'Unknown',
+          recipientType,
+          recipientId,
+          messageText: trimmedMessage,
+          createdAt: new Date().toISOString(),
+        };
+
+        if (recipientType === 'game') {
+          // Broadcast to all players in game (except sender)
+          socket.to(`game:${gameId}:chat`).emit('new-chat-message', messageData);
+        } else {
+          // Send to specific player's DM room
+          const dmRoom = createDMRoomId(userId, recipientId, gameId);
+          socket.to(dmRoom).emit('new-chat-message', messageData);
+        }
+
+        console.log(`[Chat] Message sent from ${userId} in game ${gameId} (type: ${recipientType})`);
+      } catch (error) {
+        console.error('[Chat] Error sending message:', error);
+        socket.emit('message-error', {
+          tempId,
+          error: 'send_failed',
+          message: 'Failed to send message. Please try again.',
         });
       }
     });

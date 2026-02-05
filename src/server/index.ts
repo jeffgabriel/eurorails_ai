@@ -14,6 +14,8 @@ import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
 import { initializeSocketIO } from './services/socketService';
+import { initializeCleanupJobs } from './cron/cleanupJobs';
+import { moderationService } from './services/moderationService';
 
 const app = express();
 // Railway provides PORT env var, fallback to 3000 for consistency with Docker health check
@@ -285,6 +287,28 @@ async function startServer() {
         if (!dbReady) {
             console.error('Database initialization failed');
             process.exit(1);
+        }
+
+        // Initialize moderation service (download model from S3 if needed)
+        // Note: This is async and may take 1-2 minutes on first cold start
+        try {
+            console.log('[Startup] Initializing moderation service...');
+            await moderationService.initialize();
+            console.log('[Startup] Moderation service ready');
+        } catch (error) {
+            console.error('[Startup] Failed to initialize moderation service:', error);
+            console.error('[Startup] Chat moderation will not be available');
+            // Don't exit - allow server to start without moderation
+            // Chat will still work, just without content filtering
+        }
+
+        // Initialize cleanup jobs (cron)
+        try {
+            initializeCleanupJobs();
+            console.log('[Startup] Cleanup jobs initialized');
+        } catch (error) {
+            console.error('[Startup] Failed to initialize cleanup jobs:', error);
+            // Don't exit - cleanup is not critical for startup
         }
 
         // Initialize default game
