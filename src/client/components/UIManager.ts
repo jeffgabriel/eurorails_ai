@@ -401,14 +401,16 @@ export class UIManager {
     x: number,
     y: number,
     row: number,
-    col: number
+    col: number,
+    opts?: { persist?: boolean }
   ): Promise<void> {
     await this.trainInteractionManager.updateTrainPosition(
       playerId,
       x,
       y,
       row,
-      col
+      col,
+      opts
     );
   }
 

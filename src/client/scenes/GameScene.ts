@@ -365,7 +365,27 @@ export class GameScene extends Phaser.Scene {
                     };
                   } else {
                     // For other players: use server data (authoritative)
+                    const oldPosition = existingPlayer.trainState?.position;
+                    const newPosition = updatedPlayer.trainState?.position;
+                    
                     this.gameState.players[index] = { ...existingPlayer, ...updatedPlayer };
+                    
+                    // If position changed, update visual sprite
+                    if (newPosition && 
+                        (oldPosition?.row !== newPosition.row || oldPosition?.col !== newPosition.col)) {
+                      const gridPoint = this.mapRenderer.gridPoints[newPosition.row]?.[newPosition.col];
+                      if (gridPoint) {
+                        // Use persist: false to avoid sending position back to server
+                        this.uiManager.updateTrainPosition(
+                          updatedPlayer.id,
+                          gridPoint.x,
+                          gridPoint.y,
+                          newPosition.row,
+                          newPosition.col,
+                          { persist: false }
+                        );
+                      }
+                    }
                   }
                 } else {
                   // Add new player (shouldn't happen in normal gameplay)
