@@ -308,6 +308,22 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
       }
 
       try {
+        // SECURITY: Verify user is a member of the game before joining chat
+        const validation = await ChatService.validateChatPermissions(
+          userId,
+          'game',
+          gameId,
+          gameId
+        );
+
+        if (!validation.valid) {
+          socket.emit('chat-error', {
+            error: validation.error || 'UNAUTHORIZED',
+            message: validation.details || 'You must be in the game to access chat',
+          });
+          return;
+        }
+
         // Join game chat room
         socket.join(`game:${gameId}:chat`);
         

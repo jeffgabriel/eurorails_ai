@@ -351,8 +351,18 @@ export class ChatService {
    * Mark messages as read
    */
   static async markAsRead(messageIds: number[]): Promise<void> {
+    // Input validation
+    if (!Array.isArray(messageIds)) {
+      throw new Error('messageIds must be an array');
+    }
+    
     if (messageIds.length === 0) {
       return;
+    }
+    
+    // Validate all IDs are valid numbers/strings (BIGSERIAL can be returned as string)
+    if (!messageIds.every(id => typeof id === 'number' || typeof id === 'string')) {
+      throw new Error('All message IDs must be numbers or numeric strings');
     }
 
     try {

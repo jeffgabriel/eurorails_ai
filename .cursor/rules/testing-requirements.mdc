@@ -44,7 +44,7 @@ When tests fail:
 ### Documentation of Test Status
 When creating commits/PRs:
 - ✅ "All tests passing (73/73)" - Acceptable
-- ✅ "Tests: 73 passed, 5 skipped (documented), 73 total" - Acceptable
+- ✅ "Tests: 73 passed, 5 skipped (documented), 78 total" - Acceptable
 - ❌ "Tests: 58/73 passing" - NOT ACCEPTABLE
 - ❌ "Most tests passing, some infrastructure issues" - NOT ACCEPTABLE
 

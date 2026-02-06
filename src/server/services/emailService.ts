@@ -9,10 +9,28 @@ export interface EmailService {
 }
 
 /**
+ * Escapes HTML to prevent XSS attacks
+ */
+function escapeHtml(text: string): string {
+  const htmlEscapeMap: { [key: string]: string } = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#x27;',
+    '/': '&#x2F;',
+  };
+  return text.replace(/[&<>"'/]/g, (char) => htmlEscapeMap[char]);
+}
+
+/**
  * Generates HTML content for verification email
  * Shared across all email service implementations
+ * NOTE: username is escaped to prevent XSS; verificationUrl is from server so trusted
  */
 function getVerificationEmailHtml(username: string, verificationUrl: string): string {
+  const safeUsername = escapeHtml(username);
+  
   return `
 <!DOCTYPE html>
 <html>
@@ -26,7 +44,7 @@ function getVerificationEmailHtml(username: string, verificationUrl: string): st
   </div>
   
   <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
-    <p style="font-size: 16px;">Hello <strong>${username}</strong>,</p>
+    <p style="font-size: 16px;">Hello <strong>${safeUsername}</strong>,</p>
     
     <p style="font-size: 16px;">Thank you for joining EuroRails! Please verify your email address by clicking the button below:</p>
     
