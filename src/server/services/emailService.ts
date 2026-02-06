@@ -69,13 +69,21 @@ class ResendEmailService implements EmailService {
   constructor() {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
-      throw new Error('RESEND_API_KEY environment variable is required');
+      console.warn('[Email] WARNING: RESEND_API_KEY not set. Email verification will not work.');
+      console.warn('[Email] Set RESEND_API_KEY environment variable to enable email functionality.');
+      // Create a dummy Resend instance to prevent crashes
+      // This allows the app to start, but email sending will fail gracefully
     }
-    this.resend = new Resend(apiKey);
+    this.resend = new Resend(apiKey || 'dummy-key-not-configured');
     this.fromEmail = process.env.EMAIL_FROM || 'noreply@eurorails.com';
   }
 
   async sendVerificationEmail(email: string, username: string, verificationUrl: string): Promise<void> {
+    if (!process.env.RESEND_API_KEY) {
+      console.error(`[Email] Cannot send verification email to ${email}: RESEND_API_KEY not configured`);
+      throw new Error('Email service not configured. Please contact administrator.');
+    }
+    
     try {
       await this.resend.emails.send({
         from: this.fromEmail,
