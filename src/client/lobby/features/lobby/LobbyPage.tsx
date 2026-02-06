@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { CreateGameModal } from './CreateGameModal';
 import { JoinGameModal } from './JoinGameModal';
 import { GameRow } from './GameRow';
+import { AddBotPopover } from './AddBotPopover';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
 import { getErrorMessage, api } from '../../shared/api';
@@ -172,6 +173,29 @@ export function LobbyPage() {
     toast.info('Left the game');
     // Navigate back to main lobby page
     navigate('/lobby');
+  };
+
+  const handleRemoveBot = async (playerId: string) => {
+    if (!currentGame) return;
+    try {
+      await api.removeAIPlayer(currentGame.id, playerId);
+      toast.success('Bot removed');
+      // Refresh player list
+      const result = await api.getGamePlayers(currentGame.id);
+      useLobbyStore.setState({ players: result.players });
+    } catch {
+      toast.error('Failed to remove bot');
+    }
+  };
+
+  const handleBotAdded = async () => {
+    if (!currentGame) return;
+    try {
+      const result = await api.getGamePlayers(currentGame.id);
+      useLobbyStore.setState({ players: result.players });
+    } catch {
+      // Socket update will handle it
+    }
   };
 
   const handleLogout = () => {
@@ -516,11 +540,20 @@ export function LobbyPage() {
                 <Separator />
 
                 <div>
-                  <h3 className="font-semibold mb-4 flex items-center gap-2">
-                    <Users className="size-4" />
-                    Players ({(players?.length || 0)}/{currentGame.maxPlayers})
-                  </h3>
-                  
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-semibold flex items-center gap-2">
+                      <Users className="size-4" />
+                      Players ({(players?.length || 0)}/{currentGame.maxPlayers})
+                    </h3>
+                    {currentGame.createdBy === user?.id && currentGame.status === 'setup' && (
+                      <AddBotPopover
+                        gameId={currentGame.id}
+                        disabled={players && players.length >= currentGame.maxPlayers}
+                        onBotAdded={handleBotAdded}
+                      />
+                    )}
+                  </div>
+
                   <div className="space-y-2">
                     {!players || players.length === 0 ? (
                       <p className="text-muted-foreground text-center py-4">
@@ -528,7 +561,7 @@ export function LobbyPage() {
                       </p>
                     ) : (
                       players.map((player) => (
-                        <GameRow key={player.id} player={player} />
+                        <GameRow key={player.id} player={player} onRemoveBot={handleRemoveBot} />
                       ))
                     )}
                   </div>

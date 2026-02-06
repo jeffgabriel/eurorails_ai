@@ -22,6 +22,9 @@ export interface Player {
   name: string;
   color: string;
   isOnline: boolean;
+  isAI?: boolean;
+  aiDifficulty?: 'easy' | 'medium' | 'hard';
+  aiArchetype?: string;
 }
 
 export interface Game {

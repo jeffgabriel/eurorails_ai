@@ -175,6 +175,19 @@ class ApiClient {
     return { players: response.data };
   }
 
+  async addAIPlayer(gameId: ID, config: { difficulty: string; archetype: string; name?: string }): Promise<void> {
+    await this.request<{ success: boolean }>(`/api/lobby/games/${gameId}/ai-player`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  }
+
+  async removeAIPlayer(gameId: ID, playerId: ID): Promise<void> {
+    await this.request<{ success: boolean }>(`/api/lobby/games/${gameId}/ai-player/${playerId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async startGame(gameId: ID): Promise<void> {
     await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/start`, {
       method: 'POST',
@@ -298,6 +311,7 @@ export function getErrorMessage(error: ApiError): string {
     INVALID_JOIN_CODE: 'Invalid join code',
     NOT_GAME_CREATOR: 'Only the game creator can start the game',
     GAME_NOT_AVAILABLE: 'Game is no longer available',
+    NO_HUMAN_PLAYERS: 'Cannot start a game with only AI players',
     FORBIDDEN: 'Access forbidden',
     NEW_OWNER_NOT_ONLINE: 'Selected new owner must be online',
     
