@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { AuthService } from '../services/authService';
+import { VerificationService } from '../services/verificationService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { LoginForm, RegisterForm, User } from '../../shared/types/AuthTypes';
@@ -353,6 +354,91 @@ router.delete('/me', authenticateToken, requireAuth, asyncHandler(async (req: Re
       message: 'Account deletion failed',
       details: 'An unexpected error occurred'
     });
+  }
+}));
+
+/**
+ * POST /api/auth/resend-verification
+ * Resend email verification link
+ */
+router.post('/resend-verification', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const user = req.user!;
+
+  try {
+    // Check if already verified
+    const isVerified = await VerificationService.isEmailVerified(user.id);
+    if (isVerified) {
+      res.status(400).json({
+        error: 'ALREADY_VERIFIED',
+        message: 'Email is already verified',
+        details: 'No action needed'
+      });
+      return;
+    }
+
+    // Send verification email
+    await VerificationService.sendVerificationEmail(user.id, user.email, user.username);
+
+    res.status(200).json({
+      success: true,
+      message: 'Verification email sent',
+      details: 'Please check your email inbox and spam folder'
+    });
+  } catch (error) {
+    console.error('Resend verification error:', error);
+    
+    res.status(500).json({
+      error: 'INTERNAL_SERVER_ERROR',
+      message: 'Failed to send verification email',
+      details: 'Please try again later'
+    });
+  }
+}));
+
+/**
+ * GET /api/auth/verify-email?token=xxx
+ * Verify email with token
+ */
+router.get('/verify-email', asyncHandler(async (req: Request, res: Response) => {
+  const { token } = req.query;
+
+  if (!token || typeof token !== 'string') {
+    res.status(400).json({
+      error: 'INVALID_TOKEN',
+      message: 'Verification token is required',
+      details: 'Please use the link from your email'
+    });
+    return;
+  }
+
+  try {
+    const result = await VerificationService.verifyToken(token);
+
+    if (!result.success) {
+      let message = 'Verification failed';
+      let details = 'Please request a new verification email';
+
+      if (result.error === 'INVALID_TOKEN') {
+        message = 'Invalid verification token';
+      } else if (result.error === 'TOKEN_EXPIRED') {
+        message = 'Verification link has expired';
+        details = 'Please request a new verification email (expires after 15 minutes)';
+      }
+
+      // Redirect to client with error
+      const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+      res.redirect(`${clientUrl}/login?verified=false&error=${result.error}`);
+      return;
+    }
+
+    // Redirect to client with success
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+    res.redirect(`${clientUrl}/login?verified=true`);
+  } catch (error) {
+    console.error('Email verification error:', error);
+    
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
+    res.redirect(`${clientUrl}/login?verified=false&error=VERIFICATION_ERROR`);
   }
 }));
 

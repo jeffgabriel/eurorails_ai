@@ -9,6 +9,7 @@ build/
 .env
 .env.local
 .env.*
+!.env.example
 
 # IDE files
 .vscode/

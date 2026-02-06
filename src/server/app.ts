@@ -8,6 +8,7 @@ import authRoutes from './routes/authRoutes';
 import playerRoutes from './routes/playerRoutes';
 import trackRoutes from './routes/trackRoutes';
 import deckRoutes from './routes/deckRoutes';
+import chatRoutes from './routes/chatRoutes';
 import { 
   addRequestId, 
   errorHandler, 
@@ -53,6 +54,7 @@ app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Catch-all handler for client-side routing (only for non-API, non-static routes)
 app.get('*', (req, res, next) => {
