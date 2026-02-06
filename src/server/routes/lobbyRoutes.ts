@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import { z } from 'zod';
 import { LobbyService, CreateGameData } from '../services/lobbyService';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
@@ -431,6 +432,67 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
   res.status(200).json({
     success: true,
     message: 'Player presence updated successfully'
+  });
+}));
+
+// --- AI Player Management ---
+
+const addAIPlayerSchema = z.object({
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  archetype: z.enum([
+    'backbone_builder',
+    'freight_optimizer',
+    'trunk_sprinter',
+    'continental_connector',
+    'opportunist',
+  ]),
+  name: z.string().min(1).max(30).optional(),
+});
+
+// POST /api/lobby/games/:id/ai-player - Add an AI player to a game
+router.post('/games/:id/ai-player', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId } = req.params;
+  const userId = req.user!.id;
+
+  logLobbyOperation('Add AI player request', { gameId, userId }, req);
+
+  if (!validateUUID(gameId, 'gameId', res)) {
+    return;
+  }
+
+  const parsed = addAIPlayerSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid request body',
+      details: parsed.error.issues.map(e => `${e.path.join('.')}: ${e.message}`).join('; '),
+    });
+    return;
+  }
+
+  const player = await LobbyService.addAIPlayer(gameId, userId, parsed.data);
+
+  res.status(201).json({
+    success: true,
+    data: { player },
+  });
+}));
+
+// DELETE /api/lobby/games/:id/ai-player/:playerId - Remove an AI player from a game
+router.delete('/games/:id/ai-player/:playerId', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId, playerId } = req.params;
+  const userId = req.user!.id;
+
+  logLobbyOperation('Remove AI player request', { gameId, playerId, userId }, req);
+
+  if (!validateUUID(gameId, 'gameId', res) || !validateUUID(playerId, 'playerId', res)) {
+    return;
+  }
+
+  await LobbyService.removeAIPlayer(gameId, playerId, userId);
+
+  res.status(200).json({
+    success: true,
   });
 }));
 

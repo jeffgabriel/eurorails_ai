@@ -170,9 +170,10 @@ export class PlayerService {
             INSERT INTO players (
                 id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
-                current_turn_number, hand, loads, camera_state
+                current_turn_number, hand, loads, camera_state,
+                is_ai, ai_difficulty, ai_archetype
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         `;
     const values = [
       player.id,
@@ -189,7 +190,10 @@ export class PlayerService {
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
       player.trainState.loads || [],
-      player.cameraState || null
+      player.cameraState || null,
+      player.isAI || false,
+      player.aiDifficulty || null,
+      player.aiArchetype || null,
     ];
     try {
       await useClient.query(query, values);
@@ -595,12 +599,12 @@ export class PlayerService {
     currentPlayerIndex: number
   ): Promise<void> {
     const query = `
-            UPDATE games 
+            UPDATE games
             SET current_player_index = $1, updated_at = CURRENT_TIMESTAMP
             WHERE id = $2
         `;
     await db.query(query, [currentPlayerIndex, gameId]);
-    
+
     // Emit turn change event to all clients in the game room
     const { getSocketIO } = await import('./socketService');
     const io = getSocketIO();
@@ -620,6 +624,12 @@ export class PlayerService {
         console.warn(`No player found at index ${currentPlayerIndex} for game ${gameId}`);
       }
     }
+
+    // If the new current player is an AI bot, trigger their turn asynchronously
+    const { AITurnScheduler } = await import('./ai/AITurnScheduler');
+    AITurnScheduler.triggerIfAI(gameId, currentPlayerIndex).catch(error => {
+      console.error(`[BOT:ERROR] Failed to trigger AI turn for game ${gameId}:`, error);
+    });
   }
 
   static async getGameState(
