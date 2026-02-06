@@ -41,7 +41,7 @@ curl -X POST http://localhost:3000/api/lobby/games \
 
 ## API Overview
 
-The Lobby API provides 8 endpoints for game management:
+The Lobby API provides 10 endpoints for game management:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -51,8 +51,18 @@ The Lobby API provides 8 endpoints for game management:
 | GET | `/games/:id/players` | Get game players |
 | POST | `/games/:id/start` | Start a game |
 | POST | `/games/:id/leave` | Leave a game |
+| POST | `/games/:id/ai-player` | Add AI bot to game |
+| DELETE | `/games/:id/ai-player/:playerId` | Remove AI bot |
 | POST | `/players/presence` | Update player presence |
 | GET | `/health` | Health check |
+
+### Game API (`/api/games`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/games/:id/ai-audit/:playerId` | Get AI strategy audit |
+
+See [AI Features API](./api/ai-features.md) for full AI endpoint documentation.
 
 ## Authentication
 

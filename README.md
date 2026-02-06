@@ -165,6 +165,41 @@ VITE_SOCKET_URL=https://api.example.com
 
 For complete environment variable documentation, see `example.env` in the project root.
 
+## AI Bot Players
+
+EuroRails supports AI bot opponents for single-player and mixed human/bot games. Bots use the same game rules and server logic as human players.
+
+### Adding Bots to a Game
+
+The game host can add 1-5 AI players from the game lobby before starting. Each bot is configured with:
+
+- **Difficulty** (`easy`, `medium`, `hard`) - Controls how optimally the bot plays
+- **Archetype** - The bot's strategic personality:
+  - `backbone_builder` - Connects major cities with efficient trunk lines
+  - `freight_optimizer` - Prioritizes high-value deliveries
+  - `trunk_sprinter` - Builds fast routes and upgrades train speed early
+  - `continental_connector` - Aims to connect all regions of the map
+  - `opportunist` - Adapts strategy based on current game state
+
+### How Bots Play
+
+- Bots take turns automatically when it's their turn in the rotation
+- All bot actions (track building, movement, loading/delivery) follow the same rules as human players
+- Bot demand cards are visible to all players, matching physical board game rules
+- A brief thinking animation plays during the bot's turn
+
+### Strategy Inspector
+
+Click the brain icon next to a bot's name to open the Strategy Inspector, which shows:
+- The bot's current plan in plain English
+- All options considered with scores
+- Rejected options and why they were rejected
+- Bot status summary (cash, train type, loads, connected cities)
+
+### API Reference
+
+For programmatic bot management, see the [AI Features API documentation](src/server/docs/api/ai-features.md).
+
 ## Project Structure
 
 ```
