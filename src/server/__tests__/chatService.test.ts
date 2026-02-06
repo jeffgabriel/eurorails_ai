@@ -59,8 +59,8 @@ async function addPlayerToGame(userId: string, gameId: string): Promise<string> 
   const playerId = uuidv4();
   await runQuery(async (client) => {
     await client.query(
-      'INSERT INTO players (id, user_id, game_id, color, position, is_deleted) VALUES ($1, $2, $3, $4, $5, $6)',
-      [playerId, userId, gameId, 'red', 0, false]
+      'INSERT INTO players (id, user_id, game_id, name, color, is_deleted) VALUES ($1, $2, $3, $4, $5, $6)',
+      [playerId, userId, gameId, 'Test Player', '#FF0000', false]
     );
   });
   return playerId;
@@ -220,7 +220,8 @@ describe('ChatService', () => {
       });
 
       expect(messageId).toBeDefined();
-      expect(typeof messageId).toBe('number');
+      // BIGSERIAL returns bigint which can be string or number in JS
+      expect(['number', 'string']).toContain(typeof messageId);
 
       // Verify message was stored
       const message = await runQuery(async (client) => {
