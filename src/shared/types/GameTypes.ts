@@ -1,5 +1,6 @@
 import { DemandCard } from './DemandCard';
 import { LoadType } from './LoadTypes';
+import type { AIDifficulty, AIArchetype } from './AITypes';
 export enum PlayerColor {
     YELLOW = '#FFD700',  // Using a golden yellow for better visibility
     RED = '#FF0000',
@@ -51,6 +52,9 @@ export interface Player {
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
     cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
+    isAI?: boolean;
+    aiDifficulty?: AIDifficulty;
+    aiArchetype?: AIArchetype;
 }
 
 export interface TrainState {
