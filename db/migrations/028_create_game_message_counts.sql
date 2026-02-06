@@ -17,6 +17,14 @@ BEGIN
     END IF;
 END $$;
 
+-- Add check constraint for message limit
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.check_constraints WHERE constraint_name = 'game_message_counts_total_messages_check') THEN
+        ALTER TABLE game_message_counts ADD CONSTRAINT game_message_counts_total_messages_check CHECK (total_messages <= 1000 AND total_messages >= 0);
+    END IF;
+END $$;
+
 -- Add trigger to update updated_at
 DROP TRIGGER IF EXISTS update_game_message_counts_updated_at ON game_message_counts;
 CREATE TRIGGER update_game_message_counts_updated_at
@@ -25,5 +33,5 @@ CREATE TRIGGER update_game_message_counts_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Add comments
-COMMENT ON TABLE game_message_counts IS 'Total message count per game (limit: 1000 messages)';
-COMMENT ON COLUMN game_message_counts.total_messages IS 'Total number of messages sent in this game';
+COMMENT ON TABLE game_message_counts IS 'Total message count per game (limit: 1000 messages enforced by CHECK constraint)';
+COMMENT ON COLUMN game_message_counts.total_messages IS 'Total number of messages sent in this game (0-1000)';

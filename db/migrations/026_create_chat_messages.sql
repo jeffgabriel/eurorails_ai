@@ -25,6 +25,16 @@ BEGIN
     END IF;
 END $$;
 
+-- Add check constraint for recipient_id validation
+-- When recipient_type='game', recipient_id must equal game_id
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.check_constraints WHERE constraint_name = 'chat_messages_recipient_id_check') THEN
+        ALTER TABLE chat_messages ADD CONSTRAINT chat_messages_recipient_id_check 
+        CHECK (recipient_type != 'game' OR recipient_id = game_id);
+    END IF;
+END $$;
+
 -- Create indexes for performance
 CREATE INDEX IF NOT EXISTS idx_chat_game_recipient ON chat_messages(game_id, recipient_type, recipient_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_user_id, created_at DESC);
@@ -33,4 +43,4 @@ CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender_user_id, crea
 COMMENT ON TABLE chat_messages IS 'In-game chat messages between players';
 COMMENT ON COLUMN chat_messages.message_text IS '500 Unicode characters maximum (counted by String.length in JS, not bytes)';
 COMMENT ON COLUMN chat_messages.recipient_type IS 'Type of recipient: player (DM) or game (group chat)';
-COMMENT ON COLUMN chat_messages.recipient_id IS 'User ID for player DMs, game ID for group chat';
+COMMENT ON COLUMN chat_messages.recipient_id IS 'User ID for player DMs, game ID for group chat (validated by CHECK constraint)';

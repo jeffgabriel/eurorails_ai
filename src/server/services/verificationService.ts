@@ -63,9 +63,10 @@ export class VerificationService {
       // Generate new token
       const token = await this.generateVerificationToken(userId);
 
-      // Construct verification URL
-      const baseUrl = process.env.CLIENT_URL || 'http://localhost:3000';
-      const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${token}`;
+      // Construct verification URL using API base URL (not client URL)
+      // This ensures the link points directly to the backend API endpoint
+      const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 3001}`;
+      const verificationUrl = `${apiBaseUrl}/api/auth/verify-email?token=${token}`;
 
       // Send email
       await emailService.sendVerificationEmail(email, username, verificationUrl);
@@ -79,11 +80,16 @@ export class VerificationService {
 
   /**
    * Verify a token and mark user's email as verified
+   * Uses transaction to ensure atomicity
    */
   static async verifyToken(token: string): Promise<VerificationResult> {
+    const client = await db.connect();
+    
     try {
+      await client.query('BEGIN');
+
       // Find token
-      const tokenResult = await db.query(
+      const tokenResult = await client.query(
         `SELECT user_id, expires_at 
          FROM email_verification_tokens 
          WHERE token = $1`,
@@ -91,6 +97,7 @@ export class VerificationService {
       );
 
       if (tokenResult.rows.length === 0) {
+        await client.query('ROLLBACK');
         return {
           success: false,
           error: 'INVALID_TOKEN',
@@ -102,10 +109,11 @@ export class VerificationService {
       // Check if token has expired
       if (new Date() > new Date(expiresAt)) {
         // Clean up expired token
-        await db.query(
+        await client.query(
           'DELETE FROM email_verification_tokens WHERE token = $1',
           [token]
         );
+        await client.query('COMMIT');
         
         return {
           success: false,
@@ -114,16 +122,18 @@ export class VerificationService {
       }
 
       // Mark user as verified
-      await db.query(
+      await client.query(
         'UPDATE users SET email_verified = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1',
         [userId]
       );
 
       // Delete used token
-      await db.query(
+      await client.query(
         'DELETE FROM email_verification_tokens WHERE token = $1',
         [token]
       );
+
+      await client.query('COMMIT');
 
       console.log(`[Verification] User ${userId} email verified successfully`);
 
@@ -132,11 +142,14 @@ export class VerificationService {
         userId,
       };
     } catch (error) {
+      await client.query('ROLLBACK');
       console.error('[Verification] Error verifying token:', error);
       return {
         success: false,
         error: 'VERIFICATION_ERROR',
       };
+    } finally {
+      client.release();
     }
   }
 

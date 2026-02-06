@@ -13,6 +13,17 @@ CREATE TABLE IF NOT EXISTS chat_rate_limits (
     UNIQUE(user_id, game_id)
 );
 
+-- Add foreign key constraints
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chat_rate_limits_user_id_fkey' AND table_name = 'chat_rate_limits') THEN
+        ALTER TABLE chat_rate_limits ADD CONSTRAINT chat_rate_limits_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.table_constraints WHERE constraint_name = 'chat_rate_limits_game_id_fkey' AND table_name = 'chat_rate_limits') THEN
+        ALTER TABLE chat_rate_limits ADD CONSTRAINT chat_rate_limits_game_id_fkey FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE;
+    END IF;
+END $$;
+
 -- Create index for performance
 CREATE INDEX IF NOT EXISTS idx_rate_limit_user_game ON chat_rate_limits(user_id, game_id);
 
