@@ -79,6 +79,8 @@ export class RateLimitService {
 
   /**
    * Record a message sent by user
+   * Note: In production, this fails silently to avoid blocking message sending
+   * In tests (NODE_ENV=test), errors are thrown for proper test validation
    */
   async recordMessage(userId: string, gameId: string): Promise<void> {
     try {
@@ -95,7 +97,10 @@ export class RateLimitService {
       );
     } catch (error) {
       console.error('[RateLimit] Error recording message:', error);
-      // Don't throw - rate limiting is not critical enough to block message sending
+      // In test environment, throw to catch issues; in production, fail silently
+      if (process.env.NODE_ENV === 'test') {
+        throw error;
+      }
     }
   }
 

@@ -72,6 +72,14 @@ describe('RateLimitService', () => {
         await rateLimitService.recordMessage(userId, gameId);
       }
 
+      // Small delay to ensure all database writes are committed (CI race condition fix)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Verify the database state before checking limit (prevents race conditions in CI)
+      const status = await rateLimitService.getUserStatus(userId, gameId);
+      expect(status).toBeDefined();
+      expect(status!.messageCount).toBe(15);
+
       // 16th message should be blocked
       const check = await rateLimitService.checkUserLimit(userId, gameId);
       expect(check.allowed).toBe(false);
@@ -89,6 +97,14 @@ describe('RateLimitService', () => {
       for (let i = 0; i < 15; i++) {
         await rateLimitService.recordMessage(userId, gameId);
       }
+
+      // Small delay to ensure all database writes are committed (CI race condition fix)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Verify the count is correct before checking limit
+      const status = await rateLimitService.getUserStatus(userId, gameId);
+      expect(status).toBeDefined();
+      expect(status!.messageCount).toBe(15);
 
       // Verify blocked
       const blockedCheck = await rateLimitService.checkUserLimit(userId, gameId);
@@ -121,6 +137,13 @@ describe('RateLimitService', () => {
       for (let i = 0; i < 15; i++) {
         await rateLimitService.recordMessage(user1, game1);
       }
+
+      // Small delay to ensure all database writes are committed (CI race condition fix)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Verify count before checking
+      const status = await rateLimitService.getUserStatus(user1, game1);
+      expect(status!.messageCount).toBe(15);
 
       // User1 in Game1 should be blocked
       const user1Game1Check = await rateLimitService.checkUserLimit(user1, game1);
@@ -230,6 +253,13 @@ describe('RateLimitService', () => {
       for (let i = 0; i < 15; i++) {
         await rateLimitService.recordMessage(userId, gameId);
       }
+
+      // Small delay to ensure all database writes are committed (CI race condition fix)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      // Verify count before checking
+      const status = await rateLimitService.getUserStatus(userId, gameId);
+      expect(status!.messageCount).toBe(15);
 
       // Verify blocked
       const blockedCheck = await rateLimitService.checkUserLimit(userId, gameId);

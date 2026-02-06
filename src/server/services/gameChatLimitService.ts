@@ -47,6 +47,8 @@ export class GameChatLimitService {
 
   /**
    * Increment game message count
+   * Note: In production, this fails silently to avoid blocking message sending
+   * In tests (NODE_ENV=test), errors are thrown for proper test validation
    */
   async incrementGameCount(gameId: string): Promise<void> {
     try {
@@ -63,7 +65,10 @@ export class GameChatLimitService {
       );
     } catch (error) {
       console.error('[GameChatLimit] Error incrementing game count:', error);
-      // Don't throw - counting is not critical enough to block message sending
+      // In test environment, throw to catch issues; in production, fail silently
+      if (process.env.NODE_ENV === 'test') {
+        throw error;
+      }
     }
   }
 

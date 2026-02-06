@@ -63,6 +63,9 @@ describe('GameChatLimitService', () => {
         await gameChatLimitService.incrementGameCount(gameId);
       }
 
+      // Small delay to ensure all database writes are committed (CI race condition fix)
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       const allowed = await gameChatLimitService.checkGameLimit(gameId);
 
       expect(allowed).toBe(true);
@@ -78,6 +81,9 @@ describe('GameChatLimitService', () => {
         await gameChatLimitService.incrementGameCount(gameId);
       }
 
+      // Small delay to ensure all database writes are committed
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       // Manually set to exactly 1000 after service initialized the record
       await runQuery(async (client) => {
         await client.query(
@@ -85,6 +91,9 @@ describe('GameChatLimitService', () => {
           [gameId, 1000]
         );
       });
+
+      // Another small delay after manual UPDATE
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       const allowed = await gameChatLimitService.checkGameLimit(gameId);
 
