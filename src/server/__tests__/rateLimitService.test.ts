@@ -17,11 +17,39 @@ async function runQuery<T = any>(queryFn: (client: any) => Promise<T>): Promise<
   }
 }
 
+// Helper function to create test game
+async function createTestGame(): Promise<string> {
+  const gameId = uuidv4();
+  await runQuery(async (client) => {
+    await client.query(
+      `INSERT INTO games (id, status) VALUES ($1, $2)`,
+      [gameId, 'active']
+    );
+  });
+  return gameId;
+}
+
+// Helper function to create test user
+async function createTestUser(username: string, email: string): Promise<string> {
+  const userId = uuidv4();
+  await runQuery(async (client) => {
+    await client.query(
+      'INSERT INTO users (id, username, email, password_hash, email_verified, chat_enabled) VALUES ($1, $2, $3, $4, $5, $6)',
+      [userId, username, email, 'hash', true, true]
+    );
+  });
+  return userId;
+}
+
 // Helper function to clean up test data
 async function cleanupTestData(userIds: string[], gameIds: string[]) {
   await runQuery(async (client) => {
     if (userIds.length > 0) {
       await client.query('DELETE FROM chat_rate_limits WHERE user_id = ANY($1)', [userIds]);
+      await client.query('DELETE FROM users WHERE id = ANY($1)', [userIds]);
+    }
+    if (gameIds.length > 0) {
+      await client.query('DELETE FROM games WHERE id = ANY($1)', [gameIds]);
     }
   });
 }
@@ -44,8 +72,8 @@ describe('RateLimitService', () => {
 
   describe('checkUserLimit', () => {
     it('should allow messages within limit', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser1', 'test1@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
@@ -62,8 +90,8 @@ describe('RateLimitService', () => {
     });
 
     it('should block messages after limit exceeded', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser2', 'test2@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
@@ -88,8 +116,8 @@ describe('RateLimitService', () => {
     });
 
     it('should reset limit after window expires', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser3', 'test3@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
@@ -126,10 +154,10 @@ describe('RateLimitService', () => {
     });
 
     it('should track limits per user per game separately', async () => {
-      const user1 = uuidv4();
-      const user2 = uuidv4();
-      const game1 = uuidv4();
-      const game2 = uuidv4();
+      const user1 = await createTestUser('testuser4', 'test4@example.com');
+      const user2 = await createTestUser('testuser5', 'test5@example.com');
+      const game1 = await createTestGame();
+      const game2 = await createTestGame();
       testUserIds.push(user1, user2);
       testGameIds.push(game1, game2);
 
@@ -161,8 +189,8 @@ describe('RateLimitService', () => {
 
   describe('getUserStatus', () => {
     it('should return current rate limit status', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser6', 'test6@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
@@ -181,8 +209,8 @@ describe('RateLimitService', () => {
     });
 
     it('should return null for user with no messages', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser7', 'test7@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
@@ -194,9 +222,9 @@ describe('RateLimitService', () => {
 
   describe('cleanupOldData', () => {
     it('should delete old rate limit records', async () => {
-      const userId1 = uuidv4();
-      const userId2 = uuidv4();
-      const gameId = uuidv4();
+      const userId1 = await createTestUser('testuser10', 'test10@example.com');
+      const userId2 = await createTestUser('testuser11', 'test11@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId1, userId2);
       testGameIds.push(gameId);
 
@@ -244,8 +272,8 @@ describe('RateLimitService', () => {
 
   describe('resetUserLimit', () => {
     it('should reset user rate limit', async () => {
-      const userId = uuidv4();
-      const gameId = uuidv4();
+      const userId = await createTestUser('testuser9', 'test9@example.com');
+      const gameId = await createTestGame();
       testUserIds.push(userId);
       testGameIds.push(gameId);
 
