@@ -6,6 +6,7 @@ import { Button } from '../../components/ui/button';
 import type { Player } from '../../shared/types';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
+import { ArchetypeBadge } from './ArchetypeBadge';
 
 interface GameRowProps {
   player: Player;
@@ -21,14 +22,26 @@ export function GameRow({ player, onRemoveBot }: GameRowProps) {
   const isGameCreator = currentGame?.createdBy === player.userId;
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-accent/5 transition-colors">
+    <div
+      className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+        player.isAI
+          ? 'bg-muted/50 border-dashed hover:bg-muted/70'
+          : 'bg-card hover:bg-accent/5'
+      }`}
+      role="listitem"
+      aria-label={player.isAI ? `AI bot: ${player.name}` : `Player: ${player.name}`}
+    >
       <div className="relative">
         <Avatar className="size-10">
           <AvatarFallback
             className="text-sm"
             style={{ backgroundColor: player.color + '20', color: player.color }}
           >
-            {player.isAI ? <Bot className="size-5" /> : <User className="size-5" />}
+            {player.isAI ? (
+              <Bot className="size-5" aria-label="AI bot player" />
+            ) : (
+              <User className="size-5" aria-label="Human player" />
+            )}
           </AvatarFallback>
         </Avatar>
 
@@ -62,6 +75,9 @@ export function GameRow({ player, onRemoveBot }: GameRowProps) {
                 <Badge variant="outline" className="text-xs capitalize">
                   {player.aiDifficulty}
                 </Badge>
+              )}
+              {player.aiArchetype && (
+                <ArchetypeBadge archetype={player.aiArchetype} />
               )}
             </>
           ) : (
