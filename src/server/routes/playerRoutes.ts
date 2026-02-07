@@ -3,7 +3,7 @@ import { PlayerService } from '../services/playerService';
 import { v4 as uuidv4 } from 'uuid';
 import { GameStatus } from '../types';
 import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
-import { emitStatePatch, emitTurnChange, getSocketIO } from '../services/socketService';
+import { emitStatePatch, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
 
@@ -287,18 +287,16 @@ router.post('/updateCurrentPlayer', async (req, res) => {
             });
         }
 
-        // Update the current player index
+        // Update the current player index.
+        // Note: updateCurrentPlayerIndex already emits turn:change and
+        // triggers AI turn scheduling internally — do NOT emit again here
+        // to avoid duplicate socket events that cause client-side race
+        // conditions in handleTurnChange.
         await PlayerService.updateCurrentPlayerIndex(gameId, currentPlayerIndex);
 
         // Get the updated game state
         const gameState = await PlayerService.getGameState(gameId);
-        
-        // Emit turn change and state patch
-        emitTurnChange(gameId, currentPlayerIndex);
-        await emitStatePatch(gameId, {
-            currentPlayerIndex: currentPlayerIndex
-        });
-        
+
         return res.status(200).json(gameState);
     } catch (error: any) {
         console.error('Error in /updateCurrentPlayer route:', error);

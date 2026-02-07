@@ -95,12 +95,15 @@ export class GameStateService {
                 return;
             }
 
-            // Only update local state after API succeeds
+            // Only update local state after API succeeds.
+            // Do NOT call notifyTurnChange here — the server emits a socket
+            // turn:change event which is the single source of truth.  Calling
+            // notifyTurnChange from the POST response adds a racing async
+            // handleTurnChange call whose result is unpredictable when bots
+            // advance the turn in rapid succession.
             const updatedState = await response.json();
             if (updatedState.currentPlayerIndex !== undefined) {
                 this.gameState.currentPlayerIndex = updatedState.currentPlayerIndex;
-                // Notify listeners of turn change
-                this.notifyTurnChange(this.gameState.currentPlayerIndex);
             }
         } catch (error) {
             console.error('Error updating current player:', error);

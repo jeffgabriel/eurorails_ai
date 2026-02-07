@@ -43,6 +43,7 @@ export class GameScene extends Phaser.Scene {
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
+  private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
   
 
@@ -1083,9 +1084,17 @@ export class GameScene extends Phaser.Scene {
    * Turn number increment and movement reset are client-side UI state calculations.
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    // Guard against concurrent invocations from rapid socket events.
+    // Each call captures a sequence number; after the async fetch completes,
+    // it bails out if a newer call has started (meaning this one is stale).
+    const seq = ++this.turnChangeSeq;
+
     // Refresh player data from server to get updated money amounts
     await this.refreshPlayerData();
-    
+
+    // Stale call — a newer turn:change arrived while we were fetching
+    if (seq !== this.turnChangeSeq) return;
+
     // Get the new current player after the turn change
     const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
     const newActivePlayerId = newCurrentPlayer?.id || null;
