@@ -22,6 +22,7 @@ export interface ChatMessage {
 interface OptimisticMessage extends Omit<ChatMessage, 'id' | 'createdAt'> {
   optimisticId: string;
   isPending: boolean;
+  createdAt: string; // Store creation time to avoid re-generating on every render
   error?: string;
 }
 
@@ -162,6 +163,7 @@ export class ChatStateService {
     // Create optimistic message
     const optimisticId = `optimistic-${Date.now()}-${Math.random()}`;
     const effectiveRecipientId = recipientId || gameId;
+    const createdAt = new Date().toISOString();
     const optimisticMessage: OptimisticMessage = {
       optimisticId,
       gameId,
@@ -170,6 +172,7 @@ export class ChatStateService {
       recipientType,
       recipientId: effectiveRecipientId,
       message,
+      createdAt, // Store creation time to avoid inconsistent timestamps on re-renders
       isRead: false,
       isPending: true,
     };
@@ -186,7 +189,7 @@ export class ChatStateService {
       recipientType: optimisticMessage.recipientType,
       recipientId: optimisticMessage.recipientId,
       message: optimisticMessage.message,
-      createdAt: new Date().toISOString(),
+      createdAt: optimisticMessage.createdAt,
       isRead: optimisticMessage.isRead,
     };
     this.notifyMessageListeners(gameId, tempMessage);
@@ -215,10 +218,17 @@ export class ChatStateService {
       return;
     }
 
-    // Remove matching optimistic message if it exists
-    const optimisticIndex = state.optimisticMessages.findIndex(
-      (opt) => opt.senderId === message.senderId && opt.message === message.message
-    );
+    // Remove matching optimistic message using optimisticId if present in message
+    // This provides more accurate deduplication than content-based matching
+    const optimisticIndex = state.optimisticMessages.findIndex((opt) => {
+      // If server response includes the optimistic ID, use that for matching
+      if ((message as any).optimisticId) {
+        return opt.optimisticId === (message as any).optimisticId;
+      }
+      // Fallback: match by sender and content (for backwards compatibility)
+      return opt.senderId === message.senderId && opt.message === message.message;
+    });
+    
     if (optimisticIndex >= 0) {
       state.optimisticMessages.splice(optimisticIndex, 1);
     }
@@ -358,7 +368,7 @@ export class ChatStateService {
         recipientType: opt.recipientType,
         recipientId: opt.recipientId,
         message: opt.message,
-        createdAt: new Date().toISOString(),
+        createdAt: opt.createdAt, // Use stored creation time for consistency
         isRead: opt.isRead,
       })),
     ];

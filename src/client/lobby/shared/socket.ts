@@ -333,6 +333,12 @@ class SocketService {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
+    
+    // Validate that recipientId is provided for player-to-player messages
+    if (recipientType === 'player' && !recipientId) {
+      throw new Error('recipientId is required when recipientType is player');
+    }
+    
     this.socket.emit('send-chat-message', {
       gameId,
       message,
