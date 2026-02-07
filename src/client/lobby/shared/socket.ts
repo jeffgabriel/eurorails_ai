@@ -312,6 +312,54 @@ class SocketService {
     this.socket.on('victory:tie-extended', callback);
   }
 
+  // Chat-specific methods
+  joinGameChat(gameId: ID, userId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('join-game-chat', { gameId, userId });
+    debug.log(`Joined game chat for game ${gameId}`);
+  }
+
+  leaveGameChat(gameId: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('leave-game-chat', { gameId });
+    debug.log(`Left game chat for game ${gameId}`);
+  }
+
+  sendChatMessage(gameId: ID, message: string, recipientType: 'game' | 'player' = 'game', recipientId?: ID): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('send-chat-message', {
+      gameId,
+      message,
+      recipientType,
+      recipientId: recipientId || gameId,
+    });
+    debug.log(`Sent chat message to game ${gameId}`);
+  }
+
+  onChatMessage(callback: (data: { gameId: ID; message: any }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('chat-message');
+    this.socket.on('chat-message', callback);
+  }
+
+  onChatStatus(callback: (data: { gameId: ID; messageId: number; status: 'delivered' | 'read' }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('chat-status');
+    this.socket.on('chat-status', callback);
+  }
+
+  onChatError(callback: (data: { error: string; message: string }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('chat-error');
+    this.socket.on('chat-error', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }
