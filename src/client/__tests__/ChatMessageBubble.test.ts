@@ -128,12 +128,14 @@ describe('ChatMessageBubble', () => {
     });
 
     it('should handle empty sender username', () => {
-      const senderName = '' || 'Unknown';
+      const username = '';
+      const senderName = username || 'Unknown';
       expect(senderName).toBe('Unknown');
     });
 
     it('should handle undefined sender username', () => {
-      const senderName = (undefined as any) || 'Unknown';
+      const username: string | undefined = undefined;
+      const senderName = username || 'Unknown';
       expect(senderName).toBe('Unknown');
     });
   });
