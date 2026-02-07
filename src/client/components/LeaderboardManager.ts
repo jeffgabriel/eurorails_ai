@@ -10,17 +10,20 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
+  private toggleChatCallback?: () => void;
   
   constructor(
     scene: Phaser.Scene, 
     gameState: GameState,
     nextPlayerCallback: () => void,
-    gameStateService?: GameStateService
+    gameStateService?: GameStateService,
+    toggleChatCallback?: () => void
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.nextPlayerCallback = nextPlayerCallback;
     this.gameStateService = gameStateService || null;
+    this.toggleChatCallback = toggleChatCallback;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -157,13 +160,17 @@ export class LeaderboardManager {
 
     // Create and add next player button
     const nextPlayerButton = this.createNextPlayerButton();
+    
+    // Create and add chat button
+    const chatButton = this.createChatButton();
 
     // Add all UI elements to container
     targetContainer.add([
       leaderboardBg,
       leaderboardTitle,
       ...playerEntries,
-      ...nextPlayerButton.getAll()
+      ...nextPlayerButton.getAll(),
+      ...chatButton.getAll()
     ]);
   }
 
@@ -214,6 +221,53 @@ export class LeaderboardManager {
     }
 
     buttonContainer.add([nextPlayerButton, nextPlayerText]);
+    return buttonContainer;
+  }
+
+  private createChatButton(): Phaser.GameObjects.Container {
+    const buttonContainer = this.scene.add.container(0, 0);
+    const LEADERBOARD_WIDTH = 150;
+    const LEADERBOARD_PADDING = 10;
+    
+    // Chat button goes below the "Next Player" button
+    const buttonY = LEADERBOARD_PADDING + 90 + this.gameState.players.length * 20;
+
+    // Add chat button
+    const chatButton = this.scene.add
+      .rectangle(
+        this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+        buttonY,
+        LEADERBOARD_WIDTH,
+        40,
+        0x0066cc,
+        0.9
+      )
+      .setOrigin(0, 0);
+
+    const chatButtonText = this.scene.add
+      .text(
+        this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
+        buttonY + 20,
+        "💬 Chat",
+        {
+          color: "#ffffff",
+          fontSize: "16px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+        }
+      )
+      .setOrigin(0.5, 0.5);
+
+    // Make the button interactive
+    if (this.toggleChatCallback) {
+      chatButton
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", () => this.toggleChatCallback!())
+        .on("pointerover", () => chatButton.setFillStyle(0x0055aa))
+        .on("pointerout", () => chatButton.setFillStyle(0x0066cc));
+    }
+
+    buttonContainer.add([chatButton, chatButtonText]);
     return buttonContainer;
   }
 }

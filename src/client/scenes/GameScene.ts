@@ -647,6 +647,15 @@ export class GameScene extends Phaser.Scene {
     // Set a low frame rate for the scene
     this.game.loop.targetFps = 30;
 
+    // Initialize ChatScene for this game
+    const localPlayer = this.playerStateService.getLocalPlayer();
+    if (localPlayer) {
+      this.scene.launch('ChatScene', {
+        gameId: this.gameState.id,
+        userId: localPlayer.id,
+      });
+    }
+
     // Add event handler for scene resume
     this.events.on("resume", async () => {
       // Clear and recreate UI elements
@@ -1344,6 +1353,26 @@ export class GameScene extends Phaser.Scene {
       this.uiManager.setupUIOverlay();
     } catch (error) {
       console.error('Error refreshing UI overlay:', error);
+    }
+  }
+
+  /**
+   * Toggle the chat sidebar
+   */
+  public toggleChat(): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    if (chatScene && chatScene.toggle) {
+      chatScene.toggle();
+    }
+  }
+
+  /**
+   * Open the chat sidebar
+   */
+  public openChat(): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    if (chatScene && chatScene.open) {
+      chatScene.open();
     }
   }
 }
