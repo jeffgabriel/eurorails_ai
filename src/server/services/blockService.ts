@@ -6,6 +6,15 @@ export interface BlockedUser {
   blockedAt: string;
 }
 
+export interface BlockHistoryEntry {
+  blocker_user_id: string;
+  blocked_user_id: string;
+  action: 'block' | 'unblock';
+  created_at: string;
+  blocker_username: string;
+  blocked_username: string;
+}
+
 /**
  * Service for managing user blocking/unblocking and block history
  */
@@ -163,7 +172,7 @@ export class BlockService {
   /**
    * Get block history for a user (for admin/debugging purposes)
    */
-  static async getBlockHistory(userId: string, limit: number = 50): Promise<any[]> {
+  static async getBlockHistory(userId: string, limit: number = 50): Promise<BlockHistoryEntry[]> {
     try {
       const result = await db.query(
         `SELECT 

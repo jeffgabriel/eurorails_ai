@@ -1,0 +1,57 @@
+# Testing Requirements
+
+## Mandatory Test Standards
+
+### ALL TESTS MUST PASS BEFORE COMMIT
+- **100% test pass rate required** - No commits or PRs with failing tests
+- **No exceptions** - If tests fail, they must be fixed before committing
+- **No partial credit** - "58/73 tests passing" means 15 tests FAILING, which is unacceptable
+
+### Before Every Commit
+1. **Run all tests**: `npm test`
+2. **Verify 100% pass rate** - Check output shows "Tests: X passed, X total" with no failures
+3. **Fix all failures** - Do not proceed until all tests pass
+4. **Re-run after fixes** - Ensure fixes didn't break other tests
+
+### Test Failure Response
+When tests fail:
+1. **Stop immediately** - Do not commit, do not create PR
+2. **Analyze failures** - Read error messages carefully
+3. **Fix the issues** - Update code or tests as needed
+4. **Verify fixes** - Run tests again until 100% pass
+5. **Only then proceed** - Commit only after all tests pass
+
+### What Counts as a Test Failure
+- ❌ Test fails with error or assertion failure
+- ❌ Test times out
+- ❌ Test is skipped due to errors (not intentional .skip())
+- ❌ Test infrastructure errors (database setup, mocks, etc.)
+- ✅ Only passing tests count as success
+
+### Acceptable Test States for Commit
+- ✅ All tests pass (green)
+- ✅ Tests intentionally skipped with .skip() or .todo() (document why)
+- ❌ NEVER commit with failing tests
+- ❌ NEVER commit with test errors
+- ❌ NEVER commit with "most tests passing"
+
+### Test Quality Standards
+- Tests must be deterministic (same result every run)
+- Tests must clean up after themselves (no side effects)
+- Tests must not depend on external services in CI
+- Tests must run in reasonable time (< 1 minute for unit tests)
+
+### Documentation of Test Status
+When creating commits/PRs:
+- ✅ "All tests passing (73/73)" - Acceptable
+- ✅ "Tests: 73 passed, 5 skipped (documented), 78 total" - Acceptable
+- ❌ "Tests: 58/73 passing" - NOT ACCEPTABLE
+- ❌ "Most tests passing, some infrastructure issues" - NOT ACCEPTABLE
+
+## Consequences of Violating This Rule
+- Commits with failing tests must be fixed immediately
+- PRs with failing tests will be rejected
+- Code with failing tests is not production-ready regardless of implementation quality
+
+## Summary
+**Zero tolerance for failing tests. 100% pass rate required before any commit or PR.**
