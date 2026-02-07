@@ -251,6 +251,64 @@ function generateSnapshotHash(gameId: string, botPlayerId: string, turnNumber: n
     .substring(0, 16);
 }
 
+/**
+ * Caches pathfinding/reachability results within a single AI turn.
+ * Created alongside a WorldSnapshot and passed through the pipeline.
+ */
+export class PathCache {
+  private reachabilityCache = new Map<string, Set<string>>();
+
+  /**
+   * Get or compute reachable nodes from a starting position.
+   * Cache key is `${startKey}:${maxSteps}`.
+   */
+  getReachable(
+    graph: ReadonlyMap<string, ReadonlySet<string>>,
+    startKey: string,
+    maxSteps: number,
+  ): Set<string> {
+    const cacheKey = `${startKey}:${maxSteps}`;
+    const cached = this.reachabilityCache.get(cacheKey);
+    if (cached) return cached;
+
+    const reachable = new Set<string>();
+    if (!graph.has(startKey)) {
+      this.reachabilityCache.set(cacheKey, reachable);
+      return reachable;
+    }
+
+    const queue: Array<{ key: string; steps: number }> = [{ key: startKey, steps: 0 }];
+    const visited = new Map<string, number>();
+    visited.set(startKey, 0);
+    reachable.add(startKey);
+
+    while (queue.length > 0) {
+      const { key, steps } = queue.shift()!;
+      if (steps >= maxSteps) continue;
+
+      const neighbors = graph.get(key);
+      if (!neighbors) continue;
+
+      for (const neighbor of neighbors) {
+        const newSteps = steps + 1;
+        if (!visited.has(neighbor) || visited.get(neighbor)! > newSteps) {
+          visited.set(neighbor, newSteps);
+          reachable.add(neighbor);
+          queue.push({ key: neighbor, steps: newSteps });
+        }
+      }
+    }
+
+    this.reachabilityCache.set(cacheKey, reachable);
+    return reachable;
+  }
+
+  /** Number of cached entries (for testing/logging). */
+  get size(): number {
+    return this.reachabilityCache.size;
+  }
+}
+
 export class WorldSnapshotService {
   /**
    * Capture the current game state into an immutable WorldSnapshot for AI planning.

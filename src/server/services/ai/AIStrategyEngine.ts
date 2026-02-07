@@ -1,7 +1,7 @@
 import type { StrategyAudit, TurnPlan, TurnPlanAction, FeasibleOption, ExecutionResult } from '../../../shared/types/AITypes';
 import { AIActionType } from '../../../shared/types/AITypes';
 import type { AIDifficulty, AIArchetype } from '../../../shared/types/AITypes';
-import { WorldSnapshotService } from './WorldSnapshotService';
+import { WorldSnapshotService, PathCache } from './WorldSnapshotService';
 import { OptionGenerator } from './OptionGenerator';
 import { Scorer, ScoredOption } from './Scorer';
 import { PlanValidator } from './PlanValidator';
@@ -53,12 +53,19 @@ export class AIStrategyEngine {
     // 2. Capture snapshot
     const snapshotStart = Date.now();
     const snapshot = await WorldSnapshotService.capture(gameId, playerId);
+    const pathCache = new PathCache();
     const snapshotMs = Date.now() - snapshotStart;
+    console.log(
+      `[BOT:DEBUG] Snapshot captured for ${playerId} | Hash: ${snapshot.snapshotHash} | Duration: ${snapshotMs}ms`,
+    );
 
-    // 3. Generate options
+    // 3. Generate options (with path cache for efficient reachability)
     const optionStart = Date.now();
-    const allOptions = OptionGenerator.generate(snapshot);
+    const allOptions = OptionGenerator.generate(snapshot, pathCache);
     const optionGenerationMs = Date.now() - optionStart;
+    console.log(
+      `[BOT:DEBUG] Options generated | Total: ${allOptions.length} | Cache hits: ${pathCache.size} entries | Duration: ${optionGenerationMs}ms`,
+    );
 
     const feasibleOptions = allOptions.filter(o => o.feasible);
     const infeasibleOptions = allOptions.filter(o => !o.feasible);
@@ -67,6 +74,9 @@ export class AIStrategyEngine {
     const scoringStart = Date.now();
     const scored = Scorer.score(feasibleOptions, snapshot, skillProfile, archetypeProfile);
     const scoringMs = Date.now() - scoringStart;
+    console.log(
+      `[BOT:DEBUG] Scoring complete | Scored: ${scored.length} options | Top score: ${scored[0]?.finalScore ?? 0} | Duration: ${scoringMs}ms`,
+    );
 
     // 5-6. Plan, validate, execute with retries
     const executionStart = Date.now();

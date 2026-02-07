@@ -5,6 +5,7 @@ import { TerrainType, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/
 import type { GridPoint, Point } from '../../../shared/types/GameTypes';
 import type { DemandCard } from '../../../shared/types/DemandCard';
 import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
+import { PathCache } from './WorldSnapshotService';
 
 function nodeKey(row: number, col: number): string {
   return `${row},${col}`;
@@ -145,12 +146,16 @@ function makeInfeasible(
   };
 }
 
+/** Maximum number of feasible options per action type to pass to the Scorer. */
+const MAX_FEASIBLE_PER_TYPE = 5;
+
 export class OptionGenerator {
   /**
    * Generate all candidate actions for the AI player's turn.
    * Each option includes a feasibility flag and rejection reason if infeasible.
+   * Uses PathCache for efficient reachability lookups when provided.
    */
-  static generate(snapshot: WorldSnapshot): FeasibleOption[] {
+  static generate(snapshot: WorldSnapshot, pathCache?: PathCache): FeasibleOption[] {
     const options: FeasibleOption[] = [];
     const cityLookup = buildCityLookup(snapshot.mapTopology);
     const pointLookup = buildPointLookup(snapshot.mapTopology);
@@ -159,12 +164,14 @@ export class OptionGenerator {
     const capacity = TRAIN_PROPERTIES[snapshot.trainType]?.capacity ?? 2;
     const currentLoads = snapshot.carriedLoads.length;
 
-    // Determine reachable nodes from bot's current position
+    // Determine reachable nodes from bot's current position (using cache if available)
     const botKey = snapshot.botPosition
       ? nodeKey(snapshot.botPosition.row, snapshot.botPosition.col)
       : null;
     const reachable = botKey
-      ? getReachableNodes(snapshot.trackNetworkGraph, botKey, speed)
+      ? (pathCache
+          ? pathCache.getReachable(snapshot.trackNetworkGraph, botKey, speed)
+          : getReachableNodes(snapshot.trackNetworkGraph, botKey, speed))
       : new Set<string>();
 
     // --- DeliverLoad ---
@@ -185,7 +192,66 @@ export class OptionGenerator {
     // --- PassTurn (always feasible) ---
     options.push(makeFeasible(AIActionType.PassTurn, {}));
 
-    return options;
+    // --- Prune: keep top N feasible options per action type ---
+    return this.pruneOptions(options);
+  }
+
+  /**
+   * Prune feasible options to keep at most MAX_FEASIBLE_PER_TYPE per action type.
+   * Uses simple heuristics: highest payment for deliveries, lowest cost for builds.
+   * Infeasible options are always kept (for audit/inspector).
+   */
+  static pruneOptions(options: FeasibleOption[]): FeasibleOption[] {
+    const infeasible = options.filter(o => !o.feasible);
+    const feasible = options.filter(o => o.feasible);
+
+    // Group feasible options by type
+    const byType = new Map<AIActionType, FeasibleOption[]>();
+    for (const opt of feasible) {
+      if (!byType.has(opt.type)) byType.set(opt.type, []);
+      byType.get(opt.type)!.push(opt);
+    }
+
+    const pruned: FeasibleOption[] = [];
+    for (const [type, opts] of byType) {
+      if (opts.length <= MAX_FEASIBLE_PER_TYPE) {
+        pruned.push(...opts);
+        continue;
+      }
+
+      // Sort by heuristic value (descending) then take top N
+      const sorted = opts.sort((a, b) => {
+        const aVal = this.optionHeuristicValue(a);
+        const bVal = this.optionHeuristicValue(b);
+        return bVal - aVal;
+      });
+      pruned.push(...sorted.slice(0, MAX_FEASIBLE_PER_TYPE));
+    }
+
+    return [...pruned, ...infeasible];
+  }
+
+  /**
+   * Quick heuristic value for pruning — higher is better.
+   * Used only for deciding which options to keep before full scoring.
+   */
+  private static optionHeuristicValue(option: FeasibleOption): number {
+    const params = option.parameters;
+    switch (option.type) {
+      case AIActionType.DeliverLoad:
+      case AIActionType.PickupAndDeliver:
+        return (params.payment as number) || 0;
+      case AIActionType.BuildTrack:
+      case AIActionType.BuildTowardMajorCity:
+        // Prefer lower estimated cost (invert so lower cost = higher value)
+        return 100 - ((params.estimatedCost as number) || 50);
+      case AIActionType.UpgradeTrain:
+        return 50; // Neutral priority
+      case AIActionType.PassTurn:
+        return 0;
+      default:
+        return 0;
+    }
   }
 
   /**

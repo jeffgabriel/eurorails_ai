@@ -28,6 +28,7 @@ jest.mock('../../../services/ai/WorldSnapshotService', () => ({
   WorldSnapshotService: {
     capture: (...args: unknown[]) => mockCapture(...args),
   },
+  PathCache: class { get size() { return 0; } },
 }));
 
 const mockGenerate = jest.fn();
