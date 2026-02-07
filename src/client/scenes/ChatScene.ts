@@ -196,6 +196,7 @@ export class ChatScene extends Phaser.Scene {
       color: #ffffff;
       outline: none;
       z-index: 1000;
+      display: none;
     `;
 
     document.body.appendChild(this.inputField);
@@ -305,8 +306,11 @@ export class ChatScene extends Phaser.Scene {
     const width = this.isMobile ? this.scale.width : this.SIDEBAR_WIDTH_DESKTOP;
     const isOwnMessage = message.senderId === this.userId;
 
-    // Calculate Y position (stack from top)
-    const yPosition = this.messagesList.length * 80 + this.MESSAGE_PADDING;
+    // Calculate Y position based on actual heights of previous bubbles
+    let yPosition = this.MESSAGE_PADDING;
+    for (const existingBubble of this.messagesList) {
+      yPosition += existingBubble.height + this.MESSAGE_PADDING;
+    }
 
     const bubble = new ChatMessageBubble(
       this,
@@ -349,7 +353,12 @@ export class ChatScene extends Phaser.Scene {
    * Update scroll bounds based on content height
    */
   private updateScrollBounds(): void {
-    const contentHeight = this.messagesList.length * 80;
+    // Calculate total content height from actual bubble heights
+    let contentHeight = this.MESSAGE_PADDING; // Top padding
+    for (const bubble of this.messagesList) {
+      contentHeight += bubble.height + this.MESSAGE_PADDING;
+    }
+    
     const visibleHeight = this.scale.height - this.HEADER_HEIGHT - this.INPUT_HEIGHT;
     this.maxScroll = Math.max(0, contentHeight - visibleHeight);
   }
@@ -419,6 +428,11 @@ export class ChatScene extends Phaser.Scene {
     this.isOpen = true;
     const targetX = this.isMobile ? 0 : this.scale.width - this.SIDEBAR_WIDTH_DESKTOP;
 
+    // Show input field
+    if (this.inputField) {
+      this.inputField.style.display = 'block';
+    }
+
     // Slide in from right
     this.tweens.add({
       targets: this.container,
@@ -440,6 +454,11 @@ export class ChatScene extends Phaser.Scene {
     if (!this.isOpen) return;
 
     this.isOpen = false;
+
+    // Hide input field
+    if (this.inputField) {
+      this.inputField.style.display = 'none';
+    }
 
     // Slide out to right
     this.tweens.add({

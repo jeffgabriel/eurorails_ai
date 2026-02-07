@@ -101,9 +101,9 @@ describe('ChatMessageBubble', () => {
     });
 
     it('should handle invalid timestamps gracefully', () => {
-      const invalidDate = new Date('invalid');
-      // Should create a date object (even if invalid)
-      expect(invalidDate).toBeInstanceOf(Date);
+      const formatted = formatTimestamp('invalid');
+      // Invalid dates will still format but with "Invalid Date" text
+      expect(formatted).toBeTruthy(); // Function should not throw
     });
   });
 
