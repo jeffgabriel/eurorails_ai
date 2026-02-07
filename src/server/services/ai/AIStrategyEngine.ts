@@ -273,6 +273,28 @@ export class AIStrategyEngine {
   }
 
   /**
+   * Retrieve the latest StrategyAudit for a bot player in a game.
+   * Returns null if no audit exists yet.
+   */
+  static async getLatestStrategyAudit(
+    gameId: string,
+    playerId: string,
+  ): Promise<StrategyAudit | null> {
+    const result = await db.query(
+      `SELECT audit_json FROM ai_turn_audits
+       WHERE game_id = $1 AND player_id = $2
+       ORDER BY created_at DESC LIMIT 1`,
+      [gameId, playerId],
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    return result.rows[0].audit_json as StrategyAudit;
+  }
+
+  /**
    * Log a StrategyAudit to the ai_turn_audits table.
    */
   private static async logAudit(

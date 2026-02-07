@@ -110,7 +110,7 @@ export const useStrategyInspectorStore = create<StrategyInspectorStore>((set, ge
     }
     try {
       const token = localStorage.getItem('eurorails.jwt');
-      const response = await fetch(`/api/games/${gameId}/ai-audit/${playerId}`, {
+      const response = await fetch(`/api/game/${gameId}/ai-audit/${playerId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {

@@ -1,6 +1,7 @@
 import express from 'express';
 import { GameService } from '../services/gameService';
 import { VictoryService, MajorCityCoordinate } from '../services/victoryService';
+import { AIStrategyEngine } from '../services/ai/AIStrategyEngine';
 import { authenticateToken } from '../middleware/authMiddleware';
 import { db } from '../db';
 import { emitVictoryTriggered, emitGameOver, emitTieExtended } from '../services/socketService';
@@ -277,4 +278,77 @@ router.get('/:gameId/victory-state', authenticateToken, async (req, res) => {
     }
 });
 
-export default router; 
+// Get latest AI strategy audit for a bot player
+router.get('/:gameId/ai-audit/:playerId', authenticateToken, async (req, res) => {
+    try {
+        const { gameId, playerId } = req.params;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({
+                error: 'UNAUTHORIZED',
+                details: 'Authentication required'
+            });
+        }
+
+        // Validate game membership
+        const membershipResult = await db.query(
+            'SELECT is_deleted FROM players WHERE game_id = $1 AND user_id = $2 LIMIT 1',
+            [gameId, userId]
+        );
+
+        if (membershipResult.rows.length === 0) {
+            return res.status(403).json({
+                error: 'FORBIDDEN',
+                details: 'You are not a player in this game'
+            });
+        }
+
+        if (membershipResult.rows[0].is_deleted === true) {
+            return res.status(403).json({
+                error: 'FORBIDDEN',
+                details: 'You no longer have access to this game'
+            });
+        }
+
+        // Verify the target player is an AI bot in this game
+        const playerCheck = await db.query(
+            'SELECT is_ai FROM players WHERE id = $1 AND game_id = $2',
+            [playerId, gameId]
+        );
+
+        if (playerCheck.rows.length === 0) {
+            return res.status(404).json({
+                error: 'NOT_FOUND',
+                details: 'Player not found in game'
+            });
+        }
+
+        if (!playerCheck.rows[0].is_ai) {
+            return res.status(400).json({
+                error: 'INVALID_REQUEST',
+                details: 'Audit data is only available for AI bot players'
+            });
+        }
+
+        // Fetch the latest audit
+        const audit = await AIStrategyEngine.getLatestStrategyAudit(gameId, playerId);
+
+        if (!audit) {
+            return res.status(404).json({
+                error: 'NOT_FOUND',
+                details: 'No audit data available yet. Wait for the bot to take a turn.'
+            });
+        }
+
+        return res.status(200).json(audit);
+    } catch (error: any) {
+        console.error('Error in /:gameId/ai-audit/:playerId route:', error);
+        return res.status(500).json({
+            error: 'SERVER_ERROR',
+            details: error.message || 'An unexpected error occurred'
+        });
+    }
+});
+
+export default router;
