@@ -1,6 +1,7 @@
 // game/StandaloneGame.tsx - React wrapper for the standalone game
 import { useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
+import { StrategyInspectorModal } from './components/StrategyInspectorModal';
 
 export function StandaloneGame() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -48,7 +49,7 @@ export function StandaloneGame() {
         gameRef.current.destroy(true);
         gameRef.current = null;
       }
-      
+
       // Remove the game container
       const gameContainer = document.getElementById('game-container');
       if (gameContainer && containerRef.current) {
@@ -58,14 +59,16 @@ export function StandaloneGame() {
   }, [gameId]);
 
   return (
-    <div 
-      ref={containerRef} 
+    <div
+      ref={containerRef}
       className="size-full"
-      style={{ 
+      style={{
         minHeight: '100vh',
         background: '#0b0e14',
         position: 'relative'
       }}
-    />
+    >
+      <StrategyInspectorModal />
+    </div>
   );
 }
