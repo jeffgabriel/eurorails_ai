@@ -514,6 +514,15 @@ export class GameScene extends Phaser.Scene {
           socketService.onAITurnComplete((data) => {
             this.uiManager.setBotThinking(data.playerId, false);
             this.uiManager.setupUIOverlay();
+
+            // Pre-fetch audit data into the strategy inspector cache
+            if (this.gameState.id) {
+              import('../game/stores/strategyInspectorStore').then(({ useStrategyInspectorStore }) => {
+                useStrategyInspectorStore.getState().markTurnComplete(this.gameState.id, data.playerId);
+              }).catch(() => {
+                // Strategy inspector store not available - non-fatal
+              });
+            }
           });
         }
       } catch (error) {
