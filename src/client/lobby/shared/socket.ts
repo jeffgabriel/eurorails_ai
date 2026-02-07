@@ -312,6 +312,25 @@ class SocketService {
     this.socket.on('victory:tie-extended', callback);
   }
 
+  // AI bot event listeners
+  onAIThinking(callback: (data: { playerId: string; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('ai:thinking');
+    this.socket.on('ai:thinking', callback);
+  }
+
+  onAIAction(callback: (data: { playerId: string; action: string; [key: string]: unknown }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('ai:action');
+    this.socket.on('ai:action', callback);
+  }
+
+  onAITurnComplete(callback: (data: { playerId: string; result: unknown; totalMs: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('ai:turn-complete');
+    this.socket.on('ai:turn-complete', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }

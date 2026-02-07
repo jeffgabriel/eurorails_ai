@@ -3,6 +3,7 @@ import { GameState } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { BotThinkingIndicator } from "./BotThinkingIndicator";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -10,9 +11,11 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
-  
+  private thinkingBotIds: Set<string> = new Set();
+  private activeIndicators: BotThinkingIndicator[] = [];
+
   constructor(
-    scene: Phaser.Scene, 
+    scene: Phaser.Scene,
     gameState: GameState,
     nextPlayerCallback: () => void,
     gameStateService?: GameStateService
@@ -23,8 +26,22 @@ export class LeaderboardManager {
     this.gameStateService = gameStateService || null;
     this.container = this.scene.add.container(0, 0);
   }
+
+  public setThinking(playerId: string, thinking: boolean): void {
+    if (thinking) {
+      this.thinkingBotIds.add(playerId);
+    } else {
+      this.thinkingBotIds.delete(playerId);
+    }
+  }
   
   public update(targetContainer: Phaser.GameObjects.Container): void {
+    // Clean up old thinking indicators before clearing container
+    for (const indicator of this.activeIndicators) {
+      indicator.destroy();
+    }
+    this.activeIndicators = [];
+
     // Clear existing UI elements
     targetContainer.removeAll(true);
 
@@ -117,6 +134,15 @@ export class LeaderboardManager {
             )
             .setOrigin(0, 0);
           elements.push(iconText);
+        }
+
+        // Show pulsing indicator for thinking AI bots
+        const isThinkingBot = player.isAI && this.thinkingBotIds.has(player.id);
+        if (isThinkingBot) {
+          const indicator = new BotThinkingIndicator(this.scene);
+          const dot = indicator.create(entryX + 15, entryY + 10);
+          elements.push(dot);
+          this.activeIndicators.push(indicator);
         }
 
         // Create player text - keep mostly the same, just bold for active player

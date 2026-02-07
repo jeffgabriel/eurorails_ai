@@ -79,6 +79,10 @@ export class UIManager {
     this.trainInteractionManager.updateTrainInteractivity();
   }
 
+  public setBotThinking(playerId: string, thinking: boolean): void {
+    this.leaderboardManager.setThinking(playerId, thinking);
+  }
+
   public clearTurnUndoStack(): void {
     this.turnActionManager?.clear();
   }

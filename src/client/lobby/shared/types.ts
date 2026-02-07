@@ -114,6 +114,9 @@ export interface ServerToClientEvents {
     newThreshold: number;
     timestamp: number;
   }) => void;
+  'ai:thinking': (data: { playerId: string; timestamp: number }) => void;
+  'ai:action': (data: { playerId: string; action: string; [key: string]: unknown }) => void;
+  'ai:turn-complete': (data: { playerId: string; result: unknown; totalMs: number }) => void;
 }
 
 // Form validation types

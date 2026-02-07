@@ -464,6 +464,57 @@ export class GameScene extends Phaser.Scene {
             // Refresh UI
             this.uiManager.setupUIOverlay();
           });
+
+          // Listen for AI bot thinking events
+          socketService.onAIThinking((data) => {
+            this.uiManager.setBotThinking(data.playerId, true);
+            this.uiManager.setupUIOverlay();
+          });
+
+          // Listen for AI bot action events (show toast notifications)
+          socketService.onAIAction((data) => {
+            const botPlayer = this.gameState.players.find(p => p.id === data.playerId);
+            const botName = botPlayer?.name ?? 'AI Bot';
+
+            let message = '';
+            switch (data.action) {
+              case 'deliver': {
+                const loadType = (data.loadType as string) ?? 'goods';
+                const payment = (data.payment as number) ?? 0;
+                message = `${botName} delivered ${loadType} (+${payment}M ECU)`;
+                break;
+              }
+              case 'pickup': {
+                const loadType = (data.loadType as string) ?? 'goods';
+                message = `${botName} picked up ${loadType}`;
+                break;
+              }
+              case 'buildTrack': {
+                const segmentCount = (data.segmentCount as number) ?? 0;
+                const cost = (data.cost as number) ?? 0;
+                message = `${botName} built ${segmentCount} track segments (-${cost}M ECU)`;
+                break;
+              }
+              case 'upgrade':
+              case 'crossgrade': {
+                const targetTrainType = (data.targetTrainType as string) ?? 'train';
+                message = `${botName} upgraded to ${targetTrainType}`;
+                break;
+              }
+              default:
+                message = `${botName}: ${data.action}`;
+            }
+
+            if (message) {
+              this.turnNotification.show(message, 3000);
+            }
+          });
+
+          // Listen for AI bot turn complete events
+          socketService.onAITurnComplete((data) => {
+            this.uiManager.setBotThinking(data.playerId, false);
+            this.uiManager.setupUIOverlay();
+          });
         }
       } catch (error) {
         console.error('Failed to register turn change socket listener:', error);
