@@ -22,6 +22,12 @@ const ARCHETYPE_DISPLAY_NAMES: Record<ArchetypeId, string> = {
   opportunist: 'Opportunist',
 };
 
+const BOT_NAMES = [
+  'Hans', 'Marie', 'Pierre', 'Sofia', 'Erik',
+  'Lucia', 'Klaus', 'Ingrid', 'Marco', 'Elena',
+  'Franz', 'Nadia', 'Lars', 'Chiara', 'Otto',
+];
+
 export interface CreateGameData {
   isPublic?: boolean;
   maxPlayers?: number;
@@ -1008,7 +1014,7 @@ export class LobbyService {
       // WHERE user_id = $X queries continue to work (FK constraint on users).
       const botUserId = uuidv4();
       const botPlayerId = uuidv4();
-      const botName = config.botName || `Bot ${ARCHETYPE_DISPLAY_NAMES[resolvedArchetype]}`;
+      const botName = config.botName || BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
 
       await client.query(
         `INSERT INTO users (id, username, email, password_hash, email_verified)

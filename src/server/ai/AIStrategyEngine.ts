@@ -419,13 +419,20 @@ export class AIStrategyEngine {
       score: bestScore.toFixed(2),
     });
 
-    // Update the player's position in the database
+    // Find the grid point to get pixel coordinates (x, y)
+    const centerPoint = snapshot.mapPoints.find(
+      (p) => p.row === bestCity.center.row && p.col === bestCity.center.col,
+    );
+    const posX = centerPoint?.x ?? 0;
+    const posY = centerPoint?.y ?? 0;
+
+    // Update the player's position in the database (all 4 position columns required)
     const { db } = await import('../db/index');
     await db.query(
       `UPDATE players
-       SET position_row = $1, position_col = $2
-       WHERE game_id = $3 AND id = $4`,
-      [bestCity.center.row, bestCity.center.col, gameId, botPlayerId],
+       SET position_row = $1, position_col = $2, position_x = $3, position_y = $4
+       WHERE game_id = $5 AND id = $6`,
+      [bestCity.center.row, bestCity.center.col, posX, posY, gameId, botPlayerId],
     );
 
     return {

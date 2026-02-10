@@ -312,10 +312,10 @@ describe('AIStrategyEngine.placeInitialTrain', () => {
     expect(result.row).toBe(5);
     expect(result.col).toBe(10);
 
-    // Verify DB update was called
+    // Verify DB update was called (position_row, position_col, position_x, position_y, gameId, playerId)
     expect(mockQuery).toHaveBeenCalledWith(
       expect.stringContaining('UPDATE players'),
-      [5, 10, GAME_ID, 'bot-1'],
+      [5, 10, 0, 0, GAME_ID, 'bot-1'],
     );
   });
 

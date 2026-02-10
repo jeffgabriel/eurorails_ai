@@ -73,6 +73,13 @@
 - **Status:** Fixed
 - **Lesson:** Pathfinding algorithms need a "cold start" case — when there's no existing network, the bot's position is the seed.
 
+### DEF-011: placeInitialTrain only sets position_row/col, not position_x/y
+- **Severity:** P0 — Bot position is null in WorldSnapshot despite being placed
+- **Root Cause:** `placeInitialTrain` only updates `position_row` and `position_col` in the DB. But `PlayerService.getPlayers` reconstructs `trainState.position` only when `position_x !== null` (line 543). With `position_x = null`, the position is `undefined`, so `snapshot.position` is `null`, and the DEF-010 Dijkstra seed never fires.
+- **Fix:** Update `placeInitialTrain` to also set `position_x` and `position_y` from the grid point's pixel coordinates.
+- **Status:** Fixed
+- **Lesson:** When updating position in the DB, all 4 position columns must be set together — the read path uses `position_x` as the null check sentinel.
+
 ## Patterns to Watch For
 - **Missing migrations:** Any new column in an INSERT/UPDATE must have a migration.
 - **FK constraints:** Check migrations for REFERENCES before assuming a column can hold arbitrary values.
