@@ -51,6 +51,7 @@ function makeAudit(overrides: Partial<StrategyAudit> = {}): StrategyAudit {
     turnNumber: 14,
     archetypeName: 'Freight Optimizer',
     skillLevel: 'hard',
+    snapshotHash: 'a3f8c2',
     currentPlan: 'Delivering Wine from Bordeaux to Vienna for 48M ECU.',
     archetypeRationale: 'I prioritize load combinations that share routes.',
     feasibleOptions: [
@@ -62,6 +63,10 @@ function makeAudit(overrides: Partial<StrategyAudit> = {}): StrategyAudit {
       makeRejectedOption({ description: 'Deliver Machinery to London', reason: 'No track to London' }),
       makeRejectedOption({ description: 'Pickup Steel in Birmingham', reason: 'All loads on trains' }),
     ],
+    selectedPlan: [
+      makeScoredOption({ score: 87, description: 'Deliver Wine to Vienna' }),
+    ],
+    executionResult: { success: true, actionsExecuted: 1, durationMs: 1200 },
     botStatus: {
       cash: 127,
       trainType: TrainType.Freight,

@@ -52,10 +52,13 @@ describe('GET /api/bot-audit/:gameId/:playerId', () => {
     turnNumber: 5,
     archetypeName: 'Aggressive Builder',
     skillLevel: 'medium',
+    snapshotHash: 'abc123',
     currentPlan: 'Build toward München for delivery',
     archetypeRationale: 'High cash reserves favor aggressive expansion',
     feasibleOptions: [],
     rejectedOptions: [],
+    selectedPlan: [],
+    executionResult: { success: true, actionsExecuted: 1, durationMs: 50 },
     botStatus: {
       cash: 45,
       trainType: 'Freight' as StrategyAudit['botStatus']['trainType'],

@@ -226,10 +226,13 @@ export interface StrategyAudit {
   turnNumber: number;
   archetypeName: string;
   skillLevel: SkillLevel;
+  snapshotHash: string;
   currentPlan: string;
   archetypeRationale: string;
   feasibleOptions: ScoredOption[];
   rejectedOptions: InfeasibleOption[];
+  selectedPlan: FeasibleOption[];
+  executionResult: ExecutionResult;
   botStatus: {
     cash: number;
     trainType: TrainType;
