@@ -982,8 +982,8 @@ export class LobbyService {
       }
       const botColor = availableColors[0];
 
-      // Generate synthetic user ID and player ID
-      const botUserId = `bot-${uuidv4()}`;
+      // Generate synthetic user ID and player ID (both must be valid UUIDs)
+      const botUserId = uuidv4();
       const botPlayerId = uuidv4();
 
       const botDisplayConfig: BotDisplayConfig = {
