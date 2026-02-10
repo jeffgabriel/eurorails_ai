@@ -39,6 +39,11 @@ export interface CameraState {
     scrollY: number;
 }
 
+export interface BotDisplayConfig {
+    archetype: string;  // e.g. 'backbone_builder', 'freight_optimizer'
+    skillLevel: string; // 'easy' | 'medium' | 'hard'
+}
+
 export interface Player {
     id: string;  // Add unique identifier for database
     userId?: string;  // Optional user ID for authentication (matches players.user_id in database)
@@ -51,6 +56,8 @@ export interface Player {
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
     cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
+    isBot?: boolean;  // Whether this player is an AI bot
+    botConfig?: BotDisplayConfig;  // Bot configuration for UI display
 }
 
 export interface TrainState {
