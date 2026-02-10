@@ -293,8 +293,7 @@ router.post('/updateCurrentPlayer', async (req, res) => {
         // Get the updated game state
         const gameState = await PlayerService.getGameState(gameId);
         
-        // Emit turn change and state patch
-        emitTurnChange(gameId, currentPlayerIndex);
+        // Emit state patch (turn change is already emitted by updateCurrentPlayerIndex)
         await emitStatePatch(gameId, {
             currentPlayerIndex: currentPlayerIndex
         });

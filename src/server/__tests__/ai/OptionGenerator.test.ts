@@ -485,6 +485,42 @@ describe('OptionGenerator', () => {
       }
     });
 
+    it('should only generate build and pass options during initialBuild phase', () => {
+      const tracks = makeTestTracks('bot-1');
+      const snapshot = makeSnapshot({
+        gamePhase: 'initialBuild',
+        position: { x: 0, y: 0, row: 10, col: 10 },
+        money: 50,
+        turnBuildCostSoFar: 0,
+        trainType: TrainType.Freight,
+        carriedLoads: [],
+        demandCards: [makeDemandCard(1, [
+          { city: 'Hamburg', resource: LoadType.Coal, payment: 15 },
+        ])],
+        mapPoints: makeTestMapPoints(),
+        trackSegments: tracks[0].segments,
+        allPlayerTracks: tracks,
+      });
+
+      const result = OptionGenerator.generate(snapshot);
+      const actionTypes = result.feasible.map((o: FeasibleOption) => o.type);
+
+      // Only BuildTrack, BuildTowardMajorCity, and PassTurn should be present
+      const allowedTypes = new Set([
+        AIActionType.BuildTrack,
+        AIActionType.BuildTowardMajorCity,
+        AIActionType.PassTurn,
+      ]);
+      for (const type of actionTypes) {
+        expect(allowedTypes.has(type)).toBe(true);
+      }
+
+      // No delivery, pickup, or upgrade options
+      expect(actionTypes).not.toContain(AIActionType.DeliverLoad);
+      expect(actionTypes).not.toContain(AIActionType.PickupAndDeliver);
+      expect(actionTypes).not.toContain(AIActionType.UpgradeTrain);
+    });
+
     it('should have exactly 6 action types defined', () => {
       const actionTypes = Object.values(AIActionType);
       expect(actionTypes).toHaveLength(6);

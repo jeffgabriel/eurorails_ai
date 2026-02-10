@@ -71,7 +71,15 @@ export class OptionGenerator {
       ? computeReachableCities(snapshot, snapshot.remainingMovement)
       : [];
 
-    // Generate all option types
+    // During initialBuild phase, only track-building and pass are allowed
+    if (snapshot.gamePhase === 'initialBuild') {
+      OptionGenerator.generateBuildTrackOptions(snapshot, feasible, infeasible);
+      OptionGenerator.generateBuildTowardMajorCityOptions(snapshot, feasible, infeasible);
+      OptionGenerator.generatePassTurnOption(feasible);
+      return { feasible, infeasible };
+    }
+
+    // Generate all option types for active game phase
     OptionGenerator.generateDeliveryOptions(snapshot, reachableCities, feasible, infeasible);
     OptionGenerator.generatePickupAndDeliverOptions(snapshot, reachableCities, feasible, infeasible);
     OptionGenerator.generateBuildTrackOptions(snapshot, feasible, infeasible);
