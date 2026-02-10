@@ -34,5 +34,8 @@ coverage/
 
 # Test results
 test-results/
+playwright-report/
+blob-report/
+test-results/
 
 .npm-cache/
