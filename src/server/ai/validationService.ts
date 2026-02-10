@@ -25,7 +25,7 @@ const TERRAIN_COSTS: Record<TerrainType, number> = {
   [TerrainType.SmallCity]: 3,
   [TerrainType.MediumCity]: 3,
   [TerrainType.MajorCity]: 5,
-  [TerrainType.FerryPort]: 1, // Treat as clear terrain for pathfinding; actual ferry costs are separate
+  [TerrainType.FerryPort]: 1, // Base cost; actual ferry crossing cost comes from ferryConnection.cost
   [TerrainType.Water]: 0,
 };
 
@@ -407,7 +407,15 @@ export function computeBuildSegments(
       // Calculate edge cost (0 if edge already in network)
       const edgeStr =
         current < neighborKey ? `${current}|${neighborKey}` : `${neighborKey}|${current}`;
-      const edgeCost = networkEdges.has(edgeStr) ? 0 : TERRAIN_COSTS[neighborPoint.terrain];
+      let edgeCost: number;
+      if (networkEdges.has(edgeStr)) {
+        edgeCost = 0;
+      } else if (neighborPoint.terrain === TerrainType.FerryPort && neighborPoint.ferryConnection) {
+        // Ferry ports use route-specific cost (4-16 ECU) from ferryPoints.json
+        edgeCost = neighborPoint.ferryConnection.cost;
+      } else {
+        edgeCost = TERRAIN_COSTS[neighborPoint.terrain];
+      }
 
       const newCost = currentCost + edgeCost;
       if (newCost > budget) continue;
@@ -447,6 +455,12 @@ export function computeBuildSegments(
     const fromPoint = gridLookup.get(fromKey)!;
     const toPoint = gridLookup.get(toKey)!;
 
+    // Ferry ports use route-specific cost; other terrain uses the cost table
+    const segCost =
+      toPoint.terrain === TerrainType.FerryPort && toPoint.ferryConnection
+        ? toPoint.ferryConnection.cost
+        : TERRAIN_COSTS[toPoint.terrain];
+
     segments.push({
       from: {
         x: fromPoint.x,
@@ -462,7 +476,7 @@ export function computeBuildSegments(
         col: toPoint.col,
         terrain: toPoint.terrain,
       },
-      cost: TERRAIN_COSTS[toPoint.terrain],
+      cost: segCost,
     });
   }
 

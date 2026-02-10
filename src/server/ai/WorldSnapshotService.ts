@@ -13,11 +13,14 @@ import type {
   TrackSegment,
   PlayerTrackState,
   Point,
+  FerryPoint,
+  FerryConnection,
 } from '../../shared/types/GameTypes';
 import { TerrainType, TrainType } from '../../shared/types/GameTypes';
 import type { LoadType } from '../../shared/types/LoadTypes';
 import type { DemandCard } from '../../shared/types/DemandCard';
 import mileposts from '../../../configuration/gridPoints.json';
+import ferryData from '../../../configuration/ferryPoints.json';
 
 // --- Lazy-cached map points (built once from gridPoints.json) ---
 
@@ -87,6 +90,23 @@ function getMapPoints(): GridPoint[] {
       terrain,
       city: cityData,
     });
+  }
+
+  // Attach ferry connections to grid points (mirrors client mapConfig.ts logic)
+  const idLookup = new Map<string, GridPoint>();
+  for (const p of points) {
+    idLookup.set(p.id, p);
+  }
+  for (const ferry of (ferryData as any).ferryPoints) {
+    const p1 = idLookup.get(ferry.connections[0]);
+    const p2 = idLookup.get(ferry.connections[1]);
+    if (!p1 || !p2) continue;
+
+    const fp1: FerryPoint = { row: p1.row, col: p1.col, x: p1.x, y: p1.y, id: p1.id, terrain: TerrainType.FerryPort };
+    const fp2: FerryPoint = { row: p2.row, col: p2.col, x: p2.x, y: p2.y, id: p2.id, terrain: TerrainType.FerryPort };
+    const conn: FerryConnection = { Name: ferry.Name, connections: [fp1, fp2], cost: ferry.cost };
+    p1.ferryConnection = conn;
+    p2.ferryConnection = conn;
   }
 
   cachedMapPoints = points;

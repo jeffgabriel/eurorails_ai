@@ -82,10 +82,10 @@
 
 ### DEF-012: FerryPort terrain cost 0 causes all build options to be rejected
 - **Severity:** P0 — Bot never builds track (all segments rejected as infeasible)
-- **Root Cause:** `TERRAIN_COSTS[TerrainType.FerryPort]` was set to 0 in `validationService.ts`. The Dijkstra pathfinder preferentially routes through FerryPort nodes (free cost), producing segments with `cost: 0`. The `validateBuildTrack` function rejects any segment with `seg.cost <= 0`, so ALL build options are infeasible.
-- **Fix:** Changed `FerryPort` cost from 0 to 1 (treat as clear terrain for pathfinding purposes; actual ferry crossing costs are handled separately).
+- **Root Cause:** `TERRAIN_COSTS[TerrainType.FerryPort]` was set to 0 in `validationService.ts`. The Dijkstra pathfinder preferentially routes through FerryPort nodes (free cost), producing segments with `cost: 0`. The `validateBuildTrack` function rejects any segment with `seg.cost <= 0`, so ALL build options are infeasible. Additionally, the AI had no access to ferry connection data — `WorldSnapshotService.getMapPoints()` never loaded `ferryPoints.json`.
+- **Fix:** (1) Load `ferryPoints.json` in `WorldSnapshotService.getMapPoints()` and attach `ferryConnection` data to GridPoints (mirroring client's `mapConfig.ts`). (2) In `computeBuildSegments` Dijkstra, use `ferryConnection.cost` (4-16 ECU per route) instead of the flat terrain cost when building to a ferry port. Ferry costs are now route-specific and match the game rules.
 - **Status:** Fixed
-- **Lesson:** A cost of 0 in pathfinding creates a "gravity well" — Dijkstra will route through zero-cost nodes even when they're not on the intended path. Any terrain used in pathfinding must have cost > 0.
+- **Lesson:** A cost of 0 in pathfinding creates a "gravity well" — Dijkstra will route through zero-cost nodes even when they're not on the intended path. Ferry port costs are variable per route (defined in `ferryPoints.json`), not a fixed terrain cost.
 
 ## Patterns to Watch For
 - **Missing migrations:** Any new column in an INSERT/UPDATE must have a migration.
