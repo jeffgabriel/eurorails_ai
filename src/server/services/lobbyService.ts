@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
 import { PlayerService } from './playerService';
 import { TrainType } from '../../shared/types/GameTypes';
-import type { Player as GamePlayer } from '../../shared/types/GameTypes';
+import type { Player as GamePlayer, BotDisplayConfig } from '../../shared/types/GameTypes';
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -434,13 +434,13 @@ export class LobbyService {
     }
 
     const result = await db.query(
-      `SELECT id, user_id, name, color, is_online, game_id 
-       FROM players 
-       WHERE game_id = $1 
+      `SELECT id, user_id, name, color, is_online, game_id, is_bot, bot_config
+       FROM players
+       WHERE game_id = $1
        ORDER BY created_at`,
       [gameId]
     );
-    
+
     return result.rows.map(row => ({
       id: row.id,
       userId: row.user_id,
@@ -457,6 +457,8 @@ export class LobbyService {
       },
       hand: [], // Lobby doesn't show hands - this will be loaded when game starts
       isOnline: row.is_online || false, // Include isOnline for lobby
+      isBot: row.is_bot || false,
+      botConfig: row.bot_config || undefined,
     }));
   }
 
@@ -930,6 +932,155 @@ export class LobbyService {
           );
         }
       }
+    }
+  }
+
+  /**
+   * Add a bot player to a game in setup phase.
+   * Only the game creator (host) may add bots.
+   */
+  static async addBot(
+    gameId: string,
+    hostUserId: string,
+    config: { skillLevel: string; archetype: string; botName: string },
+  ): Promise<GamePlayer> {
+    if (!gameId) throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    if (!hostUserId) throw new LobbyError('hostUserId is required', 'MISSING_USER_ID', 400);
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Verify game exists, is in setup, and hostUserId is the creator
+      const gameResult = await client.query(
+        `SELECT id, created_by, status, max_players FROM games WHERE id = $1`,
+        [gameId],
+      );
+      if (gameResult.rows.length === 0) throw new GameNotFoundError();
+      const game = gameResult.rows[0];
+
+      if (game.created_by !== hostUserId) throw new NotGameCreatorError();
+      if (game.status !== 'setup') throw new GameAlreadyStartedError();
+
+      // Check player count
+      const countResult = await client.query(
+        `SELECT COUNT(*)::int AS count FROM players WHERE game_id = $1`,
+        [gameId],
+      );
+      if (countResult.rows[0].count >= game.max_players) throw new GameFullError();
+
+      // Pick an available color
+      const allColors = ['#ff0000', '#0000ff', '#008000', '#ffd700', '#000000', '#8b4513'];
+      const usedResult = await client.query(
+        `SELECT color FROM players WHERE game_id = $1`,
+        [gameId],
+      );
+      const usedColors = usedResult.rows.map((r: any) => r.color);
+      const availableColors = allColors.filter((c) => !usedColors.includes(c));
+      if (availableColors.length === 0) {
+        throw new LobbyError('No available colors', 'NO_COLORS_AVAILABLE', 400);
+      }
+      const botColor = availableColors[0];
+
+      // Generate synthetic user ID and player ID
+      const botUserId = `bot-${uuidv4()}`;
+      const botPlayerId = uuidv4();
+
+      const botDisplayConfig: BotDisplayConfig = {
+        archetype: config.archetype,
+        skillLevel: config.skillLevel,
+      };
+
+      const botPlayer: GamePlayer = {
+        id: botPlayerId,
+        userId: botUserId,
+        name: config.botName || `Bot ${config.archetype}`,
+        color: botColor,
+        money: 50,
+        trainType: TrainType.Freight,
+        turnNumber: 1,
+        trainState: {
+          position: null,
+          movementHistory: [],
+          remainingMovement: 9,
+          loads: [],
+        },
+        hand: [],
+        isBot: true,
+        botConfig: botDisplayConfig,
+      };
+
+      await PlayerService.createPlayer(gameId, botPlayer, client);
+
+      await client.query('COMMIT');
+
+      // Emit lobby update
+      try {
+        const players = await LobbyService.getGamePlayers(gameId);
+        await emitLobbyUpdated(gameId, 'player-joined', players);
+      } catch { /* best-effort */ }
+
+      return botPlayer;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Remove a bot player from a game in setup phase.
+   * Only the game creator (host) may remove bots.
+   */
+  static async removeBot(
+    gameId: string,
+    hostUserId: string,
+    botPlayerId: string,
+  ): Promise<void> {
+    if (!gameId) throw new LobbyError('gameId is required', 'MISSING_GAME_ID', 400);
+    if (!hostUserId) throw new LobbyError('hostUserId is required', 'MISSING_USER_ID', 400);
+    if (!botPlayerId) throw new LobbyError('botPlayerId is required', 'MISSING_PLAYER_ID', 400);
+
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Verify game exists and host is the creator
+      const gameResult = await client.query(
+        `SELECT created_by, status FROM games WHERE id = $1`,
+        [gameId],
+      );
+      if (gameResult.rows.length === 0) throw new GameNotFoundError();
+      if (gameResult.rows[0].created_by !== hostUserId) throw new NotGameCreatorError();
+      if (gameResult.rows[0].status !== 'setup') throw new GameAlreadyStartedError();
+
+      // Verify the player is actually a bot
+      const playerResult = await client.query(
+        `SELECT id, is_bot FROM players WHERE game_id = $1 AND id = $2`,
+        [gameId, botPlayerId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new LobbyError('Bot player not found', 'PLAYER_NOT_FOUND', 404);
+      }
+      if (!playerResult.rows[0].is_bot) {
+        throw new LobbyError('Cannot remove a human player with this endpoint', 'NOT_A_BOT', 400);
+      }
+
+      await client.query(`DELETE FROM players WHERE id = $1`, [botPlayerId]);
+
+      await client.query('COMMIT');
+
+      // Emit lobby update
+      try {
+        const players = await LobbyService.getGamePlayers(gameId);
+        await emitLobbyUpdated(gameId, 'player-left', players);
+      } catch { /* best-effort */ }
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
     }
   }
 }

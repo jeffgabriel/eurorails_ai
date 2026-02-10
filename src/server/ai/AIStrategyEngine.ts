@@ -22,6 +22,7 @@ import { getArchetypeProfile } from './config/archetypeProfiles';
 import { BotAuditService } from '../services/botAuditService';
 import { emitToGame } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
+import { getMajorCityGroups } from '../../shared/services/majorCityGroups';
 import {
   BotConfig,
   TurnPlan,
@@ -343,6 +344,94 @@ export class AIStrategyEngine {
       audit,
       retriesUsed,
       fellBackToPass: true,
+    };
+  }
+
+  /**
+   * Place a bot's train at the best major city based on its demand cards.
+   *
+   * Called when a bot has no position (first turn or after game start).
+   * Evaluates all major cities and picks the one closest to the most
+   * demand-card cities (both supply and delivery).
+   *
+   * @param gameId - The game ID
+   * @param botPlayerId - The bot's player record ID
+   * @param botUserId - The bot's user ID
+   */
+  static async placeInitialTrain(
+    gameId: string,
+    botPlayerId: string,
+    botUserId: string,
+  ): Promise<{ row: number; col: number; cityName: string }> {
+    const log = logger.withContext(gameId, botPlayerId);
+    log.info('Placing initial train');
+
+    // Capture snapshot to get demand cards and map data
+    const snapshot = await WorldSnapshotService.capture(
+      gameId,
+      botPlayerId,
+      botUserId,
+    );
+
+    // Collect all demand cities from bot's cards
+    const demandCities = new Set<string>();
+    for (const card of snapshot.demandCards) {
+      for (const demand of card.demands) {
+        demandCities.add(demand.city);
+      }
+    }
+
+    // Get all major city groups
+    const majorCities = getMajorCityGroups();
+
+    // Build a city → position map from map data (all named cities)
+    const cityPositions = new Map<string, { row: number; col: number }>();
+    for (const mp of snapshot.mapPoints) {
+      const cityName = mp.city?.name || mp.name;
+      if (cityName && !cityPositions.has(cityName)) {
+        cityPositions.set(cityName, { row: mp.row, col: mp.col });
+      }
+    }
+
+    // Score each major city by proximity to demand cities
+    let bestCity = majorCities[0];
+    let bestScore = -Infinity;
+
+    for (const mc of majorCities) {
+      let score = 0;
+      for (const demandCity of demandCities) {
+        const pos = cityPositions.get(demandCity);
+        if (!pos) continue;
+        // Use Manhattan-ish hex distance (rough approximation)
+        const dr = Math.abs(mc.center.row - pos.row);
+        const dc = Math.abs(mc.center.col - pos.col);
+        const distance = dr + dc;
+        // Closer is better: inverse distance scoring
+        score += 1 / (1 + distance);
+      }
+      if (score > bestScore) {
+        bestScore = score;
+        bestCity = mc;
+      }
+    }
+
+    log.info(`Selected ${bestCity.cityName} for initial placement`, {
+      score: bestScore.toFixed(2),
+    });
+
+    // Update the player's position in the database
+    const { db } = await import('../db/index');
+    await db.query(
+      `UPDATE players
+       SET position_row = $1, position_col = $2
+       WHERE game_id = $3 AND id = $4`,
+      [bestCity.center.row, bestCity.center.col, gameId, botPlayerId],
+    );
+
+    return {
+      row: bestCity.center.row,
+      col: bestCity.center.col,
+      cityName: bestCity.cityName,
     };
   }
 }

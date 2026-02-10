@@ -102,19 +102,22 @@ function makeTurnResult(overrides: Record<string, unknown> = {}) {
  * Set up mockQuery to handle the standard sequence of DB queries:
  * 1. getPlayerAtIndex
  * 2. hasConnectedHuman
- * 3. (After takeTurn) increment turn number
- * 4. COUNT players
- * 5. (updateCurrentPlayerIndex is a separate mock)
+ * 3. position check (position_row, position_col)
+ * 4. (After takeTurn) increment turn number
+ * 5. COUNT players
+ * 6. (updateCurrentPlayerIndex is a separate mock)
  */
 function setupQueryMocks(options: {
   player?: ReturnType<typeof makeBotPlayer> | ReturnType<typeof makeHumanPlayer> | null;
   humanConnected?: boolean;
   playerCount?: number;
+  hasPosition?: boolean;
 }) {
   const {
     player = makeBotPlayer(),
     humanConnected = true,
     playerCount = 3,
+    hasPosition = true,
   } = options;
 
   const calls: Array<{ rows: unknown[] }> = [];
@@ -125,10 +128,15 @@ function setupQueryMocks(options: {
   // Call 2: hasConnectedHuman
   calls.push({ rows: humanConnected ? [{ '?column?': 1 }] : [] });
 
-  // Call 3: increment turn number (UPDATE, no meaningful return)
+  // Call 3: position check (bot auto-placement)
+  calls.push({
+    rows: [{ position_row: hasPosition ? 5 : null, position_col: hasPosition ? 10 : null }],
+  });
+
+  // Call 4: increment turn number (UPDATE, no meaningful return)
   calls.push({ rows: [] });
 
-  // Call 4: COUNT players
+  // Call 5: COUNT players
   calls.push({ rows: [{ count: playerCount }] });
 
   mockQuery.mockReset();

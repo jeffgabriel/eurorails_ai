@@ -213,6 +213,31 @@ async function executeBotTurn(
   // to GameService.getGame which no longer filters on userId.
   const botUserId = player.user_id || player.id;
 
+  // Auto-place train if bot has no position yet (first turn)
+  const posResult = await db.query(
+    `SELECT position_row, position_col FROM players WHERE id = $1`,
+    [player.id],
+  );
+  if (
+    posResult.rows.length > 0 &&
+    posResult.rows[0].position_row === null &&
+    posResult.rows[0].position_col === null
+  ) {
+    try {
+      const placement = await AIStrategyEngine.placeInitialTrain(
+        gameId,
+        player.id,
+        botUserId,
+      );
+      log.info(`Bot placed initial train at ${placement.cityName}`, {
+        row: placement.row,
+        col: placement.col,
+      });
+    } catch (err) {
+      log.error('Failed to place initial train', { error: String(err) });
+    }
+  }
+
   const result = await AIStrategyEngine.takeTurn(
     gameId,
     player.id,

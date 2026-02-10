@@ -434,6 +434,35 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
   });
 }));
 
+// POST /api/lobby/games/:id/bots - Add a bot to a game
+router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const gameId = req.params.id;
+  const userId = (req as any).user?.id;
+  const { skillLevel, archetype, botName } = req.body;
+
+  if (!skillLevel || !archetype) {
+    res.status(400).json({ success: false, message: 'skillLevel and archetype are required' });
+    return;
+  }
+
+  logLobbyOperation('Add bot', { gameId, skillLevel, archetype, botName }, req);
+
+  const player = await LobbyService.addBot(gameId, userId, { skillLevel, archetype, botName });
+  res.status(201).json({ success: true, data: player });
+}));
+
+// DELETE /api/lobby/games/:id/bots/:playerId - Remove a bot from a game
+router.delete('/games/:id/bots/:playerId', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const gameId = req.params.id;
+  const playerId = req.params.playerId;
+  const userId = (req as any).user?.id;
+
+  logLobbyOperation('Remove bot', { gameId, playerId }, req);
+
+  await LobbyService.removeBot(gameId, userId, playerId);
+  res.status(200).json({ success: true, message: 'Bot removed successfully' });
+}));
+
 // GET /api/lobby/health - Health check endpoint
 router.get('/health', asyncHandler(async (req: Request, res: Response) => {
   logLobbyOperation('Health check', { service: 'lobby-api' }, req);
