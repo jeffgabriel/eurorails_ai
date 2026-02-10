@@ -25,7 +25,7 @@ const TERRAIN_COSTS: Record<TerrainType, number> = {
   [TerrainType.SmallCity]: 3,
   [TerrainType.MediumCity]: 3,
   [TerrainType.MajorCity]: 5,
-  [TerrainType.FerryPort]: 0,
+  [TerrainType.FerryPort]: 1, // Treat as clear terrain for pathfinding; actual ferry costs are separate
   [TerrainType.Water]: 0,
 };
 
