@@ -361,10 +361,18 @@ export function computeBuildSegments(
   // Priority queue (simple array sorted by distance)
   const pq: Array<{ key: string; cost: number }> = [];
 
-  // Seed with all network nodes at cost 0
-  for (const nk of networkNodes) {
-    dist.set(nk, 0);
-    pq.push({ key: nk, cost: 0 });
+  // Seed with all network nodes at cost 0.
+  // When the network is empty (first build turn), seed with the bot's
+  // current position — per rules, track building starts from a major city.
+  if (networkNodes.size === 0 && snapshot.position) {
+    const posKey = nodeKey({ row: snapshot.position.row, col: snapshot.position.col });
+    dist.set(posKey, 0);
+    pq.push({ key: posKey, cost: 0 });
+  } else {
+    for (const nk of networkNodes) {
+      dist.set(nk, 0);
+      pq.push({ key: nk, cost: 0 });
+    }
   }
 
   // Sort ascending
