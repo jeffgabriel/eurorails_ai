@@ -982,8 +982,22 @@ export class LobbyService {
       }
       const botColor = availableColors[0];
 
-      // Generate player ID (bots have no user account, so userId is null)
+      // Create a synthetic user record for the bot so that all existing
+      // WHERE user_id = $X queries continue to work (FK constraint on users).
+      const botUserId = uuidv4();
       const botPlayerId = uuidv4();
+      const botName = config.botName || `Bot ${config.archetype}`;
+
+      await client.query(
+        `INSERT INTO users (id, username, email, password_hash, email_verified)
+         VALUES ($1, $2, $3, $4, true)`,
+        [
+          botUserId,
+          `bot-${botPlayerId.slice(0, 8)}`,
+          `bot-${botPlayerId}@bot.internal`,
+          'BOT_NO_LOGIN',
+        ],
+      );
 
       const botDisplayConfig: BotDisplayConfig = {
         archetype: config.archetype,
@@ -992,8 +1006,8 @@ export class LobbyService {
 
       const botPlayer: GamePlayer = {
         id: botPlayerId,
-        userId: null as any,
-        name: config.botName || `Bot ${config.archetype}`,
+        userId: botUserId,
+        name: botName,
         color: botColor,
         money: 50,
         trainType: TrainType.Freight,
@@ -1056,7 +1070,7 @@ export class LobbyService {
 
       // Verify the player is actually a bot
       const playerResult = await client.query(
-        `SELECT id, is_bot FROM players WHERE game_id = $1 AND id = $2`,
+        `SELECT id, user_id, is_bot FROM players WHERE game_id = $1 AND id = $2`,
         [gameId, botPlayerId],
       );
       if (playerResult.rows.length === 0) {
@@ -1066,7 +1080,13 @@ export class LobbyService {
         throw new LobbyError('Cannot remove a human player with this endpoint', 'NOT_A_BOT', 400);
       }
 
+      const botUserIdToDelete = playerResult.rows[0].user_id;
+
+      // Delete player first (FK cascade), then clean up the synthetic user
       await client.query(`DELETE FROM players WHERE id = $1`, [botPlayerId]);
+      if (botUserIdToDelete) {
+        await client.query(`DELETE FROM users WHERE id = $1`, [botUserIdToDelete]);
+      }
 
       await client.query('COMMIT');
 

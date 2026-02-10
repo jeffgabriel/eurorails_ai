@@ -102,7 +102,7 @@ describe('LobbyService.addBot', () => {
   });
 
   it('should create a bot player with correct config', async () => {
-    // Setup: BEGIN, game check, player count, used colors, createPlayer (game check + color check + INSERT), COMMIT
+    // Setup: BEGIN, game check, player count, used colors, INSERT user, createPlayer (game check + color check + INSERT), COMMIT
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({
@@ -110,6 +110,7 @@ describe('LobbyService.addBot', () => {
       }) // SELECT game
       .mockResolvedValueOnce({ rows: [{ count: 1 }] }) // COUNT players
       .mockResolvedValueOnce({ rows: [{ color: '#ff0000' }] }) // SELECT used colors
+      .mockResolvedValueOnce({ rows: [] }) // INSERT bot user
       .mockResolvedValueOnce({ rows: [{ id: GAME_ID }] }) // game exists check in createPlayer
       .mockResolvedValueOnce({ rows: [] }) // color check in createPlayer
       .mockResolvedValueOnce({ rows: [] }) // INSERT player
@@ -130,7 +131,7 @@ describe('LobbyService.addBot', () => {
     expect(player.color).toBe('#0000ff'); // Second color (first is taken)
     expect(player.money).toBe(50);
     expect(player.trainType).toBe(TrainType.Freight);
-    expect(player.userId).toBeNull();
+    expect(player.userId).toBeTruthy(); // Synthetic user UUID
   });
 
   it('should reject if user is not the host', async () => {
@@ -203,24 +204,30 @@ describe('LobbyService.removeBot', () => {
     setupClient();
   });
 
-  it('should remove a bot player', async () => {
+  it('should remove a bot player and its synthetic user', async () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
       .mockResolvedValueOnce({
         rows: [{ created_by: HOST_USER_ID, status: 'setup' }],
       }) // SELECT game
       .mockResolvedValueOnce({
-        rows: [{ id: 'bot-player-1', is_bot: true }],
+        rows: [{ id: 'bot-player-1', user_id: 'bot-user-1', is_bot: true }],
       }) // SELECT player
       .mockResolvedValueOnce({ rows: [] }) // DELETE player
+      .mockResolvedValueOnce({ rows: [] }) // DELETE user
       .mockResolvedValueOnce({ rows: [] }); // COMMIT
 
     await LobbyService.removeBot(GAME_ID, HOST_USER_ID, 'bot-player-1');
 
-    // Verify DELETE was called
-    const deleteCall = mockClient.query.mock.calls[3];
-    expect(deleteCall[0]).toContain('DELETE');
-    expect(deleteCall[1]).toEqual(['bot-player-1']);
+    // Verify DELETE player was called
+    const deletePlayerCall = mockClient.query.mock.calls[3];
+    expect(deletePlayerCall[0]).toContain('DELETE');
+    expect(deletePlayerCall[1]).toEqual(['bot-player-1']);
+
+    // Verify DELETE user was called
+    const deleteUserCall = mockClient.query.mock.calls[4];
+    expect(deleteUserCall[0]).toContain('DELETE');
+    expect(deleteUserCall[1]).toEqual(['bot-user-1']);
   });
 
   it('should reject removing a human player', async () => {
