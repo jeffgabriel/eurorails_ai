@@ -134,7 +134,7 @@ describe('Lobby API Integration Tests', () => {
 
       // 5. Verify game status changed
       const startedGame = await LobbyService.getGame(game.id);
-      expect(startedGame!.status).toBe('active');
+      expect(startedGame!.status).toBe('initialBuild');
 
       // 6. Leave the game
       await LobbyService.leaveGame(game.id, testUserId2);

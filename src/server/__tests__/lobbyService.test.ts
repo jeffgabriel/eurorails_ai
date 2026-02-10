@@ -356,9 +356,9 @@ describe('LobbyService', () => {
 
       await LobbyService.startGame(testGame.id, testUserId);
 
-      // Verify game status changed
+      // Verify game status changed to initialBuild (first phase before active)
       const updatedGame = await LobbyService.getGame(testGame.id);
-      expect(updatedGame!.status).toBe('active');
+      expect(updatedGame!.status).toBe('initialBuild');
     });
 
     it('should throw error for non-existent game', async () => {

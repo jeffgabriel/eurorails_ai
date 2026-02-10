@@ -575,14 +575,12 @@ export class LobbyService {
         throw new InsufficientPlayersError();
       }
       
-      // Update game status
-      await client.query(
-        'UPDATE games SET status = $1 WHERE id = $2',
-        ['active', gameId]
-      );
-      
+      // Initialize initialBuild phase (sets status, round, order, current_player_index)
+      const { InitialBuildService } = await import('./initialBuildService');
+      await InitialBuildService.initPhase(client, gameId);
+
       await client.query('COMMIT');
-      
+
       // Emit socket event to notify all clients in the lobby that game is starting
       try {
         await emitToLobby(gameId, 'game-started', {

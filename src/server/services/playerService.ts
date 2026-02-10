@@ -719,18 +719,19 @@ export class PlayerService {
     gameId: string,
     status: GameStatus
   ): Promise<void> {
-    // Validate status is lowercase and matches database constraint
+    // Validate status matches database constraint
     // Database constraint allows: 'setup', 'initialBuild', 'active', 'completed', 'abandoned'
-    const allowedStatuses = ['setup', 'initialBuild', 'active', 'completed', 'abandoned'];
-    const normalizedStatus = status.toLowerCase();
-    
+    const allowedStatuses: string[] = ['setup', 'initialBuild', 'active', 'completed', 'abandoned'];
+
     let finalStatus: string;
-    if (!allowedStatuses.includes(normalizedStatus)) {
+    if (allowedStatuses.includes(status)) {
+      finalStatus = status;
+    } else if (allowedStatuses.includes(status.toLowerCase())) {
+      finalStatus = status.toLowerCase();
+    } else {
       // If status is not in the allowed list, default to 'completed' for safety
       console.warn(`PlayerService.updateGameStatus: Status '${status}' not allowed. Valid values: ${allowedStatuses.join(', ')}. Using 'completed'.`);
       finalStatus = 'completed';
-    } else {
-      finalStatus = normalizedStatus;
     }
     
     // If setting a game to active, complete any other active games first
@@ -863,7 +864,7 @@ export class PlayerService {
         : [];
 
       const gameRow = await client.query(
-        `SELECT current_player_index
+        `SELECT current_player_index, status
          FROM games
          WHERE id = $1
          LIMIT 1
@@ -873,6 +874,12 @@ export class PlayerService {
       if (gameRow.rows.length === 0) {
         throw new Error("Game not found");
       }
+
+      // Block deliveries during initialBuild phase
+      if (gameRow.rows[0].status === 'initialBuild') {
+        throw new Error("Cannot deliver loads during initial build phase");
+      }
+
       const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
@@ -1154,7 +1161,7 @@ export class PlayerService {
 
       // Validate game exists + determine whose turn it is
       const gameRow = await client.query(
-        `SELECT current_player_index
+        `SELECT current_player_index, status
          FROM games
          WHERE id = $1
          LIMIT 1
@@ -1164,6 +1171,12 @@ export class PlayerService {
       if (gameRow.rows.length === 0) {
         throw new Error("Game not found");
       }
+
+      // Block movement during initialBuild phase
+      if (gameRow.rows[0].status === 'initialBuild') {
+        throw new Error("Cannot move train during initial build phase");
+      }
+
       const currentPlayerIndex = Number(gameRow.rows[0].current_player_index ?? 0);
       const currentPlayerQuery = await client.query(
         "SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2",
@@ -1627,7 +1640,7 @@ export class PlayerService {
         : [];
 
       const gameStateResult = await client.query(
-        `SELECT current_player_index
+        `SELECT current_player_index, status
          FROM games
          WHERE id = $1
          FOR UPDATE`,
@@ -1636,6 +1649,12 @@ export class PlayerService {
       if (gameStateResult.rows.length === 0) {
         throw new Error("Game not found");
       }
+
+      // Block non-build actions during initialBuild phase
+      if (gameStateResult.rows[0].status === 'initialBuild') {
+        throw new Error("Action not allowed during initial build phase");
+      }
+
       const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
 
       // Determine active player by ordering (must match getPlayers ordering).
@@ -1832,7 +1851,7 @@ export class PlayerService {
         : [];
 
       const gameStateResult = await client.query(
-        `SELECT current_player_index
+        `SELECT current_player_index, status
          FROM games
          WHERE id = $1
          FOR UPDATE`,
@@ -1841,6 +1860,12 @@ export class PlayerService {
       if (gameStateResult.rows.length === 0) {
         throw new Error("Game not found");
       }
+
+      // Block non-build actions during initialBuild phase
+      if (gameStateResult.rows[0].status === 'initialBuild') {
+        throw new Error("Action not allowed during initial build phase");
+      }
+
       const currentPlayerIndex = Number(gameStateResult.rows[0].current_player_index ?? 0);
 
       // Determine active player by ordering (must match getPlayers ordering).
@@ -2128,6 +2153,14 @@ export class PlayerService {
     try {
       await client.query("BEGIN");
 
+      // Block load pickup during initialBuild phase
+      const gameStatusResult = await client.query(
+        `SELECT status FROM games WHERE id = $1`, [gameId],
+      );
+      if (gameStatusResult.rows[0]?.status === 'initialBuild') {
+        throw new Error("Cannot pick up loads during initial build phase");
+      }
+
       // Lock and fetch player state
       const playerResult = await client.query(
         `SELECT id, train_type as "trainType", loads, position_row, position_col
@@ -2223,6 +2256,14 @@ export class PlayerService {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
+
+      // Block load drop during initialBuild phase
+      const gameStatusResult = await client.query(
+        `SELECT status FROM games WHERE id = $1`, [gameId],
+      );
+      if (gameStatusResult.rows[0]?.status === 'initialBuild') {
+        throw new Error("Cannot drop loads during initial build phase");
+      }
 
       // Lock and fetch player state
       const playerResult = await client.query(

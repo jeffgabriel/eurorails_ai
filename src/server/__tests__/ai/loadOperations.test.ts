@@ -92,9 +92,10 @@ function setupClient() {
 }
 
 function setupPlayerQuery(player: ReturnType<typeof makePlayerRow>) {
-  // Call order: BEGIN, SELECT player, (...validation...), UPDATE, COMMIT
+  // Call order: BEGIN, SELECT game status, SELECT player, (...validation...), UPDATE, COMMIT
   mockClient.query
     .mockResolvedValueOnce({ rows: [] }) // BEGIN
+    .mockResolvedValueOnce({ rows: [{ status: 'active' }] }) // SELECT game status
     .mockResolvedValueOnce({ rows: [player] }); // SELECT player FOR UPDATE
   // Additional calls (UPDATE, COMMIT) default to { rows: [] }
 }
@@ -222,6 +223,7 @@ describe('PlayerService.pickupLoadForUser', () => {
   it('should reject if player not found', async () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [{ status: 'active' }] }) // SELECT game status
       .mockResolvedValueOnce({ rows: [] }); // SELECT — no player
 
     await expect(
@@ -318,6 +320,7 @@ describe('PlayerService.dropLoadForUser', () => {
   it('should reject if player not found', async () => {
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
+      .mockResolvedValueOnce({ rows: [{ status: 'active' }] }) // SELECT game status
       .mockResolvedValueOnce({ rows: [] }); // SELECT — no player
 
     await expect(
@@ -377,7 +380,8 @@ describe('PlayerService.dropLoadForUser', () => {
     });
     mockClient.query
       .mockResolvedValueOnce({ rows: [] }) // BEGIN
-      .mockResolvedValueOnce({ rows: [player] }) // SELECT
+      .mockResolvedValueOnce({ rows: [{ status: 'active' }] }) // SELECT game status
+      .mockResolvedValueOnce({ rows: [player] }) // SELECT player
       .mockRejectedValueOnce(new Error('DB write failed')); // UPDATE fails
 
     await expect(
