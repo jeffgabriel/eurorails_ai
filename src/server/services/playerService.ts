@@ -7,6 +7,51 @@ import { TrackService } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
+import { loadService } from "./loadService";
+import mileposts from "../../../configuration/gridPoints.json";
+
+// --- City lookup from grid points ---
+
+interface MilepostEntry {
+  GridX: number;
+  GridY: number;
+  Type: string;
+  Name: string | null;
+}
+
+/** Cache: city name → set of "row,col" keys for all mileposts belonging to that city. */
+let cityPositionCache: Map<string, Set<string>> | null = null;
+
+function getCityPositions(): Map<string, Set<string>> {
+  if (cityPositionCache) return cityPositionCache;
+  cityPositionCache = new Map();
+  for (const mp of mileposts as MilepostEntry[]) {
+    if (!mp.Name) continue;
+    const key = `${mp.GridY},${mp.GridX}`; // row,col
+    let positions = cityPositionCache.get(mp.Name);
+    if (!positions) {
+      positions = new Set();
+      cityPositionCache.set(mp.Name, positions);
+    }
+    positions.add(key);
+  }
+  return cityPositionCache;
+}
+
+/**
+ * Check if a player position (row, col) is at the named city.
+ * Major cities span multiple mileposts, so we match any of them.
+ */
+function isPlayerAtCity(
+  positionRow: number | null,
+  positionCol: number | null,
+  cityName: string,
+): boolean {
+  if (positionRow === null || positionCol === null) return false;
+  const positions = getCityPositions().get(cityName);
+  if (!positions) return false;
+  return positions.has(`${positionRow},${positionCol}`);
+}
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -2047,6 +2092,186 @@ export class PlayerService {
         throw new Error("Failed to load updated player");
       }
       return updatedPlayer;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  // =====================================================================
+  // Server-side Load Operations (pickup & drop)
+  // =====================================================================
+
+  /**
+   * Pick up a load at a city for the authenticated user's player.
+   *
+   * Server-authoritative validation:
+   * - Player must be at the named city
+   * - Train must have capacity for another load
+   * - Load must be available at the city (configured source OR dropped load)
+   *
+   * @param gameId - The game ID
+   * @param userId - The authenticated user ID (or bot user ID)
+   * @param cityName - City where the load is being picked up
+   * @param loadType - The type of load to pick up
+   * @returns The updated loads array after pickup
+   */
+  static async pickupLoadForUser(
+    gameId: string,
+    userId: string,
+    cityName: string,
+    loadType: LoadType,
+  ): Promise<{ updatedLoads: LoadType[] }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock and fetch player state
+      const playerResult = await client.query(
+        `SELECT id, train_type as "trainType", loads, position_row, position_col
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const row = playerResult.rows[0];
+      const playerId: string = row.id;
+      const trainType: TrainType = row.trainType;
+      const currentLoads: LoadType[] = Array.isArray(row.loads) ? row.loads : [];
+      const positionRow: number | null = row.position_row;
+      const positionCol: number | null = row.position_col;
+
+      // Validate position
+      if (!isPlayerAtCity(positionRow, positionCol, cityName)) {
+        throw new Error(`Player is not at ${cityName}`);
+      }
+
+      // Validate capacity
+      const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+      if (currentLoads.length >= capacity) {
+        throw new Error(
+          `Train at capacity (${currentLoads.length}/${capacity})`,
+        );
+      }
+
+      // Validate load availability: configured city source OR dropped load
+      const isConfigured = loadService.isLoadAvailableAtCity(loadType, cityName);
+      const droppedLoads = await loadService.getDroppedLoads(gameId);
+      const isDropped = droppedLoads.some(
+        (d) => d.city_name === cityName && d.type === loadType,
+      );
+      if (!isConfigured && !isDropped) {
+        throw new Error(`${loadType} is not available at ${cityName}`);
+      }
+
+      // Update player loads
+      const updatedLoads = [...currentLoads, loadType];
+      await client.query(
+        `UPDATE players SET loads = $1 WHERE game_id = $2 AND id = $3`,
+        [updatedLoads, gameId, playerId],
+      );
+
+      await client.query("COMMIT");
+
+      // After commit: update load tracking (best-effort, outside transaction)
+      if (isDropped) {
+        try {
+          await loadService.pickupDroppedLoad(cityName, loadType, gameId);
+        } catch {
+          // Best-effort: load tracking is secondary
+        }
+      }
+
+      return { updatedLoads };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Drop a load at a city for the authenticated user's player.
+   *
+   * Server-authoritative validation:
+   * - Player must be at the named city
+   * - Load must currently be on the player's train
+   *
+   * The dropped load is tracked via LoadService.setLoadInCity so other
+   * players can pick it up.
+   *
+   * @param gameId - The game ID
+   * @param userId - The authenticated user ID (or bot user ID)
+   * @param cityName - City where the load is being dropped
+   * @param loadType - The type of load to drop
+   * @returns The updated loads array after drop
+   */
+  static async dropLoadForUser(
+    gameId: string,
+    userId: string,
+    cityName: string,
+    loadType: LoadType,
+  ): Promise<{ updatedLoads: LoadType[] }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock and fetch player state
+      const playerResult = await client.query(
+        `SELECT id, loads, position_row, position_col
+         FROM players
+         WHERE game_id = $1 AND user_id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, userId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const row = playerResult.rows[0];
+      const playerId: string = row.id;
+      const currentLoads: LoadType[] = Array.isArray(row.loads) ? row.loads : [];
+      const positionRow: number | null = row.position_row;
+      const positionCol: number | null = row.position_col;
+
+      // Validate position
+      if (!isPlayerAtCity(positionRow, positionCol, cityName)) {
+        throw new Error(`Player is not at ${cityName}`);
+      }
+
+      // Validate load is on train
+      const loadIndex = currentLoads.indexOf(loadType);
+      if (loadIndex === -1) {
+        throw new Error(`${loadType} is not on the train`);
+      }
+
+      // Remove load from train
+      const updatedLoads = [...currentLoads];
+      updatedLoads.splice(loadIndex, 1);
+      await client.query(
+        `UPDATE players SET loads = $1 WHERE game_id = $2 AND id = $3`,
+        [updatedLoads, gameId, playerId],
+      );
+
+      await client.query("COMMIT");
+
+      // After commit: track the dropped load in the city (best-effort)
+      try {
+        await loadService.setLoadInCity(cityName, loadType, gameId);
+      } catch {
+        // Best-effort: load tracking is secondary
+      }
+
+      return { updatedLoads };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
