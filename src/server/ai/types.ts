@@ -248,3 +248,12 @@ export interface ValidationResult {
   valid: boolean;
   errors: string[];
 }
+
+// --- Turn Result (from AIStrategyEngine) ---
+
+export interface TurnResult {
+  success: boolean;
+  audit: StrategyAudit;
+  retriesUsed: number;
+  fellBackToPass: boolean;
+}
