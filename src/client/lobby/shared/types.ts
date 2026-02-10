@@ -22,6 +22,12 @@ export interface Player {
   name: string;
   color: string;
   isOnline: boolean;
+  isBot?: boolean;
+  botConfig?: {
+    skillLevel: 'easy' | 'medium' | 'hard';
+    archetype: 'backbone_builder' | 'freight_optimizer' | 'trunk_sprinter' | 'continental_connector' | 'opportunist';
+    botName: string;
+  };
 }
 
 export interface Game {

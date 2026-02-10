@@ -11,3 +11,9 @@ export {
 export type { ArchetypeColorToken } from './archetypeColors';
 export { StrategyInspectorModal } from './StrategyInspectorModal';
 export type { StrategyInspectorModalProps } from './StrategyInspectorModal';
+export { AddBotButton } from './AddBotButton';
+export type { AddBotButtonProps } from './AddBotButton';
+export { BotConfigPopover } from './BotConfigPopover';
+export type { BotConfigPopoverProps } from './BotConfigPopover';
+export { BotPlayerRow } from './BotPlayerRow';
+export type { BotPlayerRowProps } from './BotPlayerRow';

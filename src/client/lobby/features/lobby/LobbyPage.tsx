@@ -24,9 +24,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { CreateGameModal } from './CreateGameModal';
 import { JoinGameModal } from './JoinGameModal';
 import { GameRow } from './GameRow';
+import { AddBotButton, BotPlayerRow } from '../../components/bot';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
 import { getErrorMessage, api } from '../../shared/api';
+import type { ArchetypeId, SkillLevel } from '../../../../server/ai/types';
 
 export function LobbyPage() {
   const navigate = useNavigate();
@@ -173,6 +175,28 @@ export function LobbyPage() {
     // Navigate back to main lobby page
     navigate('/lobby');
   };
+
+  const handleAddBot = async (config: { skillLevel: SkillLevel; archetype: ArchetypeId | 'random'; botName: string }) => {
+    if (!currentGame) return;
+    try {
+      await api.addBot(currentGame.id, config);
+      toast.success('Bot added to the game');
+    } catch (error) {
+      toast.error(getErrorMessage(error as any));
+    }
+  };
+
+  const handleRemoveBot = async (playerId: string) => {
+    if (!currentGame) return;
+    try {
+      await api.removeBot(currentGame.id, playerId);
+      toast.success('Bot removed from the game');
+    } catch (error) {
+      toast.error(getErrorMessage(error as any));
+    }
+  };
+
+  const isCreator = currentGame?.createdBy === user?.id;
 
   const handleLogout = () => {
     logout();
@@ -528,8 +552,24 @@ export function LobbyPage() {
                       </p>
                     ) : (
                       players.map((player) => (
-                        <GameRow key={player.id} player={player} />
+                        player.isBot ? (
+                          <BotPlayerRow
+                            key={player.id}
+                            player={player}
+                            canRemove={isCreator && currentGame.status === 'setup'}
+                            onRemove={handleRemoveBot}
+                          />
+                        ) : (
+                          <GameRow key={player.id} player={player} />
+                        )
                       ))
+                    )}
+                    {isCreator && currentGame.status === 'setup' && (
+                      <AddBotButton
+                        onAddBot={handleAddBot}
+                        playerCount={players?.length || 0}
+                        maxPlayers={currentGame.maxPlayers}
+                      />
                     )}
                   </div>
                 </div>

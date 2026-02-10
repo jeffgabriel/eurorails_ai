@@ -261,6 +261,21 @@ class ApiClient {
     });
   }
 
+  // Bot management endpoints
+  async addBot(gameId: ID, config: { skillLevel: string; archetype: string; botName: string }): Promise<{ player: Player }> {
+    const response = await this.request<{ success: boolean; data: Player }>(`/api/lobby/games/${gameId}/bots`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+    return { player: response.data };
+  }
+
+  async removeBot(gameId: ID, playerId: ID): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/bots/${playerId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async setLoadInCity(data: { city: string; loadType: LoadType; gameId: string }): Promise<{
     loadState: LoadState;
     droppedLoads: Array<{ city_name: string; type: LoadType }>;
