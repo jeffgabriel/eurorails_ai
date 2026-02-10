@@ -260,14 +260,40 @@ async function executeBotTurn(
  * Increment the bot's per-player turn number and advance
  * the game's current_player_index to the next player.
  *
- * Uses PlayerService.updateCurrentPlayerIndex which will emit
- * turn:change — triggering onTurnChange again (chaining if next is a bot).
+ * During initialBuild phase, uses InitialBuildService.advanceTurn()
+ * which handles round transitions and phase changes.
+ * During active phase, uses PlayerService.updateCurrentPlayerIndex.
+ *
+ * Both paths emit turn:change — triggering onTurnChange again
+ * (chaining if next is a bot).
  */
 async function advanceTurnAfterBot(
   gameId: string,
   botPlayerId: string,
   currentIndex: number,
 ): Promise<void> {
+  const log = logger.withContext(gameId, botPlayerId);
+
+  // Check if we're in initialBuild phase
+  const gameResult = await db.query(
+    `SELECT status FROM games WHERE id = $1`,
+    [gameId],
+  );
+  const gameStatus = gameResult.rows[0]?.status;
+
+  if (gameStatus === 'initialBuild') {
+    // Use InitialBuildService for phase-aware turn advancement
+    const { InitialBuildService } = await import('../services/initialBuildService');
+    const result = await InitialBuildService.advanceTurn(gameId);
+    log.info('InitialBuild turn advanced', {
+      phase: result.phase,
+      nextIndex: result.currentPlayerIndex,
+      nextPlayerId: result.currentPlayerId,
+    });
+    return;
+  }
+
+  // Active game phase — use regular turn advancement
   // Increment bot's per-player turn number
   await db.query(
     `UPDATE players

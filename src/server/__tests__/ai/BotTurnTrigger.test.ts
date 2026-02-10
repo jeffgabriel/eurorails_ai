@@ -112,12 +112,14 @@ function setupQueryMocks(options: {
   humanConnected?: boolean;
   playerCount?: number;
   hasPosition?: boolean;
+  gameStatus?: string;
 }) {
   const {
     player = makeBotPlayer(),
     humanConnected = true,
     playerCount = 3,
     hasPosition = true,
+    gameStatus = 'active',
   } = options;
 
   const calls: Array<{ rows: unknown[] }> = [];
@@ -133,10 +135,13 @@ function setupQueryMocks(options: {
     rows: [{ position_row: hasPosition ? 5 : null, position_col: hasPosition ? 10 : null }],
   });
 
-  // Call 4: increment turn number (UPDATE, no meaningful return)
+  // Call 4: SELECT game status (advanceTurnAfterBot phase check)
+  calls.push({ rows: [{ status: gameStatus }] });
+
+  // Call 5: increment turn number (UPDATE, no meaningful return)
   calls.push({ rows: [] });
 
-  // Call 5: COUNT players
+  // Call 6: COUNT players
   calls.push({ rows: [{ count: playerCount }] });
 
   mockQuery.mockReset();
