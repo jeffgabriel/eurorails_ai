@@ -4,6 +4,23 @@ import { emitLobbyUpdated, emitToLobby } from './socketService';
 import { PlayerService } from './playerService';
 import { TrainType } from '../../shared/types/GameTypes';
 import type { Player as GamePlayer, BotDisplayConfig } from '../../shared/types/GameTypes';
+import type { ArchetypeId } from '../ai/types';
+
+const ALL_ARCHETYPES: ArchetypeId[] = [
+  'backbone_builder',
+  'freight_optimizer',
+  'trunk_sprinter',
+  'continental_connector',
+  'opportunist',
+];
+
+const ARCHETYPE_DISPLAY_NAMES: Record<ArchetypeId, string> = {
+  backbone_builder: 'Backbone Builder',
+  freight_optimizer: 'Freight Optimizer',
+  trunk_sprinter: 'Trunk Sprinter',
+  continental_connector: 'Continental Connector',
+  opportunist: 'Opportunist',
+};
 
 export interface CreateGameData {
   isPublic?: boolean;
@@ -982,11 +999,16 @@ export class LobbyService {
       }
       const botColor = availableColors[0];
 
+      // Resolve 'random' archetype to a concrete one
+      const resolvedArchetype: ArchetypeId = config.archetype === 'random'
+        ? ALL_ARCHETYPES[Math.floor(Math.random() * ALL_ARCHETYPES.length)]
+        : config.archetype as ArchetypeId;
+
       // Create a synthetic user record for the bot so that all existing
       // WHERE user_id = $X queries continue to work (FK constraint on users).
       const botUserId = uuidv4();
       const botPlayerId = uuidv4();
-      const botName = config.botName || `Bot ${config.archetype}`;
+      const botName = config.botName || `Bot ${ARCHETYPE_DISPLAY_NAMES[resolvedArchetype]}`;
 
       await client.query(
         `INSERT INTO users (id, username, email, password_hash, email_verified)
@@ -1000,7 +1022,7 @@ export class LobbyService {
       );
 
       const botDisplayConfig: BotDisplayConfig = {
-        archetype: config.archetype,
+        archetype: resolvedArchetype,
         skillLevel: config.skillLevel,
       };
 
