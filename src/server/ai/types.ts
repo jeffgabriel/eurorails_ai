@@ -1,4 +1,4 @@
-import { TrainType, TrackSegment, GridPoint, Point, TerrainType, PlayerTrackState } from '../../shared/types/GameTypes';
+import { TrainType, TrackSegment, GridPoint, Point, PlayerTrackState } from '../../shared/types/GameTypes';
 import { DemandCard } from '../../shared/types/DemandCard';
 import { LoadType } from '../../shared/types/LoadTypes';
 
@@ -18,6 +18,50 @@ export interface BotConfig {
   archetype: ArchetypeId;
   botId: string;
   botName: string;
+}
+
+// --- Scoring Dimensions ---
+
+export type ScoringDimension =
+  | 'immediateIncome'
+  | 'incomePerMilepost'
+  | 'multiDeliveryPotential'
+  | 'networkExpansionValue'
+  | 'victoryProgress'
+  | 'competitorBlocking'
+  | 'riskExposure'
+  | 'loadScarcity'
+  | 'upgradeROI'
+  | 'backboneAlignment'
+  | 'loadCombinationScore'
+  | 'majorCityProximity';
+
+export type DimensionWeights = Record<ScoringDimension, number>;
+
+// --- Skill & Archetype Profiles ---
+
+export interface SkillProfile {
+  level: SkillLevel;
+  /** Base weights for each scoring dimension (0-1 scale) */
+  baseWeights: DimensionWeights;
+  /** Percentage of turns where bot picks a random feasible option instead of the best */
+  randomChoicePercent: number;
+  /** Percentage of turns where bot intentionally misses the optimal option */
+  suboptimalityPercent: number;
+  /** Number of turns to look ahead (0 = current turn only) */
+  lookaheadDepth: number;
+  /** Top N options to evaluate at each lookahead depth */
+  lookaheadBreadth: number;
+  /** Discount factor for future turn scores (0-1) */
+  lookaheadDiscount: number;
+}
+
+export interface ArchetypeProfile {
+  id: ArchetypeId;
+  name: string;
+  description: string;
+  /** Multipliers applied to scoring dimensions (1.0 = neutral) */
+  multipliers: DimensionWeights;
 }
 
 // --- AI Action Types ---
