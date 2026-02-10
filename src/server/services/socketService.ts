@@ -211,6 +211,14 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
            WHERE game_id = $1 AND user_id = $2`,
           [gameId, userId]
         ).catch((err) => console.error('Failed to set presence on join:', err));
+
+        // Notify BotTurnTrigger that a human reconnected (may resume queued bot turns)
+        import('../ai/BotTurnTrigger').then(({ BotTurnTrigger }) => {
+          BotTurnTrigger.onHumanReconnect(gameId)
+            .catch((err) => console.error('[BotTurnTrigger] onHumanReconnect error:', err));
+        }).catch(() => {
+          // BotTurnTrigger module not available — silently ignore
+        });
       }
 
       (async () => {
@@ -560,6 +568,15 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
     currentPlayerId,
     gameId,
     timestamp: Date.now(),
+  });
+
+  // Notify BotTurnTrigger so it can auto-play if the new player is a bot.
+  // Uses dynamic import to avoid circular dependency.
+  import('../ai/BotTurnTrigger').then(({ BotTurnTrigger }) => {
+    BotTurnTrigger.onTurnChange(gameId, currentPlayerIndex, currentPlayerId)
+      .catch((err) => console.error('[BotTurnTrigger] onTurnChange error:', err));
+  }).catch(() => {
+    // BotTurnTrigger module not available (e.g. during tests) — silently ignore
   });
 }
 
