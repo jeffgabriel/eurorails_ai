@@ -464,6 +464,16 @@ export class UIManager {
     this.playerHandDisplay.updateGameState(this.gameState);
   }
 
+  /** Trigger pulsing animation on a bot's brain icon */
+  public triggerBotPulse(botPlayerId: string): void {
+    this.leaderboardManager.triggerBotPulse(botPlayerId);
+  }
+
+  /** Register callback for brain icon clicks */
+  public setOnBrainClick(callback: (playerId: string) => void): void {
+    this.leaderboardManager.setOnBrainClick(callback);
+  }
+
   /**
    * Create a persistent Final Round banner at the top center of the screen
    * Only displayed when victory has been triggered

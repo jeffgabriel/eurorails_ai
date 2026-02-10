@@ -366,6 +366,24 @@ class SocketService {
     this.socket.on('chat-error', callback);
   }
 
+  onBotTurnStart(callback: (data: { gameId: ID; playerId: ID; playerName: string; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('bot:turn-start');
+    this.socket.on('bot:turn-start', callback);
+  }
+
+  onBotAction(callback: (data: { gameId: ID; playerId: ID; action: string; description: string; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('bot:action');
+    this.socket.on('bot:action', callback);
+  }
+
+  onBotTurnComplete(callback: (data: { gameId: ID; playerId: ID; timestamp: number }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('bot:turn-complete');
+    this.socket.on('bot:turn-complete', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }

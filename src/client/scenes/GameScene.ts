@@ -14,6 +14,7 @@ import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
+import { useGameSettingsStore } from "../store/gameSettings";
 
 // Add type declaration for Phaser.Scene
 declare module "phaser" {
@@ -44,7 +45,10 @@ export class GameScene extends Phaser.Scene {
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
   private loadsReferencePanel?: LoadsReferencePanel;
-  
+
+  // Bot animation state
+  private botActionQueue: Array<{ action: string; description: string; playerId: string }> = [];
+  private isBotAnimating = false;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -463,6 +467,22 @@ export class GameScene extends Phaser.Scene {
 
             // Refresh UI
             this.uiManager.setupUIOverlay();
+          });
+
+          // Listen for bot turn events
+          socketService.onBotTurnStart((data) => {
+            if (data.gameId !== this.gameState.id) return;
+            this.handleBotTurnStart(data.playerId, data.playerName);
+          });
+
+          socketService.onBotAction((data) => {
+            if (data.gameId !== this.gameState.id) return;
+            this.handleBotAction(data.playerId, data.action, data.description);
+          });
+
+          socketService.onBotTurnComplete((data) => {
+            if (data.gameId !== this.gameState.id) return;
+            this.handleBotTurnComplete(data.playerId);
           });
         }
       } catch (error) {
@@ -1104,6 +1124,52 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  // --- Bot Turn Animation ---
+
+  private handleBotTurnStart(playerId: string, playerName: string): void {
+    this.botActionQueue = [];
+    this.isBotAnimating = true;
+    this.uiManager.triggerBotPulse(playerId);
+    this.turnNotification.show(`${playerName} is thinking...`, 2000);
+  }
+
+  private handleBotAction(playerId: string, action: string, description: string): void {
+    this.botActionQueue.push({ action, description, playerId });
+    if (!this.isBotAnimating) return;
+
+    const fastMode = useGameSettingsStore.getState().fastModeEnabled;
+    if (fastMode) {
+      // In fast mode, show notification immediately with no delay
+      this.turnNotification.show(description, 800);
+    } else {
+      // In normal mode, queue actions with pacing delays
+      this.processBotActionQueue();
+    }
+  }
+
+  private processBotActionQueue(): void {
+    const next = this.botActionQueue.shift();
+    if (!next) return;
+
+    this.turnNotification.show(next.description, 1500);
+
+    // Stagger the next action display
+    this.time.delayedCall(1200, () => {
+      if (this.isBotAnimating && this.botActionQueue.length > 0) {
+        this.processBotActionQueue();
+      }
+    });
+  }
+
+  private handleBotTurnComplete(playerId: string): void {
+    this.isBotAnimating = false;
+    this.botActionQueue = [];
+
+    const player = this.gameState.players.find(p => p.id === playerId);
+    const name = player?.name || 'Bot';
+    this.turnNotification.show(`${name} finished their turn.`, 1500);
   }
 
   // Clean up resources when scene is destroyed

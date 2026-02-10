@@ -117,6 +117,9 @@ export interface ServerToClientEvents {
   'chat-message': (data: { gameId: ID; message: any }) => void;
   'chat-status': (data: { gameId: ID; messageId: number; status: 'delivered' | 'read' }) => void;
   'chat-error': (data: { error: string; message: string }) => void;
+  'bot:turn-start': (data: { gameId: ID; playerId: ID; playerName: string; timestamp: number }) => void;
+  'bot:action': (data: { gameId: ID; playerId: ID; action: string; description: string; timestamp: number }) => void;
+  'bot:turn-complete': (data: { gameId: ID; playerId: ID; timestamp: number }) => void;
 }
 
 // Form validation types

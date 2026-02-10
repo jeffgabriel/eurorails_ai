@@ -5,6 +5,7 @@ import { config } from '../config/apiConfig';
 import { UI_FONT_FAMILY } from '../config/uiFont';
 import { CityListDropDown } from '../components/CityListDropDown';
 import { CityListItem } from '../components/CityListDropDown';
+import { useGameSettingsStore } from '../store/gameSettings';
 
 export class SettingsScene extends Phaser.Scene {
     private gameState: GameState;
@@ -345,6 +346,49 @@ export class SettingsScene extends Phaser.Scene {
 
             const yForButtonIndex = (idx: number) =>
                 blockTopY + (buttonHeight / 2) + idx * (buttonHeight + buttonGap);
+
+            // --- Fast Bot Turns toggle --- (Players tab only, when bots present)
+            const hasBots = this.gameState.players.some(p => p.isBot);
+            if (hasBots) {
+                const toggleY = blockTopY - 110;
+                const fastMode = useGameSettingsStore.getState().fastModeEnabled;
+
+                const toggleBg = this.add.rectangle(
+                    buttonX - 80,
+                    toggleY,
+                    36,
+                    20,
+                    fastMode ? 0x22c55e : 0x999999,
+                    1
+                ).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
+
+                // Toggle knob
+                const knobX = fastMode ? buttonX - 80 + 20 : buttonX - 80 + 4;
+                const toggleKnob = this.add.rectangle(
+                    knobX,
+                    toggleY,
+                    16,
+                    16,
+                    0xffffff,
+                    1
+                ).setOrigin(0, 0.5);
+
+                this.add.text(
+                    buttonX - 38,
+                    toggleY,
+                    'Fast Bot Turns',
+                    {
+                        color: '#000000',
+                        fontSize: '16px',
+                        fontFamily: UI_FONT_FAMILY
+                    }
+                ).setOrigin(0, 0.5);
+
+                toggleBg.on('pointerdown', () => {
+                    useGameSettingsStore.getState().toggleFastMode();
+                    this.renderScene().catch(console.error);
+                });
+            }
 
             // --- City search ("Take me to...") --- (Players tab only)
             const gameScene = this.scene.get('GameScene') as GameScene;
