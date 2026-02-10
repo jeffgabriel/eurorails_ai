@@ -982,8 +982,7 @@ export class LobbyService {
       }
       const botColor = availableColors[0];
 
-      // Generate synthetic user ID and player ID (both must be valid UUIDs)
-      const botUserId = uuidv4();
+      // Generate player ID (bots have no user account, so userId is null)
       const botPlayerId = uuidv4();
 
       const botDisplayConfig: BotDisplayConfig = {
@@ -993,7 +992,7 @@ export class LobbyService {
 
       const botPlayer: GamePlayer = {
         id: botPlayerId,
-        userId: botUserId,
+        userId: null as any,
         name: config.botName || `Bot ${config.archetype}`,
         color: botColor,
         money: 50,

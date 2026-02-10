@@ -130,7 +130,7 @@ describe('LobbyService.addBot', () => {
     expect(player.color).toBe('#0000ff'); // Second color (first is taken)
     expect(player.money).toBe(50);
     expect(player.trainType).toBe(TrainType.Freight);
-    expect(player.userId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(player.userId).toBeNull();
   });
 
   it('should reject if user is not the host', async () => {
