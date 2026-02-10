@@ -9,3 +9,5 @@ export {
   ARCHETYPE_ABBREVIATIONS,
 } from './archetypeColors';
 export type { ArchetypeColorToken } from './archetypeColors';
+export { StrategyInspectorModal } from './StrategyInspectorModal';
+export type { StrategyInspectorModalProps } from './StrategyInspectorModal';
