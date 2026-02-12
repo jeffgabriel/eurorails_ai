@@ -31,6 +31,9 @@ interface LobbyActions {
   refreshGameState: () => Promise<void>;
   // Lobby listings
   loadMyGames: (options?: { silent?: boolean }) => Promise<void>;
+  // Bot management
+  addBot: (gameId: ID, config: { skillLevel: string; archetype: string; name?: string }) => Promise<void>;
+  removeBot: (gameId: ID, playerId: ID) => Promise<void>;
   // Socket methods
   connectToLobbySocket: (gameId: ID, token: string) => void;
   disconnectFromLobbySocket: (gameId: ID) => void;
@@ -566,6 +569,32 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   clearError: () => {
     set({ error: null, retryCount: 0 });
+  },
+
+  // Bot management
+  addBot: async (gameId: ID, config: { skillLevel: string; archetype: string; name?: string }) => {
+    set({ isLoading: true, error: null });
+
+    try {
+      await api.addBot(gameId, config);
+      set({ isLoading: false });
+      // Player list update handled by lobby-updated socket event
+    } catch (error) {
+      const handledError = handleError(error, 0);
+      set({ isLoading: false, error: handledError });
+      throw handledError;
+    }
+  },
+
+  removeBot: async (gameId: ID, playerId: ID) => {
+    try {
+      await api.removeBot(gameId, playerId);
+      // Player list update handled by lobby-updated socket event
+    } catch (error) {
+      const handledError = handleError(error, 0);
+      set({ error: handledError });
+      throw handledError;
+    }
   },
 
   // Socket methods
