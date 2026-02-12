@@ -46,6 +46,7 @@ export class GameScene extends Phaser.Scene {
   private previousActivePlayerId: string | null = null;
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
+  private socketUnsubDebugAny?: () => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -610,6 +611,15 @@ export class GameScene extends Phaser.Scene {
 
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
+    try {
+      const { socketService: svc } = await import('../lobby/shared/socket');
+      if (svc) {
+        const overlay = this.debugOverlay;
+        this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
+        });
+      }
+    } catch { /* socket not available */ }
 
     // Main camera ignores UI elements
     this.cameras.main.ignore([
@@ -1147,6 +1157,8 @@ export class GameScene extends Phaser.Scene {
 
     // Clean up static overlays
     this.loadsReferencePanel?.destroy();
+    this.socketUnsubDebugAny?.();
+    this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
   }
 
