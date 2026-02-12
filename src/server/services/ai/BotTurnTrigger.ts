@@ -5,8 +5,15 @@
  * Called from emitTurnChange() as a side effect after turn:change emission.
  */
 
+import { db } from '../../db/index';
+import { emitToGame } from '../socketService';
+import { PlayerService } from '../playerService';
+
+/** Delay in ms before executing a bot turn */
+export const BOT_TURN_DELAY_MS = 1500;
+
 /** Feature flag: defaults to true if unset */
-function isAIBotsEnabled(): boolean {
+export function isAIBotsEnabled(): boolean {
   const value = process.env.ENABLE_AI_BOTS;
   if (value === undefined || value === '') return true;
   return value.toLowerCase() !== 'false';
@@ -16,7 +23,7 @@ function isAIBotsEnabled(): boolean {
 console.log(`[BotTurnTrigger] ENABLE_AI_BOTS=${isAIBotsEnabled() ? 'true' : 'false'}`);
 
 /** Guard set to prevent double-execution of bot turns per game */
-const pendingBotTurns = new Set<string>();
+export const pendingBotTurns = new Set<string>();
 
 /** Queued turns for games where no human is connected */
 interface QueuedTurn {
@@ -24,11 +31,12 @@ interface QueuedTurn {
   currentPlayerIndex: number;
   currentPlayerId: string;
 }
-const queuedBotTurns = new Map<string, QueuedTurn>();
+export const queuedBotTurns = new Map<string, QueuedTurn>();
 
 /**
  * Called after emitTurnChange() to detect and execute bot turns.
- * Returns immediately if ENABLE_AI_BOTS is false.
+ * Returns immediately if ENABLE_AI_BOTS is false, player is not a bot,
+ * game is completed/abandoned, or a bot turn is already in progress.
  */
 export async function onTurnChange(
   gameId: string,
@@ -37,7 +45,66 @@ export async function onTurnChange(
 ): Promise<void> {
   if (!isAIBotsEnabled()) return;
 
-  // TODO: Query player is_bot, guard against double execution, delay, execute PassTurn
+  // Query player: is_bot?
+  const playerResult = await db.query(
+    'SELECT is_bot FROM players WHERE id = $1',
+    [currentPlayerId],
+  );
+  if (!playerResult.rows[0]?.is_bot) return;
+
+  // Check game status
+  const gameResult = await db.query(
+    'SELECT status FROM games WHERE id = $1',
+    [gameId],
+  );
+  const status = gameResult.rows[0]?.status;
+  if (status === 'completed' || status === 'abandoned') return;
+
+  // Double execution guard
+  if (pendingBotTurns.has(gameId)) return;
+
+  pendingBotTurns.add(gameId);
+  try {
+    // Delay before executing bot turn
+    await new Promise(resolve => setTimeout(resolve, BOT_TURN_DELAY_MS));
+
+    // Emit bot:turn-start
+    const turnResult = await db.query(
+      'SELECT current_turn_number FROM players WHERE id = $1',
+      [currentPlayerId],
+    );
+    const turnNumber = turnResult.rows[0]?.current_turn_number || 0;
+    emitToGame(gameId, 'bot:turn-start', { botPlayerId: currentPlayerId, turnNumber });
+
+    const startTime = Date.now();
+
+    // Bot turn housekeeping: increment turn number, reset build cost
+    await db.query(
+      'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 1) + 1 WHERE id = $1',
+      [currentPlayerId],
+    );
+    await db.query(
+      'UPDATE player_tracks SET turn_build_cost = 0 WHERE game_id = $1 AND player_id = $2',
+      [gameId, currentPlayerId],
+    );
+
+    const durationMs = Date.now() - startTime;
+
+    // Emit bot:turn-complete
+    emitToGame(gameId, 'bot:turn-complete', {
+      botPlayerId: currentPlayerId,
+      turnNumber: turnNumber + 1,
+      action: 'PassTurn',
+      durationMs,
+    });
+
+    // Advance to next player
+    await advanceTurnAfterBot(gameId);
+  } catch (error) {
+    console.error(`[BotTurnTrigger] Error executing bot turn for game ${gameId}:`, error);
+  } finally {
+    pendingBotTurns.delete(gameId);
+  }
 }
 
 /**
@@ -55,9 +122,30 @@ export async function onHumanReconnect(gameId: string): Promise<void> {
 
 /**
  * Phase-aware turn advancement after a bot completes its turn.
+ * Routes to the correct service based on game status.
  */
 export async function advanceTurnAfterBot(gameId: string): Promise<void> {
-  // TODO: Route to InitialBuildService.advanceTurn() or PlayerService.updateCurrentPlayerIndex()
-}
+  const result = await db.query(
+    'SELECT status, current_player_index FROM games WHERE id = $1',
+    [gameId],
+  );
+  const game = result.rows[0];
+  if (!game) return;
 
-export { isAIBotsEnabled, pendingBotTurns, queuedBotTurns };
+  if (game.status === 'initialBuild') {
+    // InitialBuildService will be implemented in a later task
+    // For now, this is a placeholder that later tasks will fill in
+    console.log(`[BotTurnTrigger] advanceTurnAfterBot: initialBuild phase — not yet implemented`);
+  } else if (game.status === 'active') {
+    const countResult = await db.query(
+      'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',
+      [gameId],
+    );
+    const playerCount = countResult.rows[0]?.count || 0;
+    if (playerCount > 0) {
+      const nextIndex = (game.current_player_index + 1) % playerCount;
+      await PlayerService.updateCurrentPlayerIndex(gameId, nextIndex);
+    }
+  }
+  // completed/abandoned: do nothing
+}
