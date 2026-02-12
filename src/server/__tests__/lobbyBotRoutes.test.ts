@@ -238,14 +238,14 @@ describe('LobbyBotRoutes', () => {
         expect(response.body.message).toContain('archetype');
       });
 
-      it('should return 400 for name exceeding 30 characters', async () => {
+      it('should return 400 for name exceeding 20 characters', async () => {
         const game = await createTestGame();
         mockAuthForUser(creatorUserId, 'botroute_creator');
 
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'balanced', name: 'A'.repeat(31) })
+          .send({ skillLevel: 'medium', archetype: 'balanced', name: 'A'.repeat(21) })
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');

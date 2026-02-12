@@ -481,11 +481,11 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
   }
 
   // Validate name length if provided
-  if (name !== undefined && (typeof name !== 'string' || name.length > 30)) {
+  if (name !== undefined && (typeof name !== 'string' || name.length > 20)) {
     res.status(400).json({
       error: 'VALIDATION_ERROR',
       message: 'Invalid bot name',
-      details: 'name must be a string of 30 characters or fewer'
+      details: 'name must be a string of 20 characters or fewer'
     });
     return;
   }
