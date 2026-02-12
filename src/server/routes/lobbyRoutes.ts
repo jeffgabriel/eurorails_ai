@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
-import { LobbyService, CreateGameData } from '../services/lobbyService';
+import { LobbyService, CreateGameData, NotABotError, GameNotFoundError, NotGameCreatorError, GameAlreadyStartedError, GameFullError } from '../services/lobbyService';
+import { BotSkillLevel, BotArchetype, BotConfig } from '../../shared/types/GameTypes';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
@@ -431,6 +432,87 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
   res.status(200).json({
     success: true,
     message: 'Player presence updated successfully'
+  });
+}));
+
+// POST /api/lobby/games/:id/bots - Add a bot to a game
+router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId } = req.params;
+  const userId = req.user!.id;
+  const { skillLevel, archetype, name } = req.body;
+
+  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, archetype, name }, req);
+
+  // Validate UUID format
+  if (!validateUUID(gameId, 'gameId', res)) {
+    return;
+  }
+
+  // Validate required fields
+  if (!validateRequiredFields({ skillLevel, archetype }, res)) {
+    return;
+  }
+
+  // Validate skillLevel enum
+  if (!Object.values(BotSkillLevel).includes(skillLevel)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid skill level',
+      details: `skillLevel must be one of: ${Object.values(BotSkillLevel).join(', ')}`
+    });
+    return;
+  }
+
+  // Validate archetype enum
+  if (!Object.values(BotArchetype).includes(archetype)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid archetype',
+      details: `archetype must be one of: ${Object.values(BotArchetype).join(', ')}`
+    });
+    return;
+  }
+
+  // Validate name length if provided
+  if (name !== undefined && (typeof name !== 'string' || name.length > 30)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid bot name',
+      details: 'name must be a string of 30 characters or fewer'
+    });
+    return;
+  }
+
+  const botConfig: BotConfig = { skillLevel, archetype, name };
+  const bot = await LobbyService.addBot(gameId, userId, botConfig);
+
+  logLobbyOperation('Bot added successfully', { gameId, botId: bot.id }, req);
+
+  res.status(201).json({
+    success: true,
+    data: bot
+  });
+}));
+
+// DELETE /api/lobby/games/:id/bots/:playerId - Remove a bot from a game
+router.delete('/games/:id/bots/:playerId', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
+  const { id: gameId, playerId } = req.params;
+  const userId = req.user!.id;
+
+  logLobbyOperation('Remove bot request', { gameId, userId, playerId }, req);
+
+  // Validate UUID format
+  if (!validateUUID(gameId, 'gameId', res) || !validateUUID(playerId, 'playerId', res)) {
+    return;
+  }
+
+  await LobbyService.removeBot(gameId, userId, playerId);
+
+  logLobbyOperation('Bot removed successfully', { gameId, playerId }, req);
+
+  res.status(200).json({
+    success: true,
+    message: 'Bot removed successfully'
   });
 }));
 
