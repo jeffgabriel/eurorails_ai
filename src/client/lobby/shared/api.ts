@@ -219,6 +219,20 @@ class ApiClient {
     });
   }
 
+  async addBot(gameId: ID, config: { skillLevel: string; archetype: string; name?: string }): Promise<{ player: Player }> {
+    const response = await this.request<{ success: boolean; data: Player }>(`/api/lobby/games/${gameId}/bots`, {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+    return { player: response.data };
+  }
+
+  async removeBot(gameId: ID, playerId: ID): Promise<void> {
+    await this.request<{ success: boolean; message: string }>(`/api/lobby/games/${gameId}/bots/${playerId}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Load endpoints
   // Note: Load endpoints return unwrapped responses (arrays/objects directly, not { success, data })
   async getLoadState(): Promise<LoadState[]> {
