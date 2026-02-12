@@ -135,6 +135,23 @@ export class LeaderboardManager {
           .setOrigin(0, 0);
         elements.push(playerText);
 
+        // Add [BOT] suffix for AI players
+        if (player.isBot) {
+          const botLabel = this.scene.add
+            .text(
+              entryX + (isCurrentPlayer ? 25 : 5) + playerText.width + 4,
+              entryY + 4,
+              "[BOT]",
+              {
+                color: "#aaaaaa",
+                fontSize: "10px",
+                fontFamily: UI_FONT_FAMILY,
+              }
+            )
+            .setOrigin(0, 0);
+          elements.push(botLabel);
+        }
+
         // Create money text (right-aligned) - keep mostly the same
         const moneyText = this.scene.add
           .text(
