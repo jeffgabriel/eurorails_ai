@@ -30,15 +30,19 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
+    // Close popover and reset immediately — the socket lobby-updated event
+    // may unmount this component before the API response arrives, leaving
+    // the Radix portal stranded if we wait to close after the await.
+    setOpen(false);
+    const config = {
+      skillLevel,
+      archetype,
+      name: name.trim() || undefined,
+    };
+    resetForm();
     try {
-      await onAddBot({
-        skillLevel,
-        archetype,
-        name: name.trim() || undefined,
-      });
+      await onAddBot(config);
       toast.success('Bot added to the game');
-      setOpen(false);
-      resetForm();
     } catch {
       toast.error('Failed to add bot');
     } finally {

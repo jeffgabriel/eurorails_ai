@@ -571,30 +571,16 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
     set({ error: null, retryCount: 0 });
   },
 
-  // Bot management
-  addBot: async (gameId: ID, config: { skillLevel: string; archetype: string; name?: string }) => {
-    set({ isLoading: true, error: null });
-
-    try {
-      await api.addBot(gameId, config);
-      set({ isLoading: false });
-      // Player list update handled by lobby-updated socket event
-    } catch (error) {
-      const handledError = handleError(error, 0);
-      set({ isLoading: false, error: handledError });
-      throw handledError;
-    }
+  // Bot management — callers handle their own loading/error UI,
+  // so we don't touch global isLoading or error here.
+  addBot: async (_gameId: ID, config: { skillLevel: string; archetype: string; name?: string }) => {
+    await api.addBot(_gameId, config);
+    // Player list update handled by lobby-updated socket event
   },
 
-  removeBot: async (gameId: ID, playerId: ID) => {
-    try {
-      await api.removeBot(gameId, playerId);
-      // Player list update handled by lobby-updated socket event
-    } catch (error) {
-      const handledError = handleError(error, 0);
-      set({ error: handledError });
-      throw handledError;
-    }
+  removeBot: async (_gameId: ID, playerId: ID) => {
+    await api.removeBot(_gameId, playerId);
+    // Player list update handled by lobby-updated socket event
   },
 
   // Socket methods

@@ -973,11 +973,13 @@ export class LobbyService {
       }
 
       // Create synthetic user for the bot
+      // Username must be unique across all users — use UUID suffix, not display name
       const botUserId = uuidv4();
       const botEmail = `bot-${botUserId}@bot.internal`;
+      const botUsername = `bot-${botUserId.slice(0, 8)}`;
       await client.query(
         'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
-        [botUserId, botName, botEmail, 'BOT_NO_LOGIN']
+        [botUserId, botUsername, botEmail, 'BOT_NO_LOGIN']
       );
 
       // Pick an available color
