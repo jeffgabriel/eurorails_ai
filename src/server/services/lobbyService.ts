@@ -434,13 +434,13 @@ export class LobbyService {
     }
 
     const result = await db.query(
-      `SELECT id, user_id, name, color, is_online, game_id 
-       FROM players 
-       WHERE game_id = $1 
+      `SELECT id, user_id, name, color, is_online, game_id, is_bot, bot_config
+       FROM players
+       WHERE game_id = $1
        ORDER BY created_at`,
       [gameId]
     );
-    
+
     return result.rows.map(row => ({
       id: row.id,
       userId: row.user_id,
@@ -457,6 +457,8 @@ export class LobbyService {
       },
       hand: [], // Lobby doesn't show hands - this will be loaded when game starts
       isOnline: row.is_online || false, // Include isOnline for lobby
+      isBot: row.is_bot || false,
+      botConfig: row.bot_config || undefined,
     }));
   }
 

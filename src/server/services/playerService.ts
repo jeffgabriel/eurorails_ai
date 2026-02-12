@@ -170,9 +170,10 @@ export class PlayerService {
             INSERT INTO players (
                 id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
-                current_turn_number, hand, loads, camera_state
+                current_turn_number, hand, loads, camera_state,
+                is_bot, bot_config
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         `;
     const values = [
       player.id,
@@ -189,7 +190,9 @@ export class PlayerService {
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
       player.trainState.loads || [],
-      player.cameraState || null
+      player.cameraState || null,
+      player.isBot || false,
+      player.botConfig ? JSON.stringify(player.botConfig) : null
     ];
     try {
       await useClient.query(query, values);
@@ -395,7 +398,9 @@ export class PlayerService {
                     ta.actions as "turnActions",
                     hand,
                     loads,
-                    camera_state
+                    camera_state,
+                    is_bot,
+                    bot_config
                 FROM players
                 LEFT JOIN LATERAL (
                     SELECT movement_path
@@ -508,6 +513,8 @@ export class PlayerService {
           },
           hand: handCards,
           cameraState: row.camera_state || undefined,  // Per-player camera state
+          isBot: row.is_bot || false,
+          botConfig: row.bot_config || undefined,
         };
       });
 
