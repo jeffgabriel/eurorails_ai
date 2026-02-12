@@ -20,6 +20,13 @@ jest.mock('../services/playerService', () => ({
   },
 }));
 
+// Mock InitialBuildService
+jest.mock('../services/InitialBuildService', () => ({
+  InitialBuildService: {
+    advanceTurn: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { db } from '../db/index';
 import { emitToGame } from '../services/socketService';
 
@@ -326,16 +333,15 @@ describe('BotTurnTrigger', () => {
       expect(PlayerService.updateCurrentPlayerIndex).not.toHaveBeenCalled();
     });
 
-    it('should log for initialBuild games (placeholder)', async () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    it('should call InitialBuildService.advanceTurn for initialBuild games', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ status: 'initialBuild', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
 
       const { advanceTurnAfterBot } = await import('../services/ai/BotTurnTrigger');
+      const { InitialBuildService } = await import('../services/InitialBuildService');
 
       await advanceTurnAfterBot('game-1');
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('initialBuild'));
-      consoleSpy.mockRestore();
+      expect(InitialBuildService.advanceTurn).toHaveBeenCalledWith('game-1');
     });
   });
 });

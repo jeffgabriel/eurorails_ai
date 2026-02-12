@@ -8,6 +8,7 @@
 import { db } from '../../db/index';
 import { emitToGame } from '../socketService';
 import { PlayerService } from '../playerService';
+import { InitialBuildService } from '../InitialBuildService';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -133,9 +134,7 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
   if (!game) return;
 
   if (game.status === 'initialBuild') {
-    // InitialBuildService will be implemented in a later task
-    // For now, this is a placeholder that later tasks will fill in
-    console.log(`[BotTurnTrigger] advanceTurnAfterBot: initialBuild phase — not yet implemented`);
+    await InitialBuildService.advanceTurn(gameId);
   } else if (game.status === 'active') {
     const countResult = await db.query(
       'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',

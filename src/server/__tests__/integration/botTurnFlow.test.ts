@@ -316,18 +316,32 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
       expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith(gameId, 2);
     });
 
-    it('should log placeholder for initialBuild games (routing not yet wired)', async () => {
-      const consoleSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
-
+    it('should call InitialBuildService.advanceTurn for initialBuild games', async () => {
+      // advanceTurnAfterBot: game status query
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'initialBuild',
         current_player_index: 1,
       }]));
+      // InitialBuildService.advanceTurn: game state query
+      mockQuery.mockResolvedValueOnce(mockResult([{
+        status: 'initialBuild',
+        initial_build_round: 1,
+        initial_build_order: [humanId, bot1Id, bot2Id],
+        current_player_index: 1,
+      }]));
+      // InitialBuildService.advanceTurn: players query
+      mockQuery.mockResolvedValueOnce(mockResult([
+        { id: humanId },
+        { id: bot1Id },
+        { id: bot2Id },
+      ]));
+      // InitialBuildService.advanceTurn: UPDATE query
+      mockQuery.mockResolvedValueOnce(mockResult([]));
 
       await advanceTurnAfterBot(gameId);
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('initialBuild'));
-      consoleSpy.mockRestore();
+      // Should have called emitTurnChange for the next player (bot2)
+      expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 2, bot2Id);
     });
 
     it('should not advance for completed games', async () => {
