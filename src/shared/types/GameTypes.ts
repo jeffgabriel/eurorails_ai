@@ -16,6 +16,26 @@ export enum TrainType {
     Superfreight = 'superfreight'   // 3 loads, 12 mileposts
 }
 
+export enum BotSkillLevel {
+    Easy = 'easy',
+    Medium = 'medium',
+    Hard = 'hard'
+}
+
+export enum BotArchetype {
+    Aggressive = 'aggressive',
+    Defensive = 'defensive',
+    Balanced = 'balanced',
+    Opportunistic = 'opportunistic',
+    BuilderFirst = 'builder_first'
+}
+
+export interface BotConfig {
+    skillLevel: BotSkillLevel;
+    archetype: BotArchetype;
+    name?: string;
+}
+
 export interface TrainProperties {
     speed: number;
     capacity: number;
@@ -51,6 +71,8 @@ export interface Player {
     trainState: TrainState;
     hand: DemandCard[];  // Array of demand cards in player's hand
     cameraState?: CameraState;  // Per-player camera state (zoom, pan position)
+    isBot?: boolean;
+    botConfig?: BotConfig;
 }
 
 export interface TrainState {

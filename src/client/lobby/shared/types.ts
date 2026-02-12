@@ -1,4 +1,6 @@
 // shared/types.ts
+import { BotConfig } from '../../../shared/types/GameTypes';
+
 export type ID = string;
 
 export interface User {
@@ -22,6 +24,8 @@ export interface Player {
   name: string;
   color: string;
   isOnline: boolean;
+  isBot?: boolean;
+  botConfig?: BotConfig;
 }
 
 export interface Game {
