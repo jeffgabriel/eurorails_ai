@@ -961,10 +961,20 @@ export class LobbyService {
         throw new GameFullError();
       }
 
+      // Generate bot name: use provided name or auto-number
+      let botName = botConfig.name;
+      if (!botName) {
+        const botCountResult = await client.query(
+          'SELECT COUNT(*) as count FROM players WHERE game_id = $1 AND is_bot = true',
+          [gameId]
+        );
+        const botNumber = parseInt(botCountResult.rows[0].count) + 1;
+        botName = `Bot ${botNumber}`;
+      }
+
       // Create synthetic user for the bot
       const botUserId = uuidv4();
       const botEmail = `bot-${botUserId}@bot.internal`;
-      const botName = botConfig.name || `Bot ${botConfig.archetype}`;
       await client.query(
         'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
         [botUserId, botName, botEmail, 'BOT_NO_LOGIN']

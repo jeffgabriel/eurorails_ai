@@ -463,12 +463,19 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
     return;
   }
 
+  // Resolve 'random' archetype to a concrete value
+  let resolvedArchetype = archetype;
+  if (archetype === 'random') {
+    const archetypeValues = Object.values(BotArchetype);
+    resolvedArchetype = archetypeValues[Math.floor(Math.random() * archetypeValues.length)];
+  }
+
   // Validate archetype enum
-  if (!Object.values(BotArchetype).includes(archetype)) {
+  if (!Object.values(BotArchetype).includes(resolvedArchetype)) {
     res.status(400).json({
       error: 'VALIDATION_ERROR',
       message: 'Invalid archetype',
-      details: `archetype must be one of: ${Object.values(BotArchetype).join(', ')}`
+      details: `archetype must be one of: ${Object.values(BotArchetype).join(', ')}, random`
     });
     return;
   }
@@ -483,7 +490,7 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
     return;
   }
 
-  const botConfig: BotConfig = { skillLevel, archetype, name };
+  const botConfig: BotConfig = { skillLevel, archetype: resolvedArchetype, name };
   const bot = await LobbyService.addBot(gameId, userId, botConfig);
 
   logLobbyOperation('Bot added successfully', { gameId, botId: bot.id }, req);

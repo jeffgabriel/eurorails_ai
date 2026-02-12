@@ -95,7 +95,7 @@ describe('LobbyService Bot Management', () => {
         expect(bot).toBeDefined();
         expect(bot.isBot).toBe(true);
         expect(bot.botConfig).toEqual(defaultBotConfig);
-        expect(bot.name).toBe('Bot opportunistic');
+        expect(bot.name).toBe('Bot 1');
       });
 
       it('should use custom name when provided', async () => {
