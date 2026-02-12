@@ -2,6 +2,7 @@ import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
 import { PlayerService } from './playerService';
+import { InitialBuildService } from './InitialBuildService';
 import { TrainType, BotSkillLevel, BotArchetype } from '../../shared/types/GameTypes';
 import type { Player as GamePlayer, BotConfig } from '../../shared/types/GameTypes';
 
@@ -583,14 +584,26 @@ export class LobbyService {
         throw new InsufficientPlayersError();
       }
       
-      // Update game status
+      // Update game status to initialBuild (initial track building phase)
       await client.query(
         'UPDATE games SET status = $1 WHERE id = $2',
-        ['active', gameId]
+        ['initialBuild', gameId]
       );
-      
+
       await client.query('COMMIT');
-      
+
+      // Initialize the initial build phase with player ordering
+      try {
+        const playersResult = await db.query(
+          'SELECT id FROM players WHERE game_id = $1 ORDER BY created_at ASC',
+          [gameId],
+        );
+        const playerIds = playersResult.rows.map((r: any) => r.id);
+        await InitialBuildService.setupInitialBuild(gameId, playerIds);
+      } catch (setupError) {
+        console.error(`[LobbyService] Failed to setup initial build for game ${gameId}:`, setupError);
+      }
+
       // Emit socket event to notify all clients in the lobby that game is starting
       try {
         await emitToLobby(gameId, 'game-started', {
