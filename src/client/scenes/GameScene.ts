@@ -44,6 +44,7 @@ export class GameScene extends Phaser.Scene {
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
+  private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
   private socketUnsubDebugAny?: () => void;
@@ -1037,8 +1038,11 @@ export class GameScene extends Phaser.Scene {
    * Turn number increment and movement reset are client-side UI state calculations.
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    const mySeq = ++this.turnChangeSeq;
+
     // Refresh player data from server to get updated money amounts
     await this.refreshPlayerData();
+    if (mySeq !== this.turnChangeSeq) return;
     
     // Get the new current player after the turn change
     const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
@@ -1065,6 +1069,7 @@ export class GameScene extends Phaser.Scene {
       // Handle ferry state transitions and teleportation at turn start FIRST
       // This must happen before movement reset so that justCrossedFerry can be properly set
       await this.handleFerryTurnTransition(newCurrentPlayer);
+      if (mySeq !== this.turnChangeSeq) return;
 
       // Reset movement points for the new player using TRAIN_PROPERTIES
       // This ensures movement is reset when turn changes come from server (polling/socket)
@@ -1105,7 +1110,8 @@ export class GameScene extends Phaser.Scene {
       }
       
       await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode, totalCost);
-      
+      if (mySeq !== this.turnChangeSeq) return;
+
       // Do not auto-pan on turn changes.
       // Each client maintains its own per-player camera state via CameraController,
       // and auto-panning to the new active player's train is disorienting for other players.
