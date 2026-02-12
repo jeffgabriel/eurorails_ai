@@ -401,4 +401,40 @@ describe('DebugOverlay', () => {
       expect(container.innerHTML).toContain('rgba(34,197,94,0.2)');
     });
   });
+
+  describe('bot turn events', () => {
+    it('should display bot turn started on bot:turn-start event', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-start', { botPlayerId: 'BotAlpha', turnNumber: 1 });
+
+      expect(container.innerHTML).toContain('Bot BotAlpha turn started at');
+      expect(container.innerHTML).toContain('turns this game: 0');
+    });
+
+    it('should display bot turn completed and increment count on bot:turn-complete event', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', turnNumber: 1, action: 'PassTurn', durationMs: 1500 });
+
+      expect(container.innerHTML).toContain('Bot BotAlpha turn completed: PassTurn (1500ms)');
+      expect(container.innerHTML).toContain('turns this game: 1');
+    });
+
+    it('should increment count across multiple bot turn completions', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      expect(container.innerHTML).toContain('turns this game: 2');
+      expect(container.innerHTML).toContain('Bot BotBeta turn completed');
+    });
+  });
 });

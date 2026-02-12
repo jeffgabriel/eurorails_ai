@@ -24,6 +24,15 @@ export class DebugOverlay {
   private stateChangeListener: () => void;
   private turnChangeListener: (index: number) => void;
 
+  private botTurnCount: number = 0;
+  private lastBotTurnInfo: {
+    name: string;
+    startTime: number;
+    action: string;
+    durationMs: number;
+    completed: boolean;
+  } | null = null;
+
   private static readonly MAX_EVENTS = 50;
   private static readonly STORAGE_KEY = 'eurorails.debugOverlay.open';
 
@@ -125,6 +134,27 @@ export class DebugOverlay {
     if (this.eventLog.length > DebugOverlay.MAX_EVENTS) {
       this.eventLog.pop();
     }
+
+    // Track bot turn events for the dedicated section
+    if (eventName === 'bot:turn-start') {
+      this.lastBotTurnInfo = {
+        name: payload?.botPlayerId || 'unknown',
+        startTime: Date.now(),
+        action: '',
+        durationMs: 0,
+        completed: false,
+      };
+    } else if (eventName === 'bot:turn-complete') {
+      this.botTurnCount++;
+      this.lastBotTurnInfo = {
+        name: payload?.botPlayerId || 'unknown',
+        startTime: this.lastBotTurnInfo?.startTime || Date.now(),
+        action: payload?.action || 'PassTurn',
+        durationMs: payload?.durationMs || 0,
+        completed: true,
+      };
+    }
+
     if (this.isOpen) this.render();
   }
 
@@ -238,10 +268,21 @@ export class DebugOverlay {
   }
 
   private renderBotTurnSection(): string {
+    let content: string;
+    if (!this.lastBotTurnInfo) {
+      content = '<div style="color:#6b7280;font-size:11px;">No bot turn data yet</div>';
+    } else if (!this.lastBotTurnInfo.completed) {
+      const time = new Date(this.lastBotTurnInfo.startTime)
+        .toLocaleTimeString('en-US', { hour12: false });
+      content = `<div style="color:#fbbf24;font-size:11px;">Bot ${this.lastBotTurnInfo.name} turn started at ${time}</div>`;
+    } else {
+      content = `<div style="color:#34d399;font-size:11px;">Bot ${this.lastBotTurnInfo.name} turn completed: ${this.lastBotTurnInfo.action} (${this.lastBotTurnInfo.durationMs}ms)</div>`;
+    }
+
     return `
       <div style="padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);">
-        <div style="color:#f9fafb;font-weight:bold;font-size:12px;margin-bottom:4px;">Bot Turn</div>
-        <div style="color:#6b7280;font-size:11px;">No bot turn data yet — bot turn execution not implemented</div>
+        <div style="color:#f9fafb;font-weight:bold;font-size:12px;margin-bottom:4px;">Bot Turn <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
+        ${content}
       </div>
     `;
   }
