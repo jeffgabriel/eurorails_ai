@@ -12,6 +12,7 @@ import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
+import { DebugOverlay } from "../components/DebugOverlay";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -44,7 +45,7 @@ export class GameScene extends Phaser.Scene {
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
   private loadsReferencePanel?: LoadsReferencePanel;
-  
+  private debugOverlay?: DebugOverlay;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -607,6 +608,9 @@ export class GameScene extends Phaser.Scene {
     ], this.gameState);
     this.loadsReferencePanel.create();
 
+    // Debug overlay (toggled with backtick key)
+    this.debugOverlay = new DebugOverlay(this, this.gameStateService);
+
     // Main camera ignores UI elements
     this.cameras.main.ignore([
       this.uiContainer,
@@ -1143,6 +1147,7 @@ export class GameScene extends Phaser.Scene {
 
     // Clean up static overlays
     this.loadsReferencePanel?.destroy();
+    this.debugOverlay?.destroy();
   }
 
   /**
