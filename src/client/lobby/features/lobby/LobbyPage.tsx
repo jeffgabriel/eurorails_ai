@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { CreateGameModal } from './CreateGameModal';
 import { JoinGameModal } from './JoinGameModal';
 import { GameRow } from './GameRow';
+import { BotConfigPopover } from './BotConfigPopover';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
 import { getErrorMessage, api } from '../../shared/api';
@@ -65,7 +66,9 @@ export function LobbyPage() {
     loadMyGames,
     connectToLobbySocket,
     disconnectFromLobbySocket,
-    onGameStarted
+    onGameStarted,
+    addBot,
+    removeBot
   } = useLobbyStore();
   
   // Get function to access store state
@@ -528,10 +531,23 @@ export function LobbyPage() {
                       </p>
                     ) : (
                       players.map((player) => (
-                        <GameRow key={player.id} player={player} />
+                        <GameRow
+                          key={player.id}
+                          player={player}
+                          onRemoveBot={(playerId) => removeBot(currentGame.id, playerId)}
+                        />
                       ))
                     )}
                   </div>
+
+                  {currentGame.createdBy === user?.id &&
+                    currentGame.status === 'setup' &&
+                    (players?.length || 0) < currentGame.maxPlayers && (
+                    <BotConfigPopover
+                      gameId={currentGame.id}
+                      onAddBot={(config) => addBot(currentGame.id, config)}
+                    />
+                  )}
                 </div>
 
                 <div className="flex gap-2">
