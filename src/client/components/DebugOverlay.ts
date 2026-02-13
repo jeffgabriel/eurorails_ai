@@ -32,7 +32,7 @@ export class DebugOverlay {
     durationMs: number;
     completed: boolean;
     buildTrackData?: {
-      segmentsBuilt: Array<{ from: string; to: string; terrain: string; cost: number }>;
+      segmentsBuilt: number;
       totalCost: number;
       remainingMoney: number;
       targetCity?: string;
@@ -163,9 +163,8 @@ export class DebugOverlay {
       if (action === AIActionType.BuildTrack && payload?.segmentsBuilt) {
         this.lastBotTurnInfo.buildTrackData = {
           segmentsBuilt: payload.segmentsBuilt,
-          totalCost: payload.totalCost ?? 0,
+          totalCost: payload.cost ?? 0,
           remainingMoney: payload.remainingMoney ?? 0,
-          targetCity: payload.targetCity,
         };
       }
     }
@@ -310,14 +309,8 @@ export class DebugOverlay {
     const targetLine = data.targetCity
       ? `<div style="color:#60a5fa;font-size:11px;margin-top:4px;">Target: ${data.targetCity}</div>`
       : '';
-    const costLine = `<div style="color:#e5e7eb;font-size:11px;">Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
-    const segmentRows = data.segmentsBuilt.map((s) =>
-      `<div style="padding:1px 0;font-size:10px;color:#9ca3af;">${s.from} → ${s.to} <span style="color:#6b7280;">${s.terrain}</span> <span style="color:#fbbf24;">${s.cost}M</span></div>`
-    ).join('');
-    const segmentSection = data.segmentsBuilt.length > 0
-      ? `<div style="margin-top:2px;padding-left:8px;border-left:2px solid rgba(255,255,255,0.1);">${segmentRows}</div>`
-      : '';
-    return `${targetLine}${costLine}${segmentSection}`;
+    const costLine = `<div style="color:#e5e7eb;font-size:11px;">Segments: ${data.segmentsBuilt} | Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
+    return `${targetLine}${costLine}`;
   }
 
   private applyContainerStyles(): void {
