@@ -6,6 +6,8 @@ import { authenticateToken, requireAuth } from '../middleware/authMiddleware';
 import { emitStatePatch, emitTurnChange, getSocketIO } from '../services/socketService';
 import { TrainType } from '../../shared/types/GameTypes';
 import { LoadType } from '../../shared/types/LoadTypes';
+import { InitialBuildService } from '../services/InitialBuildService';
+import { db } from '../db';
 
 const router = express.Router();
 
@@ -287,18 +289,32 @@ router.post('/updateCurrentPlayer', async (req, res) => {
             });
         }
 
-        // Update the current player index
+        // Check game status for phase-aware routing
+        const gameResult = await db.query(
+            'SELECT status FROM games WHERE id = $1',
+            [gameId],
+        );
+        const gameStatus = gameResult.rows[0]?.status;
+
+        if (gameStatus === 'initialBuild') {
+            // During initial build phase, use InitialBuildService for turn advancement
+            await InitialBuildService.advanceTurn(gameId);
+            const gameState = await PlayerService.getGameState(gameId);
+            return res.status(200).json(gameState);
+        }
+
+        // Active phase: use standard player index update
         await PlayerService.updateCurrentPlayerIndex(gameId, currentPlayerIndex);
 
         // Get the updated game state
         const gameState = await PlayerService.getGameState(gameId);
-        
+
         // Emit turn change and state patch
         emitTurnChange(gameId, currentPlayerIndex);
         await emitStatePatch(gameId, {
             currentPlayerIndex: currentPlayerIndex
         });
-        
+
         return res.status(200).json(gameState);
     } catch (error: any) {
         console.error('Error in /updateCurrentPlayer route:', error);
