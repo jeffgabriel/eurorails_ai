@@ -9,6 +9,7 @@ import { ChatService } from './chatService';
 import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
+import { onTurnChange as triggerBotTurn } from './ai/BotTurnTrigger';
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
@@ -561,6 +562,13 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
     gameId,
     timestamp: Date.now(),
   });
+
+  // Trigger bot turn detection (fire-and-forget)
+  if (currentPlayerId) {
+    triggerBotTurn(gameId, currentPlayerIndex, currentPlayerId).catch(err => {
+      console.error(`[socketService] BotTurnTrigger error for game ${gameId}:`, err);
+    });
+  }
 }
 
 /**
