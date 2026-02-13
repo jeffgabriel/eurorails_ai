@@ -109,7 +109,9 @@ export async function onTurnChange(
     );
 
     // Execute bot strategy pipeline
+    console.log(`[BotTurnTrigger] Executing AI pipeline for game ${gameId}, player ${currentPlayerId}`);
     const result = await AIStrategyEngine.takeTurn(gameId, currentPlayerId);
+    console.log(`[BotTurnTrigger] Pipeline result: action=${result.action}, built=${result.segmentsBuilt}, cost=${result.cost}, success=${result.success}${result.error ? `, error=${result.error}` : ''}`);
 
     // Emit bot:turn-complete with audit data
     emitToGame(gameId, 'bot:turn-complete', {

@@ -41,33 +41,47 @@ export class AIStrategyEngine {
    */
   static async takeTurn(gameId: string, botPlayerId: string): Promise<BotTurnResult> {
     const startTime = Date.now();
+    const tag = `[AIStrategy ${gameId.slice(0, 8)}]`;
 
     try {
       // 1. Capture world snapshot
       const snapshot = await capture(gameId, botPlayerId);
+      console.log(`${tag} Snapshot: status=${snapshot.gameStatus}, money=${snapshot.bot.money}, segments=${snapshot.bot.existingSegments.length}, position=${snapshot.bot.position ? `${snapshot.bot.position.row},${snapshot.bot.position.col}` : 'none'}`);
 
       // 2. Auto-place bot if no position and has track
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0) {
         await AIStrategyEngine.autoPlaceBot(snapshot);
+        console.log(`${tag} Auto-placed bot at ${snapshot.bot.position?.row},${snapshot.bot.position?.col}`);
       }
 
       // 3. Generate, score, validate, and execute with retries
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
       const options = OptionGenerator.generate(snapshot);
+      console.log(`${tag} Options: ${options.map(o => `${o.action}(feasible=${o.feasible}, segments=${o.segments?.length ?? 0}, cost=${o.estimatedCost ?? 0}, reason="${o.reason}")`).join(', ')}`);
+
       const scored = Scorer.score(options, snapshot, botConfig);
+      console.log(`${tag} Scored: ${scored.map(o => `${o.action}(score=${o.score?.toFixed(1)}, feasible=${o.feasible})`).join(', ')}`);
 
       // Try each option in score order
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         const candidate = scored[attempt] ?? null;
-        if (!candidate || !candidate.feasible) break;
+        if (!candidate || !candidate.feasible) {
+          console.log(`${tag} Attempt ${attempt}: no feasible candidate, breaking`);
+          break;
+        }
 
         const validation = validate(candidate, snapshot);
-        if (!validation.valid) continue;
+        if (!validation.valid) {
+          console.log(`${tag} Attempt ${attempt}: validation failed — ${validation.reason}`);
+          continue;
+        }
 
         try {
+          console.log(`${tag} Attempt ${attempt}: executing ${candidate.action} (segments=${candidate.segments?.length ?? 0}, cost=${candidate.estimatedCost ?? 0})`);
           const result = await TurnExecutor.execute(candidate, snapshot);
           if (result.success) {
             const durationMs = Date.now() - startTime;
+            console.log(`${tag} SUCCESS: ${result.action}, built=${result.segmentsBuilt}, cost=${result.cost}, ${durationMs}ms`);
             return {
               action: result.action,
               segmentsBuilt: result.segmentsBuilt,
@@ -76,12 +90,13 @@ export class AIStrategyEngine {
               success: true,
             };
           }
-        } catch {
-          // Execution threw — try next option
+        } catch (execError) {
+          console.error(`${tag} Attempt ${attempt}: execution threw:`, execError instanceof Error ? execError.message : execError);
         }
       }
 
       // All retries exhausted: fall back to PassTurn
+      console.log(`${tag} All retries exhausted, falling back to PassTurn`);
       const passPlan: FeasibleOption = {
         action: AIActionType.PassTurn,
         feasible: true,
@@ -99,6 +114,7 @@ export class AIStrategyEngine {
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
+      console.error(`${tag} PIPELINE ERROR (${durationMs}ms):`, error instanceof Error ? error.stack : error);
       return {
         action: AIActionType.PassTurn,
         segmentsBuilt: 0,

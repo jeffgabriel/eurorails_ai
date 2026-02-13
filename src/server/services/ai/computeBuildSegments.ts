@@ -161,15 +161,24 @@ export function computeBuildSegments(
   budget: number,
   maxSegments: number = 3,
 ): TrackSegment[] {
-  if (budget <= 0) return [];
+  const tag = '[computeBuild]';
+  if (budget <= 0) {
+    console.log(`${tag} budget=${budget}, returning empty`);
+    return [];
+  }
 
   const grid = loadGridPoints();
+  console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}`);
 
   // Determine starting frontier
   const trackEndpoints = extractTrackEndpoints(existingSegments);
   const sources = trackEndpoints.length > 0 ? trackEndpoints : startPositions;
+  console.log(`${tag} sources: ${sources.length} (endpoints=${trackEndpoints.length}, startPositions=${startPositions.length})`);
 
-  if (sources.length === 0) return [];
+  if (sources.length === 0) {
+    console.log(`${tag} no sources, returning empty`);
+    return [];
+  }
 
   // Build a set of already-built edges so we don't duplicate
   const builtEdges = new Set<string>();
@@ -263,6 +272,8 @@ export function computeBuildSegments(
   // Among equal-length paths, prefer the cheapest.
   let bestPath: DijkstraNode | null = null;
 
+  console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
+
   for (const node of bestPaths.values()) {
     // Count new segments in this path (steps that aren't on existing network)
     const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
@@ -280,10 +291,17 @@ export function computeBuildSegments(
     }
   }
 
-  if (!bestPath) return [];
+  if (!bestPath) {
+    console.log(`${tag} no valid path found, returning empty`);
+    return [];
+  }
+
+  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges)}`);
 
   // Extract up to maxSegments new segments from the path
-  return extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments);
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments);
+  console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
+  return segments;
 }
 
 /**
