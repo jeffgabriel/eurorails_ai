@@ -9,7 +9,7 @@ import { db } from '../../db/index';
 import { emitToGame, getSocketIO } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
-import { AIActionType } from '../../../shared/types/GameTypes';
+import { AIStrategyEngine } from './AIStrategyEngine';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -98,8 +98,6 @@ export async function onTurnChange(
     const turnNumber = turnResult.rows[0]?.current_turn_number || 0;
     emitToGame(gameId, 'bot:turn-start', { botPlayerId: currentPlayerId, turnNumber });
 
-    const startTime = Date.now();
-
     // Bot turn housekeeping: increment turn number, reset build cost
     await db.query(
       'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 1) + 1 WHERE id = $1',
@@ -110,14 +108,17 @@ export async function onTurnChange(
       [gameId, currentPlayerId],
     );
 
-    const durationMs = Date.now() - startTime;
+    // Execute bot strategy pipeline
+    const result = await AIStrategyEngine.takeTurn(gameId, currentPlayerId);
 
-    // Emit bot:turn-complete
+    // Emit bot:turn-complete with audit data
     emitToGame(gameId, 'bot:turn-complete', {
       botPlayerId: currentPlayerId,
       turnNumber: turnNumber + 1,
-      action: AIActionType.PassTurn,
-      durationMs,
+      action: result.action,
+      segmentsBuilt: result.segmentsBuilt,
+      cost: result.cost,
+      durationMs: result.durationMs,
     });
 
     // Advance to next player

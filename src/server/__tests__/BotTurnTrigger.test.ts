@@ -28,12 +28,27 @@ jest.mock('../services/InitialBuildService', () => ({
   },
 }));
 
+// Mock AIStrategyEngine
+jest.mock('../services/ai/AIStrategyEngine', () => ({
+  AIStrategyEngine: {
+    takeTurn: jest.fn().mockResolvedValue({
+      action: 'PassTurn',
+      segmentsBuilt: 0,
+      cost: 0,
+      durationMs: 10,
+      success: true,
+    }),
+  },
+}));
+
 import { db } from '../db/index';
 import { emitToGame, getSocketIO } from '../services/socketService';
+import { AIStrategyEngine } from '../services/ai/AIStrategyEngine';
 
 const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockGetSocketIO = getSocketIO as jest.MockedFunction<typeof getSocketIO>;
+const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
 
 describe('BotTurnTrigger', () => {
   const originalEnv = process.env.ENABLE_AI_BOTS;
@@ -42,6 +57,13 @@ describe('BotTurnTrigger', () => {
     jest.useFakeTimers();
     jest.resetAllMocks();
     process.env.ENABLE_AI_BOTS = 'true';
+    mockTakeTurn.mockResolvedValue({
+      action: 'PassTurn' as any,
+      segmentsBuilt: 0,
+      cost: 0,
+      durationMs: 10,
+      success: true,
+    });
   });
 
   afterEach(async () => {
@@ -205,9 +227,12 @@ describe('BotTurnTrigger', () => {
         botPlayerId: 'bot-1',
         turnNumber: 3,
       }));
+      expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-1');
       expect(mockEmitToGame).toHaveBeenCalledWith('game-1', 'bot:turn-complete', expect.objectContaining({
         botPlayerId: 'bot-1',
         action: 'PassTurn',
+        segmentsBuilt: 0,
+        cost: 0,
       }));
     });
 
