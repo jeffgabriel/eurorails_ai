@@ -437,4 +437,89 @@ describe('DebugOverlay', () => {
       expect(container.innerHTML).toContain('Bot BotBeta turn completed');
     });
   });
+
+  describe('BuildTrack details', () => {
+    const buildTrackPayload = {
+      botPlayerId: 'BotAlpha',
+      turnNumber: 2,
+      action: 'BuildTrack',
+      durationMs: 250,
+      segmentsBuilt: [
+        { from: '(5,10)', to: '(5,11)', terrain: 'Clear', cost: 1 },
+        { from: '(5,11)', to: '(6,12)', terrain: 'Mountain', cost: 2 },
+      ],
+      totalCost: 3,
+      remainingMoney: 47,
+      targetCity: 'Berlin',
+    };
+
+    it('should display segment details for BuildTrack action', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('(5,10) → (5,11)');
+      expect(container.innerHTML).toContain('Clear');
+      expect(container.innerHTML).toContain('(5,11) → (6,12)');
+      expect(container.innerHTML).toContain('Mountain');
+    });
+
+    it('should display total cost and remaining money', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Cost: 3M');
+      expect(container.innerHTML).toContain('Remaining: 47M');
+    });
+
+    it('should display target city when provided', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Target: Berlin');
+    });
+
+    it('should not display target city when not provided', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const { targetCity, ...payloadWithoutCity } = buildTrackPayload;
+      overlay.logSocketEvent('bot:turn-complete', payloadWithoutCity);
+
+      expect(container.innerHTML).not.toContain('Target:');
+      expect(container.innerHTML).toContain('Cost: 3M');
+    });
+
+    it('should not display BuildTrack details for PassTurn action', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+
+      expect(container.innerHTML).not.toContain('Cost:');
+      expect(container.innerHTML).not.toContain('Target:');
+      expect(container.innerHTML).not.toContain('→');
+    });
+
+    it('should display individual segment costs', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('1M');
+      expect(container.innerHTML).toContain('2M');
+    });
+  });
 });
