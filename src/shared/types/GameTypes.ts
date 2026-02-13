@@ -275,6 +275,31 @@ export interface BorrowResult {
     updatedDebtOwed: number;     // New total debt owed
 }
 
+/** Frozen game state snapshot for AI bot evaluation */
+export interface WorldSnapshot {
+    gameId: string;
+    gameStatus: GameStatus;
+    turnNumber: number;
+    bot: {
+        playerId: string;
+        money: number;
+        position: { row: number; col: number } | null;
+        existingSegments: TrackSegment[];
+        demandCards: number[];  // card IDs from player.hand
+        trainType: string;
+        loads: string[];
+        botConfig: {
+            skillLevel: string;
+            archetype: string;
+            name?: string;
+        } | null;
+    };
+    allPlayerTracks: Array<{
+        playerId: string;
+        segments: TrackSegment[];
+    }>;
+}
+
 /** Actions a bot can take during its turn */
 export enum AIActionType {
     PassTurn = 'PassTurn',
