@@ -64,18 +64,21 @@ export class AIStrategyEngine {
         const validation = validate(candidate, snapshot);
         if (!validation.valid) continue;
 
-        const result = await TurnExecutor.execute(candidate, snapshot);
-        if (result.success) {
-          const durationMs = Date.now() - startTime;
-          return {
-            action: result.action,
-            segmentsBuilt: result.segmentsBuilt,
-            cost: result.cost,
-            durationMs,
-            success: true,
-          };
+        try {
+          const result = await TurnExecutor.execute(candidate, snapshot);
+          if (result.success) {
+            const durationMs = Date.now() - startTime;
+            return {
+              action: result.action,
+              segmentsBuilt: result.segmentsBuilt,
+              cost: result.cost,
+              durationMs,
+              success: true,
+            };
+          }
+        } catch {
+          // Execution threw — try next option
         }
-        // Execution failed — try next option
       }
 
       // All retries exhausted: fall back to PassTurn
