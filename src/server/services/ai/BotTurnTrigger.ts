@@ -6,7 +6,7 @@
  */
 
 import { db } from '../../db/index';
-import { emitToGame } from '../socketService';
+import { emitToGame, getSocketIO } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
 
@@ -36,10 +36,14 @@ export const queuedBotTurns = new Map<string, QueuedTurn>();
 
 /**
  * Check whether any human player has an active socket connection to the game room.
- * Stub implementation — always returns true. BE-006 will replace with real socket check.
+ * Uses Socket.IO room membership — bots don't have sockets, so any connected
+ * socket in the room must belong to a human player.
  */
-export async function hasConnectedHuman(_gameId: string): Promise<boolean> {
-  return true;
+export async function hasConnectedHuman(gameId: string): Promise<boolean> {
+  const io = getSocketIO();
+  if (!io) return true; // No Socket.IO = likely testing; proceed as if human present
+  const room = io.sockets.adapter.rooms.get(gameId);
+  return !!room && room.size > 0;
 }
 
 /**

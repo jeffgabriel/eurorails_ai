@@ -20,6 +20,7 @@ jest.mock('../../services/socketService', () => ({
   emitTurnChange: jest.fn(),
   emitStatePatch: jest.fn().mockResolvedValue(undefined),
   emitToGame: jest.fn(),
+  getSocketIO: jest.fn().mockReturnValue(null),
 }));
 
 // Mock playerService

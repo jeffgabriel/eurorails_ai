@@ -11,6 +11,7 @@ jest.mock('../db/index', () => ({
 jest.mock('../services/socketService', () => ({
   emitToGame: jest.fn(),
   emitTurnChange: jest.fn(),
+  getSocketIO: jest.fn().mockReturnValue(null),
 }));
 
 // Mock playerService
@@ -28,10 +29,11 @@ jest.mock('../services/InitialBuildService', () => ({
 }));
 
 import { db } from '../db/index';
-import { emitToGame } from '../services/socketService';
+import { emitToGame, getSocketIO } from '../services/socketService';
 
 const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
+const mockGetSocketIO = getSocketIO as jest.MockedFunction<typeof getSocketIO>;
 
 describe('BotTurnTrigger', () => {
   const originalEnv = process.env.ENABLE_AI_BOTS;
@@ -84,6 +86,59 @@ describe('BotTurnTrigger', () => {
       process.env.ENABLE_AI_BOTS = '';
       const { isAIBotsEnabled } = await import('../services/ai/BotTurnTrigger');
       expect(isAIBotsEnabled()).toBe(true);
+    });
+  });
+
+  describe('hasConnectedHuman', () => {
+    it('should return true when io is null (testing fallback)', async () => {
+      mockGetSocketIO.mockReturnValue(null);
+      const { hasConnectedHuman } = await import('../services/ai/BotTurnTrigger');
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(true);
+    });
+
+    it('should return true when room has connected sockets', async () => {
+      const mockRoom = new Set(['socket-1', 'socket-2']);
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map([['game-1', mockRoom]]),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const { hasConnectedHuman } = await import('../services/ai/BotTurnTrigger');
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(true);
+    });
+
+    it('should return false when room has no sockets', async () => {
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map(),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const { hasConnectedHuman } = await import('../services/ai/BotTurnTrigger');
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(false);
+    });
+
+    it('should return false when room exists but is empty', async () => {
+      const mockRoom = new Set();
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map([['game-1', mockRoom]]),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const { hasConnectedHuman } = await import('../services/ai/BotTurnTrigger');
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(false);
     });
   });
 
