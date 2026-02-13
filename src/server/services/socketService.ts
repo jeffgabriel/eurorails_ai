@@ -9,7 +9,7 @@ import { ChatService } from './chatService';
 import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
-import { onTurnChange as triggerBotTurn } from './ai/BotTurnTrigger';
+import { onTurnChange as triggerBotTurn, onHumanReconnect } from './ai/BotTurnTrigger';
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
@@ -213,6 +213,11 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           [gameId, userId]
         ).catch((err) => console.error('Failed to set presence on join:', err));
       }
+
+      // Dequeue any pending bot turns now that a human has joined the game room
+      onHumanReconnect(gameId).catch((err) => {
+        console.error(`[socketService] onHumanReconnect error for game ${gameId}:`, err);
+      });
 
       (async () => {
         try {
