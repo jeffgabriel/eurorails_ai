@@ -87,9 +87,19 @@ export class TurnExecutor {
       );
       remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
 
-      // 3. Insert audit record
-      const durationMs = Date.now() - startTime;
-      await client.query(
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    // 3. Post-commit: audit record (best-effort — don't let a missing table
+    //    undo a successful track build)
+    try {
+      const auditDurationMs = Date.now() - startTime;
+      await db.query(
         `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, segments_built, cost, remaining_money, duration_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
@@ -100,16 +110,11 @@ export class TurnExecutor {
           JSON.stringify(newSegments),
           cost,
           remainingMoney,
-          durationMs,
+          auditDurationMs,
         ],
       );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    } catch (auditError) {
+      console.error('[TurnExecutor] BuildTrack audit insert failed (track was saved):', auditError instanceof Error ? auditError.message : auditError);
     }
 
     // 4. Emit socket events AFTER successful commit (best-effort — don't let

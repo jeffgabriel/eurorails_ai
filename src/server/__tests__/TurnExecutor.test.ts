@@ -139,14 +139,15 @@ describe('TurnExecutor', () => {
       expect(moneyCall![1]).toEqual([5, 'bot-1']);
     });
 
-    it('should insert audit record', async () => {
+    it('should insert audit record post-commit via db.query', async () => {
       const seg = makeSegment(3);
       const plan = makeBuildOption([seg]);
       const snapshot = makeSnapshot();
 
       await TurnExecutor.execute(plan, snapshot);
 
-      const auditCall = mockClient.query.mock.calls.find(
+      // Audit INSERT now goes through db.query (best-effort, outside transaction)
+      const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
         (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
       );
       expect(auditCall).toBeDefined();
@@ -222,6 +223,24 @@ describe('TurnExecutor', () => {
       expect(result.segmentsBuilt).toBe(1);
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
       expect(result.error).toBeUndefined();
+    });
+
+    it('should still succeed when BuildTrack audit insert fails', async () => {
+      // First db.query call will be the audit INSERT — make it fail
+      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+      const seg = makeSegment(2);
+      const plan = makeBuildOption([seg]);
+
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
+
+      // Track save succeeded (transaction committed) — result should still be success
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.segmentsBuilt).toBe(1);
+      // Verify the transaction still committed
+      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
+      expect(queries).toContain('COMMIT');
+      expect(queries).not.toContain('ROLLBACK');
     });
 
     it('should still succeed when emitStatePatch throws post-commit', async () => {

@@ -164,12 +164,12 @@ describe('Bot Build Track Flow (Integration)', () => {
       expect(moneyCall[1][0]).toBe(1); // cost
       expect(moneyCall[1][1]).toBe(botId); // player_id
 
-      // Verify audit log (INSERT INTO bot_turn_audits)
-      const auditCall = mockClient.query.mock.calls.find(
+      // Verify audit log (INSERT INTO bot_turn_audits) — now via db.query (best-effort, post-commit)
+      const auditCall = mockQuery.mock.calls.find(
         (call: any[]) => typeof call[0] === 'string' && call[0].includes('bot_turn_audits'),
       );
       expect(auditCall).toBeDefined();
-      const auditParams = auditCall[1];
+      const auditParams = auditCall![1];
       expect(auditParams[0]).toBe(gameId);
       expect(auditParams[1]).toBe(botId);
       expect(auditParams[3]).toBe('BuildTrack');
