@@ -7,6 +7,7 @@ import {
   _resetCache,
   GridCoord,
 } from '../services/ai/MapTopology';
+import { getMajorCityLookup, getMajorCityGroups } from '../../shared/services/majorCityGroups';
 
 describe('computeBuildSegments', () => {
   beforeEach(() => _resetCache());
@@ -194,6 +195,69 @@ describe('computeBuildSegments', () => {
         const connectsToNetwork =
           networkPositions.has(firstFrom) || networkPositions.has(firstTo);
         expect(connectsToNetwork).toBe(true);
+      }
+    });
+  });
+
+  describe('intra-city edge filter (GH-213)', () => {
+    it('should never produce segments where both endpoints are in the same major city', () => {
+      const lookup = getMajorCityLookup();
+      // Start from Paris center — segments should exit the city, not stay inside
+      const segments = computeBuildSegments([PARIS], [], 20);
+      for (const seg of segments) {
+        const fromCity = lookup.get(`${seg.from.row},${seg.from.col}`);
+        const toCity = lookup.get(`${seg.to.row},${seg.to.col}`);
+        if (fromCity && toCity) {
+          expect(fromCity).not.toBe(toCity);
+        }
+      }
+    });
+
+    it('should still build segments from a major city outpost to outside points', () => {
+      // Start from a Paris outpost (28,32) — should build outward, not intra-city
+      const parisOutpost: GridCoord = { row: 28, col: 32 };
+      const segments = computeBuildSegments([parisOutpost], [], 20);
+      // Should produce at least one segment going outside the city
+      expect(segments.length).toBeGreaterThan(0);
+      const lookup = getMajorCityLookup();
+      for (const seg of segments) {
+        const fromCity = lookup.get(`${seg.from.row},${seg.from.col}`);
+        const toCity = lookup.get(`${seg.to.row},${seg.to.col}`);
+        if (fromCity && toCity) {
+          expect(fromCity).not.toBe(toCity);
+        }
+      }
+    });
+  });
+
+  describe('getMajorCityLookup helper', () => {
+    it('should map major city center to city name', () => {
+      const lookup = getMajorCityLookup();
+      expect(lookup.get('29,32')).toBe('Paris');
+    });
+
+    it('should map major city outposts to city name', () => {
+      const lookup = getMajorCityLookup();
+      // Paris outposts
+      expect(lookup.get('30,32')).toBe('Paris');
+      expect(lookup.get('29,33')).toBe('Paris');
+      expect(lookup.get('28,32')).toBe('Paris');
+    });
+
+    it('should not map non-city points', () => {
+      const lookup = getMajorCityLookup();
+      // (29,31) is a clear milepost near Paris, not part of the city
+      expect(lookup.get('29,31')).toBeUndefined();
+    });
+
+    it('should contain entries for all major city groups', () => {
+      const lookup = getMajorCityLookup();
+      const groups = getMajorCityGroups();
+      for (const group of groups) {
+        expect(lookup.get(`${group.center.row},${group.center.col}`)).toBe(group.cityName);
+        for (const outpost of group.outposts) {
+          expect(lookup.get(`${outpost.row},${outpost.col}`)).toBe(group.cityName);
+        }
       }
     });
   });

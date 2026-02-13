@@ -4,6 +4,7 @@ import { TrackSegment, PlayerTrackState } from '../../shared/types/TrackTypes';
 import { MapRenderer } from './MapRenderer';
 import { TrackService } from '../services/TrackService';
 import { getWaterCrossingExtraCost } from '../../shared/config/waterCrossings';
+import { getMajorCityLookup } from '../../shared/services/majorCityGroups';
 
 export class TrackDrawingManager {
     private scene: Phaser.Scene;
@@ -1180,7 +1181,15 @@ export class TrackDrawingManager {
                         continue;
                     }
                 }
-                
+
+                // No track may be built within a major city red area (GH-213)
+                const cityLookup = getMajorCityLookup();
+                const currentCityName = cityLookup.get(`${currentPoint.row},${currentPoint.col}`);
+                const neighborCityName = cityLookup.get(`${neighbor.row},${neighbor.col}`);
+                if (currentCityName && neighborCityName && currentCityName === neighborCityName) {
+                    continue;
+                }
+
                 // Calculate the base cost for a segment
                 let segmentCost = 0;
                 if (!(isCurrentInNetwork && isNeighborInNetwork) && 

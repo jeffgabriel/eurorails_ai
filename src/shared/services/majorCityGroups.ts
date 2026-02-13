@@ -22,6 +22,27 @@ export type FerryEdge = {
  * - We model the red-area connectivity as "public edges" (no owner) by connecting the
  *   major-city center to each outpost.
  */
+/**
+ * Lookup map from grid coordinate key ("row,col") to city name
+ * for all major city points (center + outposts).
+ * Used to detect intra-city edges that should not have track built between them.
+ */
+let _majorCityLookupCache: Map<string, string> | null = null;
+
+export function getMajorCityLookup(): Map<string, string> {
+  if (_majorCityLookupCache) return _majorCityLookupCache;
+
+  const lookup = new Map<string, string>();
+  for (const group of getMajorCityGroups()) {
+    lookup.set(`${group.center.row},${group.center.col}`, group.cityName);
+    for (const outpost of group.outposts) {
+      lookup.set(`${outpost.row},${outpost.col}`, group.cityName);
+    }
+  }
+  _majorCityLookupCache = lookup;
+  return lookup;
+}
+
 export function getMajorCityGroups(): MajorCityGroup[] {
   const centers = new Map<string, { row: number; col: number }>();
   const outpostsByCity = new Map<string, Array<{ row: number; col: number }>>();

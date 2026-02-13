@@ -15,6 +15,7 @@ import {
   GridCoord,
   GridPointData,
 } from './MapTopology';
+import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 /** Internal node for Dijkstra's priority queue */
 interface DijkstraNode {
@@ -168,6 +169,7 @@ export function computeBuildSegments(
   }
 
   const grid = loadGridPoints();
+  const majorCityLookup = getMajorCityLookup();
   console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}`);
 
   // Determine starting frontier
@@ -227,6 +229,11 @@ export function computeBuildSegments(
       const nbKey = makeKey(nb.row, nb.col);
       const nbData = grid.get(nbKey);
       if (!nbData) continue;
+
+      // No track may be built within a major city red area (GH-213)
+      const currentCityName = majorCityLookup.get(currentKey);
+      const nbCityName = majorCityLookup.get(nbKey);
+      if (currentCityName && nbCityName && currentCityName === nbCityName) continue;
 
       const terrainCost = getTerrainCost(nbData.terrain);
       if (terrainCost === Infinity) continue; // water
