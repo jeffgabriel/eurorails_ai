@@ -51,7 +51,8 @@ export class AIStrategyEngine {
       // 2. Auto-place bot if no position and has track
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0) {
         await AIStrategyEngine.autoPlaceBot(snapshot);
-        console.log(`${tag} Auto-placed bot at ${snapshot.bot.position?.row},${snapshot.bot.position?.col}`);
+        const placed = snapshot.bot.position as { row: number; col: number } | null;
+        console.log(`${tag} Auto-placed bot at ${placed ? `${placed.row},${placed.col}` : 'failed'}`);
       }
 
       // 3. Generate, score, validate, and execute with retries
