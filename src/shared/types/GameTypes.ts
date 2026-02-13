@@ -108,7 +108,7 @@ export interface TrainState {
     lastTraversedEdge?: TrackSegment;
 }
 
-export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned';
+export type GameStatus = 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned';
 
 export const VICTORY_INITIAL_THRESHOLD = 250; // 250M ECU to win
 export const VICTORY_TIE_THRESHOLD = 300; // 300M ECU after a tie
