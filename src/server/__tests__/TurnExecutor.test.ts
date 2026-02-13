@@ -223,6 +223,25 @@ describe('TurnExecutor', () => {
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
       expect(result.error).toBeUndefined();
     });
+
+    it('should still succeed when emitStatePatch throws post-commit', async () => {
+      mockEmitStatePatch.mockRejectedValueOnce(new Error('server_seq failed'));
+      const seg = makeSegment(2);
+      const plan = makeBuildOption([seg]);
+
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
+
+      // DB write succeeded — result should still be success
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.segmentsBuilt).toBe(1);
+      // track:updated should have been called before emitStatePatch threw
+      expect(mockEmitToGame).toHaveBeenCalledWith(
+        'game-1',
+        'track:updated',
+        expect.objectContaining({ gameId: 'game-1', playerId: 'bot-1' }),
+      );
+    });
   });
 
   describe('BuildTrack — failure and rollback', () => {
@@ -311,6 +330,17 @@ describe('TurnExecutor', () => {
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.cost).toBe(0);
       expect(result.segmentsBuilt).toBe(0);
+    });
+
+    it('should still succeed when audit insert fails', async () => {
+      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+      const plan = makePassOption();
+
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
+
+      // Audit failure is best-effort — result should still be success
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.PassTurn);
     });
   });
 });

@@ -112,16 +112,21 @@ export class TurnExecutor {
       client.release();
     }
 
-    // 4. Emit socket events AFTER successful commit
-    emitToGame(snapshot.gameId, 'track:updated', {
-      gameId: snapshot.gameId,
-      playerId: snapshot.bot.playerId,
-      timestamp: Date.now(),
-    });
+    // 4. Emit socket events AFTER successful commit (best-effort — don't let
+    //    socket errors undo a successful DB write)
+    try {
+      emitToGame(snapshot.gameId, 'track:updated', {
+        gameId: snapshot.gameId,
+        playerId: snapshot.bot.playerId,
+        timestamp: Date.now(),
+      });
 
-    await emitStatePatch(snapshot.gameId, {
-      players: [{ id: snapshot.bot.playerId, money: remainingMoney } as any],
-    });
+      await emitStatePatch(snapshot.gameId, {
+        players: [{ id: snapshot.bot.playerId, money: remainingMoney } as any],
+      });
+    } catch (emitError) {
+      console.error('[TurnExecutor] Post-commit emit failed (track was saved):', emitError instanceof Error ? emitError.message : emitError);
+    }
 
     const durationMs = Date.now() - startTime;
     return {
@@ -143,19 +148,24 @@ export class TurnExecutor {
   ): Promise<ExecutionResult> {
     const durationMs = Date.now() - startTime;
 
-    await db.query(
-      `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        snapshot.gameId,
-        snapshot.bot.playerId,
-        snapshot.turnNumber,
-        AIActionType.PassTurn,
-        0,
-        snapshot.bot.money,
-        durationMs,
-      ],
-    );
+    // Audit insert is best-effort — don't let a missing table crash the turn
+    try {
+      await db.query(
+        `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          snapshot.gameId,
+          snapshot.bot.playerId,
+          snapshot.turnNumber,
+          AIActionType.PassTurn,
+          0,
+          snapshot.bot.money,
+          durationMs,
+        ],
+      );
+    } catch (auditError) {
+      console.error('[TurnExecutor] PassTurn audit insert failed:', auditError instanceof Error ? auditError.message : auditError);
+    }
 
     return {
       success: true,
