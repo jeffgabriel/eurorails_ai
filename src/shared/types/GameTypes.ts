@@ -283,6 +283,7 @@ export interface FeasibleOption {
     segments?: TrackSegment[];
     estimatedCost?: number;
     targetCity?: string;
+    score?: number;
 }
 
 /** Frozen game state snapshot for AI bot evaluation */
