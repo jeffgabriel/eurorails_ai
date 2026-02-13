@@ -90,23 +90,28 @@ export async function onTurnChange(
     // Delay before executing bot turn
     await new Promise(resolve => setTimeout(resolve, BOT_TURN_DELAY_MS));
 
-    // Emit bot:turn-start
-    const turnResult = await db.query(
-      'SELECT current_turn_number FROM players WHERE id = $1',
-      [currentPlayerId],
-    );
-    const turnNumber = turnResult.rows[0]?.current_turn_number || 0;
-    emitToGame(gameId, 'bot:turn-start', { botPlayerId: currentPlayerId, turnNumber });
+    // Emit bot:turn-start (best-effort housekeeping — don't let missing columns abort the turn)
+    let turnNumber = 0;
+    try {
+      const turnResult = await db.query(
+        'SELECT current_turn_number FROM players WHERE id = $1',
+        [currentPlayerId],
+      );
+      turnNumber = turnResult.rows[0]?.current_turn_number || 0;
+      emitToGame(gameId, 'bot:turn-start', { botPlayerId: currentPlayerId, turnNumber });
 
-    // Bot turn housekeeping: increment turn number, reset build cost
-    await db.query(
-      'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 1) + 1 WHERE id = $1',
-      [currentPlayerId],
-    );
-    await db.query(
-      'UPDATE player_tracks SET turn_build_cost = 0 WHERE game_id = $1 AND player_id = $2',
-      [gameId, currentPlayerId],
-    );
+      // Bot turn housekeeping: increment turn number, reset build cost
+      await db.query(
+        'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 1) + 1 WHERE id = $1',
+        [currentPlayerId],
+      );
+      await db.query(
+        'UPDATE player_tracks SET turn_build_cost = 0 WHERE game_id = $1 AND player_id = $2',
+        [gameId, currentPlayerId],
+      );
+    } catch (housekeepingError) {
+      console.error(`[BotTurnTrigger] Housekeeping failed for game ${gameId} (continuing):`, housekeepingError instanceof Error ? housekeepingError.message : housekeepingError);
+    }
 
     // Execute bot strategy pipeline
     console.log(`[BotTurnTrigger] Executing AI pipeline for game ${gameId}, player ${currentPlayerId}`);
