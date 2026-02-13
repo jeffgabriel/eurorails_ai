@@ -275,6 +275,16 @@ export interface BorrowResult {
     updatedDebtOwed: number;     // New total debt owed
 }
 
+/** A feasible option the AI bot can take during its turn */
+export interface FeasibleOption {
+    action: AIActionType;
+    feasible: boolean;
+    reason: string;
+    segments?: TrackSegment[];
+    estimatedCost?: number;
+    targetCity?: string;
+}
+
 /** Frozen game state snapshot for AI bot evaluation */
 export interface WorldSnapshot {
     gameId: string;
