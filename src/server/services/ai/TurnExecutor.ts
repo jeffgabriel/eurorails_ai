@@ -10,16 +10,15 @@ import {
   FeasibleOption,
   WorldSnapshot,
   AIActionType,
-  PlayerTrackState,
 } from '../../../shared/types/GameTypes';
-import { TrackService } from '../trackService';
-import { emitToGame } from '../socketService';
+import { emitToGame, emitStatePatch } from '../socketService';
 
 export interface ExecutionResult {
   success: boolean;
   action: AIActionType;
   cost: number;
   segmentsBuilt: number;
+  remainingMoney: number;
   durationMs: number;
   error?: string;
 }
@@ -37,51 +36,56 @@ export class TurnExecutor {
 
     switch (plan.action) {
       case AIActionType.BuildTrack:
-        return TurnExecutor.executeBuildTrack(plan, snapshot, startTime);
+        return TurnExecutor.handleBuildTrack(plan, snapshot, startTime);
       case AIActionType.PassTurn:
-        return TurnExecutor.executePassTurn(plan, snapshot, startTime);
+        return TurnExecutor.handlePassTurn(snapshot, startTime);
       default:
         return {
           success: true,
           action: plan.action,
           cost: 0,
           segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
           durationMs: Date.now() - startTime,
         };
     }
   }
 
-  private static async executeBuildTrack(
+  /**
+   * BuildTrack: save track, deduct money, insert audit — all in one transaction.
+   * Emit socket events only after successful commit.
+   */
+  private static async handleBuildTrack(
     plan: FeasibleOption,
     snapshot: WorldSnapshot,
     startTime: number,
   ): Promise<ExecutionResult> {
-    const segments = plan.segments ?? [];
-    const cost = plan.estimatedCost ?? segments.reduce((s, seg) => s + seg.cost, 0);
+    const newSegments = plan.segments ?? [];
+    const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
+    const allSegments = [...snapshot.bot.existingSegments, ...newSegments];
+    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
+
     const client = await db.connect();
+    let remainingMoney = snapshot.bot.money - cost;
 
     try {
       await client.query('BEGIN');
 
-      // 1. Save new track segments (append to existing)
-      const allSegments = [...snapshot.bot.existingSegments, ...segments];
-      const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
-      const trackState: PlayerTrackState = {
-        playerId: snapshot.bot.playerId,
-        gameId: snapshot.gameId,
-        segments: allSegments,
-        totalCost,
-        turnBuildCost: cost,
-        lastBuildTimestamp: new Date(),
-      };
-
-      await TrackService.saveTrackState(snapshot.gameId, snapshot.bot.playerId, trackState);
+      // 1. Save track state (UPSERT directly — avoids TrackService's separate transaction)
+      await client.query(
+        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (game_id, player_id)
+         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
+        [snapshot.gameId, snapshot.bot.playerId, JSON.stringify(allSegments), totalCost, cost],
+      );
 
       // 2. Deduct money from bot player
-      await client.query(
-        'UPDATE players SET money = money - $1 WHERE game_id = $2 AND id = $3',
-        [cost, snapshot.gameId, snapshot.bot.playerId],
+      const moneyResult = await client.query(
+        'UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money',
+        [cost, snapshot.bot.playerId],
       );
+      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
 
       // 3. Insert audit record
       const durationMs = Date.now() - startTime;
@@ -93,54 +97,52 @@ export class TurnExecutor {
           snapshot.bot.playerId,
           snapshot.turnNumber,
           AIActionType.BuildTrack,
-          JSON.stringify(segments),
+          JSON.stringify(newSegments),
           cost,
-          snapshot.bot.money - cost,
+          remainingMoney,
           durationMs,
         ],
       );
 
       await client.query('COMMIT');
-
-      // 4. Emit socket events post-commit
-      emitToGame(snapshot.gameId, 'track:updated', {
-        playerId: snapshot.bot.playerId,
-        segments: allSegments,
-        totalCost,
-        turnBuildCost: cost,
-      });
-
-      return {
-        success: true,
-        action: AIActionType.BuildTrack,
-        cost,
-        segmentsBuilt: segments.length,
-        durationMs,
-      };
     } catch (error) {
       await client.query('ROLLBACK');
-      const durationMs = Date.now() - startTime;
-      return {
-        success: false,
-        action: AIActionType.BuildTrack,
-        cost: 0,
-        segmentsBuilt: 0,
-        durationMs,
-        error: error instanceof Error ? error.message : String(error),
-      };
+      throw error;
     } finally {
       client.release();
     }
+
+    // 4. Emit socket events AFTER successful commit
+    emitToGame(snapshot.gameId, 'track:updated', {
+      gameId: snapshot.gameId,
+      playerId: snapshot.bot.playerId,
+      timestamp: Date.now(),
+    });
+
+    await emitStatePatch(snapshot.gameId, {
+      players: [{ id: snapshot.bot.playerId, money: remainingMoney } as any],
+    });
+
+    const durationMs = Date.now() - startTime;
+    return {
+      success: true,
+      action: AIActionType.BuildTrack,
+      cost,
+      segmentsBuilt: newSegments.length,
+      remainingMoney,
+      durationMs,
+    };
   }
 
-  private static async executePassTurn(
-    _plan: FeasibleOption,
+  /**
+   * PassTurn: insert audit record only, no track or money changes.
+   */
+  private static async handlePassTurn(
     snapshot: WorldSnapshot,
     startTime: number,
   ): Promise<ExecutionResult> {
     const durationMs = Date.now() - startTime;
 
-    // Insert audit record (no transaction needed for single insert)
     await db.query(
       `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -160,6 +162,7 @@ export class TurnExecutor {
       action: AIActionType.PassTurn,
       cost: 0,
       segmentsBuilt: 0,
+      remainingMoney: snapshot.bot.money,
       durationMs,
     };
   }
