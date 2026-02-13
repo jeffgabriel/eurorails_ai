@@ -9,6 +9,7 @@ import { db } from '../../db/index';
 import { emitToGame, getSocketIO } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
+import { AIActionType } from '../../../shared/types/GameTypes';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -115,7 +116,7 @@ export async function onTurnChange(
     emitToGame(gameId, 'bot:turn-complete', {
       botPlayerId: currentPlayerId,
       turnNumber: turnNumber + 1,
-      action: 'PassTurn',
+      action: AIActionType.PassTurn,
       durationMs,
     });
 

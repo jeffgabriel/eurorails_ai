@@ -274,3 +274,15 @@ export interface BorrowResult {
     updatedMoney: number;        // New player money balance
     updatedDebtOwed: number;     // New total debt owed
 }
+
+/** Actions a bot can take during its turn */
+export enum AIActionType {
+    PassTurn = 'PassTurn',
+    BuildTrack = 'BuildTrack',
+}
+
+/** Human-readable labels for each AIActionType, used by UI components */
+export const AI_ACTION_LABELS: Record<AIActionType, string> = {
+    [AIActionType.PassTurn]: 'Pass Turn',
+    [AIActionType.BuildTrack]: 'Build Track',
+};

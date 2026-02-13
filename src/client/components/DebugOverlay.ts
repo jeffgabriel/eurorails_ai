@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, GameStatus } from '../../shared/types/GameTypes';
+import { GameState, Player, GameStatus, AIActionType } from '../../shared/types/GameTypes';
 import { GameStateService } from '../services/GameStateService';
 
 /** Captured socket event for the debug log ring buffer */
@@ -149,7 +149,7 @@ export class DebugOverlay {
       this.lastBotTurnInfo = {
         name: payload?.botPlayerId || 'unknown',
         startTime: this.lastBotTurnInfo?.startTime || Date.now(),
-        action: payload?.action || 'PassTurn',
+        action: payload?.action || AIActionType.PassTurn,
         durationMs: payload?.durationMs || 0,
         completed: true,
       };
