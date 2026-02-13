@@ -35,6 +35,14 @@ interface QueuedTurn {
 export const queuedBotTurns = new Map<string, QueuedTurn>();
 
 /**
+ * Check whether any human player has an active socket connection to the game room.
+ * Stub implementation — always returns true. BE-006 will replace with real socket check.
+ */
+export async function hasConnectedHuman(_gameId: string): Promise<boolean> {
+  return true;
+}
+
+/**
  * Called after emitTurnChange() to detect and execute bot turns.
  * Returns immediately if ENABLE_AI_BOTS is false, player is not a bot,
  * game is completed/abandoned, or a bot turn is already in progress.
@@ -63,6 +71,14 @@ export async function onTurnChange(
 
   // Double execution guard
   if (pendingBotTurns.has(gameId)) return;
+
+  // Queue bot turn if no human is connected
+  const humanConnected = await hasConnectedHuman(gameId);
+  if (!humanConnected) {
+    queuedBotTurns.set(gameId, { gameId, currentPlayerIndex, currentPlayerId });
+    console.log(`[BotTurnTrigger] Queued bot turn for game ${gameId} (no human connected)`);
+    return;
+  }
 
   pendingBotTurns.add(gameId);
   try {
@@ -117,6 +133,7 @@ export async function onHumanReconnect(gameId: string): Promise<void> {
   const queued = queuedBotTurns.get(gameId);
   if (!queued) return;
 
+  console.log(`[BotTurnTrigger] Dequeuing bot turn for game ${gameId} (human reconnected)`);
   queuedBotTurns.delete(gameId);
   await onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId);
 }
