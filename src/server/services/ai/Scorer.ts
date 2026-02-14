@@ -14,6 +14,7 @@ import {
   TerrainType,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints } from './MapTopology';
+import { DemandDeckService } from '../demandDeckService';
 
 /** Base score for building track (encourages building over passing) */
 const BUILD_BASE_SCORE = 10;
@@ -29,6 +30,27 @@ const BUILDER_FIRST_SEGMENT_BONUS = 2;
 
 /** PassTurn default score */
 const PASS_TURN_SCORE = 0;
+
+/** Base score for delivering a load (highest priority — immediate income) */
+const DELIVER_BASE_SCORE = 100;
+
+/** Multiplier for delivery payment in score */
+const DELIVER_PAYMENT_FACTOR = 2;
+
+/** Base score for picking up a load */
+const PICKUP_BASE_SCORE = 50;
+
+/** Multiplier for best matching demand payment when picking up */
+const PICKUP_PAYMENT_FACTOR = 0.5;
+
+/** Base score for moving train (higher than building to prefer delivery) */
+const MOVE_BASE_SCORE = 15;
+
+/** Bonus per ECU of demand payoff (scaled down) */
+const PAYOFF_BONUS_FACTOR = 0.5;
+
+/** Maximum distance score — closer destinations score higher */
+const MOVE_DISTANCE_MAX_BONUS = 12;
 
 export class Scorer {
   /**
@@ -50,6 +72,15 @@ export class Scorer {
       switch (option.action) {
         case AIActionType.BuildTrack:
           option.score = Scorer.calculateBuildTrackScore(option, snapshot, botConfig);
+          break;
+        case AIActionType.MoveTrain:
+          option.score = Scorer.calculateMoveScore(option, snapshot);
+          break;
+        case AIActionType.DeliverLoad:
+          option.score = Scorer.calculateDeliveryScore(option);
+          break;
+        case AIActionType.PickupLoad:
+          option.score = Scorer.calculatePickupScore(option, snapshot);
           break;
         case AIActionType.PassTurn:
           option.score = Scorer.calculatePassTurnScore();
@@ -89,6 +120,88 @@ export class Scorer {
 
     // Demand proximity bonus: check if any segment endpoint is near a demand city
     score += Scorer.demandProximityBonus(option, snapshot);
+
+    return score;
+  }
+
+  /**
+   * Score a MoveTrain option based on distance to target, demand payoff, and track usage fees.
+   * Closer destinations with higher payoffs and lower fees score higher.
+   */
+  private static calculateMoveScore(
+    option: FeasibleOption,
+    snapshot: WorldSnapshot,
+  ): number {
+    let score = MOVE_BASE_SCORE;
+
+    const mileposts = option.mileposts ?? 0;
+    const speed = 12; // max possible speed for normalization
+
+    // Distance bonus: inversely proportional to remaining distance
+    // If path reaches the target city, mileposts is the full distance — shorter = better
+    if (mileposts > 0) {
+      score += MOVE_DISTANCE_MAX_BONUS * (1 - (mileposts - 1) / speed);
+    }
+
+    // Payoff bonus: look up the demand card payoff for the target city
+    if (option.targetCity) {
+      const demandDeck = DemandDeckService.getInstance();
+      let bestPayoff = 0;
+      for (const cardId of snapshot.bot.demandCards) {
+        const card = demandDeck.getCard(cardId);
+        if (!card) continue;
+        for (const demand of card.demands) {
+          if (demand.city === option.targetCity && demand.payment > bestPayoff) {
+            bestPayoff = demand.payment;
+          }
+        }
+      }
+      score += bestPayoff * PAYOFF_BONUS_FACTOR;
+    }
+
+    // Penalty: track usage fees
+    score -= (option.estimatedCost ?? 0);
+
+    return score;
+  }
+
+  /**
+   * Score a DeliverLoad option. Delivery is the highest-priority action since
+   * it produces immediate income. Base 100 + payment * 2.
+   */
+  private static calculateDeliveryScore(option: FeasibleOption): number {
+    const payment = option.payment ?? 0;
+    return DELIVER_BASE_SCORE + payment * DELIVER_PAYMENT_FACTOR;
+  }
+
+  /**
+   * Score a PickupLoad option. Base 50 + best matching demand payment * 0.5.
+   * Pickups with a matching demand are worth more than speculative pickups.
+   */
+  private static calculatePickupScore(
+    option: FeasibleOption,
+    snapshot: WorldSnapshot,
+  ): number {
+    let score = PICKUP_BASE_SCORE;
+
+    // If the option already has a payment (from demand matching in OptionGenerator),
+    // use it directly.
+    if (option.payment && option.payment > 0) {
+      score += option.payment * PICKUP_PAYMENT_FACTOR;
+    } else {
+      // Speculative pickup — find the best matching demand for this load type
+      let bestPayment = 0;
+      if (option.loadType) {
+        for (const rd of snapshot.bot.resolvedDemands) {
+          for (const demand of rd.demands) {
+            if (demand.loadType === option.loadType && demand.payment > bestPayment) {
+              bestPayment = demand.payment;
+            }
+          }
+        }
+      }
+      score += bestPayment * PICKUP_PAYMENT_FACTOR;
+    }
 
     return score;
   }

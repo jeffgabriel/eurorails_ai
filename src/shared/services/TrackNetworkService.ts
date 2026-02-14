@@ -1,4 +1,4 @@
-import { Milepost, TerrainType } from '../types/GameTypes';
+import { Milepost, TerrainType, TrackSegment, TrackNetwork as StringTrackNetwork } from '../types/GameTypes';
 import { TrackNetwork } from '../types/PlayerTypes';
 
 export interface SerializedNetwork {
@@ -258,4 +258,32 @@ export class TrackNetworkService {
         const dy = to.y - from.y;
         return Math.sqrt(dx * dx + dy * dy);
     }
+}
+
+/**
+ * Build a string-keyed TrackNetwork adjacency list from TrackSegment[].
+ * Node keys use the `row,col` format consistent with the rest of the codebase.
+ */
+export function buildTrackNetwork(segments: TrackSegment[]): StringTrackNetwork {
+    const nodes = new Set<string>();
+    const edges = new Map<string, Set<string>>();
+
+    for (const seg of segments) {
+        const fromKey = `${seg.from.row},${seg.from.col}`;
+        const toKey = `${seg.to.row},${seg.to.col}`;
+
+        nodes.add(fromKey);
+        nodes.add(toKey);
+
+        if (!edges.has(fromKey)) {
+            edges.set(fromKey, new Set<string>());
+        }
+        if (!edges.has(toKey)) {
+            edges.set(toKey, new Set<string>());
+        }
+        edges.get(fromKey)!.add(toKey);
+        edges.get(toKey)!.add(fromKey);
+    }
+
+    return { nodes, edges };
 }

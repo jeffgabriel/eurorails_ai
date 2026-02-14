@@ -54,12 +54,45 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(),
 }));
 
-// Mock majorCityGroups
+// Mock majorCityGroups — outposts are the buildable entry points around a city center
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   getMajorCityGroups: jest.fn(() => [
-    { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
-    { cityName: 'Berlin', center: { row: 20, col: 50 }, outposts: [] },
+    { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [{ row: 29, col: 31 }, { row: 28, col: 32 }] },
+    { cityName: 'Berlin', center: { row: 20, col: 50 }, outposts: [{ row: 20, col: 49 }] },
   ]),
+}));
+
+// Mock trackUsageFees (used by OptionGenerator for movement BFS)
+jest.mock('../../../shared/services/trackUsageFees', () => ({
+  buildUnionTrackGraph: jest.fn(() => ({
+    adjacency: new Map(),
+    edgeOwners: new Map(),
+  })),
+  computeTrackUsageForMove: jest.fn(() => ({
+    feeTotal: 0,
+    ownersUsed: [],
+    ownersPaid: [],
+  })),
+}));
+
+// Mock DemandDeckService (used by OptionGenerator and Scorer for movement)
+jest.mock('../../services/demandDeckService', () => ({
+  DemandDeckService: {
+    getInstance: jest.fn(() => ({
+      getCard: jest.fn(() => undefined),
+    })),
+  },
+  demandDeckService: {
+    getCard: jest.fn(() => undefined),
+  },
+}));
+
+// Mock PlayerService (used by TurnExecutor for MoveTrain)
+jest.mock('../../services/playerService', () => ({
+  PlayerService: {
+    moveTrainForUser: jest.fn(),
+    updateCurrentPlayerIndex: jest.fn(),
+  },
 }));
 
 import { db } from '../../db/index';
@@ -107,6 +140,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       {
         game_status: 'active',
         player_id: botId,
+        user_id: 'user-bot-paris',
         money: 50,
         position_row: 29,
         position_col: 32,
@@ -122,6 +156,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       {
         game_status: 'active',
         player_id: 'human-1',
+        user_id: 'user-human-1',
         money: 40,
         position_row: 20,
         position_col: 50,
@@ -266,9 +301,13 @@ describe('Bot Build Track Flow (Integration)', () => {
 
       // computeBuildSegments should have been called (OptionGenerator called it)
       expect(mockComputeBuild).toHaveBeenCalled();
-      // First arg is start positions - should include major city centers
+      // First arg is start positions - should include major city outposts (entry points)
       const [startPositions] = mockComputeBuild.mock.calls[0];
       expect(startPositions.length).toBeGreaterThan(0);
+      // Verify outpost positions are used (not centers)
+      expect(startPositions).toEqual(
+        expect.arrayContaining([expect.objectContaining({ row: 29, col: 31 })]),
+      );
 
       expect(result.success).toBe(true);
     });

@@ -24,16 +24,19 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
     turnNumber: 1,
     bot: {
       playerId: 'bot-e2e',
+      userId: 'user-bot-e2e',
       money: 50,
       position: null,
       existingSegments: [],
       demandCards: [],
+      resolvedDemands: [],
       trainType: 'Freight',
       loads: [],
       botConfig: null,
       ...overrides,
     },
     allPlayerTracks: [],
+    loadAvailability: {},
   };
 }
 

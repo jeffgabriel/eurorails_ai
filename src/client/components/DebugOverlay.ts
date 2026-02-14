@@ -37,6 +37,14 @@ export class DebugOverlay {
       remainingMoney: number;
       targetCity?: string;
     };
+    movementData?: {
+      from: { row: number; col: number };
+      to: { row: number; col: number };
+      mileposts: number;
+      trackUsageFee: number;
+    };
+    loadsPickedUp?: Array<{ loadType: string; city: string }>;
+    loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
   } | null = null;
 
   private static readonly MAX_EVENTS = 50;
@@ -167,6 +175,20 @@ export class DebugOverlay {
           remainingMoney: payload.remainingMoney ?? 0,
         };
       }
+      if (payload?.movementData) {
+        this.lastBotTurnInfo.movementData = {
+          from: payload.movementData.from,
+          to: payload.movementData.to,
+          mileposts: payload.movementData.mileposts ?? 0,
+          trackUsageFee: payload.movementData.trackUsageFee ?? 0,
+        };
+      }
+      if (payload?.loadsPickedUp?.length) {
+        this.lastBotTurnInfo.loadsPickedUp = payload.loadsPickedUp;
+      }
+      if (payload?.loadsDelivered?.length) {
+        this.lastBotTurnInfo.loadsDelivered = payload.loadsDelivered;
+      }
     }
 
     if (this.isOpen) this.render();
@@ -294,6 +316,12 @@ export class DebugOverlay {
       if (this.lastBotTurnInfo.buildTrackData) {
         content += this.renderBuildTrackDetails(this.lastBotTurnInfo.buildTrackData);
       }
+      if (this.lastBotTurnInfo.movementData) {
+        content += this.renderMovementDetails(this.lastBotTurnInfo.movementData);
+      }
+      if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
+        content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);
+      }
     }
 
     return `
@@ -311,6 +339,27 @@ export class DebugOverlay {
       : '';
     const costLine = `<div style="color:#e5e7eb;font-size:11px;">Segments: ${data.segmentsBuilt} | Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
     return `${targetLine}${costLine}`;
+  }
+
+  private renderMovementDetails(data: NonNullable<typeof this.lastBotTurnInfo>['movementData']): string {
+    if (!data) return '';
+    return `<div style="color:#e5e7eb;font-size:11px;">Moved: (${data.from.row},${data.from.col}) → (${data.to.row},${data.to.col}), ${data.mileposts}mp, fee: ${data.trackUsageFee}M</div>`;
+  }
+
+  private renderLoadDetails(
+    pickups?: Array<{ loadType: string; city: string }>,
+    deliveries?: Array<{ loadType: string; city: string; payment: number; cardId: number }>,
+  ): string {
+    let html = '';
+    if (pickups && pickups.length > 0) {
+      const items = pickups.map(p => `${p.loadType} at ${p.city}`).join(', ');
+      html += `<div style="color:#60a5fa;font-size:11px;">Picked up: ${items}</div>`;
+    }
+    if (deliveries && deliveries.length > 0) {
+      const items = deliveries.map(d => `${d.loadType} to ${d.city} (+${d.payment}M)`).join(', ');
+      html += `<div style="color:#fbbf24;font-size:11px;">Delivered: ${items}</div>`;
+    }
+    return html;
   }
 
   private applyContainerStyles(): void {

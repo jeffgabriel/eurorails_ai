@@ -522,4 +522,152 @@ describe('DebugOverlay', () => {
       expect(container.innerHTML).toContain('2M');
     });
   });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * TEST-006: DebugOverlay load pickup/delivery display
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('load pickup and delivery display', () => {
+    it('should display picked up loads in blue when loadsPickedUp is present', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'MoveTrain',
+        durationMs: 300,
+        loadsPickedUp: [
+          { loadType: 'Coal', city: 'Hamburg' },
+          { loadType: 'Iron', city: 'Hamburg' },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Picked up:');
+      expect(container.innerHTML).toContain('Coal at Hamburg');
+      expect(container.innerHTML).toContain('Iron at Hamburg');
+      // Blue color for pickups
+      expect(container.innerHTML).toContain('color:#60a5fa');
+    });
+
+    it('should display delivered loads in amber when loadsDelivered is present', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'DeliverLoad',
+        durationMs: 200,
+        loadsDelivered: [
+          { loadType: 'Wine', city: 'Berlin', payment: 20, cardId: 42 },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Delivered:');
+      expect(container.innerHTML).toContain('Wine to Berlin (+20M)');
+      // Amber color for deliveries
+      expect(container.innerHTML).toContain('color:#fbbf24');
+    });
+
+    it('should display both pickups and deliveries in the same turn', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'MoveTrain',
+        durationMs: 400,
+        loadsPickedUp: [{ loadType: 'Oil', city: 'Bucuresti' }],
+        loadsDelivered: [{ loadType: 'Coal', city: 'Berlin', payment: 10, cardId: 31 }],
+      });
+
+      expect(container.innerHTML).toContain('Picked up: Oil at Bucuresti');
+      expect(container.innerHTML).toContain('Delivered: Coal to Berlin (+10M)');
+    });
+
+    it('should not display load details when loadsPickedUp and loadsDelivered are absent', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'BuildTrack',
+        durationMs: 250,
+      });
+
+      expect(container.innerHTML).not.toContain('Picked up:');
+      expect(container.innerHTML).not.toContain('Delivered:');
+    });
+
+    it('should not display load details when arrays are empty', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PassTurn',
+        durationMs: 100,
+        loadsPickedUp: [],
+        loadsDelivered: [],
+      });
+
+      expect(container.innerHTML).not.toContain('Picked up:');
+      expect(container.innerHTML).not.toContain('Delivered:');
+    });
+
+    it('should store loadsPickedUp in lastBotTurnInfo on bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PickupLoad',
+        durationMs: 150,
+        loadsPickedUp: [{ loadType: 'Coal', city: 'Hamburg' }],
+      });
+
+      // Re-open and verify data persists across renders
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.innerHTML).toContain('Coal at Hamburg');
+    });
+
+    it('should store loadsDelivered in lastBotTurnInfo on bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'DeliverLoad',
+        durationMs: 150,
+        loadsDelivered: [{ loadType: 'Wine', city: 'Paris', payment: 15, cardId: 73 }],
+      });
+
+      // Re-open and verify data persists
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.innerHTML).toContain('Wine to Paris (+15M)');
+    });
+
+    it('should format multiple pickups as comma-separated list', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PickupLoad',
+        durationMs: 200,
+        loadsPickedUp: [
+          { loadType: 'Coal', city: 'Hamburg' },
+          { loadType: 'Iron', city: 'Hamburg' },
+          { loadType: 'Oil', city: 'Hamburg' },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Coal at Hamburg, Iron at Hamburg, Oil at Hamburg');
+    });
+  });
 });

@@ -1,4 +1,7 @@
 # EuroRails AI Project Guidelines
+Always use compounds skill to investigate code issues bugs new features
+
+Keep two running logs - the first tracks when you use compounds skill and what benefit it provided and the other tracks when you could not or decided to not use compounds skill even though you should have
 
 ## Commands
 - Build: `npm run build` (client + server)

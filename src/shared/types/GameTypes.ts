@@ -284,6 +284,18 @@ export interface FeasibleOption {
     estimatedCost?: number;
     targetCity?: string;
     score?: number;
+    movementPath?: { row: number; col: number }[];
+    targetPosition?: { row: number; col: number };
+    mileposts?: number;
+    loadType?: LoadType;
+    cardId?: number;
+    payment?: number;
+}
+
+/** Resolved demand card data for AI decision-making */
+export interface ResolvedDemand {
+    cardId: number;
+    demands: Array<{ city: string; loadType: string; payment: number }>;
 }
 
 /** Frozen game state snapshot for AI bot evaluation */
@@ -293,10 +305,12 @@ export interface WorldSnapshot {
     turnNumber: number;
     bot: {
         playerId: string;
+        userId: string;
         money: number;
         position: { row: number; col: number } | null;
         existingSegments: TrackSegment[];
         demandCards: number[];  // card IDs from player.hand
+        resolvedDemands: ResolvedDemand[];  // fully resolved demand card data
         trainType: string;
         loads: string[];
         botConfig: {
@@ -304,21 +318,30 @@ export interface WorldSnapshot {
             archetype: string;
             name?: string;
         } | null;
+        /** Set by AIStrategyEngine when bot crosses a ferry — halves movement speed for this turn */
+        ferryHalfSpeed?: boolean;
     };
     allPlayerTracks: Array<{
         playerId: string;
         segments: TrackSegment[];
     }>;
+    loadAvailability: Record<string, string[]>;  // city name → available load types
 }
 
 /** Actions a bot can take during its turn */
 export enum AIActionType {
     PassTurn = 'PassTurn',
     BuildTrack = 'BuildTrack',
+    MoveTrain = 'MoveTrain',
+    PickupLoad = 'PickupLoad',
+    DeliverLoad = 'DeliverLoad',
 }
 
 /** Human-readable labels for each AIActionType, used by UI components */
 export const AI_ACTION_LABELS: Record<AIActionType, string> = {
     [AIActionType.PassTurn]: 'Pass Turn',
     [AIActionType.BuildTrack]: 'Build Track',
+    [AIActionType.MoveTrain]: 'Move Train',
+    [AIActionType.PickupLoad]: 'Pick Up Load',
+    [AIActionType.DeliverLoad]: 'Deliver Load',
 };

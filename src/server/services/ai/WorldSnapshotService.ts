@@ -6,7 +6,9 @@
  */
 
 import { db } from '../../db/index';
-import { WorldSnapshot, TrackSegment, GameStatus } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand } from '../../../shared/types/GameTypes';
+import { DemandDeckService } from '../demandDeckService';
+import { LoadService } from '../loadService';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -22,6 +24,7 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     SELECT
       g.status        AS game_status,
       p.id            AS player_id,
+      p.user_id,
       p.money,
       p.position_row,
       p.position_col,
@@ -75,24 +78,60 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     segments: parseSegments(row.segments),
   }));
 
+  // Resolve demand cards from DemandDeckService
+  const demandCardIds: number[] = Array.isArray(botRow.hand) ? botRow.hand : [];
+  const demandDeck = DemandDeckService.getInstance();
+  const resolvedDemands: ResolvedDemand[] = [];
+  for (const cardId of demandCardIds) {
+    const card = demandDeck.getCard(cardId);
+    if (!card) continue;
+    resolvedDemands.push({
+      cardId: card.id,
+      demands: card.demands.map((d) => ({
+        city: d.city,
+        loadType: d.resource,
+        payment: d.payment,
+      })),
+    });
+  }
+
+  // Build load availability for cities relevant to the bot's demands
+  const loadSvc = LoadService.getInstance();
+  const loadAvailability: Record<string, string[]> = {};
+  const citiesOfInterest = new Set<string>();
+  for (const rd of resolvedDemands) {
+    for (const d of rd.demands) {
+      citiesOfInterest.add(d.city);
+    }
+  }
+  for (const city of citiesOfInterest) {
+    const loads = loadSvc.getAvailableLoadsForCity(city);
+    if (loads.length > 0) {
+      loadAvailability[city] = loads;
+    }
+  }
+
   return {
     gameId,
     gameStatus,
     turnNumber: botRow.current_turn_number ?? 0,
     bot: {
       playerId: botPlayerId,
+      userId: botRow.user_id ?? '',
       money: botRow.money ?? 50,
       position:
         botRow.position_row != null && botRow.position_col != null
           ? { row: botRow.position_row, col: botRow.position_col }
           : null,
       existingSegments: botSegments,
-      demandCards: Array.isArray(botRow.hand) ? botRow.hand : [],
+      demandCards: demandCardIds,
+      resolvedDemands,
       trainType: botRow.train_type ?? 'Freight',
       loads: Array.isArray(botRow.loads) ? botRow.loads : [],
       botConfig,
     },
     allPlayerTracks,
+    loadAvailability,
   };
 }
 

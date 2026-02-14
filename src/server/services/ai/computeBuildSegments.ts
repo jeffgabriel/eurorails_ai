@@ -6,7 +6,7 @@
  * a major city when no track exists.
  */
 
-import { TrackSegment, TerrainType } from '../../../shared/types/GameTypes';
+import { TrackSegment, TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
 import {
   getHexNeighbors,
   getTerrainCost,
@@ -16,6 +16,25 @@ import {
   GridPointData,
 } from './MapTopology';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import waterCrossingsData from '../../../../configuration/waterCrossings.json';
+
+// Precompute water crossing costs for O(1) edge lookup.
+// River = +2M, Lake/Ocean inlet = +3M (additive to terrain cost).
+const _waterCrossingCosts = new Map<string, number>();
+for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).riverEdges ?? []) {
+  _waterCrossingCosts.set(edge, WaterCrossingType.River); // 2
+}
+for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).nonRiverWaterEdges ?? []) {
+  _waterCrossingCosts.set(edge, WaterCrossingType.Lake); // 3
+}
+
+/** Extra cost for building across a river, lake, or ocean inlet. */
+function getWaterCrossingCost(fromRow: number, fromCol: number, toRow: number, toCol: number): number {
+  const a = `${fromRow},${fromCol}`;
+  const b = `${toRow},${toCol}`;
+  const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+  return _waterCrossingCosts.get(key) ?? 0;
+}
 
 /** Internal node for Dijkstra's priority queue */
 interface DijkstraNode {
@@ -137,7 +156,7 @@ function buildSegment(
       col: toCoord.col,
       terrain: toData.terrain,
     },
-    cost: getTerrainCost(toData.terrain),
+    cost: getTerrainCost(toData.terrain) + getWaterCrossingCost(fromCoord.row, fromCoord.col, toCoord.row, toCoord.col),
   };
 }
 
@@ -153,14 +172,19 @@ function buildSegment(
  *                         (typically major city positions).
  * @param existingSegments - The bot's current track network.
  * @param budget - Maximum total cost in ECU millions for this turn's build.
- * @param maxSegments - Maximum number of segments to return (default 3).
+ * @param maxSegments - Maximum number of segments to return (default: budget,
+ *                      i.e. only limited by cost). The per-turn build cost
+ *                      in EuroRails is ECU 20M, and cheapest terrain is 1 ECU,
+ *                      so the practical max is ~20.
  * @returns An array of TrackSegment with full grid + pixel coordinates.
  */
 export function computeBuildSegments(
   startPositions: GridCoord[],
   existingSegments: TrackSegment[],
   budget: number,
-  maxSegments: number = 3,
+  maxSegments: number = budget,
+  /** Edges owned by other players — these cannot be built on (Right of Way rule). */
+  occupiedEdges?: Set<string>,
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
@@ -238,8 +262,11 @@ export function computeBuildSegments(
       const terrainCost = getTerrainCost(nbData.terrain);
       if (terrainCost === Infinity) continue; // water
 
-      // Don't traverse already-built edges
+      // Don't traverse edges owned by other players (Right of Way rule)
       const edgeKey = `${currentKey}-${nbKey}`;
+      if (occupiedEdges?.has(edgeKey)) continue;
+
+      // Don't traverse already-built edges (own network)
       if (builtEdges.has(edgeKey)) {
         // But we can pass through existing network nodes for free
         if (onNetwork.has(nbKey)) {
@@ -258,7 +285,8 @@ export function computeBuildSegments(
         continue;
       }
 
-      const newCost = current.cost + terrainCost;
+      const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
+      const newCost = current.cost + terrainCost + waterExtra;
       if (newCost > budget) continue; // over budget
 
       const existingCost = minCost.get(nbKey);

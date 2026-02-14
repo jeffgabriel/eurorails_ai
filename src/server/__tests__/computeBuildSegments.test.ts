@@ -20,7 +20,11 @@ describe('computeBuildSegments', () => {
     it('should return segments when given a major city start and sufficient budget', () => {
       const segments = computeBuildSegments([PARIS], [], 20);
       expect(segments.length).toBeGreaterThan(0);
-      expect(segments.length).toBeLessThanOrEqual(3);
+      // With budget=20 and no explicit maxSegments, builds up to 20 segments (budget-limited)
+      expect(segments.length).toBeLessThanOrEqual(20);
+      // Total cost should not exceed budget
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
     });
 
     it('should return empty array when budget is 0', () => {
@@ -74,10 +78,10 @@ describe('computeBuildSegments', () => {
       }
     });
 
-    it('should have cost matching terrain cost of destination', () => {
+    it('should have cost >= terrain cost of destination (extra for water crossings)', () => {
       const segments = computeBuildSegments([PARIS], [], 20);
       for (const seg of segments) {
-        expect(seg.cost).toBe(getTerrainCost(seg.to.terrain));
+        expect(seg.cost).toBeGreaterThanOrEqual(getTerrainCost(seg.to.terrain));
       }
     });
 

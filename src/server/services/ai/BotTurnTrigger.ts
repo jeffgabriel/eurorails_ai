@@ -126,6 +126,8 @@ export async function onTurnChange(
       segmentsBuilt: result.segmentsBuilt,
       cost: result.cost,
       durationMs: result.durationMs,
+      loadsPickedUp: result.loadsPickedUp,
+      loadsDelivered: result.loadsDelivered,
     });
 
     // Advance to next player
