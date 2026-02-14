@@ -56,7 +56,8 @@ export class LeaderboardManager {
         0x333333,
         0.9
       )
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setInteractive(); // Block pointer events from passing through
 
     // Add leaderboard title
     const leaderboardTitle = this.scene.add
@@ -150,7 +151,12 @@ export class LeaderboardManager {
         if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
           playerText
             .setInteractive({ useHandCursor: true })
-            .on("pointerdown", () => this.openDMCallback!(dmTargetUserId, player.name));
+            .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+              if (pointer.event) {
+                pointer.event.stopPropagation();
+              }
+              this.openDMCallback!(dmTargetUserId, player.name);
+            });
         }
         elements.push(playerText);
 
@@ -228,7 +234,12 @@ export class LeaderboardManager {
     if (isLocalPlayerActive) {
       nextPlayerButton
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.nextPlayerCallback())
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.nextPlayerCallback();
+        })
         .on("pointerover", () => nextPlayerButton.setFillStyle(0x008800))
         .on("pointerout", () => nextPlayerButton.setFillStyle(0x00aa00));
     } else {
@@ -278,7 +289,12 @@ export class LeaderboardManager {
     if (this.toggleChatCallback) {
       chatButton
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.toggleChatCallback!())
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.toggleChatCallback!();
+        })
         .on("pointerover", () => chatButton.setFillStyle(0x0055aa))
         .on("pointerout", () => chatButton.setFillStyle(0x0066cc));
     }

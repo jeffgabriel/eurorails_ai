@@ -395,9 +395,12 @@ export class ChatStateService {
 
     try {
       const { authenticatedFetch } = await import('./authenticatedFetch');
+      // Ensure all IDs are numbers (server may return them as strings for BIGSERIAL)
+      const numericIds = messageIds.map(id => typeof id === 'string' ? parseInt(id, 10) : id);
+      
       const response = await authenticatedFetch(`${config.apiBaseUrl}/api/chat/mark-read`, {
         method: 'POST',
-        body: JSON.stringify({ messageIds }),
+        body: JSON.stringify({ messageIds: numericIds }),
       });
 
       if (!response.ok) {
