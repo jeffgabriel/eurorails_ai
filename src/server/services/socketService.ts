@@ -474,8 +474,9 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           timestamp: new Date().toISOString(),
         });
 
-        // 9. Broadcast to recipients
+        // 9. Broadcast to recipients (include gameId for client routing)
         const messageData = {
+          gameId,
           id: messageId,
           senderUserId: userId,
           senderUsername: senderUsername || 'Unknown',
@@ -486,10 +487,14 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         };
 
         if (recipientType === 'game') {
-          // Broadcast to all players in game (except sender)
+          // Emit to sender (so they get their message and can replace optimistic)
+          socket.emit('new-chat-message', messageData);
+          // Broadcast to other players in game
           socket.to(`game:${gameId}:chat`).emit('new-chat-message', messageData);
         } else {
-          // Send to specific player's DM room
+          // Emit to sender for DM
+          socket.emit('new-chat-message', messageData);
+          // Send to recipient's DM room
           const dmRoom = createDMRoomId(userId, recipientId, gameId);
           socket.to(dmRoom).emit('new-chat-message', messageData);
         }

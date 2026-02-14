@@ -2,6 +2,7 @@ import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 
 export class LeaderboardManager {
@@ -10,20 +11,26 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
+  private playerStateService: PlayerStateService | null = null;
   private toggleChatCallback?: () => void;
-  
+  private openDMCallback?: (playerId: string, playerName: string) => void;
+
   constructor(
-    scene: Phaser.Scene, 
+    scene: Phaser.Scene,
     gameState: GameState,
     nextPlayerCallback: () => void,
     gameStateService?: GameStateService,
-    toggleChatCallback?: () => void
+    toggleChatCallback?: () => void,
+    openDMCallback?: (playerId: string, playerName: string) => void,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.nextPlayerCallback = nextPlayerCallback;
     this.gameStateService = gameStateService || null;
     this.toggleChatCallback = toggleChatCallback;
+    this.openDMCallback = openDMCallback;
+    this.playerStateService = playerStateService || null;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -122,20 +129,29 @@ export class LeaderboardManager {
           elements.push(iconText);
         }
 
-        // Create player text - keep mostly the same, just bold for active player
+        // Create player text - clickable for DM (requires userId for chat API)
+        const dmTargetUserId = (player as any).userId;
+        const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
         const playerText = this.scene.add
           .text(
             entryX + (isCurrentPlayer ? 25 : 5),
             entryY + 2,
             player.name,
             {
-              color: "#ffffff", // Keep white for all players
-              fontSize: "14px", // Same size for all
+              color: "#ffffff",
+              fontSize: "14px",
               fontStyle: isCurrentPlayer ? "bold" : "normal",
               fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(0, 0);
+
+        // Make clickable for DM (except local player; requires userId)
+        if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
+          playerText
+            .setInteractive({ useHandCursor: true })
+            .on("pointerdown", () => this.openDMCallback!(dmTargetUserId, player.name));
+        }
         elements.push(playerText);
 
         // Create money text (right-aligned) - keep mostly the same

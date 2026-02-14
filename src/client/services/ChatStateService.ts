@@ -27,7 +27,7 @@ interface OptimisticMessage extends Omit<ChatMessage, 'id' | 'createdAt'> {
 }
 
 /**
- * Chat state for a specific game
+ * Chat state for a specific game or DM
  */
 interface GameChatState {
   messages: ChatMessage[];
@@ -35,6 +35,10 @@ interface GameChatState {
   unreadCount: number;
   isJoined: boolean;
   isLoading: boolean;
+}
+
+function getDMKey(gameId: string, otherUserId: string): string {
+  return `dm:${gameId}:${otherUserId}`;
 }
 
 type MessageListener = (message: ChatMessage) => void;
@@ -47,6 +51,7 @@ type ErrorListener = (error: { code: string; message: string }) => void;
  */
 export class ChatStateService {
   private gameChats: Map<string, GameChatState> = new Map();
+  private dmChats: Map<string, GameChatState> = new Map();
   private messageListeners: Map<string, Set<MessageListener>> = new Map();
   private unreadCountListeners: Set<UnreadCountListener> = new Set();
   private errorListeners: Set<ErrorListener> = new Set();
@@ -118,8 +123,8 @@ export class ChatStateService {
       // Join the socket room
       socketService.joinGameChat?.(gameId, this.userId);
 
-      // Fetch initial message history
-      const messages = await this.fetchMessages(gameId);
+      // Fetch initial message history (game chat)
+      const messages = await this.fetchMessages(gameId, 'game', gameId, 1, 50);
       state.messages = messages;
       state.isJoined = true;
       state.isLoading = false;
@@ -133,6 +138,87 @@ export class ChatStateService {
       console.error('[ChatStateService] Failed to join game chat:', error);
       throw error;
     }
+  }
+
+  /**
+   * Ensure DM state exists for a recipient; returns state or null if game not joined
+   */
+  private ensureDMState(gameId: string, recipientId: string): GameChatState | null {
+    if (!this.gameChats.has(gameId) || !this.gameChats.get(gameId)!.isJoined) {
+      return null;
+    }
+    const dmKey = getDMKey(gameId, recipientId);
+    if (!this.dmChats.has(dmKey)) {
+      this.dmChats.set(dmKey, {
+        messages: [],
+        optimisticMessages: [],
+        unreadCount: 0,
+        isJoined: true,
+        isLoading: false,
+      });
+    }
+    return this.dmChats.get(dmKey)!;
+  }
+
+  /**
+   * Open DM with a player: load history and return messages. Caller should subscribe via onMessage(dmKey, ...).
+   */
+  async openDM(gameId: string, recipientId: string): Promise<ChatMessage[]> {
+    if (!this.userId) {
+      throw new Error('ChatStateService not initialized');
+    }
+    const dmKey = getDMKey(gameId, recipientId);
+    if (!this.dmChats.has(dmKey)) {
+      this.dmChats.set(dmKey, {
+        messages: [],
+        optimisticMessages: [],
+        unreadCount: 0,
+        isJoined: true,
+        isLoading: true,
+      });
+    }
+    const state = this.dmChats.get(dmKey)!;
+    try {
+      const messages = await this.fetchMessages(gameId, 'player', recipientId, 1, 50);
+      state.messages = messages;
+      state.isLoading = false;
+      return this.getDMMessages(gameId, recipientId);
+    } catch (error) {
+      state.isLoading = false;
+      console.error('[ChatStateService] Failed to load DM:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get messages for a DM (including optimistic)
+   */
+  getDMMessages(gameId: string, recipientId: string): ChatMessage[] {
+    const dmKey = getDMKey(gameId, recipientId);
+    return this.getMessagesByKey(dmKey);
+  }
+
+  /**
+   * Get messages by key (gameId or dmKey)
+   */
+  private getMessagesByKey(key: string): ChatMessage[] {
+    const state = this.gameChats.get(key) ?? this.dmChats.get(key);
+    if (!state) return [];
+    const combinedMessages: ChatMessage[] = [
+      ...state.messages,
+      ...state.optimisticMessages.map((opt): ChatMessage => ({
+        id: -1,
+        gameId: opt.gameId,
+        senderId: opt.senderId,
+        senderUsername: opt.senderUsername,
+        recipientType: opt.recipientType,
+        recipientId: opt.recipientId,
+        message: opt.message,
+        createdAt: opt.createdAt,
+        isRead: opt.isRead,
+      })),
+    ];
+    return combinedMessages;
   }
 
   /**
@@ -155,14 +241,18 @@ export class ChatStateService {
       throw new Error('ChatStateService not initialized');
     }
 
-    const state = this.gameChats.get(gameId);
+    const effectiveRecipientId = recipientId || gameId;
+    const state =
+      recipientType === 'game'
+        ? this.gameChats.get(gameId)
+        : this.ensureDMState(gameId, effectiveRecipientId);
+
     if (!state) {
-      throw new Error('Not joined to game chat');
+      throw new Error(recipientType === 'game' ? 'Not joined to game chat' : 'DM state not initialized');
     }
 
     // Create optimistic message
     const optimisticId = `optimistic-${Date.now()}-${Math.random()}`;
-    const effectiveRecipientId = recipientId || gameId;
     const createdAt = new Date().toISOString();
     const optimisticMessage: OptimisticMessage = {
       optimisticId,
@@ -179,7 +269,9 @@ export class ChatStateService {
 
     // Add to optimistic messages immediately (optimistic UI)
     state.optimisticMessages.push(optimisticMessage);
-    
+
+    const notifyKey = recipientType === 'game' ? gameId : getDMKey(gameId, effectiveRecipientId);
+
     // Notify listeners with a properly typed message
     const tempMessage: ChatMessage = {
       id: -1,
@@ -192,13 +284,19 @@ export class ChatStateService {
       createdAt: optimisticMessage.createdAt,
       isRead: optimisticMessage.isRead,
     };
-    this.notifyMessageListeners(gameId, tempMessage);
+    this.notifyMessageListeners(notifyKey, tempMessage);
 
     try {
-      // Send via socket (server-authoritative)
-      socketService.sendChatMessage?.(gameId, message, recipientType, effectiveRecipientId);
+      // Send via socket (server-authoritative) - pass tempId for optimistic matching
+      socketService.sendChatMessage?.(
+        gameId,
+        message,
+        recipientType,
+        effectiveRecipientId,
+        optimisticId
+      );
 
-      // Note: The actual message confirmation will come via socket 'chat-message' event
+      // Note: The actual message confirmation will come via socket 'new-chat-message' event
       // At that point, we'll remove the optimistic message and add the real one
     } catch (error) {
       // Mark optimistic message as failed
@@ -213,37 +311,61 @@ export class ChatStateService {
    * Handle incoming message from socket
    */
   private handleIncomingMessage(gameId: string, message: ChatMessage): void {
-    const state = this.gameChats.get(gameId);
-    if (!state) {
-      return;
+    // Route to game chat or DM based on recipientType
+    if (message.recipientType === 'game') {
+      this.handleGameMessage(gameId, message);
+    } else {
+      const otherUserId = message.senderId === this.userId ? message.recipientId : message.senderId;
+      const dmKey = getDMKey(gameId, otherUserId);
+      this.handleDMMessage(dmKey, message);
     }
+  }
 
-    // Remove matching optimistic message using optimisticId if present in message
-    // This provides more accurate deduplication than content-based matching
+  private handleGameMessage(gameId: string, message: ChatMessage): void {
+    const state = this.gameChats.get(gameId);
+    if (!state) return;
+    this.applyIncomingMessage(state, message, gameId, () => this.notifyMessageListeners(gameId, message));
+  }
+
+  private handleDMMessage(dmKey: string, message: ChatMessage): void {
+    if (!this.dmChats.has(dmKey)) {
+      this.dmChats.set(dmKey, {
+        messages: [],
+        optimisticMessages: [],
+        unreadCount: 0,
+        isJoined: true,
+        isLoading: false,
+      });
+    }
+    const state = this.dmChats.get(dmKey)!;
+    this.applyIncomingMessage(state, message, dmKey, () => this.notifyMessageListeners(dmKey, message));
+  }
+
+  private applyIncomingMessage(
+    state: GameChatState,
+    message: ChatMessage,
+    notifyKey: string,
+    notify: () => void
+  ): void {
     const optimisticIndex = state.optimisticMessages.findIndex((opt) => {
-      // If server response includes the optimistic ID, use that for matching
       if ((message as any).optimisticId) {
         return opt.optimisticId === (message as any).optimisticId;
       }
-      // Fallback: match by sender and content (for backwards compatibility)
       return opt.senderId === message.senderId && opt.message === message.message;
     });
-    
+
     if (optimisticIndex >= 0) {
       state.optimisticMessages.splice(optimisticIndex, 1);
     }
 
-    // Add real message
     state.messages.push(message);
 
-    // Update unread count if message is from another user
     if (message.senderId !== this.userId && !message.isRead) {
       state.unreadCount++;
-      this.notifyUnreadCount(gameId, state.unreadCount);
+      this.notifyUnreadCount(notifyKey, state.unreadCount);
     }
 
-    // Notify listeners
-    this.notifyMessageListeners(gameId, message);
+    notify();
   }
 
   /**
@@ -273,7 +395,7 @@ export class ChatStateService {
 
     try {
       const { authenticatedFetch } = await import('./authenticatedFetch');
-      const response = await authenticatedFetch(`${config.apiBaseUrl}/api/chat/messages/read`, {
+      const response = await authenticatedFetch(`${config.apiBaseUrl}/api/chat/mark-read`, {
         method: 'POST',
         body: JSON.stringify({ messageIds }),
       });
@@ -303,13 +425,26 @@ export class ChatStateService {
   }
 
   /**
-   * Fetch message history for a game
+   * Fetch message history for a game or DM
    */
-  private async fetchMessages(gameId: string, limit: number = 50, offset: number = 0): Promise<ChatMessage[]> {
+  private async fetchMessages(
+    gameId: string,
+    recipientType: 'game' | 'player' = 'game',
+    recipientId?: string,
+    page: number = 1,
+    limit: number = 50
+  ): Promise<ChatMessage[]> {
     try {
       const { authenticatedFetch } = await import('./authenticatedFetch');
+      const effectiveRecipientId = recipientId || gameId;
+      const params = new URLSearchParams({
+        recipientType,
+        recipientId: effectiveRecipientId,
+        page: String(page),
+        limit: String(Math.min(limit, 30)),
+      });
       const response = await authenticatedFetch(
-        `${config.apiBaseUrl}/api/chat/messages?gameId=${gameId}&limit=${limit}&offset=${offset}`,
+        `${config.apiBaseUrl}/api/chat/messages/${gameId}?${params}`,
         { method: 'GET' }
       );
 
@@ -318,7 +453,13 @@ export class ChatStateService {
       }
 
       const data = await response.json();
-      return data.messages || [];
+      const rawMessages = data.data?.messages || data.messages || [];
+      // Map server format (messageText, senderUserId) to client format (message, senderId)
+      return rawMessages.map((m: any) => ({
+        ...m,
+        message: m.messageText ?? m.message,
+        senderId: m.senderUserId ?? m.senderId,
+      }));
     } catch (error) {
       console.error('[ChatStateService] Failed to fetch messages:', error);
       return [];
@@ -332,7 +473,7 @@ export class ChatStateService {
     try {
       const { authenticatedFetch } = await import('./authenticatedFetch');
       const response = await authenticatedFetch(
-        `${config.apiBaseUrl}/api/chat/messages/unread?gameId=${gameId}`,
+        `${config.apiBaseUrl}/api/chat/unread/${gameId}`,
         { method: 'GET' }
       );
 
@@ -341,7 +482,7 @@ export class ChatStateService {
       }
 
       const data = await response.json();
-      return data.unreadCount || 0;
+      return data.data?.total ?? data.unreadCount ?? 0;
     } catch (error) {
       console.error('[ChatStateService] Failed to fetch unread count:', error);
       return 0;
@@ -352,28 +493,7 @@ export class ChatStateService {
    * Get all messages for a game (including optimistic ones)
    */
   getMessages(gameId: string): ChatMessage[] {
-    const state = this.gameChats.get(gameId);
-    if (!state) {
-      return [];
-    }
-
-    // Combine real messages with optimistic ones
-    const combinedMessages: ChatMessage[] = [
-      ...state.messages,
-      ...state.optimisticMessages.map((opt): ChatMessage => ({
-        id: -1, // Temporary ID for optimistic messages
-        gameId: opt.gameId,
-        senderId: opt.senderId,
-        senderUsername: opt.senderUsername,
-        recipientType: opt.recipientType,
-        recipientId: opt.recipientId,
-        message: opt.message,
-        createdAt: opt.createdAt, // Use stored creation time for consistency
-        isRead: opt.isRead,
-      })),
-    ];
-
-    return combinedMessages;
+    return this.getMessagesByKey(gameId);
   }
 
   /**
@@ -475,12 +595,20 @@ export class ChatStateService {
       this.leaveGameChat(gameId);
       this.gameChats.delete(gameId);
       this.messageListeners.delete(gameId);
+      // Remove DM states for this game
+      for (const key of this.dmChats.keys()) {
+        if (key.startsWith(`dm:${gameId}:`)) {
+          this.dmChats.delete(key);
+          this.messageListeners.delete(key);
+        }
+      }
     } else {
       // Clean up all
       for (const gId of this.gameChats.keys()) {
         this.leaveGameChat(gId);
       }
       this.gameChats.clear();
+      this.dmChats.clear();
       this.messageListeners.clear();
       this.unreadCountListeners.clear();
       this.errorListeners.clear();

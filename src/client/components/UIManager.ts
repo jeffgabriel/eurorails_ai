@@ -312,7 +312,9 @@ export class UIManager {
       this.gameState,
       UIManagedNextPlayerCallback,
       this.gameStateService,
-      () => (this.scene as any).toggleChat?.()
+      () => (this.scene as any).toggleChat?.(),
+      (userId: string, playerName: string) => (this.scene as any).openChatDM?.(userId, playerName),
+      this.playerStateService
     );
 
     // Initialize the player hand display

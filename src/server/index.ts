@@ -10,6 +10,7 @@ import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
+import chatRoutes from './routes/chatRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
@@ -104,6 +105,7 @@ app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));

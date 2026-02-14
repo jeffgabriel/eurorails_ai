@@ -329,19 +329,27 @@ class SocketService {
     debug.log(`Left game chat for game ${gameId}`);
   }
 
-  sendChatMessage(gameId: ID, message: string, recipientType: 'game' | 'player' = 'game', recipientId?: ID): void {
+  sendChatMessage(
+    gameId: ID,
+    message: string,
+    recipientType: 'game' | 'player' = 'game',
+    recipientId?: ID,
+    tempId?: string
+  ): void {
     if (!this.socket) {
       throw new Error('Socket not connected');
     }
-    
+
     // Validate that recipientId is provided for player-to-player messages
     if (recipientType === 'player' && !recipientId) {
       throw new Error('recipientId is required when recipientType is player');
     }
-    
+
+    // Server expects messageText and tempId
     this.socket.emit('send-chat-message', {
+      tempId: tempId || `temp-${Date.now()}`,
       gameId,
-      message,
+      messageText: message,
       recipientType,
       recipientId: recipientId || gameId,
     });
@@ -350,8 +358,23 @@ class SocketService {
 
   onChatMessage(callback: (data: { gameId: ID; message: any }) => void): void {
     if (!this.socket) return;
-    this.socket.off('chat-message');
-    this.socket.on('chat-message', callback);
+    this.socket.off('new-chat-message');
+    this.socket.on('new-chat-message', (data: any) => {
+      // Map server format to client ChatMessage format
+      const gameId = data.gameId;
+      const message = {
+        id: data.id,
+        gameId,
+        senderId: data.senderUserId,
+        senderUsername: data.senderUsername || 'Unknown',
+        recipientType: data.recipientType,
+        recipientId: data.recipientId,
+        message: data.messageText,
+        createdAt: data.createdAt,
+        isRead: false,
+      };
+      callback({ gameId, message });
+    });
   }
 
   onChatStatus(callback: (data: { gameId: ID; messageId: number; status: 'delivered' | 'read' }) => void): void {

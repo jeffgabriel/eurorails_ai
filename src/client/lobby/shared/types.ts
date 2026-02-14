@@ -83,7 +83,13 @@ export interface ClientToServerEvents {
   'leave-lobby': (data: { gameId: ID }) => void;
   'join-game-chat': (data: { gameId: ID; userId: ID }) => void;
   'leave-game-chat': (data: { gameId: ID }) => void;
-  'send-chat-message': (data: { gameId: ID; message: string; recipientType: 'game' | 'player'; recipientId: ID }) => void;
+  'send-chat-message': (data: {
+    tempId: string;
+    gameId: ID;
+    messageText: string;
+    recipientType: 'game' | 'player';
+    recipientId: ID;
+  }) => void;
 }
 
 export interface ServerToClientEvents {
@@ -115,6 +121,7 @@ export interface ServerToClientEvents {
     timestamp: number;
   }) => void;
   'chat-message': (data: { gameId: ID; message: any }) => void;
+  'new-chat-message': (data: { gameId: ID; message: any }) => void;
   'chat-status': (data: { gameId: ID; messageId: number; status: 'delivered' | 'read' }) => void;
   'chat-error': (data: { error: string; message: string }) => void;
 }

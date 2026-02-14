@@ -647,13 +647,25 @@ export class GameScene extends Phaser.Scene {
     // Set a low frame rate for the scene
     this.game.loop.targetFps = 30;
 
-    // Initialize ChatScene for this game
+    // Initialize ChatScene for this game (use auth userId for chat, not player slot id)
     const localPlayer = this.playerStateService.getLocalPlayer();
     if (localPlayer) {
-      this.scene.launch('ChatScene', {
-        gameId: this.gameState.id,
-        userId: localPlayer.id,
-      });
+      const authUserId =
+        localPlayer.userId ??
+        (() => {
+          try {
+            const userJson = localStorage.getItem('eurorails.user');
+            return userJson ? (JSON.parse(userJson) as { id?: string })?.id : undefined;
+          } catch {
+            return undefined;
+          }
+        })();
+      if (authUserId) {
+        this.scene.launch('ChatScene', {
+          gameId: this.gameState.id,
+          userId: authUserId,
+        });
+      }
     }
 
     // Add event handler for scene resume
@@ -1372,6 +1384,18 @@ export class GameScene extends Phaser.Scene {
   public openChat(): void {
     const chatScene = this.scene.get('ChatScene') as any;
     if (chatScene && chatScene.open) {
+      chatScene.open();
+    }
+  }
+
+  /**
+   * Open the chat sidebar in DM mode with a specific player
+   */
+  public openChatDM(recipientUserId: string, recipientName: string): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    if (chatScene && chatScene.openDM) {
+      chatScene.openDM(recipientUserId, recipientName);
+    } else if (chatScene && chatScene.open) {
       chatScene.open();
     }
   }
