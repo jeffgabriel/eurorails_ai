@@ -188,6 +188,144 @@ describe("trackUsageFees.computeTrackUsageForMove", () => {
     expect(result.ownersUsed.size).toBe(0);
   });
 
+  it("prefers longer own-track path over shorter opponent-track path", () => {
+    // Bug scenario: p1 has a long route (0,0)→(0,1)→(0,2)→(0,3)→(0,4)→(0,5)
+    // p2 has a shortcut (0,0)→(0,5) via (0,0)→(1,0)→(0,5)
+    // BFS would pick the 2-hop opponent path; Dijkstra should pick the 5-hop own path
+    const allTracks: PlayerTrackState[] = [
+      {
+        playerId: "p1",
+        gameId: "g1",
+        segments: [
+          {
+            from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 4, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 4, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 5, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+        ],
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(),
+      } as any,
+      {
+        playerId: "p2",
+        gameId: "g1",
+        segments: [
+          {
+            from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 1, col: 0, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 1, col: 0, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 5, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+        ],
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(),
+      } as any,
+    ];
+
+    const result = computeTrackUsageForMove({
+      allTracks,
+      from: { row: 0, col: 0 },
+      to: { row: 0, col: 5 },
+      currentPlayerId: "p1",
+      majorCityGroups: [],
+    });
+
+    expect(result.isValid).toBe(true);
+    // Should use own 5-hop path, NOT the 2-hop opponent shortcut
+    expect(result.path.length).toBe(5);
+    expect(result.ownersUsed.size).toBe(0);
+  });
+
+  it("uses opponent track only when no own-track path exists", () => {
+    // p1 has track (0,0)→(0,1) and (0,4)→(0,5)
+    // p2 bridges the gap: (0,1)→(0,2)→(0,3)→(0,4)
+    // p1 must use p2's track to get from (0,0) to (0,5)
+    const allTracks: PlayerTrackState[] = [
+      {
+        playerId: "p1",
+        gameId: "g1",
+        segments: [
+          {
+            from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 4, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 5, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+        ],
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(),
+      } as any,
+      {
+        playerId: "p2",
+        gameId: "g1",
+        segments: [
+          {
+            from: { x: 0, y: 0, row: 0, col: 1, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 2, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+          {
+            from: { x: 0, y: 0, row: 0, col: 3, terrain: TerrainType.Clear },
+            to: { x: 0, y: 0, row: 0, col: 4, terrain: TerrainType.Clear },
+            cost: 1,
+          },
+        ],
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(),
+      } as any,
+    ];
+
+    const result = computeTrackUsageForMove({
+      allTracks,
+      from: { row: 0, col: 0 },
+      to: { row: 0, col: 5 },
+      currentPlayerId: "p1",
+      majorCityGroups: [],
+    });
+
+    expect(result.isValid).toBe(true);
+    expect(result.path.length).toBe(5);
+    expect(result.ownersUsed.has("p2")).toBe(true);
+    expect(result.ownersUsed.has("p1")).toBe(false);
+  });
+
   it("finds valid path across ferry to connect disconnected networks", () => {
     // Two players with track on opposite sides of a ferry
     const allTracks: PlayerTrackState[] = [

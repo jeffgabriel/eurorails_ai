@@ -105,32 +105,67 @@ export function buildUnionTrackGraph(args: {
   return { adjacency, edgeOwners };
 }
 
-function bfsPath(adjacency: Map<string, Set<string>>, startKey: string, goalKey: string): string[] | null {
+/**
+ * Dijkstra-like pathfinding that prefers own-track and public edges over opponent track.
+ * Own-track / public edges have cost 0; opponent-only edges have cost 1.
+ * This ensures a player's own (possibly longer) route is chosen over a shorter
+ * route through opponent track, avoiding unnecessary track usage fees.
+ */
+function preferOwnTrackPath(
+  adjacency: Map<string, Set<string>>,
+  edgeOwners: Map<string, Set<string>>,
+  currentPlayerId: string,
+  startKey: string,
+  goalKey: string
+): string[] | null {
   if (startKey === goalKey) return [startKey];
-  const queue: string[] = [startKey];
-  const visited = new Set<string>([startKey]);
-  const parent = new Map<string, string>();
 
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
+  const dist = new Map<string, number>();
+  const parent = new Map<string, string>();
+  dist.set(startKey, 0);
+
+  const pq: Array<[number, string]> = [[0, startKey]];
+
+  while (pq.length > 0) {
+    pq.sort((a, b) => a[0] - b[0]);
+    const [curCost, cur] = pq.shift()!;
+
+    if (cur === goalKey) {
+      const path: string[] = [goalKey];
+      let step = goalKey;
+      while (parent.has(step)) {
+        step = parent.get(step)!;
+        path.unshift(step);
+      }
+      return path;
+    }
+
+    if (curCost > (dist.get(cur) ?? Infinity)) continue;
+
     const neighbors = adjacency.get(cur);
     if (!neighbors) continue;
+
     for (const next of neighbors) {
-      if (visited.has(next)) continue;
-      visited.add(next);
-      parent.set(next, cur);
-      if (next === goalKey) {
-        const path: string[] = [goalKey];
-        let step = goalKey;
-        while (parent.has(step)) {
-          step = parent.get(step)!;
-          path.unshift(step);
-        }
-        return path;
+      const fromNode = parseNodeKey(cur);
+      const toNode = parseNodeKey(next);
+      const eKey = edgeKey(fromNode, toNode);
+      const owners = edgeOwners.get(eKey);
+
+      // Cost 0 for own track or public edges; cost 1 for opponent-only edges
+      let edgeCost = 0;
+      if (owners && owners.size > 0 && !owners.has(currentPlayerId)) {
+        edgeCost = 1;
       }
-      queue.push(next);
+
+      const newCost = curCost + edgeCost;
+      if (newCost < (dist.get(next) ?? Infinity)) {
+        dist.set(next, newCost);
+        parent.set(next, cur);
+        pq.push([newCost, next]);
+      }
     }
   }
+
   return null;
 }
 
@@ -151,7 +186,7 @@ export function computeTrackUsageForMove(args: {
   const startKey = nodeKey(args.from);
   const goalKey = nodeKey(args.to);
 
-  const pathKeys = bfsPath(adjacency, startKey, goalKey);
+  const pathKeys = preferOwnTrackPath(adjacency, edgeOwners, args.currentPlayerId, startKey, goalKey);
   if (!pathKeys) {
     return {
       isValid: false,
