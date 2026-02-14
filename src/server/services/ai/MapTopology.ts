@@ -137,7 +137,7 @@ export function getTerrainCost(terrain: TerrainType): number {
     case TerrainType.SmallCity:   return 3;
     case TerrainType.MediumCity:  return 3;
     case TerrainType.MajorCity:   return 5;
-    case TerrainType.FerryPort:   return 1;
+    case TerrainType.FerryPort:   return 0; // actual cost is ferryConnection.cost (4–16M), applied at call site
     case TerrainType.Water:       return Infinity;
     default:                      return 1;
   }

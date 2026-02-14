@@ -11,6 +11,8 @@ export type FerryEdge = {
   name: string;
   pointA: { row: number; col: number };
   pointB: { row: number; col: number };
+  /** Build cost in ECU millions to reach this ferry port (4–16M). */
+  cost: number;
 };
 
 /**
@@ -105,6 +107,7 @@ export function getFerryEdges(): FerryEdge[] {
         name: ferry.Name,
         pointA: coordsA,
         pointB: coordsB,
+        cost: ferry.cost,
       });
     }
   }

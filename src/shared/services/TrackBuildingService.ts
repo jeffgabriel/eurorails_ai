@@ -3,6 +3,15 @@ import { Result, Ok, Err } from "neverthrow";
 import { TrackNetworkService } from "./TrackNetworkService";
 import { Milepost, TerrainType } from "../types/GameTypes";
 import { TrackBuildOptions } from "../types/TrackTypes";
+import ferryPointsConfig from "../../../configuration/ferryPoints.json";
+
+// Precompute ferry port costs: milepost UUID → connection cost (4–16M).
+const _ferryPortCostById = new Map<string, number>();
+for (const ferry of ferryPointsConfig.ferryPoints) {
+    for (const id of ferry.connections) {
+        _ferryPortCostById.set(id, ferry.cost);
+    }
+}
 
 export enum TrackBuildError {
     INVALID_CONNECTION = 'INVALID_CONNECTION',
@@ -29,6 +38,11 @@ export class TrackBuildingService {
     }
 
     private calculateNewSegmentCost(from: Milepost, to: Milepost, network: TrackNetwork): number {
+        // Ferry ports use their connection cost (4–16M) from ferryPoints.json
+        if (to.type === TerrainType.FerryPort) {
+            return _ferryPortCostById.get(to.id) ?? 0;
+        }
+
         // Return cost based on terrain type
         const terrainCosts: { [key in TerrainType]: number } = {
             [TerrainType.Clear]: 1,
@@ -40,7 +54,7 @@ export class TrackBuildingService {
             [TerrainType.FerryPort]: 0,
             [TerrainType.Water]: 0
         };
-        
+
         return terrainCosts[to.type] || 1;
     }
 

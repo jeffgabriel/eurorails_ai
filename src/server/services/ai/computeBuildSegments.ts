@@ -15,7 +15,7 @@ import {
   GridCoord,
   GridPointData,
 } from './MapTopology';
-import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
 // Precompute water crossing costs for O(1) edge lookup.
@@ -133,6 +133,7 @@ function buildSegment(
   fromCoord: GridCoord,
   toCoord: GridCoord,
   grid: Map<string, GridPointData>,
+  ferryPortCosts: Map<string, number>,
 ): TrackSegment | null {
   const fromData = grid.get(makeKey(fromCoord.row, fromCoord.col));
   const toData = grid.get(makeKey(toCoord.row, toCoord.col));
@@ -140,6 +141,9 @@ function buildSegment(
 
   const fromPixel = gridToPixel(fromCoord.row, fromCoord.col);
   const toPixel = gridToPixel(toCoord.row, toCoord.col);
+
+  // Ferry ports use their connection cost (4–16M) instead of terrain cost
+  const baseCost = ferryPortCosts.get(makeKey(toCoord.row, toCoord.col)) ?? getTerrainCost(toData.terrain);
 
   return {
     from: {
@@ -156,7 +160,7 @@ function buildSegment(
       col: toCoord.col,
       terrain: toData.terrain,
     },
-    cost: getTerrainCost(toData.terrain) + getWaterCrossingCost(fromCoord.row, fromCoord.col, toCoord.row, toCoord.col),
+    cost: baseCost + getWaterCrossingCost(fromCoord.row, fromCoord.col, toCoord.row, toCoord.col),
   };
 }
 
@@ -194,6 +198,16 @@ export function computeBuildSegments(
 
   const grid = loadGridPoints();
   const majorCityLookup = getMajorCityLookup();
+
+  // Build ferry port cost lookup: grid coord → connection cost (4–16M).
+  // Per game rules, building TO a ferry port costs the ferry connection cost,
+  // not the base terrain cost (which getTerrainCost incorrectly returns as 1).
+  const ferryPortCosts = new Map<string, number>();
+  for (const ferry of getFerryEdges()) {
+    ferryPortCosts.set(makeKey(ferry.pointA.row, ferry.pointA.col), ferry.cost);
+    ferryPortCosts.set(makeKey(ferry.pointB.row, ferry.pointB.col), ferry.cost);
+  }
+
   console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}`);
 
   // Determine starting frontier
@@ -259,7 +273,8 @@ export function computeBuildSegments(
       const nbCityName = majorCityLookup.get(nbKey);
       if (currentCityName && nbCityName && currentCityName === nbCityName) continue;
 
-      const terrainCost = getTerrainCost(nbData.terrain);
+      // Ferry ports use their connection cost (4–16M) instead of terrain cost
+      const terrainCost = ferryPortCosts.get(nbKey) ?? getTerrainCost(nbData.terrain);
       if (terrainCost === Infinity) continue; // water
 
       // Don't traverse edges owned by other players (Right of Way rule)
@@ -334,7 +349,7 @@ export function computeBuildSegments(
   console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges)}`);
 
   // Extract up to maxSegments new segments from the path
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments);
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts);
   console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
   return segments;
 }
@@ -369,6 +384,7 @@ function extractSegments(
   grid: Map<string, GridPointData>,
   budget: number,
   maxSegments: number,
+  ferryPortCosts: Map<string, number>,
 ): TrackSegment[] {
   const segments: TrackSegment[] = [];
   let spent = 0;
@@ -380,7 +396,7 @@ function extractSegments(
     // Skip already-built edges
     if (builtEdges.has(`${fromKey}-${toKey}`)) continue;
 
-    const seg = buildSegment(path[i], path[i + 1], grid);
+    const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
     if (!seg) break;
 
     if (spent + seg.cost > budget) break;

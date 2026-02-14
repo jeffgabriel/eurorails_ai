@@ -69,8 +69,8 @@ describe('MapTopology', () => {
       expect(getTerrainCost(TerrainType.MajorCity)).toBe(5);
     });
 
-    it('should return 1 for FerryPort terrain', () => {
-      expect(getTerrainCost(TerrainType.FerryPort)).toBe(1);
+    it('should return 0 for FerryPort terrain (actual cost is ferryConnection.cost, applied at call site)', () => {
+      expect(getTerrainCost(TerrainType.FerryPort)).toBe(0);
     });
 
     it('should return Infinity for Water terrain', () => {
