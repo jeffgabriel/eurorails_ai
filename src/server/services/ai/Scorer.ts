@@ -143,20 +143,32 @@ export class Scorer {
       score += MOVE_DISTANCE_MAX_BONUS * (1 - (mileposts - 1) / speed);
     }
 
-    // Payoff bonus: look up the demand card payoff for the target city
+    // Payoff bonus: prioritize cities where we can actually deliver
     if (option.targetCity) {
       const demandDeck = DemandDeckService.getInstance();
-      let bestPayoff = 0;
+      let bestDeliverablePayoff = 0;  // bot HAS the matching load
+      let bestGeneralPayoff = 0;       // demand exists but bot doesn't have load
+
       for (const cardId of snapshot.bot.demandCards) {
         const card = demandDeck.getCard(cardId);
         if (!card) continue;
         for (const demand of card.demands) {
-          if (demand.city === option.targetCity && demand.payment > bestPayoff) {
-            bestPayoff = demand.payment;
+          if (demand.city !== option.targetCity) continue;
+          if (snapshot.bot.loads.includes(demand.resource)) {
+            if (demand.payment > bestDeliverablePayoff) bestDeliverablePayoff = demand.payment;
+          } else {
+            if (demand.payment > bestGeneralPayoff) bestGeneralPayoff = demand.payment;
           }
         }
       }
-      score += bestPayoff * PAYOFF_BONUS_FACTOR;
+
+      if (bestDeliverablePayoff > 0) {
+        // Bot can deliver here — strong bonus
+        score += bestDeliverablePayoff * PAYOFF_BONUS_FACTOR + 15;
+      } else if (bestGeneralPayoff > 0) {
+        // Demand exists but bot can't deliver — weak bonus
+        score += bestGeneralPayoff * 0.1;
+      }
     }
 
     // Penalty: track usage fees

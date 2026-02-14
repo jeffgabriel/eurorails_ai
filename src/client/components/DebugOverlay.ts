@@ -173,6 +173,7 @@ export class DebugOverlay {
           segmentsBuilt: payload.segmentsBuilt,
           totalCost: payload.cost ?? 0,
           remainingMoney: payload.remainingMoney ?? 0,
+          targetCity: payload.buildTargetCity,
         };
       }
       if (payload?.movementData) {
@@ -198,7 +199,7 @@ export class DebugOverlay {
     if (!this.container) return;
     const gameState = (this.scene as any).gameState as GameState | undefined;
     if (!gameState) {
-      this.container.innerHTML = '<div style="padding:12px;color:#9ca3af;">Waiting for game state...</div>';
+      this.container.innerHTML = '<div style="padding:20px;color:#9ca3af;font-size:18px;">Waiting for game state...</div>';
       return;
     }
 
@@ -218,15 +219,15 @@ export class DebugOverlay {
     const currentName = currentPlayer?.name || '—';
 
     return `
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.1);">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid rgba(255,255,255,0.15);">
         <div>
-          <span style="color:#f9fafb;font-weight:bold;font-size:14px;">Debug Overlay</span>
-          <span style="margin-left:8px;color:#9ca3af;font-size:11px;">${gameId}</span>
-          <span style="margin-left:8px;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,0.1);color:#e5e7eb;font-size:11px;">${status}</span>
+          <span style="color:#f9fafb;font-weight:bold;font-size:22px;">Debug Overlay</span>
+          <span style="margin-left:12px;color:#9ca3af;font-size:16px;">${gameId}</span>
+          <span style="margin-left:12px;padding:4px 10px;border-radius:4px;background:rgba(255,255,255,0.1);color:#e5e7eb;font-size:16px;">${status}</span>
         </div>
-        <button onclick="document.getElementById('debug-overlay').style.display='none'" style="background:none;border:none;color:#9ca3af;cursor:pointer;font-size:16px;padding:4px 8px;">&times;</button>
+        <button onclick="document.getElementById('debug-overlay').style.display='none'" style="background:none;border:none;color:#9ca3af;cursor:pointer;font-size:24px;padding:6px 12px;">&times;</button>
       </div>
-      <div style="padding:4px 12px;color:#9ca3af;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.1);">
+      <div style="padding:8px 20px;color:#9ca3af;font-size:16px;border-bottom:1px solid rgba(255,255,255,0.15);">
         Current Player: <span style="color:#e5e7eb;">#${currentIdx} — ${currentName}</span>
       </div>
     `;
@@ -252,29 +253,29 @@ export class DebugOverlay {
         : '—';
 
       return `<tr style="background:${rowBg};">
-        <td style="padding:2px 6px;">${p.name}</td>
-        <td style="padding:2px 6px;text-align:center;">${isBot ? 'Y' : 'N'}</td>
-        <td style="padding:2px 6px;text-align:right;">${p.money ?? 0}</td>
-        <td style="padding:2px 6px;">${pos}</td>
-        <td style="padding:2px 6px;">${p.trainType ?? '—'}</td>
-        <td style="padding:2px 6px;">${loads}</td>
-        <td style="padding:2px 6px;text-align:right;">${p.turnNumber ?? 0}</td>
+        <td style="padding:6px 10px;">${p.name}</td>
+        <td style="padding:6px 10px;text-align:center;">${isBot ? 'Y' : 'N'}</td>
+        <td style="padding:6px 10px;text-align:right;">${p.money ?? 0}</td>
+        <td style="padding:6px 10px;">${pos}</td>
+        <td style="padding:6px 10px;">${p.trainType ?? '—'}</td>
+        <td style="padding:6px 10px;">${loads}</td>
+        <td style="padding:6px 10px;text-align:right;">${p.turnNumber ?? 0}</td>
       </tr>`;
     }).join('');
 
     return `
-      <div style="padding:8px 12px;">
-        <div style="color:#f9fafb;font-weight:bold;font-size:12px;margin-bottom:4px;">Players</div>
-        <table style="width:100%;border-collapse:collapse;font-size:11px;color:#e5e7eb;">
+      <div style="padding:14px 20px;">
+        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Players</div>
+        <table style="width:100%;border-collapse:collapse;font-size:15px;color:#e5e7eb;">
           <thead>
-            <tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">
-              <th style="padding:2px 6px;text-align:left;">Name</th>
-              <th style="padding:2px 6px;text-align:center;">Bot?</th>
-              <th style="padding:2px 6px;text-align:right;">Money</th>
-              <th style="padding:2px 6px;text-align:left;">Position</th>
-              <th style="padding:2px 6px;text-align:left;">Train</th>
-              <th style="padding:2px 6px;text-align:left;">Loads</th>
-              <th style="padding:2px 6px;text-align:right;">Turn#</th>
+            <tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.15);">
+              <th style="padding:6px 10px;text-align:left;">Name</th>
+              <th style="padding:6px 10px;text-align:center;">Bot?</th>
+              <th style="padding:6px 10px;text-align:right;">Money</th>
+              <th style="padding:6px 10px;text-align:left;">Position</th>
+              <th style="padding:6px 10px;text-align:left;">Train</th>
+              <th style="padding:6px 10px;text-align:left;">Loads</th>
+              <th style="padding:6px 10px;text-align:right;">Turn#</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -286,7 +287,7 @@ export class DebugOverlay {
   private renderSocketLog(): string {
     const entries = this.eventLog.map((e) => {
       const time = e.timestamp.toLocaleTimeString('en-US', { hour12: false });
-      return `<div style="padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+      return `<div style="padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         <span style="color:#9ca3af;">[${time}]</span>
         <span style="color:#60a5fa;">${e.name}</span>
         <span style="color:#6b7280;"> — ${e.payload}</span>
@@ -294,9 +295,9 @@ export class DebugOverlay {
     }).join('');
 
     return `
-      <div style="padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);">
-        <div style="color:#f9fafb;font-weight:bold;font-size:12px;margin-bottom:4px;">Socket Events <span style="color:#6b7280;font-weight:normal;">(${this.eventLog.length})</span></div>
-        <div style="max-height:200px;overflow-y:auto;font-size:11px;color:#e5e7eb;">
+      <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
+        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Socket Events <span style="color:#6b7280;font-weight:normal;">(${this.eventLog.length})</span></div>
+        <div style="max-height:350px;overflow-y:auto;font-size:15px;color:#e5e7eb;">
           ${entries || '<div style="color:#6b7280;">No events yet</div>'}
         </div>
       </div>
@@ -306,27 +307,28 @@ export class DebugOverlay {
   private renderBotTurnSection(): string {
     let content: string;
     if (!this.lastBotTurnInfo) {
-      content = '<div style="color:#6b7280;font-size:11px;">No bot turn data yet</div>';
+      content = '<div style="color:#6b7280;font-size:15px;">No bot turn data yet</div>';
     } else if (!this.lastBotTurnInfo.completed) {
       const time = new Date(this.lastBotTurnInfo.startTime)
         .toLocaleTimeString('en-US', { hour12: false });
-      content = `<div style="color:#fbbf24;font-size:11px;">Bot ${this.lastBotTurnInfo.name} turn started at ${time}</div>`;
+      content = `<div style="color:#fbbf24;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn started at ${time}</div>`;
     } else {
-      content = `<div style="color:#34d399;font-size:11px;">Bot ${this.lastBotTurnInfo.name} turn completed: ${this.lastBotTurnInfo.action} (${this.lastBotTurnInfo.durationMs}ms)</div>`;
+      content = `<div style="color:#34d399;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn completed: ${this.lastBotTurnInfo.action} (${this.lastBotTurnInfo.durationMs}ms)</div>`;
+      // Show load actions first (most interesting to watch)
+      if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
+        content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);
+      }
       if (this.lastBotTurnInfo.buildTrackData) {
         content += this.renderBuildTrackDetails(this.lastBotTurnInfo.buildTrackData);
       }
       if (this.lastBotTurnInfo.movementData) {
         content += this.renderMovementDetails(this.lastBotTurnInfo.movementData);
       }
-      if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
-        content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);
-      }
     }
 
     return `
-      <div style="padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);">
-        <div style="color:#f9fafb;font-weight:bold;font-size:12px;margin-bottom:4px;">Bot Turn <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
+      <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
+        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Bot Turn <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
         ${content}
       </div>
     `;
@@ -335,15 +337,15 @@ export class DebugOverlay {
   private renderBuildTrackDetails(data: NonNullable<typeof this.lastBotTurnInfo>['buildTrackData']): string {
     if (!data) return '';
     const targetLine = data.targetCity
-      ? `<div style="color:#60a5fa;font-size:11px;margin-top:4px;">Target: ${data.targetCity}</div>`
-      : '';
-    const costLine = `<div style="color:#e5e7eb;font-size:11px;">Segments: ${data.segmentsBuilt} | Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
+      ? `<div style="color:#60a5fa;font-size:15px;margin-top:6px;font-weight:bold;">Building toward: ${data.targetCity}</div>`
+      : `<div style="color:#f87171;font-size:15px;margin-top:6px;">No build target (undirected)</div>`;
+    const costLine = `<div style="color:#e5e7eb;font-size:15px;">Segments: ${data.segmentsBuilt} | Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
     return `${targetLine}${costLine}`;
   }
 
   private renderMovementDetails(data: NonNullable<typeof this.lastBotTurnInfo>['movementData']): string {
     if (!data) return '';
-    return `<div style="color:#e5e7eb;font-size:11px;">Moved: (${data.from.row},${data.from.col}) → (${data.to.row},${data.to.col}), ${data.mileposts}mp, fee: ${data.trackUsageFee}M</div>`;
+    return `<div style="color:#e5e7eb;font-size:15px;">Moved: (${data.from.row},${data.from.col}) → (${data.to.row},${data.to.col}), ${data.mileposts}mp, fee: ${data.trackUsageFee}M</div>`;
   }
 
   private renderLoadDetails(
@@ -353,11 +355,11 @@ export class DebugOverlay {
     let html = '';
     if (pickups && pickups.length > 0) {
       const items = pickups.map(p => `${p.loadType} at ${p.city}`).join(', ');
-      html += `<div style="color:#60a5fa;font-size:11px;">Picked up: ${items}</div>`;
+      html += `<div style="color:#60a5fa;font-size:15px;">Picked up: ${items}</div>`;
     }
     if (deliveries && deliveries.length > 0) {
       const items = deliveries.map(d => `${d.loadType} to ${d.city} (+${d.payment}M)`).join(', ');
-      html += `<div style="color:#fbbf24;font-size:11px;">Delivered: ${items}</div>`;
+      html += `<div style="color:#fbbf24;font-size:15px;">Delivered: ${items}</div>`;
     }
     return html;
   }
@@ -368,12 +370,12 @@ export class DebugOverlay {
       position: 'fixed',
       top: '0',
       right: '0',
-      width: '400px',
+      width: '60vw',
       height: '100vh',
-      background: 'rgba(0, 0, 0, 0.85)',
+      background: 'rgba(0, 0, 0, 0.9)',
       color: '#e5e7eb',
       fontFamily: "'Courier New', Consolas, monospace",
-      fontSize: '12px',
+      fontSize: '16px',
       zIndex: '5000',
       overflowY: 'auto',
       pointerEvents: 'auto',
