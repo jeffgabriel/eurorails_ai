@@ -5,6 +5,8 @@ import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { CameraController } from "./CameraController";
+
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
@@ -16,7 +18,7 @@ export class PlayerHandDisplay {
   private mapRenderer: MapRenderer;
   private trainInteractionManager: TrainInteractionManager;
   private trackDrawingManager: TrackDrawingManager;
-  private cameraController?: any; // CameraController type
+  private cameraController?: CameraController;
 
   // Layout constants
   private readonly STATUS_BAR_HEIGHT = 50; // Height when collapsed
@@ -38,7 +40,7 @@ export class PlayerHandDisplay {
     trainInteractionManager: TrainInteractionManager,
     trackDrawingManager: TrackDrawingManager,
     gameStateService?: GameStateService,
-    cameraController?: any
+    cameraController?: CameraController
   ) {
     this.scene = scene;
     this.gameState = gameState;

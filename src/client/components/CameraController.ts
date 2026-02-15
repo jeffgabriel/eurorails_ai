@@ -208,7 +208,7 @@ export class CameraController {
         
         // Make map container interactive to detect pointer entering map area
         this.mapContainer.setInteractive(
-            new Phaser.Geom.Rectangle(0, 0, this.mapWidth * 2, this.mapHeight * 2),
+            new Phaser.Geom.Rectangle(0, 0, this.mapWidth, this.mapHeight),
             Phaser.Geom.Rectangle.Contains
         );
         

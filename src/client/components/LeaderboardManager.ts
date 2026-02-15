@@ -4,6 +4,7 @@ import { GameState } from "../../shared/types/GameTypes";
 import { GameStateService } from "../services/GameStateService";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { CameraController } from "./CameraController";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -14,7 +15,7 @@ export class LeaderboardManager {
   private playerStateService: PlayerStateService | null = null;
   private toggleChatCallback?: () => void;
   private openDMCallback?: (playerId: string, playerName: string) => void;
-  private cameraController?: any; // CameraController type
+  private cameraController?: CameraController;
 
   constructor(
     scene: Phaser.Scene,
@@ -24,7 +25,7 @@ export class LeaderboardManager {
     toggleChatCallback?: () => void,
     openDMCallback?: (playerId: string, playerName: string) => void,
     playerStateService?: PlayerStateService,
-    cameraController?: any
+    cameraController?: CameraController
   ) {
     this.scene = scene;
     this.gameState = gameState;

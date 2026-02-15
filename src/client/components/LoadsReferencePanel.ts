@@ -7,6 +7,7 @@ import {
   CityTableEntry,
 } from "../utils/loadDataTransformer";
 import { api } from "../lobby/shared/api";
+import { CameraController } from "./CameraController";
 
 type LoadsReferencePage = {
   key: string;
@@ -18,7 +19,7 @@ export class LoadsReferencePanel {
   private readonly scene: Phaser.Scene;
   private readonly pages: LoadsReferencePage[];
   private gameState: GameState | null = null;
-  private cameraController?: any; // CameraController type
+  private cameraController?: CameraController;
 
   private root!: Phaser.GameObjects.Container;
   private background!: Phaser.GameObjects.Rectangle;
@@ -76,7 +77,7 @@ export class LoadsReferencePanel {
   private dragStartY: number = 0;
   private dragStartOffset: number = 0;
 
-  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState, cameraController?: any) {
+  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState, cameraController?: CameraController) {
     this.scene = scene;
     this.pages = pages;
     this.gameState = gameState || null;

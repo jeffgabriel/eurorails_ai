@@ -12,6 +12,7 @@ import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TurnActionManager } from "./TurnActionManager";
 import { PlayerStateService } from "../services/PlayerStateService";
 import { LoadService } from "../services/LoadService";
+import { CameraController } from "./CameraController";
 
 export class UIManager {
   private scene: Phaser.Scene;
@@ -27,7 +28,7 @@ export class UIManager {
   private trackDrawingManager: TrackDrawingManager;
   private turnActionManager!: TurnActionManager;
   private playerStateService: PlayerStateService;
-  private cameraController?: any; // CameraController type
+  private cameraController?: CameraController;
   // Component managers
   private trainInteractionManager!: TrainInteractionManager;
   private leaderboardManager!: LeaderboardManager;
@@ -46,7 +47,7 @@ export class UIManager {
     mapRenderer: MapRenderer,
     trackDrawingManager: TrackDrawingManager,
     playerStateService?: PlayerStateService,
-    cameraController?: any
+    cameraController?: CameraController
   ) {
     this.scene = scene;
     this.gameState = gameState;
