@@ -131,7 +131,7 @@ export class LeaderboardManager {
         }
 
         // Create player text - clickable for DM (requires userId for chat API)
-        const dmTargetUserId = (player as any).userId;
+        const dmTargetUserId = player.userId;
         const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
         const playerText = this.scene.add
           .text(

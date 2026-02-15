@@ -661,10 +661,13 @@ export class GameScene extends Phaser.Scene {
           }
         })();
       if (authUserId) {
-        this.scene.launch('ChatScene', {
-          gameId: this.gameState.id,
-          userId: authUserId,
-        });
+        // Prevent duplicate ChatScene launches on restart
+        if (!this.scene.get('ChatScene')) {
+          this.scene.launch('ChatScene', {
+            gameId: this.gameState.id,
+            userId: authUserId,
+          });
+        }
       }
     }
 

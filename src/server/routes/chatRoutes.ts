@@ -349,18 +349,21 @@ router.post('/mark-read', authenticateToken, requireAuth, asyncHandler(async (re
     return;
   }
 
-  // Validate all IDs are numbers or numeric strings
-  if (!messageIds.every((id) => typeof id === 'number' || (typeof id === 'string' && !isNaN(parseInt(id, 10))))) {
+  // Validate all IDs are numbers or numeric strings (strict validation with regex)
+  if (!messageIds.every((id) => typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id)))) {
     res.status(400).json({
       error: 'VALIDATION_ERROR',
-      message: 'All messageIds must be numbers',
+      message: 'All messageIds must be numbers or numeric strings',
       details: 'Invalid message ID format'
     });
     return;
   }
 
+  // Deduplicate message IDs to avoid duplicate counting
+  const uniqueMessageIds = [...new Set(messageIds)];
+
   // Convert all to numbers if they're numeric strings
-  const numericIds = messageIds.map(id => typeof id === 'string' ? parseInt(id, 10) : id);
+  const numericIds = uniqueMessageIds.map(id => typeof id === 'string' ? parseInt(id, 10) : id);
 
   try {
     // Verify user is recipient of all messages
@@ -375,7 +378,7 @@ router.post('/mark-read', authenticateToken, requireAuth, asyncHandler(async (re
       [numericIds, user.id]
     );
 
-    if (verifyResult.rows.length !== numericIds.length) {
+    if (verifyResult.rows.length !== uniqueMessageIds.length) {
       res.status(403).json({
         error: 'FORBIDDEN',
         message: 'You can only mark your own received messages as read'

@@ -243,9 +243,13 @@ export class ChatScene extends Phaser.Scene {
     // Message listener is subscribed dynamically when joining game chat or opening DM
     this.subscribeToGameChat();
 
-    // Listen for unread count changes
-    chatStateService.onUnreadCount((gameId: string, count: number) => {
-      if (gameId === this.gameId && this.isOpen) {
+    // Listen for unread count changes (handle both game chat and DM keys)
+    chatStateService.onUnreadCount((notifyKey: string, count: number) => {
+      // Check if this is for the current view (game chat or active DM)
+      const isCurrentGameChat = notifyKey === this.gameId && !this.dmRecipientId;
+      const isCurrentDM = this.dmRecipientId && notifyKey === `dm:${this.gameId}:${this.dmRecipientId}`;
+      
+      if ((isCurrentGameChat || isCurrentDM) && this.isOpen) {
         this.markVisibleMessagesAsRead();
       }
     });

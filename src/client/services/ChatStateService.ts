@@ -328,6 +328,14 @@ export class ChatStateService {
   }
 
   private handleDMMessage(dmKey: string, message: ChatMessage): void {
+    // Extract gameId from dmKey format: dm:gameId:otherUserId
+    const gameId = dmKey.split(':')[1];
+    
+    // Only process DMs if user has joined the game chat
+    if (!this.gameChats.has(gameId) || !this.gameChats.get(gameId)!.isJoined) {
+      return;
+    }
+    
     if (!this.dmChats.has(dmKey)) {
       this.dmChats.set(dmKey, {
         messages: [],
@@ -407,11 +415,11 @@ export class ChatStateService {
         throw new Error('Failed to mark messages as read');
       }
 
-      // Update local state
+      // Update local state for both game chats and DMs
       for (const [gameId, state] of this.gameChats.entries()) {
         let unreadChanged = false;
         for (const message of state.messages) {
-          if (messageIds.includes(message.id) && !message.isRead) {
+          if (numericIds.includes(message.id) && !message.isRead) {
             message.isRead = true;
             state.unreadCount = Math.max(0, state.unreadCount - 1);
             unreadChanged = true;
@@ -419,6 +427,21 @@ export class ChatStateService {
         }
         if (unreadChanged) {
           this.notifyUnreadCount(gameId, state.unreadCount);
+        }
+      }
+
+      // Also update DM local state
+      for (const [dmKey, state] of this.dmChats.entries()) {
+        let unreadChanged = false;
+        for (const message of state.messages) {
+          if (numericIds.includes(message.id) && !message.isRead) {
+            message.isRead = true;
+            state.unreadCount = Math.max(0, state.unreadCount - 1);
+            unreadChanged = true;
+          }
+        }
+        if (unreadChanged) {
+          this.notifyUnreadCount(dmKey, state.unreadCount);
         }
       }
     } catch (error) {
