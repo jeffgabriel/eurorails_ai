@@ -27,6 +27,7 @@ export class UIManager {
   private trackDrawingManager: TrackDrawingManager;
   private turnActionManager!: TurnActionManager;
   private playerStateService: PlayerStateService;
+  private cameraController?: any; // CameraController type
   // Component managers
   private trainInteractionManager!: TrainInteractionManager;
   private leaderboardManager!: LeaderboardManager;
@@ -44,7 +45,8 @@ export class UIManager {
     gameStateService: GameStateService,
     mapRenderer: MapRenderer,
     trackDrawingManager: TrackDrawingManager,
-    playerStateService?: PlayerStateService
+    playerStateService?: PlayerStateService,
+    cameraController?: any
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -54,6 +56,7 @@ export class UIManager {
     this.gameStateService = gameStateService;
     this.mapRenderer = mapRenderer;
     this.trackDrawingManager = trackDrawingManager;
+    this.cameraController = cameraController;
     // IMPORTANT: Use a shared PlayerStateService instance so local-only state (like hand)
     // stays consistent across UI + dialogs. If not provided, fall back to creating one.
     this.playerStateService = playerStateService ?? new PlayerStateService();
@@ -235,7 +238,13 @@ export class UIManager {
           fontStyle: "bold",
           fontFamily: UI_FONT_FAMILY,
         }).setOrigin(0.5);
-        bg.setInteractive({ useHandCursor: true }).on("pointerdown", onClick);
+        bg.setInteractive({ useHandCursor: true })
+          .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            if (pointer.event) {
+              pointer.event.stopPropagation();
+            }
+            onClick();
+          });
         modalRoot.add([bg, text]);
       };
 
@@ -314,7 +323,8 @@ export class UIManager {
       this.gameStateService,
       () => (this.scene as any).toggleChat?.(),
       (userId: string, playerName: string) => (this.scene as any).openChatDM?.(userId, playerName),
-      this.playerStateService
+      this.playerStateService,
+      this.cameraController
     );
 
     // Initialize the player hand display
@@ -329,7 +339,8 @@ export class UIManager {
       this.mapRenderer,
       this.trainInteractionManager,
       this.trackDrawingManager,
-      this.gameStateService
+      this.gameStateService,
+      this.cameraController
     );
 
     // Record track segments immediately when they are built (uncommitted),

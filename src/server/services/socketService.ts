@@ -339,7 +339,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         }
 
         socket.emit('chat-joined', { gameId });
-        console.log(`[Chat] User ${userId} joined chat for game ${gameId}`);
       } catch (error) {
         console.error('[Chat] Error joining game chat:', error);
         socket.emit('chat-error', {
@@ -499,7 +498,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           socket.to(dmRoom).emit('new-chat-message', messageData);
         }
 
-        console.log(`[Chat] Message sent from ${userId} in game ${gameId} (type: ${recipientType})`);
       } catch (error) {
         console.error('[Chat] Error sending message:', error);
         socket.emit('message-error', {

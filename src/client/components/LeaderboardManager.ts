@@ -14,6 +14,7 @@ export class LeaderboardManager {
   private playerStateService: PlayerStateService | null = null;
   private toggleChatCallback?: () => void;
   private openDMCallback?: (playerId: string, playerName: string) => void;
+  private cameraController?: any; // CameraController type
 
   constructor(
     scene: Phaser.Scene,
@@ -22,7 +23,8 @@ export class LeaderboardManager {
     gameStateService?: GameStateService,
     toggleChatCallback?: () => void,
     openDMCallback?: (playerId: string, playerName: string) => void,
-    playerStateService?: PlayerStateService
+    playerStateService?: PlayerStateService,
+    cameraController?: any
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -31,6 +33,7 @@ export class LeaderboardManager {
     this.toggleChatCallback = toggleChatCallback;
     this.openDMCallback = openDMCallback;
     this.playerStateService = playerStateService || null;
+    this.cameraController = cameraController;
     this.container = this.scene.add.container(0, 0);
   }
   

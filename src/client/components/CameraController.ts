@@ -15,6 +15,7 @@ export class CameraController {
     private pendingRender: boolean = false;
     private localPlayerId: string | null = null;
     private readonly ZOOM_STEP: number = 0.05;
+    private mapContainer: Phaser.GameObjects.Container | null = null;
     
     constructor(scene: Phaser.Scene, mapWidth: number, mapHeight: number, gameState: GameState) {
         this.scene = scene;
@@ -22,6 +23,13 @@ export class CameraController {
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
         this.gameState = gameState;
+    }
+
+    /**
+     * Set the map container to enable automatic drag state reset when pointer re-enters map
+     */
+    public setMapContainer(mapContainer: Phaser.GameObjects.Container): void {
+        this.mapContainer = mapContainer;
     }
 
     /**
@@ -82,11 +90,32 @@ export class CameraController {
         }
 
         this.setupInputHandlers();
+        
+        // Set up map container listener if available
+        if (this.mapContainer) {
+            this.setupMapContainerListener();
+        }
     }
 
     private setupInputHandlers(): void {
         // Handle pointer down event
         this.scene.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+            // Only start dragging if we're clicking on the map, not on UI elements
+            // Check if any interactive objects (like UI buttons) are under the pointer
+            const objectsUnderPointer = this.scene.input.hitTestPointer(pointer);
+            
+            // If there are interactive objects under the pointer, don't start dragging
+            // Exception: allow dragging if the only object is the map container itself
+            const hasUIElements = objectsUnderPointer.some(obj => {
+                // Ignore the map container - it's interactive but that's intentional for our pointerover detection
+                return obj !== this.mapContainer;
+            });
+            
+            if (hasUIElements) {
+                // There are UI elements under the pointer, don't start camera drag
+                return;
+            }
+            
             this.isMouseDown = true;
             this.isDragging = false;
             this.lastPointerPosition = { x: pointer.x, y: pointer.y };
@@ -174,6 +203,27 @@ export class CameraController {
         });
     }
 
+    private setupMapContainerListener(): void {
+        if (!this.mapContainer) return;
+        
+        // Make map container interactive to detect pointer entering map area
+        this.mapContainer.setInteractive(
+            new Phaser.Geom.Rectangle(0, 0, this.mapWidth * 2, this.mapHeight * 2),
+            Phaser.Geom.Rectangle.Contains
+        );
+        
+        // Reset drag state when pointer enters the map area
+        // This handles the case where user starts dragging, moves over UI, 
+        // releases mouse there (which we never see), then moves back to map
+        this.mapContainer.on('pointerover', (pointer: Phaser.Input.Pointer) => {
+            // If we think we're dragging but the pointer button isn't actually down,
+            // we're in a stuck state and should reset
+            if ((this.isDragging || this.isMouseDown) && !pointer.isDown) {
+                this.resetDragState();
+            }
+        });
+    }
+
     private requestRender(): void {
         if (!this.pendingRender) {
             this.pendingRender = true;
@@ -227,5 +277,13 @@ export class CameraController {
 
     public setCameraIgnoreItems(items: Phaser.GameObjects.GameObject[]): void {
         this.camera.ignore(items);
+    }
+
+    /**
+     * Reset the camera dragging state (e.g., when UI elements consume pointer events)
+     */
+    public resetDragState(): void {
+        this.isMouseDown = false;
+        this.isDragging = false;
     }
 }
