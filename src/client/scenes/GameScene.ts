@@ -1402,19 +1402,21 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    // Check if the scene is ready (has completed create lifecycle)
-    if (chatScene.sys && chatScene.sys.isActive()) {
+    // Check if the scene is ready
+    if (chatScene.isReady && chatScene.openDM) {
       // Scene is ready, call openDM directly
-      if (chatScene.openDM) {
-        chatScene.openDM(recipientUserId, recipientName);
-      }
+      chatScene.openDM(recipientUserId, recipientName);
     } else {
       // Scene is still initializing, wait for it to be ready
-      chatScene.events.once('create', () => {
-        if (chatScene.openDM) {
+      const checkReady = () => {
+        if (chatScene.isReady && chatScene.openDM) {
           chatScene.openDM(recipientUserId, recipientName);
+        } else {
+          // Check again in 100ms
+          setTimeout(checkReady, 100);
         }
-      });
+      };
+      checkReady();
     }
   }
 }

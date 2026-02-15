@@ -20,6 +20,7 @@ export class ChatScene extends Phaser.Scene {
   private userId: string = '';
   private isOpen: boolean = false;
   private isMobile: boolean = false;
+  private isReady: boolean = false; // Flag to track when create() has completed
 
   /** DM mode: when set, we show DM with this player instead of game chat */
   private dmRecipientId: string | null = null;
@@ -80,6 +81,9 @@ export class ChatScene extends Phaser.Scene {
 
     // Start closed
     this.isOpen = false;
+    
+    // Mark scene as ready
+    this.isReady = true;
   }
 
   /**
