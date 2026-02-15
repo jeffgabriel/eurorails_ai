@@ -362,7 +362,9 @@ export class ChatStateService {
       return opt.senderId === message.senderId && opt.message === message.message;
     });
 
-    if (optimisticIndex >= 0) {
+    const wasOptimistic = optimisticIndex >= 0;
+
+    if (wasOptimistic) {
       state.optimisticMessages.splice(optimisticIndex, 1);
     }
 
@@ -373,7 +375,11 @@ export class ChatStateService {
       this.notifyUnreadCount(notifyKey, state.unreadCount);
     }
 
-    notify();
+    // Only notify listeners if this is NOT replacing an optimistic message
+    // (optimistic messages were already shown in the UI)
+    if (!wasOptimistic) {
+      notify();
+    }
   }
 
   /**

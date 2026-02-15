@@ -533,6 +533,9 @@ export class GameScene extends Phaser.Scene {
     // Set local player ID for per-player camera state
     const localPlayerId = this.playerStateService.getLocalPlayerId();
     this.cameraController.setLocalPlayerId(localPlayerId);
+    
+    // Set map container for automatic drag state reset
+    this.cameraController.setMapContainer(this.mapContainer);
 
     // Initialize turn notification component
     this.turnNotification = new TurnNotification(this);
@@ -557,7 +560,8 @@ export class GameScene extends Phaser.Scene {
       this.gameStateService,
       this.mapRenderer,
       this.trackManager,
-      this.playerStateService
+      this.playerStateService,
+      this.cameraController
     );
 
     // Reusable pattern: when local, server-authoritative actions mutate game state
@@ -604,7 +608,7 @@ export class GameScene extends Phaser.Scene {
       { key: "by-resource", label: "By Resource", type: "resource" }, // Interactive resource table
       { key: "by-city", label: "By City", type: "city" }, // Interactive city table
       { key: "player-cards", label: "Cards", type: "cards" }, // Dynamic content showing all players' hands
-    ], this.gameState);
+    ], this.gameState, this.cameraController);
     this.loadsReferencePanel.create();
 
     // Main camera ignores UI elements

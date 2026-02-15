@@ -5,6 +5,8 @@ import { MapRenderer } from "./MapRenderer";
 import { TrainInteractionManager } from "./TrainInteractionManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { TrackDrawingManager } from "./TrackDrawingManager";
+import { CameraController } from "./CameraController";
+
 export class PlayerHandDisplay {
   private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
@@ -16,6 +18,7 @@ export class PlayerHandDisplay {
   private mapRenderer: MapRenderer;
   private trainInteractionManager: TrainInteractionManager;
   private trackDrawingManager: TrackDrawingManager;
+  private cameraController?: CameraController;
 
   // Layout constants
   private readonly STATUS_BAR_HEIGHT = 50; // Height when collapsed
@@ -36,7 +39,8 @@ export class PlayerHandDisplay {
     mapRenderer: MapRenderer,
     trainInteractionManager: TrainInteractionManager,
     trackDrawingManager: TrackDrawingManager,
-    gameStateService?: GameStateService
+    gameStateService?: GameStateService,
+    cameraController?: CameraController
   ) {
     this.scene = scene;
     this.gameState = gameState;
@@ -47,6 +51,7 @@ export class PlayerHandDisplay {
     this.mapRenderer = mapRenderer;
     this.trainInteractionManager = trainInteractionManager;
     this.trackDrawingManager = trackDrawingManager;
+    this.cameraController = cameraController;
     this.container = this.scene.add.container(0, 0);
   }
 
@@ -255,7 +260,10 @@ export class PlayerHandDisplay {
     );
     hitArea.setInteractive({ useHandCursor: true });
 
-    hitArea.on("pointerdown", async () => {
+    hitArea.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) {
+        pointer.event.stopPropagation();
+      }
       await this.toggleCollapse();
     });
 
@@ -263,7 +271,10 @@ export class PlayerHandDisplay {
 
     // Make entire status bar clickable to expand
     statusBarBg.setInteractive({ useHandCursor: true });
-    statusBarBg.on("pointerdown", async () => {
+    statusBarBg.on("pointerdown", async (pointer: Phaser.Input.Pointer) => {
+      if (pointer.event) {
+        pointer.event.stopPropagation();
+      }
       await this.toggleCollapse();
     });
   }

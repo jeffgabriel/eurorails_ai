@@ -65,10 +65,10 @@ export class ChatScene extends Phaser.Scene {
     // Create main container (initially offscreen)
     this.container = this.add.container(this.scale.width, 0);
 
-    // Build UI
+    // Build UI - order matters: messages first, then header/input on top to cover overflow
     this.createBackground();
-    this.createHeader();
     this.createMessagesArea();
+    this.createHeader();
     this.createInputArea();
 
     // Set up event listeners
@@ -162,6 +162,7 @@ export class ChatScene extends Phaser.Scene {
     const height = this.scale.height - this.HEADER_HEIGHT - this.INPUT_HEIGHT;
 
     // Messages container (scrollable)
+    // No mask needed - header and input are rendered on top to cover overflow
     this.messagesContainer = this.add.container(0, this.HEADER_HEIGHT);
     this.container.add(this.messagesContainer);
 

@@ -19,14 +19,15 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
 
   // Constants
   private readonly BUBBLE_PADDING = 12;
-  private readonly MAX_MESSAGE_WIDTH = 250;
+  private readonly MIN_BUBBLE_WIDTH = 120;
+  private readonly MAX_BUBBLE_WIDTH = 250;
   private readonly TIMESTAMP_HEIGHT = 18;
 
   constructor(
     scene: Phaser.Scene,
     x: number,
     y: number,
-    maxWidth: number,
+    containerWidth: number,
     message: ChatMessage,
     isOwnMessage: boolean
   ) {
@@ -34,7 +35,7 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
 
     this.message = message;
     this.isOwnMessage = isOwnMessage;
-    this.maxWidth = Math.min(maxWidth, this.MAX_MESSAGE_WIDTH);
+    this.maxWidth = containerWidth;
 
     this.render();
     scene.add.existing(this);
@@ -52,11 +53,9 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
     const messageText = this.createMessageText(sanitizedContent);
     const timestampText = this.createTimestampText();
 
-    // Calculate bubble dimensions
-    const bubbleWidth = Math.min(
-      this.maxWidth,
-      Math.max(messageText.width, senderText.width) + this.BUBBLE_PADDING * 2
-    );
+    // Calculate bubble dimensions - constrain bubble width but not container
+    const contentWidth = Math.max(messageText.width, senderText.width) + this.BUBBLE_PADDING * 2;
+    const bubbleWidth = Math.max(this.MIN_BUBBLE_WIDTH, Math.min(contentWidth, this.MAX_BUBBLE_WIDTH));
     const bubbleHeight =
       messageText.height +
       senderText.height +
@@ -66,46 +65,31 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
     // Create bubble background
     const bubble = this.createBubbleBackground(bubbleWidth, bubbleHeight);
 
-    // Position elements
-    const align = this.isOwnMessage ? 'right' : 'left';
+    // Position bubble: left-aligned for others, right-aligned for own messages
     const bubbleX = this.isOwnMessage ? this.maxWidth - bubbleWidth : 0;
-
     bubble.setPosition(bubbleX, 0);
 
-    if (this.isOwnMessage) {
-      senderText.setPosition(bubbleX + bubbleWidth - this.BUBBLE_PADDING, this.BUBBLE_PADDING);
-      senderText.setOrigin(1, 0);
+    // Position text elements inside the bubble (always left-aligned within bubble)
+    senderText.setPosition(bubbleX + this.BUBBLE_PADDING, this.BUBBLE_PADDING);
+    senderText.setOrigin(0, 0);
 
-      messageText.setPosition(
-        bubbleX + bubbleWidth - this.BUBBLE_PADDING,
-        this.BUBBLE_PADDING + senderText.height + 4
-      );
-      messageText.setOrigin(1, 0);
+    messageText.setPosition(
+      bubbleX + this.BUBBLE_PADDING,
+      this.BUBBLE_PADDING + senderText.height + 4
+    );
+    messageText.setOrigin(0, 0);
 
-      timestampText.setPosition(
-        bubbleX + bubbleWidth - this.BUBBLE_PADDING,
-        bubbleHeight - this.BUBBLE_PADDING - 2
-      );
-      timestampText.setOrigin(1, 1);
-    } else {
-      senderText.setPosition(bubbleX + this.BUBBLE_PADDING, this.BUBBLE_PADDING);
-      senderText.setOrigin(0, 0);
-
-      messageText.setPosition(
-        bubbleX + this.BUBBLE_PADDING,
-        this.BUBBLE_PADDING + senderText.height + 4
-      );
-      messageText.setOrigin(0, 0);
-
-      timestampText.setPosition(
-        bubbleX + this.BUBBLE_PADDING,
-        bubbleHeight - this.BUBBLE_PADDING - 2
-      );
-      timestampText.setOrigin(0, 1);
-    }
+    timestampText.setPosition(
+      bubbleX + this.BUBBLE_PADDING,
+      bubbleHeight - this.BUBBLE_PADDING - 2
+    );
+    timestampText.setOrigin(0, 1);
 
     // Add to container
     this.add([bubble, senderText, messageText, timestampText]);
+
+    // Set container size explicitly for proper layout calculation
+    this.setSize(this.maxWidth, bubbleHeight);
   }
 
   /**
@@ -146,7 +130,7 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
       fontFamily: UI_FONT_FAMILY,
       color: '#ffffff',
       wordWrap: {
-        width: this.maxWidth - this.BUBBLE_PADDING * 2,
+        width: this.MAX_BUBBLE_WIDTH - this.BUBBLE_PADDING * 2,
         useAdvancedWrap: true,
       },
     });
