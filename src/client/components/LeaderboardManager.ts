@@ -2,6 +2,7 @@ import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 
 export class LeaderboardManager {
@@ -10,17 +11,26 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
-  
+  private playerStateService: PlayerStateService | null = null;
+  private toggleChatCallback?: () => void;
+  private openDMCallback?: (playerId: string, playerName: string) => void;
+
   constructor(
-    scene: Phaser.Scene, 
+    scene: Phaser.Scene,
     gameState: GameState,
     nextPlayerCallback: () => void,
-    gameStateService?: GameStateService
+    gameStateService?: GameStateService,
+    toggleChatCallback?: () => void,
+    openDMCallback?: (playerId: string, playerName: string) => void,
+    playerStateService?: PlayerStateService
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.nextPlayerCallback = nextPlayerCallback;
     this.gameStateService = gameStateService || null;
+    this.toggleChatCallback = toggleChatCallback;
+    this.openDMCallback = openDMCallback;
+    this.playerStateService = playerStateService || null;
     this.container = this.scene.add.container(0, 0);
   }
   
@@ -46,7 +56,8 @@ export class LeaderboardManager {
         0x333333,
         0.9
       )
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setInteractive(); // Block pointer events from passing through
 
     // Add leaderboard title
     const leaderboardTitle = this.scene.add
@@ -119,20 +130,34 @@ export class LeaderboardManager {
           elements.push(iconText);
         }
 
-        // Create player text - keep mostly the same, just bold for active player
+        // Create player text - clickable for DM (requires userId for chat API)
+        const dmTargetUserId = player.userId;
+        const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
         const playerText = this.scene.add
           .text(
             entryX + (isCurrentPlayer ? 25 : 5),
             entryY + 2,
             player.name,
             {
-              color: "#ffffff", // Keep white for all players
-              fontSize: "14px", // Same size for all
+              color: "#ffffff",
+              fontSize: "14px",
               fontStyle: isCurrentPlayer ? "bold" : "normal",
               fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(0, 0);
+
+        // Make clickable for DM (except local player; requires userId)
+        if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
+          playerText
+            .setInteractive({ useHandCursor: true })
+            .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+              if (pointer.event) {
+                pointer.event.stopPropagation();
+              }
+              this.openDMCallback!(dmTargetUserId, player.name);
+            });
+        }
         elements.push(playerText);
 
         // Create money text (right-aligned) - keep mostly the same
@@ -157,13 +182,17 @@ export class LeaderboardManager {
 
     // Create and add next player button
     const nextPlayerButton = this.createNextPlayerButton();
+    
+    // Create and add chat button
+    const chatButton = this.createChatButton();
 
     // Add all UI elements to container
     targetContainer.add([
       leaderboardBg,
       leaderboardTitle,
       ...playerEntries,
-      ...nextPlayerButton.getAll()
+      ...nextPlayerButton.getAll(),
+      ...chatButton.getAll()
     ]);
   }
 
@@ -205,7 +234,12 @@ export class LeaderboardManager {
     if (isLocalPlayerActive) {
       nextPlayerButton
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.nextPlayerCallback())
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.nextPlayerCallback();
+        })
         .on("pointerover", () => nextPlayerButton.setFillStyle(0x008800))
         .on("pointerout", () => nextPlayerButton.setFillStyle(0x00aa00));
     } else {
@@ -214,6 +248,58 @@ export class LeaderboardManager {
     }
 
     buttonContainer.add([nextPlayerButton, nextPlayerText]);
+    return buttonContainer;
+  }
+
+  private createChatButton(): Phaser.GameObjects.Container {
+    const buttonContainer = this.scene.add.container(0, 0);
+    const LEADERBOARD_WIDTH = 150;
+    const LEADERBOARD_PADDING = 10;
+    
+    // Chat button goes below the "Next Player" button
+    const buttonY = LEADERBOARD_PADDING + 90 + this.gameState.players.length * 20;
+
+    // Add chat button
+    const chatButton = this.scene.add
+      .rectangle(
+        this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+        buttonY,
+        LEADERBOARD_WIDTH,
+        40,
+        0x0066cc,
+        0.9
+      )
+      .setOrigin(0, 0);
+
+    const chatButtonText = this.scene.add
+      .text(
+        this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
+        buttonY + 20,
+        "💬 Chat",
+        {
+          color: "#ffffff",
+          fontSize: "16px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+        }
+      )
+      .setOrigin(0.5, 0.5);
+
+    // Make the button interactive
+    if (this.toggleChatCallback) {
+      chatButton
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.toggleChatCallback!();
+        })
+        .on("pointerover", () => chatButton.setFillStyle(0x0055aa))
+        .on("pointerout", () => chatButton.setFillStyle(0x0066cc));
+    }
+
+    buttonContainer.add([chatButton, chatButtonText]);
     return buttonContainer;
   }
 }

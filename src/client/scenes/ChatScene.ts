@@ -20,9 +20,17 @@ export class ChatScene extends Phaser.Scene {
   private userId: string = '';
   private isOpen: boolean = false;
   private isMobile: boolean = false;
+  private isReady: boolean = false; // Flag to track when create() has completed
+
+  /** DM mode: when set, we show DM with this player instead of game chat */
+  private dmRecipientId: string | null = null;
+  private dmRecipientName: string | null = null;
+  private messageUnsubscribe: (() => void) | null = null;
 
   // UI components
   private container!: Phaser.GameObjects.Container;
+  private headerTitle!: Phaser.GameObjects.Text;
+  private headerBackBtn!: Phaser.GameObjects.Text;
   private background!: Phaser.GameObjects.Rectangle;
   private messagesContainer!: Phaser.GameObjects.Container;
   private messagesList: ChatMessageBubble[] = [];
@@ -69,21 +77,30 @@ export class ChatScene extends Phaser.Scene {
     this.setupInputHandlers();
 
     // Join the game chat
-    await this.joinChat();
+    try {
+      await this.joinChat();
+    } catch (error) {
+      console.error('[ChatScene] Failed to join chat:', error);
+    }
 
     // Start closed
     this.isOpen = false;
+    
+    // Mark scene as ready
+    this.isReady = true;
   }
 
   /**
    * Create semi-transparent background
+   * Set interactive to block pointer events from leaking through to game layers
    */
   private createBackground(): void {
     const width = this.isMobile ? this.scale.width : this.SIDEBAR_WIDTH_DESKTOP;
     const height = this.scale.height;
 
     this.background = this.add.rectangle(0, 0, width, height, 0x2c2c2c, 0.95)
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setInteractive({ useHandCursor: false });
 
     this.container.add(this.background);
   }
@@ -99,14 +116,26 @@ export class ChatScene extends Phaser.Scene {
       .setOrigin(0, 0);
     this.container.add(headerBg);
 
-    // Title
-    const title = this.add.text(15, this.HEADER_HEIGHT / 2, 'Game Chat', {
+    // Back button (visible only in DM mode)
+    this.headerBackBtn = this.add.text(15, this.HEADER_HEIGHT / 2, '← Game Chat', {
+      fontSize: '14px',
+      fontFamily: UI_FONT_FAMILY,
+      color: '#aaaaaa',
+    })
+      .setOrigin(0, 0.5)
+      .setInteractive({ useHandCursor: true })
+      .on('pointerdown', () => this.switchToGameChat())
+      .setVisible(false);
+    this.container.add(this.headerBackBtn);
+
+    // Title (stored for dynamic updates when switching to/from DM)
+    this.headerTitle = this.add.text(15, this.HEADER_HEIGHT / 2, 'Game Chat', {
       fontSize: '20px',
       fontFamily: UI_FONT_FAMILY,
       color: '#ffffff',
       fontStyle: 'bold',
     }).setOrigin(0, 0.5);
-    this.container.add(title);
+    this.container.add(this.headerTitle);
 
     // Close button
     const closeBtn = this.add.text(width - 15, this.HEADER_HEIGHT / 2, '✕', {
@@ -219,16 +248,16 @@ export class ChatScene extends Phaser.Scene {
    * Set up chat state service listeners
    */
   private setupChatListeners(): void {
-    // Listen for new messages
-    chatStateService.onMessage(this.gameId, (message: ChatMessage) => {
-      this.addMessageBubble(message);
-      this.scrollToBottom();
-    });
+    // Message listener is subscribed dynamically when joining game chat or opening DM
+    this.subscribeToGameChat();
 
-    // Listen for unread count changes
-    chatStateService.onUnreadCount((gameId: string, count: number) => {
-      if (gameId === this.gameId && this.isOpen) {
-        // Mark visible messages as read
+    // Listen for unread count changes (handle both game chat and DM keys)
+    chatStateService.onUnreadCount((notifyKey: string, count: number) => {
+      // Check if this is for the current view (game chat or active DM)
+      const isCurrentGameChat = notifyKey === this.gameId && !this.dmRecipientId;
+      const isCurrentDM = this.dmRecipientId && notifyKey === `dm:${this.gameId}:${this.dmRecipientId}`;
+      
+      if ((isCurrentGameChat || isCurrentDM) && this.isOpen) {
         this.markVisibleMessagesAsRead();
       }
     });
@@ -236,6 +265,29 @@ export class ChatScene extends Phaser.Scene {
     // Listen for errors
     chatStateService.onError((error) => {
       this.showError(error.message);
+    });
+  }
+
+  /**
+   * Subscribe to game chat messages
+   */
+  private subscribeToGameChat(): void {
+    this.messageUnsubscribe?.();
+    this.messageUnsubscribe = chatStateService.onMessage(this.gameId, (message: ChatMessage) => {
+      this.addMessageBubble(message);
+      this.scrollToBottom();
+    });
+  }
+
+  /**
+   * Subscribe to DM messages for a recipient (key format must match ChatStateService)
+   */
+  private subscribeToDM(recipientId: string): void {
+    const dmKey = `dm:${this.gameId}:${recipientId}`;
+    this.messageUnsubscribe?.();
+    this.messageUnsubscribe = chatStateService.onMessage(dmKey, (message: ChatMessage) => {
+      this.addMessageBubble(message);
+      this.scrollToBottom();
     });
   }
 
@@ -281,7 +333,7 @@ export class ChatScene extends Phaser.Scene {
   }
 
   /**
-   * Send a message
+   * Send a message (game chat or DM based on current mode)
    */
   private async sendMessage(): Promise<void> {
     if (!this.inputField || !this.inputField.value.trim()) {
@@ -292,7 +344,11 @@ export class ChatScene extends Phaser.Scene {
     this.inputField.value = '';
 
     try {
-      await chatStateService.sendMessage(this.gameId, message);
+      if (this.dmRecipientId) {
+        await chatStateService.sendMessage(this.gameId, message, 'player', this.dmRecipientId);
+      } else {
+        await chatStateService.sendMessage(this.gameId, message);
+      }
     } catch (error) {
       console.error('[ChatScene] Failed to send message:', error);
       this.showError('Failed to send message');
@@ -367,7 +423,9 @@ export class ChatScene extends Phaser.Scene {
    * Mark visible messages as read
    */
   private markVisibleMessagesAsRead(): void {
-    const messages = chatStateService.getMessages(this.gameId);
+    const messages = this.dmRecipientId
+      ? chatStateService.getDMMessages(this.gameId, this.dmRecipientId)
+      : chatStateService.getMessages(this.gameId);
     const unreadIds = messages
       .filter((msg) => !msg.isRead && msg.senderId !== this.userId && msg.id > 0)
       .map((msg) => msg.id);
@@ -420,6 +478,58 @@ export class ChatScene extends Phaser.Scene {
   }
 
   /**
+   * Open chat in DM mode with a specific player
+   */
+  public async openDM(recipientUserId: string, recipientName: string): Promise<void> {
+    try {
+      this.dmRecipientId = recipientUserId;
+      this.dmRecipientName = recipientName;
+      this.subscribeToDM(recipientUserId);
+      this.headerTitle.setText(`DM with ${recipientName}`);
+      this.headerBackBtn.setVisible(true);
+      this.headerTitle.setX(15 + this.headerBackBtn.width + 10);
+
+      // Clear and reload messages
+      this.clearMessageBubbles();
+      const messages = await chatStateService.openDM(this.gameId, recipientUserId);
+      messages.forEach((msg) => this.addMessageBubble(msg));
+      this.scrollToBottom();
+      
+      await this.open();
+    } catch (error) {
+      console.error('[ChatScene] Error in openDM:', error);
+      this.showError('Failed to load conversation');
+    }
+  }
+
+  /**
+   * Switch back to game chat (call when user wants to leave DM view)
+   */
+  public switchToGameChat(): void {
+    this.dmRecipientId = null;
+    this.dmRecipientName = null;
+    this.headerBackBtn.setVisible(false);
+    this.headerTitle.setX(15);
+    this.subscribeToGameChat();
+    this.headerTitle.setText('Game Chat');
+    this.clearMessageBubbles();
+    const messages = chatStateService.getMessages(this.gameId);
+    messages.forEach((msg) => this.addMessageBubble(msg));
+    this.scrollToBottom();
+  }
+
+  /**
+   * Clear all message bubbles from the display
+   */
+  private clearMessageBubbles(): void {
+    for (const bubble of this.messagesList) {
+      bubble.destroy();
+    }
+    this.messagesList = [];
+    this.updateScrollBounds();
+  }
+
+  /**
    * Open the chat sidebar
    */
   public async open(): Promise<void> {
@@ -427,6 +537,9 @@ export class ChatScene extends Phaser.Scene {
 
     this.isOpen = true;
     const targetX = this.isMobile ? 0 : this.scale.width - this.SIDEBAR_WIDTH_DESKTOP;
+
+    // Bring ChatScene to top so it receives input and blocks game layer
+    this.scene.bringToTop('ChatScene');
 
     // Show input field
     if (this.inputField) {
@@ -484,6 +597,9 @@ export class ChatScene extends Phaser.Scene {
    * Clean up when scene is destroyed
    */
   shutdown(): void {
+    this.messageUnsubscribe?.();
+    this.messageUnsubscribe = null;
+
     // Clean up HTML input
     if (this.inputField) {
       this.inputField.remove();
