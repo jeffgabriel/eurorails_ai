@@ -171,7 +171,9 @@ export class CameraController {
         let lastWheelTime = 0;
         this.scene.input.on('wheel', (pointer: Phaser.Input.Pointer, gameObjects: any, deltaX: number, deltaY: number) => {
             // Skip zoom if pointer is over interactive UI elements (e.g., scrollable panels)
-            if (gameObjects && gameObjects.length > 0) {
+            // But allow zoom if the only interactive object is the mapContainer itself
+            const hasUIElements = gameObjects && gameObjects.some((obj: any) => obj !== this.mapContainer);
+            if (hasUIElements) {
                 return;
             }
 
