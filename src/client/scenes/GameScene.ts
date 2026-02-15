@@ -661,8 +661,16 @@ export class GameScene extends Phaser.Scene {
           }
         })();
       if (authUserId) {
-        // Prevent duplicate ChatScene launches on restart
-        if (!this.scene.get('ChatScene')) {
+        const existingChatScene = this.scene.get('ChatScene');
+        
+        // If ChatScene exists but isn't ready, restart it (handles hot reload scenarios)
+        if (existingChatScene && !(existingChatScene as any).isReady) {
+          this.scene.stop('ChatScene');
+          this.scene.launch('ChatScene', {
+            gameId: this.gameState.id,
+            userId: authUserId,
+          });
+        } else if (!existingChatScene) {
           this.scene.launch('ChatScene', {
             gameId: this.gameState.id,
             userId: authUserId,

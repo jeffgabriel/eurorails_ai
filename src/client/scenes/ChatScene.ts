@@ -77,7 +77,11 @@ export class ChatScene extends Phaser.Scene {
     this.setupInputHandlers();
 
     // Join the game chat
-    await this.joinChat();
+    try {
+      await this.joinChat();
+    } catch (error) {
+      console.error('[ChatScene] Failed to join chat:', error);
+    }
 
     // Start closed
     this.isOpen = false;
@@ -477,25 +481,25 @@ export class ChatScene extends Phaser.Scene {
    * Open chat in DM mode with a specific player
    */
   public async openDM(recipientUserId: string, recipientName: string): Promise<void> {
-    this.dmRecipientId = recipientUserId;
-    this.dmRecipientName = recipientName;
-    this.subscribeToDM(recipientUserId);
-    this.headerTitle.setText(`DM with ${recipientName}`);
-    this.headerBackBtn.setVisible(true);
-    this.headerTitle.setX(15 + this.headerBackBtn.width + 10);
-
-    // Clear and reload messages
-    this.clearMessageBubbles();
     try {
+      this.dmRecipientId = recipientUserId;
+      this.dmRecipientName = recipientName;
+      this.subscribeToDM(recipientUserId);
+      this.headerTitle.setText(`DM with ${recipientName}`);
+      this.headerBackBtn.setVisible(true);
+      this.headerTitle.setX(15 + this.headerBackBtn.width + 10);
+
+      // Clear and reload messages
+      this.clearMessageBubbles();
       const messages = await chatStateService.openDM(this.gameId, recipientUserId);
       messages.forEach((msg) => this.addMessageBubble(msg));
       this.scrollToBottom();
+      
+      await this.open();
     } catch (error) {
-      console.error('[ChatScene] Failed to load DM:', error);
+      console.error('[ChatScene] Error in openDM:', error);
       this.showError('Failed to load conversation');
     }
-
-    await this.open();
   }
 
   /**
