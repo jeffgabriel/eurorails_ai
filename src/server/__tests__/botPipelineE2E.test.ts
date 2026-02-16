@@ -33,6 +33,7 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
       trainType: 'Freight',
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [],

@@ -8,8 +8,11 @@ import {
   AIActionType,
   TerrainType,
   TrackSegment,
+  TrainType,
+  BotMemoryState,
 } from '../../shared/types/GameTypes';
 import { DemandDeckService } from '../services/demandDeckService';
+import { loadGridPoints } from '../services/ai/MapTopology';
 
 // Mock MapTopology so we don't load gridPoints.json
 jest.mock('../services/ai/MapTopology', () => ({
@@ -68,6 +71,7 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
       trainType: 'Freight',
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [],
@@ -113,8 +117,9 @@ describe('Scorer', () => {
     });
 
     it('should reward more segments with higher score', () => {
-      const one = makeBuildOption([makeSegment(1)]);
-      const three = makeBuildOption([makeSegment(1), makeSegment(1), makeSegment(1)]);
+      // Use cost=0 segments so cost penalty doesn't cancel out the segment bonus
+      const one = makeBuildOption([makeSegment(0)]);
+      const three = makeBuildOption([makeSegment(0), makeSegment(0), makeSegment(0)]);
       const scored = Scorer.score([one, three], makeSnapshot(), makeBotConfig());
 
       expect(scored[0].segments!.length).toBe(3);
@@ -205,6 +210,7 @@ function makeMoveSnapshot(demandCards: number[] = [42]): WorldSnapshot {
       trainType: 'Freight',
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
     },
     allPlayerTracks: [],
     loadAvailability: {},
@@ -331,6 +337,7 @@ function makeLoadSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnaps
       trainType: 'Freight',
       loads: ['Coal'],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [],
@@ -406,5 +413,536 @@ describe('Scorer — calculatePickupScore', () => {
     const demandScored = scored.find(o => o.payment === 15)!;
     const specScored = scored.find(o => !o.payment)!;
     expect(demandScored.score!).toBeGreaterThan(specScored.score!);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * TEST: Scorer.calculateUpgradeScore — game-phase-aware upgrade timing (BE-004)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function makeUpgradeOption(targetTrainType: TrainType): FeasibleOption {
+  return {
+    action: AIActionType.UpgradeTrain,
+    feasible: true,
+    reason: `Upgrade to ${targetTrainType}`,
+    targetTrainType,
+  };
+}
+
+function makeUpgradeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot {
+  return {
+    gameId: 'g1',
+    gameStatus: 'active',
+    turnNumber: 10,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-bot-1',
+      money: 50,
+      position: { row: 10, col: 10 },
+      existingSegments: Array.from({ length: 25 }, () => makeSegment(1)),
+      demandCards: [],
+      resolvedDemands: [],
+      trainType: TrainType.Freight,
+      loads: [],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+      ...overrides,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
+
+function makeMemory(overrides?: Partial<BotMemoryState>): BotMemoryState {
+  return {
+    currentBuildTarget: null,
+    turnsOnTarget: 0,
+    lastAction: null,
+    consecutivePassTurns: 0,
+    deliveryCount: 3,
+    totalEarnings: 60,
+    turnNumber: 10,
+    ...overrides,
+  };
+}
+
+describe('Scorer — calculateUpgradeScore (BE-004: game-phase-aware)', () => {
+  it('should return low score (2) in early game with few deliveries and few segments', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const snapshot = makeUpgradeSnapshot({
+      existingSegments: Array.from({ length: 10 }, () => makeSegment(1)),
+    });
+    const memory = makeMemory({ deliveryCount: 1, turnNumber: 5 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(2);
+  });
+
+  it('should not penalize upgrade when deliveryCount >= 2 even with few segments', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const snapshot = makeUpgradeSnapshot({
+      existingSegments: Array.from({ length: 10 }, () => makeSegment(1)),
+    });
+    const memory = makeMemory({ deliveryCount: 2, turnNumber: 10 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score!).toBeGreaterThan(2);
+  });
+
+  it('should not penalize upgrade when segmentCount >= 20 even with few deliveries', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const snapshot = makeUpgradeSnapshot({
+      existingSegments: Array.from({ length: 25 }, () => makeSegment(1)),
+    });
+    const memory = makeMemory({ deliveryCount: 0, turnNumber: 5 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score!).toBeGreaterThan(2);
+  });
+
+  it('should boost score by +15 when turnNumber > 25 and still on Freight', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const snapshot = makeUpgradeSnapshot({ trainType: TrainType.Freight });
+
+    const earlyMemory = makeMemory({ turnNumber: 10 });
+    const lateMemory = makeMemory({ turnNumber: 30 });
+
+    const earlyScored = Scorer.score([{ ...option }], snapshot, null, earlyMemory);
+    const lateScored = Scorer.score([{ ...option }], snapshot, null, lateMemory);
+
+    // Late game with Freight should be 15 points higher than early game
+    expect(lateScored[0].score! - earlyScored[0].score!).toBe(15);
+  });
+
+  it('should NOT apply overdue boost when train is already upgraded', () => {
+    const option = makeUpgradeOption(TrainType.Superfreight);
+    const snapshot = makeUpgradeSnapshot({ trainType: TrainType.FastFreight });
+
+    const earlyMemory = makeMemory({ turnNumber: 10 });
+    const lateMemory = makeMemory({ turnNumber: 30 });
+
+    const earlyScored = Scorer.score([{ ...option }], snapshot, null, earlyMemory);
+    const lateScored = Scorer.score([{ ...option }], snapshot, null, lateMemory);
+
+    // No overdue boost since train is FastFreight, not Freight
+    expect(lateScored[0].score).toBe(earlyScored[0].score);
+  });
+
+  it('should boost score by +10 when money > 80 and deliveryCount >= 2', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const richSnapshot = makeUpgradeSnapshot({ money: 100 });
+    const poorSnapshot = makeUpgradeSnapshot({ money: 40 });
+    const memory = makeMemory({ deliveryCount: 3 });
+
+    const richScored = Scorer.score([{ ...option }], richSnapshot, null, memory);
+    const poorScored = Scorer.score([{ ...option }], poorSnapshot, null, memory);
+
+    // Rich bot gets financial readiness boost (+10) plus money thresholds (+6)
+    // Poor bot gets no money bonuses at all
+    expect(richScored[0].score!).toBeGreaterThan(poorScored[0].score!);
+    expect(richScored[0].score! - poorScored[0].score!).toBeGreaterThanOrEqual(10);
+  });
+
+  it('should NOT apply financial readiness boost when deliveryCount < 2', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+    const snapshot = makeUpgradeSnapshot({ money: 100 });
+    const lowDeliveryMemory = makeMemory({ deliveryCount: 1, turnNumber: 10 });
+
+    // deliveryCount < 2 AND segments >= 20, so no early game penalty
+    // but also no financial readiness boost
+    const scored = Scorer.score([option], snapshot, null, lowDeliveryMemory);
+
+    // Score should not include the +10 financial readiness boost.
+    // Early game penalty doesn't apply because segments >= 20.
+    // But the money >= 80 base threshold (+3+3=6) still applies.
+    // However deliveryCount < 2 blocks the +10 financial readiness.
+    // Let's verify by comparing with deliveryCount=2
+    const highDeliveryMemory = makeMemory({ deliveryCount: 2, turnNumber: 10 });
+    const scored2 = Scorer.score([{ ...option }], snapshot, null, highDeliveryMemory);
+
+    expect(scored2[0].score! - scored[0].score!).toBe(10);
+  });
+
+  it('should preserve legacy behavior when botMemory is undefined', () => {
+    const option = makeUpgradeOption(TrainType.FastFreight);
+
+    // With < 10 segments and no memory, should return 2 (legacy early gate)
+    const fewSegSnapshot = makeUpgradeSnapshot({
+      existingSegments: Array.from({ length: 5 }, () => makeSegment(1)),
+    });
+    const scored = Scorer.score([option], fewSegSnapshot, null);
+    expect(scored[0].score).toBe(2);
+
+    // With >= 10 segments and no memory, should compute normal score
+    const manySegSnapshot = makeUpgradeSnapshot({
+      existingSegments: Array.from({ length: 25 }, () => makeSegment(1)),
+    });
+    const scored2 = Scorer.score([option], manySegSnapshot, null);
+    expect(scored2[0].score!).toBeGreaterThan(2);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * TEST: Scorer.calculateDiscardScore — intelligent discard decisions (BE-005)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+const mockLoadGridPoints = loadGridPoints as jest.MockedFunction<typeof loadGridPoints>;
+
+function makeDiscardOption(): FeasibleOption {
+  return {
+    action: AIActionType.DiscardHand,
+    feasible: true,
+    reason: 'Discard hand and draw 3 new cards',
+  };
+}
+
+/**
+ * Build a grid map with named cities at specific coordinates.
+ * Entries: "row,col" → { row, col, terrain, name }
+ */
+function buildGridWithCities(cities: Array<{ name: string; row: number; col: number }>): Map<string, { row: number; col: number; terrain: number; name: string }> {
+  const grid = new Map<string, { row: number; col: number; terrain: number; name: string }>();
+  for (const city of cities) {
+    grid.set(`${city.row},${city.col}`, { row: city.row, col: city.col, terrain: TerrainType.Clear, name: city.name });
+  }
+  return grid;
+}
+
+function makeDiscardSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot {
+  return {
+    gameId: 'g1',
+    gameStatus: 'active',
+    turnNumber: 10,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-bot-1',
+      money: 50,
+      position: { row: 10, col: 10 },
+      existingSegments: [
+        // Track from (0,0) to (1,0) — Berlin is at (1,0)
+        {
+          from: { x: 0, y: 0, row: 0, col: 0, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 1, col: 0, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+        // Track from (1,0) to (2,0) — Paris is at (2,0)
+        {
+          from: { x: 0, y: 0, row: 1, col: 0, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 2, col: 0, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+      ],
+      demandCards: [42, 73, 99],
+      resolvedDemands: [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }] },
+        { cardId: 73, demands: [{ city: 'Paris', loadType: 'Wine', payment: 20 }] },
+        { cardId: 99, demands: [{ city: 'Madrid', loadType: 'Oil', payment: 15 }] },
+      ],
+      trainType: TrainType.Freight,
+      loads: [],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+      ...overrides,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
+
+describe('Scorer — calculateDiscardScore (BE-005: intelligent discard)', () => {
+  afterEach(() => {
+    // Restore default empty grid mock
+    mockLoadGridPoints.mockReturnValue(new Map());
+  });
+
+  it('should return 1 when botMemory is undefined (legacy behavior)', () => {
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+
+    const scored = Scorer.score([option], snapshot, null);
+
+    expect(scored[0].score).toBe(1);
+  });
+
+  it('should return 1 when bot has no track segments', () => {
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot({ existingSegments: [] });
+    const memory = makeMemory({ deliveryCount: 0 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(1);
+  });
+
+  it('should return 20 when 0/3 demands are reachable and deliveryCount < 3', () => {
+    // Grid has cities but none match the bot's network coordinates
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },  // far from network
+      { name: 'Paris', row: 60, col: 60 },
+      { name: 'Madrid', row: 70, col: 70 },
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 1 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(20);
+  });
+
+  it('should return 1 when 0/3 demands are reachable but deliveryCount >= 3', () => {
+    // Grid has cities but none match the bot's network coordinates
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },
+      { name: 'Paris', row: 60, col: 60 },
+      { name: 'Madrid', row: 70, col: 70 },
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 5 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    // With 0 reachable but deliveryCount >= 3, the 0-reachable branch
+    // doesn't fire because deliveryCount >= 3. Falls through to reachableCount check:
+    // reachableCount is 0, but since deliveryCount >= 3, falls to bottom → 1
+    expect(scored[0].score).toBe(1);
+  });
+
+  it('should return 5 when exactly 1/3 demands are reachable', () => {
+    // Berlin at (1,0) is on the network; Paris and Madrid are NOT
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 1, col: 0 },    // on network
+      { name: 'Paris', row: 60, col: 60 },    // off network
+      { name: 'Madrid', row: 70, col: 70 },   // off network
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 2 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(5);
+  });
+
+  it('should return 1 when 2/3 demands are reachable', () => {
+    // Berlin at (1,0) and Paris at (2,0) are on the network; Madrid is NOT
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 1, col: 0 },    // on network
+      { name: 'Paris', row: 2, col: 0 },      // on network
+      { name: 'Madrid', row: 70, col: 70 },   // off network
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 2 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(1);
+  });
+
+  it('should return 1 when all 3/3 demands are reachable', () => {
+    // All three cities are on the network
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 1, col: 0 },
+      { name: 'Paris', row: 2, col: 0 },
+      { name: 'Madrid', row: 0, col: 0 },  // on network (segment from 0,0)
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 2 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(1);
+  });
+
+  it('should score discard (20) higher than BuildTrack base (10) when hand is desperate', () => {
+    // No cities reachable, few deliveries
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },
+      { name: 'Paris', row: 60, col: 60 },
+      { name: 'Madrid', row: 70, col: 70 },
+    ]));
+
+    const discard = makeDiscardOption();
+    const build = makeBuildOption([makeSegment(1)]);
+    const pass = makePassOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 0 });
+
+    const scored = Scorer.score([discard, build, pass], snapshot, null, memory);
+
+    const discardScored = scored.find(o => o.action === AIActionType.DiscardHand)!;
+    const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
+    // Desperate discard (20) should beat basic build (10 base - 1 cost + 1 segment = 10)
+    expect(discardScored.score!).toBeGreaterThan(buildScored.score!);
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * TEST: Scorer.calculateDropScore — proximity protection (BE-006)
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function makeDropOption(loadType: string, targetCity?: string): FeasibleOption {
+  return {
+    action: AIActionType.DropLoad,
+    feasible: true,
+    reason: `Drop ${loadType}`,
+    loadType: loadType as any,
+    targetCity,
+  };
+}
+
+function makeDropSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot {
+  return {
+    gameId: 'g1',
+    gameStatus: 'active',
+    turnNumber: 10,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-bot-1',
+      money: 50,
+      position: { row: 10, col: 10 },
+      existingSegments: [
+        // Network covers rows 0-20 to give variety
+        {
+          from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 11, col: 10, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+        {
+          from: { x: 0, y: 0, row: 11, col: 10, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 12, col: 10, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+      ],
+      demandCards: [42],
+      resolvedDemands: [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }] },
+      ],
+      trainType: TrainType.Freight,
+      loads: ['Coal'],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+      ...overrides,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
+
+describe('Scorer — calculateDropScore (BE-006: proximity protection)', () => {
+  afterEach(() => {
+    mockLoadGridPoints.mockReturnValue(new Map());
+  });
+
+  it('should apply -20 penalty when delivery city is close (< 5 turns away)', () => {
+    // Bot at (10,10), Berlin at (12,10) — distance = 2, speed = 9, turns = 0.22 (< 5)
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 12, col: 10 },  // on network, very close to bot
+    ]));
+
+    const option = makeDropOption('Coal');
+    const snapshot = makeDropSnapshot();
+
+    const scored = Scorer.score([option], snapshot, null);
+
+    // Base 5 - 20 proximity penalty = -15
+    expect(scored[0].score!).toBeLessThan(0);
+  });
+
+  it('should NOT apply penalty when delivery city is far (>= 5 turns away)', () => {
+    // Bot at (10,10), Berlin at (60,10) — distance = 50, speed = 9, turns = 5.56 (>= 5)
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 60, col: 10 },
+    ]));
+
+    // Also need Berlin on the network (add a segment there)
+    const snapshot = makeDropSnapshot({
+      existingSegments: [
+        {
+          from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 60, col: 10, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+      ],
+    });
+
+    const option = makeDropOption('Coal');
+    const scored = Scorer.score([option], snapshot, null);
+
+    // No proximity penalty, base 5
+    expect(scored[0].score!).toBeGreaterThanOrEqual(5);
+  });
+
+  it('should protect close loads even if they have low payment', () => {
+    // Low-value Coal (10M) but delivery is close — should still be penalized for dropping
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 11, col: 10 },  // on network, 1 hex away
+    ]));
+
+    const option = makeDropOption('Coal');
+    const snapshot = makeDropSnapshot();
+
+    const scored = Scorer.score([option], snapshot, null);
+
+    // Should have strong negative score due to proximity penalty
+    expect(scored[0].score!).toBeLessThan(0);
+  });
+
+  it('should not apply proximity penalty when delivery city is not on network', () => {
+    // Berlin exists in grid but NOT on the bot's track network
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },  // not on network (network is at 10-12,10)
+    ]));
+
+    const option = makeDropOption('Coal');
+    const snapshot = makeDropSnapshot();
+
+    const scored = Scorer.score([option], snapshot, null);
+
+    // No proximity penalty (city not reachable). The unreachable path fires instead.
+    // With payment=10 (< 20), gets +10 bonus for low-value unreachable → drop it
+    expect(scored[0].score!).toBeGreaterThan(0);
+  });
+
+  it('should not apply proximity penalty when bot has no position', () => {
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 12, col: 10 },
+    ]));
+
+    const option = makeDropOption('Coal');
+    const snapshot = makeDropSnapshot({ position: null });
+
+    const scored = Scorer.score([option], snapshot, null);
+
+    // No proximity penalty (no position), but reachable demand means no unreachable bonus
+    // Score = 5 (base)
+    expect(scored[0].score).toBe(5);
+  });
+
+  it('should score drop lower than delivery when load is close to destination', () => {
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 12, col: 10 },
+    ]));
+
+    const drop = makeDropOption('Coal');
+    const delivery = makeDeliveryOption('Coal', 10, 42);
+    const snapshot = makeDropSnapshot();
+
+    const scored = Scorer.score([drop, delivery], snapshot, null);
+
+    // Delivery should always beat drop, especially when close
+    expect(scored[0].action).toBe(AIActionType.DeliverLoad);
+    expect(scored[0].score!).toBeGreaterThan(scored[1].score!);
   });
 });

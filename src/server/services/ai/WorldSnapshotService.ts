@@ -9,6 +9,7 @@ import { db } from '../../db/index';
 import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand } from '../../../shared/types/GameTypes';
 import { DemandDeckService } from '../demandDeckService';
 import { LoadService } from '../loadService';
+import { getConnectedMajorCityCount } from './connectedMajorCities';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -104,6 +105,16 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       citiesOfInterest.add(d.city);
     }
   }
+  // Also add SOURCE cities for load types the bot's demands need.
+  // Without this, the bot can't discover where to pick up loads.
+  for (const rd of resolvedDemands) {
+    for (const d of rd.demands) {
+      const sourceCities = loadSvc.getSourceCitiesForLoad(d.loadType);
+      for (const city of sourceCities) {
+        citiesOfInterest.add(city);
+      }
+    }
+  }
   for (const city of citiesOfInterest) {
     const loads = loadSvc.getAvailableLoadsForCity(city);
     if (loads.length > 0) {
@@ -129,6 +140,7 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
       trainType: botRow.train_type ?? 'Freight',
       loads: Array.isArray(botRow.loads) ? botRow.loads : [],
       botConfig,
+      connectedMajorCityCount: getConnectedMajorCityCount(botSegments),
     },
     allPlayerTracks,
     loadAvailability,

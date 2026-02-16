@@ -13,7 +13,7 @@ import {
 } from '../../shared/types/GameTypes';
 import { emitToGame } from '../services/socketService';
 import { db } from '../db/index';
-import { getMajorCityGroups } from '../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getFerryEdges } from '../../shared/services/majorCityGroups';
 
 // Mock all pipeline services
 jest.mock('../services/ai/WorldSnapshotService');
@@ -42,6 +42,7 @@ const mockScore = Scorer.score as jest.Mock;
 const mockValidate = validate as jest.Mock;
 const mockExecute = TurnExecutor.execute as jest.Mock;
 const mockGetMajorCityGroups = getMajorCityGroups as jest.Mock;
+const mockGetFerryEdges = getFerryEdges as jest.Mock;
 
 function makeSegment(cost: number): TrackSegment {
   return {
@@ -67,6 +68,7 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnapshot 
       trainType: 'Freight',
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [],
@@ -98,6 +100,7 @@ describe('AIStrategyEngine', () => {
     mockGetMajorCityGroups.mockReturnValue([
       { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
     ]);
+    mockGetFerryEdges.mockReturnValue([]);
   });
 
   describe('happy path — BuildTrack', () => {
@@ -121,7 +124,8 @@ describe('AIStrategyEngine', () => {
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(mockCapture).toHaveBeenCalledWith('game-1', 'bot-1');
-      expect(mockGenerate).toHaveBeenCalledWith(snapshot);
+      // generate() is called with (snapshot, actions, memory) — verify first arg
+      expect(mockGenerate).toHaveBeenCalledWith(snapshot, expect.any(Set), expect.any(Object));
       expect(mockScore).toHaveBeenCalled();
       expect(mockValidate).toHaveBeenCalledWith(buildOption, snapshot);
       expect(mockExecute).toHaveBeenCalledWith(buildOption, snapshot);
@@ -378,6 +382,7 @@ describe('AIStrategyEngine — two-phase turn', () => {
     mockGetMajorCityGroups.mockReturnValue([
       { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
     ]);
+    mockGetFerryEdges.mockReturnValue([]);
   });
 
   it('should move AND build in same turn', async () => {
@@ -595,6 +600,7 @@ describe('AIStrategyEngine — multi-action turn with loads', () => {
     mockGetMajorCityGroups.mockReturnValue([
       { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
     ]);
+    mockGetFerryEdges.mockReturnValue([]);
   });
 
   it('should execute Phase 0 delivery at current position before movement', async () => {

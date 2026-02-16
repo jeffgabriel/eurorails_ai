@@ -146,6 +146,7 @@ export function makeMovementSnapshot(
       trainType: TrainType.Freight,
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [

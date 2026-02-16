@@ -323,6 +323,8 @@ export interface WorldSnapshot {
         } | null;
         /** Set by AIStrategyEngine when bot crosses a ferry — halves movement speed for this turn */
         ferryHalfSpeed?: boolean;
+        /** Number of major cities connected by the bot's continuous track network */
+        connectedMajorCityCount: number;
     };
     allPlayerTracks: Array<{
         playerId: string;

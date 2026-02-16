@@ -43,6 +43,7 @@ function makeSnapshot(overrides?: Partial<WorldSnapshot>): WorldSnapshot {
       trainType: 'Freight',
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
     },
     allPlayerTracks: [],
     loadAvailability: {},
@@ -192,6 +193,7 @@ function makeActiveSnapshot(overrides?: Partial<WorldSnapshot['bot']>, topOverri
       trainType: TrainType.Freight,
       loads: [],
       botConfig: null,
+      connectedMajorCityCount: 0,
       ...overrides,
     },
     allPlayerTracks: [
@@ -784,6 +786,7 @@ describe('OptionGenerator — sticky build target', () => {
         trainType: 'Freight',
         loads: [],
         botConfig: null,
+        connectedMajorCityCount: 0,
       },
       allPlayerTracks: [],
       loadAvailability: {
