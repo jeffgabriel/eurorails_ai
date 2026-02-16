@@ -222,6 +222,14 @@ export class LoadService {
     }
   }
 
+  /**
+   * Get the cities that produce a given load type.
+   * Inverse of getAvailableLoadsForCity.
+   */
+  public getSourceCitiesForLoad(loadType: string): string[] {
+    return this.loadConfiguration[loadType]?.cities ?? [];
+  }
+
   public isLoadAvailableAtCity(loadType: string, city: string): boolean {
     const config = this.loadConfiguration[loadType];
     return config?.cities.includes(city) ?? false;

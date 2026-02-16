@@ -41,6 +41,12 @@ export function validate(option: FeasibleOption, snapshot: WorldSnapshot): Valid
       return validatePickup(option, snapshot);
     case AIActionType.DeliverLoad:
       return validateDelivery(option, snapshot);
+    case AIActionType.DropLoad:
+      return validateDropLoad(option, snapshot);
+    case AIActionType.UpgradeTrain:
+      return validateUpgradeTrain(option, snapshot);
+    case AIActionType.DiscardHand:
+      return { valid: true, reason: 'DiscardHand is always valid' };
     case AIActionType.PassTurn:
       return { valid: true, reason: 'PassTurn is always valid' };
     default:
@@ -245,4 +251,78 @@ function validateDelivery(option: FeasibleOption, snapshot: WorldSnapshot): Vali
   }
 
   return { valid: true, reason: 'Delivery validation passed' };
+}
+
+function validateDropLoad(option: FeasibleOption, snapshot: WorldSnapshot): ValidationResult {
+  // 1. Game must be active
+  if (snapshot.gameStatus !== 'active') {
+    return { valid: false, reason: 'Game is not active' };
+  }
+
+  // 2. Bot must have a position
+  if (!snapshot.bot.position) {
+    return { valid: false, reason: 'Bot has no position' };
+  }
+
+  // 3. Bot must be at a city
+  const grid = loadGridPoints();
+  const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+  const currentPoint = grid.get(posKey);
+  if (!currentPoint?.name) {
+    return { valid: false, reason: 'Bot is not at a city' };
+  }
+
+  // 4. Must specify a load type
+  if (!option.loadType) {
+    return { valid: false, reason: 'DropLoad requires a loadType' };
+  }
+
+  // 5. Bot must be carrying the load
+  if (!snapshot.bot.loads.includes(option.loadType)) {
+    return { valid: false, reason: `Bot is not carrying ${option.loadType}` };
+  }
+
+  return { valid: true, reason: 'Drop validation passed' };
+}
+
+function validateUpgradeTrain(option: FeasibleOption, snapshot: WorldSnapshot): ValidationResult {
+  // 1. Must specify target train type and kind
+  if (!option.targetTrainType || !option.upgradeKind) {
+    return { valid: false, reason: 'UpgradeTrain requires targetTrainType and upgradeKind' };
+  }
+
+  // 2. Bot must have enough money
+  const cost = option.upgradeKind === 'upgrade' ? 20 : 5;
+  if (snapshot.bot.money < cost) {
+    return { valid: false, reason: `Insufficient funds: need ${cost}M, have ${snapshot.bot.money}M` };
+  }
+
+  // 3. Validate upgrade path
+  const currentType = snapshot.bot.trainType as TrainType;
+  const targetType = option.targetTrainType;
+
+  if (option.upgradeKind === 'upgrade') {
+    const legalUpgrade =
+      (currentType === TrainType.Freight &&
+        (targetType === TrainType.FastFreight || targetType === TrainType.HeavyFreight)) ||
+      ((currentType === TrainType.FastFreight || currentType === TrainType.HeavyFreight) &&
+        targetType === TrainType.Superfreight);
+    if (!legalUpgrade) {
+      return { valid: false, reason: `Illegal upgrade: ${currentType} → ${targetType}` };
+    }
+  } else {
+    const legalCrossgrade =
+      (currentType === TrainType.FastFreight && targetType === TrainType.HeavyFreight) ||
+      (currentType === TrainType.HeavyFreight && targetType === TrainType.FastFreight);
+    if (!legalCrossgrade) {
+      return { valid: false, reason: `Illegal crossgrade: ${currentType} → ${targetType}` };
+    }
+    // Check load capacity won't be exceeded after crossgrade
+    const targetCapacity = TRAIN_PROPERTIES[targetType]?.capacity ?? 2;
+    if (snapshot.bot.loads.length > targetCapacity) {
+      return { valid: false, reason: `Cannot crossgrade: ${snapshot.bot.loads.length} loads exceed target capacity ${targetCapacity}` };
+    }
+  }
+
+  return { valid: true, reason: 'Upgrade validation passed' };
 }

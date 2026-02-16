@@ -10,11 +10,14 @@ import {
   FeasibleOption,
   WorldSnapshot,
   AIActionType,
+  TrainType,
+  TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { emitToGame, emitStatePatch } from '../socketService';
 import { PlayerService } from '../playerService';
 import { LoadService } from '../loadService';
+import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from './MapTopology';
 
 export interface ExecutionResult {
@@ -49,6 +52,12 @@ export class TurnExecutor {
         return TurnExecutor.handlePickupLoad(plan, snapshot, startTime);
       case AIActionType.DeliverLoad:
         return TurnExecutor.handleDeliverLoad(plan, snapshot, startTime);
+      case AIActionType.DropLoad:
+        return TurnExecutor.handleDropLoad(plan, snapshot, startTime);
+      case AIActionType.UpgradeTrain:
+        return TurnExecutor.handleUpgradeTrain(plan, snapshot, startTime);
+      case AIActionType.DiscardHand:
+        return TurnExecutor.handleDiscardHand(snapshot, startTime);
       case AIActionType.PassTurn:
         return TurnExecutor.handlePassTurn(snapshot, startTime);
       default:
@@ -267,10 +276,44 @@ export class TurnExecutor {
     const currentPoint = posKey ? grid.get(posKey) : undefined;
     const cityName = currentPoint?.name ?? '';
 
+    // Server-side capacity check: reject pickup if train is full
+    const trainType = snapshot.bot.trainType as TrainType;
+    const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+    if (snapshot.bot.loads.length >= capacity) {
+      return {
+        success: false,
+        action: AIActionType.PickupLoad,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: Date.now() - startTime,
+        error: `Train at full capacity (${snapshot.bot.loads.length}/${capacity})`,
+      };
+    }
+
     // Critical DB op: append load to player's loads array
     const client = await db.connect();
     try {
       await client.query('BEGIN');
+
+      // Double-check capacity in DB to prevent race conditions
+      const currentLoads = await client.query(
+        'SELECT array_length(loads, 1) as load_count FROM players WHERE id = $1 FOR UPDATE',
+        [snapshot.bot.playerId],
+      );
+      const dbLoadCount = currentLoads.rows[0]?.load_count ?? 0;
+      if (dbLoadCount >= capacity) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          action: AIActionType.PickupLoad,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: `Train at full capacity in DB (${dbLoadCount}/${capacity})`,
+        };
+      }
 
       await client.query(
         'UPDATE players SET loads = array_append(loads, $1) WHERE id = $2',
@@ -434,6 +477,250 @@ export class TurnExecutor {
       durationMs: Date.now() - startTime,
       payment,
       newCardId,
+    };
+  }
+
+  /**
+   * DropLoad: remove a load from the bot's train and drop it at the current city.
+   * Per game rules: "Any load may be dropped at any city without a payoff."
+   * If the load is native to this city, return it to the tray instead.
+   */
+  private static async handleDropLoad(
+    plan: FeasibleOption,
+    snapshot: WorldSnapshot,
+    startTime: number,
+  ): Promise<ExecutionResult> {
+    const loadType = plan.loadType;
+    if (!loadType) {
+      return {
+        success: false,
+        action: AIActionType.DropLoad,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: Date.now() - startTime,
+        error: 'No loadType specified',
+      };
+    }
+
+    // Resolve city name
+    const grid = loadGridPoints();
+    const posKey = snapshot.bot.position
+      ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+      : '';
+    const currentPoint = posKey ? grid.get(posKey) : undefined;
+    const cityName = currentPoint?.name ?? '';
+
+    if (!cityName) {
+      return {
+        success: false,
+        action: AIActionType.DropLoad,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: Date.now() - startTime,
+        error: 'Bot is not at a named city',
+      };
+    }
+
+    // Critical DB op: remove load from player's loads array
+    const client = await db.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Remove the first occurrence of this load type from the array
+      await client.query(
+        `UPDATE players SET loads = array_remove(loads, $1) WHERE id = $2`,
+        [loadType, snapshot.bot.playerId],
+      );
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    // Drop the load at the city (best-effort — separate from critical tx)
+    try {
+      const loadSvc = LoadService.getInstance();
+      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
+        // Load is native to this city — return to tray
+        await loadSvc.returnLoad(cityName, loadType as LoadType, snapshot.gameId);
+      } else {
+        // Drop as a non-native load at this city
+        await loadSvc.setLoadInCity(cityName, loadType as LoadType, snapshot.gameId);
+      }
+    } catch (dropErr) {
+      console.error('[TurnExecutor] DropLoad city placement failed (load was removed from train):', dropErr instanceof Error ? dropErr.message : dropErr);
+    }
+
+    // Post-commit: audit record (best-effort)
+    try {
+      await db.query(
+        `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [snapshot.gameId, snapshot.bot.playerId, snapshot.turnNumber, AIActionType.DropLoad, 0, snapshot.bot.money, Date.now() - startTime],
+      );
+    } catch (auditError) {
+      console.error('[TurnExecutor] DropLoad audit insert failed:', auditError instanceof Error ? auditError.message : auditError);
+    }
+
+    // Post-commit: socket emit (best-effort)
+    try {
+      const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
+      const botPlayer = publicPlayers.find((p: any) => p.id === snapshot.bot.playerId);
+      if (botPlayer) {
+        await emitStatePatch(snapshot.gameId, { players: [botPlayer] } as any);
+      }
+    } catch (emitError) {
+      console.error('[TurnExecutor] DropLoad post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
+    }
+
+    return {
+      success: true,
+      action: AIActionType.DropLoad,
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: snapshot.bot.money,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  /**
+   * UpgradeTrain: update train type and deduct money directly.
+   * Does NOT use PlayerService.purchaseTrainType to avoid turn-management conflicts.
+   */
+  private static async handleUpgradeTrain(
+    plan: FeasibleOption,
+    snapshot: WorldSnapshot,
+    startTime: number,
+  ): Promise<ExecutionResult> {
+    const targetType = plan.targetTrainType;
+    const kind = plan.upgradeKind;
+    if (!targetType || !kind) {
+      return {
+        success: false,
+        action: AIActionType.UpgradeTrain,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: Date.now() - startTime,
+        error: 'UpgradeTrain requires targetTrainType and upgradeKind',
+      };
+    }
+
+    const cost = kind === 'upgrade' ? 20 : 5;
+    const client = await db.connect();
+    let remainingMoney = snapshot.bot.money - cost;
+
+    try {
+      await client.query('BEGIN');
+      const moneyResult = await client.query(
+        'UPDATE players SET train_type = $1, money = money - $2 WHERE id = $3 RETURNING money',
+        [targetType, cost, snapshot.bot.playerId],
+      );
+      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    // Audit (best-effort)
+    try {
+      await db.query(
+        `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [snapshot.gameId, snapshot.bot.playerId, snapshot.turnNumber, AIActionType.UpgradeTrain, cost, remainingMoney, Date.now() - startTime],
+      );
+    } catch (auditError) {
+      console.error('[TurnExecutor] UpgradeTrain audit insert failed:', auditError instanceof Error ? auditError.message : auditError);
+    }
+
+    // Socket emit (best-effort)
+    try {
+      const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
+      const botPlayer = publicPlayers.find((p: any) => p.id === snapshot.bot.playerId);
+      if (botPlayer) {
+        await emitStatePatch(snapshot.gameId, { players: [botPlayer] } as any);
+      }
+    } catch (emitError) {
+      console.error('[TurnExecutor] UpgradeTrain post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
+    }
+
+    return {
+      success: true,
+      action: AIActionType.UpgradeTrain,
+      cost,
+      segmentsBuilt: 0,
+      remainingMoney,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  /**
+   * DiscardHand: discard current hand and draw 3 new cards directly.
+   * Does NOT use PlayerService.discardHandForUser to avoid turn-advancement conflicts
+   * (BotTurnTrigger handles turn advancement separately).
+   */
+  private static async handleDiscardHand(
+    snapshot: WorldSnapshot,
+    startTime: number,
+  ): Promise<ExecutionResult> {
+    const demandDeck = DemandDeckService.getInstance();
+
+    // Discard current hand
+    for (const cardId of snapshot.bot.demandCards) {
+      demandDeck.discardCard(cardId);
+    }
+
+    // Draw 3 new cards
+    const newCardIds: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const card = demandDeck.drawCard();
+      if (!card) break;
+      newCardIds.push(card.id);
+    }
+
+    // Update player's hand in DB
+    await db.query(
+      'UPDATE players SET hand = $1 WHERE id = $2',
+      [newCardIds, snapshot.bot.playerId],
+    );
+
+    // Audit (best-effort)
+    try {
+      await db.query(
+        `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [snapshot.gameId, snapshot.bot.playerId, snapshot.turnNumber, AIActionType.DiscardHand, 0, snapshot.bot.money, Date.now() - startTime],
+      );
+    } catch (auditError) {
+      console.error('[TurnExecutor] DiscardHand audit insert failed:', auditError instanceof Error ? auditError.message : auditError);
+    }
+
+    // Socket emit (best-effort)
+    try {
+      const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
+      const botPlayer = publicPlayers.find((p: any) => p.id === snapshot.bot.playerId);
+      if (botPlayer) {
+        await emitStatePatch(snapshot.gameId, { players: [botPlayer] } as any);
+      }
+    } catch (emitError) {
+      console.error('[TurnExecutor] DiscardHand post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
+    }
+
+    return {
+      success: true,
+      action: AIActionType.DiscardHand,
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: snapshot.bot.money,
+      durationMs: Date.now() - startTime,
     };
   }
 

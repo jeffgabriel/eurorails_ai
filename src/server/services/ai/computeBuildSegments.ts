@@ -189,6 +189,9 @@ export function computeBuildSegments(
   maxSegments: number = budget,
   /** Edges owned by other players — these cannot be built on (Right of Way rule). */
   occupiedEdges?: Set<string>,
+  /** Target positions to build toward (demand card cities). When provided,
+   *  path selection prefers routes that get closest to a target over raw segment count. */
+  targetPositions?: GridCoord[],
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
@@ -317,27 +320,73 @@ export function computeBuildSegments(
     }
   }
 
-  // Select the best path: the one that reaches furthest for the least cost.
-  // We want the longest path (most new segments) that fits within budget.
-  // Among equal-length paths, prefer the cheapest.
+  // Select the best path based on whether we have target positions (demand cities).
+  // With targets: prefer the path whose endpoint is closest to any target city.
+  // Without targets: prefer the longest path (most new segments) within budget.
   let bestPath: DijkstraNode | null = null;
 
   console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
 
-  for (const node of bestPaths.values()) {
-    // Count new segments in this path (steps that aren't on existing network)
-    const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
-    if (newSteps === 0) continue;
+  const hasTargets = targetPositions && targetPositions.length > 0;
 
-    const bestNewSteps = bestPath
-      ? countNewSegments(bestPath.path, onNetwork, builtEdges)
-      : 0;
+  if (hasTargets) {
+    // Filter out targets already on the bot's track — building toward an
+    // already-reachable city wastes budget and creates star-shaped building.
+    const unreachedTargets = targetPositions!.filter(
+      t => !onNetwork.has(makeKey(t.row, t.col))
+    );
+    const effectiveTargets = unreachedTargets.length > 0
+      ? unreachedTargets
+      : targetPositions!;  // fallback if ALL targets are connected
 
-    if (
-      newSteps > bestNewSteps ||
-      (newSteps === bestNewSteps && node.cost < (bestPath?.cost ?? Infinity))
-    ) {
-      bestPath = node;
+    // Target-aware selection: pick the path that gets closest to a demand city
+    let bestTargetDist = Infinity;
+    let bestTargetName = '';
+
+    for (const node of bestPaths.values()) {
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
+      if (newSteps === 0) continue;
+
+      const endpoint = node.path[node.path.length - 1];
+      let minDist = Infinity;
+      for (const target of effectiveTargets) {
+        const dist = (endpoint.row - target.row) ** 2 + (endpoint.col - target.col) ** 2;
+        if (dist < minDist) minDist = dist;
+      }
+
+      // Prefer closer to target; among equal distances, prefer more segments
+      if (
+        minDist < bestTargetDist ||
+        (minDist === bestTargetDist && newSteps > (bestPath ? countNewSegments(bestPath.path, onNetwork, builtEdges) : 0))
+      ) {
+        bestPath = node;
+        bestTargetDist = minDist;
+      }
+    }
+
+    // Identify which target the path aims at
+    if (bestPath) {
+      const ep = bestPath.path[bestPath.path.length - 1];
+      const gridPt = grid.get(makeKey(ep.row, ep.col));
+      bestTargetName = gridPt?.name ?? `(${ep.row},${ep.col})`;
+      console.log(`${tag} target-aware: aiming for ${bestTargetName}, dist²=${bestTargetDist}, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
+    }
+  } else {
+    // Original untargeted selection: most new segments, then cheapest
+    for (const node of bestPaths.values()) {
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
+      if (newSteps === 0) continue;
+
+      const bestNewSteps = bestPath
+        ? countNewSegments(bestPath.path, onNetwork, builtEdges)
+        : 0;
+
+      if (
+        newSteps > bestNewSteps ||
+        (newSteps === bestNewSteps && node.cost < (bestPath?.cost ?? Infinity))
+      ) {
+        bestPath = node;
+      }
     }
   }
 

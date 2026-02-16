@@ -1,7 +1,28 @@
 # EuroRails AI Project Guidelines
-Always use compounds skill to investigate code issues bugs new features
 
-Keep two running logs - the first tracks when you use compounds skill and what benefit it provided and the other tracks when you could not or decided to not use compounds skill even though you should have
+## CRITICAL: Always Use Compounds Skill First
+
+### Why this matters
+1. **Compounds IS the product.** We are building compounds for customers. EuroRails exists as a test codebase for exercising compounds. Every task is a test case — if you skip compounds, you skip the whole point.
+2. **Compounds is superior to grep.** It uses code graphs and a vector DB indexed on the codebase, giving you dependency relationships and semantic understanding that raw grep/glob cannot provide.
+
+### When to use it
+Before doing ANY of the following, you MUST invoke the compounds skill FIRST:
+- Investigating bugs or errors
+- Exploring code architecture or how components connect
+- Searching for how a feature works or where something is implemented
+- Tracing dependencies or imports between modules
+- Planning or implementing new features
+- Understanding relationships between files/services
+
+Do NOT fall back to raw grep/glob for architectural or cross-module questions.
+
+**If compounds is not authenticated, run `compounds auth login` immediately before falling back to other tools.**
+
+### Log every task
+**After every codebase task**, log your compounds usage:
+- `compounds-usage-log.md` — when you used it and what benefit it provided
+- `compounds-missed-log.md` — when you skipped it but should have used it
 
 ## Commands
 - Build: `npm run build` (client + server)
