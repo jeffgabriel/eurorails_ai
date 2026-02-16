@@ -67,12 +67,6 @@ const PICKUP_OPPORTUNITY_FACTOR = 0.3;
  *  chain builds more segments. */
 const CHAIN_SCORE_FACTOR = 20;
 
-/** If estimated turns to deliver a load is below this threshold, penalize dropping it */
-const PROXIMITY_THRESHOLD_TURNS = 5;
-
-/** Penalty applied when a load is close to its delivery destination */
-const DROP_PROXIMITY_PENALTY = 20;
-
 export class Scorer {
   /**
    * Score and sort options by strategic value, highest first.
@@ -375,88 +369,20 @@ export class Scorer {
   }
 
   /**
-   * Score a DropLoad option. Dropping is an escape valve when the bot is
-   * stuck with undeliverable loads. Base 5 (above PassTurn=0, below real
-   * actions) + bonus when the load truly can't be delivered.
+   * Score a DropLoad option. OptionGenerator now only generates drops for
+   * truly orphaned loads (no demand card at all), so this scorer is simpler.
+   * Base 10 — orphaned loads should be dropped to free capacity for useful pickups.
+   * Bonus if train is full and a useful load is available at the current city.
    */
   private static calculateDropScore(
     option: FeasibleOption,
     snapshot: WorldSnapshot,
   ): number {
-    let score = 5;
+    // Orphaned load (no demand card) — should almost always drop
+    let score = 10;
 
-    // Big bonus if the load can't be delivered to any reachable city — escape valve
+    // Bonus if train is full and a better load is available at this city
     if (option.loadType) {
-      const grid = loadGridPoints();
-      const onNetwork = new Set<string>();
-      for (const seg of snapshot.bot.existingSegments) {
-        onNetwork.add(`${seg.from.row},${seg.from.col}`);
-        onNetwork.add(`${seg.to.row},${seg.to.col}`);
-      }
-
-      let hasReachableDemand = false;
-      for (const rd of snapshot.bot.resolvedDemands) {
-        for (const demand of rd.demands) {
-          if (demand.loadType !== option.loadType) continue;
-          for (const [key, point] of grid) {
-            if (point.name === demand.city && onNetwork.has(key)) {
-              hasReachableDemand = true;
-              break;
-            }
-          }
-          if (hasReachableDemand) break;
-        }
-        if (hasReachableDemand) break;
-      }
-
-      if (hasReachableDemand && snapshot.bot.position) {
-        // Proximity protection: if the delivery city is close, strongly penalize dropping.
-        // Estimate turns to delivery using Euclidean distance / train speed.
-        const trainType = snapshot.bot.trainType as TrainType;
-        const speed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
-        let closestDist = Infinity;
-
-        for (const rd of snapshot.bot.resolvedDemands) {
-          for (const demand of rd.demands) {
-            if (demand.loadType !== option.loadType) continue;
-            for (const [key, point] of grid) {
-              if (point.name === demand.city && onNetwork.has(key)) {
-                const dr = snapshot.bot.position.row - point.row;
-                const dc = snapshot.bot.position.col - point.col;
-                const dist = Math.sqrt(dr * dr + dc * dc);
-                if (dist < closestDist) closestDist = dist;
-              }
-            }
-          }
-        }
-
-        const estimatedTurns = closestDist / speed;
-        if (estimatedTurns < PROXIMITY_THRESHOLD_TURNS) {
-          score -= DROP_PROXIMITY_PENALTY;
-        }
-      }
-
-      if (!hasReachableDemand) {
-        // Check if the load has a high-value demand worth building toward —
-        // don't drop a 43M Ham just because Glasgow isn't on network yet.
-        let bestPayment = 0;
-        for (const rd of snapshot.bot.resolvedDemands) {
-          for (const demand of rd.demands) {
-            if (demand.loadType === option.loadType && demand.payment > bestPayment) {
-              bestPayment = demand.payment;
-            }
-          }
-        }
-
-        if (bestPayment >= 20) {
-          // High-value demand exists — keep the load, build toward delivery city
-          score -= 10;
-        } else {
-          score += 10; // low-value load with no reachable destination — drop it
-        }
-      }
-
-      // Bonus if train is full and a better load is available at this city
       const trainType = snapshot.bot.trainType as TrainType;
       const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
       if (snapshot.bot.loads.length >= capacity && option.targetCity) {

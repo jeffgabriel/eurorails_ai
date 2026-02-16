@@ -374,7 +374,7 @@ export class AIStrategyEngine {
       }
     }
 
-    // Try drop loads (escape valve — drop undeliverable loads before pickups)
+    // Try drop loads (escape valve — drop truly orphaned loads before pickups)
     const dropOptions = OptionGenerator.generate(snapshot, loadActions)
       .filter(o => o.action === AIActionType.DropLoad && o.feasible);
 
@@ -382,10 +382,16 @@ export class AIStrategyEngine {
       const scoredDrops = Scorer.score(dropOptions, snapshot, botConfig);
       for (const candidate of scoredDrops) {
         if (!candidate.feasible) continue;
+        // Score gate: only drop if the Scorer thinks it's clearly beneficial.
+        // Prevents marginal drops that create oscillation loops.
+        if ((candidate.score ?? 0) <= 0) {
+          console.log(`${tag} ${phase}: skipping DropLoad ${candidate.loadType} (score=${candidate.score} ≤ 0)`);
+          continue;
+        }
         const validation = validate(candidate, snapshot);
         if (!validation.valid) continue;
         try {
-          console.log(`${tag} ${phase}: executing DropLoad ${candidate.loadType} at ${candidate.targetCity}`);
+          console.log(`${tag} ${phase}: executing DropLoad ${candidate.loadType} at ${candidate.targetCity} (score=${candidate.score})`);
           const result = await TurnExecutor.execute(candidate, snapshot);
           if (result.success) {
             snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== candidate.loadType);

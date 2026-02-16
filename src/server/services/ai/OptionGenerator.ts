@@ -615,7 +615,9 @@ export class OptionGenerator {
   /**
    * Generate drop load options when the bot is carrying loads it can't deliver.
    * Per game rules: "Any load may be dropped at any city without a payoff."
-   * Only offers dropping loads whose demand destinations are NOT reachable.
+   * Only offers dropping loads that have NO matching demand card at all (orphaned
+   * loads). Loads with a demand card — even if the destination isn't on the
+   * network yet — should be kept so the bot can build toward delivery.
    */
   private static generateDropLoadOptions(snapshot: WorldSnapshot): FeasibleOption[] {
     if (snapshot.gameStatus !== 'active') return [];
@@ -629,30 +631,25 @@ export class OptionGenerator {
     const currentCityName = currentPoint?.name ?? null;
     if (!currentCityName) return [];
 
-    const onNetwork = OptionGenerator.buildNetworkSet(snapshot);
     const options: FeasibleOption[] = [];
 
     for (const loadTypeStr of snapshot.bot.loads) {
       const loadType = loadTypeStr as LoadType;
 
-      // Check if ANY demand destination for this load is reachable
-      let hasReachableDemand = false;
+      // Check if ANY demand card wants this load type (regardless of reachability)
+      let hasDemand = false;
       for (const rd of snapshot.bot.resolvedDemands) {
         for (const demand of rd.demands) {
-          if (demand.loadType !== loadTypeStr) continue;
-          for (const [key, point] of grid) {
-            if (point.name === demand.city && onNetwork.has(key)) {
-              hasReachableDemand = true;
-              break;
-            }
+          if (demand.loadType === loadTypeStr) {
+            hasDemand = true;
+            break;
           }
-          if (hasReachableDemand) break;
         }
-        if (hasReachableDemand) break;
+        if (hasDemand) break;
       }
 
-      if (!hasReachableDemand) {
-        options.push(makeFeasible(AIActionType.DropLoad, `Drop ${loadTypeStr} at ${currentCityName} (no reachable demand)`, {
+      if (!hasDemand) {
+        options.push(makeFeasible(AIActionType.DropLoad, `Drop ${loadTypeStr} at ${currentCityName} (no demand card)`, {
           loadType,
           targetCity: currentCityName,
         }));

@@ -875,10 +875,10 @@ describe('Multi-turn integration tests (TEST-002)', () => {
   });
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // 6. Drop load proximity protection (BE-006)
+  // 6. Drop load — orphaned loads only, with score gate (BE-006 fix)
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  describe('Drop load proximity protection', () => {
-    it('DropLoad in Phase 0 is executed through executeLoadActions', async () => {
+  describe('Drop load — orphaned loads with score gate', () => {
+    it('DropLoad in Phase 0 is executed when score > 0', async () => {
       const snapshot = makeSnapshot();
       snapshot.bot.loads = ['Coal'];
       mockCapture.mockResolvedValue(snapshot);
@@ -887,10 +887,10 @@ describe('Multi-turn integration tests (TEST-002)', () => {
       const dropOption: FeasibleOption = {
         action: AIActionType.DropLoad,
         feasible: true,
-        reason: 'Drop Coal (no reachable demand)',
+        reason: 'Drop Coal (no demand card)',
         loadType: 'Coal' as any,
         targetCity: 'TestCity',
-        score: 15,
+        score: 10,
       };
 
       // Phase 0: delivery (none), drop (Coal), pickup (none)
@@ -923,7 +923,48 @@ describe('Multi-turn integration tests (TEST-002)', () => {
 
       const result = await AIStrategyEngine.takeTurn(GAME_ID, BOT_ID);
       expect(result.success).toBe(true);
-      // The drop happened in Phase 0, the final action is from Phase 2
+      expect(result.action).toBe(AIActionType.PassTurn);
+    });
+
+    it('DropLoad in Phase 0 is skipped when score <= 0', async () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Coal'];
+      mockCapture.mockResolvedValue(snapshot);
+      mockValidate.mockReturnValue({ valid: true });
+
+      const dropOption: FeasibleOption = {
+        action: AIActionType.DropLoad,
+        feasible: true,
+        reason: 'Drop Coal (no demand card)',
+        loadType: 'Coal' as any,
+        targetCity: 'TestCity',
+        score: -5, // Negative score — should be skipped
+      };
+
+      // Phase 0: delivery (none), drop (Coal — skipped due to score), pickup (none)
+      mockGenerate
+        .mockReturnValueOnce([])  // Phase 0: delivery
+        .mockReturnValueOnce([dropOption])  // Phase 0: drop (will be skipped)
+        .mockReturnValueOnce([])  // Phase 0: pickup
+        .mockReturnValueOnce([])  // Phase 1: no movement
+        .mockReturnValueOnce([passOption()]); // Phase 2: pass
+      mockScore
+        .mockReturnValueOnce([dropOption])  // Phase 0: scored drops
+        .mockReturnValueOnce([passOption()]); // Phase 2: scored options
+      mockExecute
+        .mockResolvedValueOnce({
+          success: true,
+          action: AIActionType.PassTurn,
+          cost: 0,
+          segmentsBuilt: 0,
+          remainingMoney: 50,
+          durationMs: 1,
+        });
+
+      const result = await AIStrategyEngine.takeTurn(GAME_ID, BOT_ID);
+      expect(result.success).toBe(true);
+      // DropLoad was skipped, only PassTurn executed
+      expect(mockExecute).toHaveBeenCalledTimes(1);
       expect(result.action).toBe(AIActionType.PassTurn);
     });
   });

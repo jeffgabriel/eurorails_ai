@@ -840,108 +840,48 @@ function makeDropSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSnaps
   };
 }
 
-describe('Scorer — calculateDropScore (BE-006: proximity protection)', () => {
-  afterEach(() => {
-    mockLoadGridPoints.mockReturnValue(new Map());
-  });
-
-  it('should apply -20 penalty when delivery city is close (< 5 turns away)', () => {
-    // Bot at (10,10), Berlin at (12,10) — distance = 2, speed = 9, turns = 0.22 (< 5)
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 12, col: 10 },  // on network, very close to bot
-    ]));
-
+describe('Scorer — calculateDropScore (orphaned loads only)', () => {
+  it('should score orphaned load drop positively (base 10)', () => {
+    // Orphaned load: bot has Coal but no demand card for Coal
     const option = makeDropOption('Coal');
-    const snapshot = makeDropSnapshot();
-
-    const scored = Scorer.score([option], snapshot, null);
-
-    // Base 5 - 20 proximity penalty = -15
-    expect(scored[0].score!).toBeLessThan(0);
-  });
-
-  it('should NOT apply penalty when delivery city is far (>= 5 turns away)', () => {
-    // Bot at (10,10), Berlin at (60,10) — distance = 50, speed = 9, turns = 5.56 (>= 5)
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 60, col: 10 },
-    ]));
-
-    // Also need Berlin on the network (add a segment there)
     const snapshot = makeDropSnapshot({
-      existingSegments: [
-        {
-          from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear },
-          to: { x: 0, y: 0, row: 60, col: 10, terrain: TerrainType.Clear },
-          cost: 1,
-        },
+      resolvedDemands: [
+        // Demand is for Wine, not Coal — Coal is orphaned
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Wine', payment: 10 }] },
       ],
     });
 
-    const option = makeDropOption('Coal');
     const scored = Scorer.score([option], snapshot, null);
 
-    // No proximity penalty, base 5
-    expect(scored[0].score!).toBeGreaterThanOrEqual(5);
+    // Base 10 for orphaned load
+    expect(scored[0].score!).toBe(10);
   });
 
-  it('should protect close loads even if they have low payment', () => {
-    // Low-value Coal (10M) but delivery is close — should still be penalized for dropping
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 11, col: 10 },  // on network, 1 hex away
-    ]));
-
-    const option = makeDropOption('Coal');
-    const snapshot = makeDropSnapshot();
-
-    const scored = Scorer.score([option], snapshot, null);
-
-    // Should have strong negative score due to proximity penalty
-    expect(scored[0].score!).toBeLessThan(0);
-  });
-
-  it('should not apply proximity penalty when delivery city is not on network', () => {
-    // Berlin exists in grid but NOT on the bot's track network
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },  // not on network (network is at 10-12,10)
-    ]));
-
-    const option = makeDropOption('Coal');
-    const snapshot = makeDropSnapshot();
+  it('should add bonus when train is full and useful load available at city', () => {
+    const option = makeDropOption('Coal', 'Paris');
+    const snapshot = makeDropSnapshot({
+      loads: ['Coal', 'Iron'], // Full for Freight (capacity 2)
+      resolvedDemands: [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Wine', payment: 15 }] },
+      ],
+    });
+    // Wine is available at Paris and matches a demand
+    snapshot.loadAvailability = { Paris: ['Wine'] };
 
     const scored = Scorer.score([option], snapshot, null);
 
-    // No proximity penalty (city not reachable). The unreachable path fires instead.
-    // With payment=10 (< 20), gets +10 bonus for low-value unreachable → drop it
-    expect(scored[0].score!).toBeGreaterThan(0);
+    // Base 10 + 5 full-train-with-useful-pickup bonus = 15
+    expect(scored[0].score!).toBe(15);
   });
 
-  it('should not apply proximity penalty when bot has no position', () => {
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 12, col: 10 },
-    ]));
-
-    const option = makeDropOption('Coal');
-    const snapshot = makeDropSnapshot({ position: null });
-
-    const scored = Scorer.score([option], snapshot, null);
-
-    // No proximity penalty (no position), but reachable demand means no unreachable bonus
-    // Score = 5 (base)
-    expect(scored[0].score).toBe(5);
-  });
-
-  it('should score drop lower than delivery when load is close to destination', () => {
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 12, col: 10 },
-    ]));
-
+  it('should score drop lower than delivery', () => {
     const drop = makeDropOption('Coal');
     const delivery = makeDeliveryOption('Coal', 10, 42);
     const snapshot = makeDropSnapshot();
 
     const scored = Scorer.score([drop, delivery], snapshot, null);
 
-    // Delivery should always beat drop, especially when close
+    // Delivery should always beat drop
     expect(scored[0].action).toBe(AIActionType.DeliverLoad);
     expect(scored[0].score!).toBeGreaterThan(scored[1].score!);
   });

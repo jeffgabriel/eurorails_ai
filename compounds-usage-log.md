@@ -32,3 +32,11 @@ Tracks when the compounds skill was used and what benefit it provided.
 
 ### Benefit
 Comprehensive cross-module architectural mapping for tech spec. Compounds provided dependency graphs, code flow analysis, and semantic search across 3700+ entities that would have required dozens of manual grep/file-read operations. The AI-generated summaries for each query correctly identified component relationships and data flow patterns.
+
+## 2026-02-16 — Bug Diagnosis: DropLoad Oscillation Loop
+
+### Context
+User reported bot picking up Wine at Bordeaux, carrying to Paris, dropping without payment, looping. Invoked compounds skill to search for Phase 0/Phase 1.5 auto-execute logic in AIStrategyEngine. Context compacted mid-search; continued with direct file reads.
+
+### Benefit
+Compounds skill was invoked for initial architecture search of the auto-execute load action pipeline. Direct file reads were then used for detailed tracing of the 3-way bug interaction (OptionGenerator + Scorer + AIStrategyEngine).
