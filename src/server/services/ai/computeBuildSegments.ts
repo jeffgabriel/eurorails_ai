@@ -206,12 +206,29 @@ export function computeBuildSegments(
   // Per game rules, building TO a ferry port costs the ferry connection cost,
   // not the base terrain cost (which getTerrainCost incorrectly returns as 1).
   const ferryPortCosts = new Map<string, number>();
-  for (const ferry of getFerryEdges()) {
+  const ferryEdges = getFerryEdges();
+  for (const ferry of ferryEdges) {
     ferryPortCosts.set(makeKey(ferry.pointA.row, ferry.pointA.col), ferry.cost);
     ferryPortCosts.set(makeKey(ferry.pointB.row, ferry.pointB.col), ferry.cost);
   }
 
-  console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}`);
+  // Ferry adjacency: when Dijkstra reaches a ferry port, it can cross to the
+  // partner port for free (the cost to build TO the port was already paid;
+  // the crossing itself is a public edge per game rules).
+  const ferryAdjacency = new Map<string, GridCoord[]>();
+  const ferryEdgeKeys = new Set<string>();
+  for (const ferry of ferryEdges) {
+    const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
+    const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
+    if (!ferryAdjacency.has(aKey)) ferryAdjacency.set(aKey, []);
+    if (!ferryAdjacency.has(bKey)) ferryAdjacency.set(bKey, []);
+    ferryAdjacency.get(aKey)!.push({ row: ferry.pointB.row, col: ferry.pointB.col });
+    ferryAdjacency.get(bKey)!.push({ row: ferry.pointA.row, col: ferry.pointA.col });
+    ferryEdgeKeys.add(`${aKey}-${bKey}`);
+    ferryEdgeKeys.add(`${bKey}-${aKey}`);
+  }
+
+  console.log(`${tag} grid loaded: ${grid.size} points, budget=${budget}, maxSegments=${maxSegments}, ferries=${ferryEdges.length}`);
 
   // Determine starting frontier
   const trackEndpoints = extractTrackEndpoints(existingSegments);
@@ -318,6 +335,27 @@ export function computeBuildSegments(
         });
       }
     }
+
+    // Ferry crossing: if current node is a ferry port, expand to partner port(s).
+    // Crossing is free — cost to build TO the port was already paid above.
+    const ferryPartners = ferryAdjacency.get(currentKey);
+    if (ferryPartners) {
+      for (const partner of ferryPartners) {
+        const partnerKey = makeKey(partner.row, partner.col);
+        const newCost = current.cost; // free crossing
+        if (newCost > budget) continue;
+        const existingCost = minCost.get(partnerKey);
+        if (existingCost === undefined || newCost < existingCost) {
+          minCost.set(partnerKey, newCost);
+          heap.push({
+            row: partner.row,
+            col: partner.col,
+            cost: newCost,
+            path: [...current.path, { row: partner.row, col: partner.col }],
+          });
+        }
+      }
+    }
   }
 
   // Select the best path based on whether we have target positions (demand cities).
@@ -344,7 +382,7 @@ export function computeBuildSegments(
     let bestTargetName = '';
 
     for (const node of bestPaths.values()) {
-      const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys);
       if (newSteps === 0) continue;
 
       const endpoint = node.path[node.path.length - 1];
@@ -357,7 +395,7 @@ export function computeBuildSegments(
       // Prefer closer to target; among equal distances, prefer more segments
       if (
         minDist < bestTargetDist ||
-        (minDist === bestTargetDist && newSteps > (bestPath ? countNewSegments(bestPath.path, onNetwork, builtEdges) : 0))
+        (minDist === bestTargetDist && newSteps > (bestPath ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys) : 0))
       ) {
         bestPath = node;
         bestTargetDist = minDist;
@@ -374,11 +412,11 @@ export function computeBuildSegments(
   } else {
     // Original untargeted selection: most new segments, then cheapest
     for (const node of bestPaths.values()) {
-      const newSteps = countNewSegments(node.path, onNetwork, builtEdges);
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys);
       if (newSteps === 0) continue;
 
       const bestNewSteps = bestPath
-        ? countNewSegments(bestPath.path, onNetwork, builtEdges)
+        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)
         : 0;
 
       if (
@@ -395,10 +433,10 @@ export function computeBuildSegments(
     return [];
   }
 
-  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges)}`);
+  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)}`);
 
   // Extract up to maxSegments new segments from the path
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts);
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys);
   console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
   return segments;
 }
@@ -410,11 +448,13 @@ function countNewSegments(
   path: GridCoord[],
   onNetwork: Set<string>,
   builtEdges: Set<string>,
+  ferryEdgeKeys: Set<string>,
 ): number {
   let count = 0;
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
+    if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) continue; // public ferry crossing, not buildable
     if (!builtEdges.has(`${fromKey}-${toKey}`)) {
       count++;
     }
@@ -434,6 +474,7 @@ function extractSegments(
   budget: number,
   maxSegments: number,
   ferryPortCosts: Map<string, number>,
+  ferryEdgeKeys: Set<string>,
 ): TrackSegment[] {
   const segments: TrackSegment[] = [];
   let spent = 0;
@@ -444,6 +485,9 @@ function extractSegments(
 
     // Skip already-built edges
     if (builtEdges.has(`${fromKey}-${toKey}`)) continue;
+
+    // Skip ferry crossings — these are public edges, not buildable track
+    if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) continue;
 
     const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
     if (!seg) break;
