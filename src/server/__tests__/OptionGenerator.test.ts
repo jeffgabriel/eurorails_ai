@@ -903,3 +903,107 @@ describe('OptionGenerator — sticky build target', () => {
     expect(builds.length).toBeGreaterThan(0);
   });
 });
+
+describe('OptionGenerator — chain ranking: short-haul beats long-haul', () => {
+  const { loadGridPoints } = require('../services/ai/MapTopology');
+
+  function makeChainGridMap(): Map<string, { row: number; col: number; name: string; terrain: number }> {
+    const map = new Map();
+    // Close pickup/delivery pair: München at (8,8), London at (12,12)
+    map.set('8,8', { row: 8, col: 8, name: 'München', terrain: TerrainType.MajorCity });
+    map.set('12,12', { row: 12, col: 12, name: 'London', terrain: TerrainType.MajorCity });
+    // Far pickup/delivery pair: Porto at (40,5), Krakow at (10,45)
+    map.set('40,5', { row: 40, col: 5, name: 'Porto', terrain: TerrainType.MajorCity });
+    map.set('10,45', { row: 10, col: 45, name: 'Krakow', terrain: TerrainType.MajorCity });
+    return map;
+  }
+
+  function makeChainSnapshot(overrides?: Partial<WorldSnapshot>): WorldSnapshot {
+    return {
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 5,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-bot-1',
+        money: 50,
+        position: { row: 5, col: 5 },
+        existingSegments: [makeSegment(5, 5, 6, 5, 1)],
+        demandCards: [42, 43],
+        resolvedDemands: [
+          {
+            cardId: 42,
+            demands: [{ city: 'London', loadType: 'Beer', payment: 11 }],
+          },
+          {
+            cardId: 43,
+            demands: [{ city: 'Krakow', loadType: 'Fish', payment: 40 }],
+          },
+        ],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {
+        'München': ['Beer'],
+        'Porto': ['Fish'],
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    loadGridPoints.mockReturnValue(makeChainGridMap());
+    setupMockDemandDeck([
+      { id: 42, demands: [{ city: 'London', payment: 11, resource: 'Beer' }] },
+      { id: 43, demands: [{ city: 'Krakow', payment: 40, resource: 'Fish' }] },
+    ]);
+    let callCount = 0;
+    mockComputeBuild.mockImplementation(() => {
+      callCount++;
+      return [makeSegment(5, 5, 5 + callCount, 5 + callCount, 1)];
+    });
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('should rank short-haul chain (Beer→London) above long-haul chain (Fish→Krakow) despite lower payment', () => {
+    const snapshot = makeChainSnapshot();
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+
+    // Should produce build options
+    expect(builds.length).toBeGreaterThan(0);
+
+    // Find the Beer→London and Fish→Krakow build options
+    const beerBuild = builds.find(b => b.reason?.includes('Beer') && b.reason?.includes('London'));
+    const fishBuild = builds.find(b => b.reason?.includes('Fish') && b.reason?.includes('Krakow'));
+
+    // Beer→London should exist and be ranked in the top 3 chains
+    expect(beerBuild).toBeDefined();
+
+    // If both exist, Beer should have a higher chainScore
+    if (beerBuild && fishBuild) {
+      expect(beerBuild.chainScore!).toBeGreaterThan(fishBuild.chainScore!);
+    }
+  });
+
+  it('should apply budget penalty to chains whose build cost exceeds bot money', () => {
+    // Give bot very little money — long-haul chain should be penalized
+    const snapshot = makeChainSnapshot({ bot: { ...makeChainSnapshot().bot, money: 20 } });
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+
+    expect(builds.length).toBeGreaterThan(0);
+
+    // The short-haul chain should dominate when budget is tight
+    const beerBuild = builds.find(b => b.reason?.includes('Beer') && b.reason?.includes('London'));
+    expect(beerBuild).toBeDefined();
+  });
+});

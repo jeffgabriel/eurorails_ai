@@ -414,6 +414,66 @@ describe('Scorer — calculatePickupScore', () => {
     const specScored = scored.find(o => !o.payment)!;
     expect(demandScored.score!).toBeGreaterThan(specScored.score!);
   });
+
+  it('should apply 0.15 penalty for unreachable delivery destination', () => {
+    // Grid: Berlin at (50,50) — far from network at (10,10)-(11,10)
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },
+    ]));
+
+    const pickup = makePickupOption('Coal', 40, 42);
+    const snapshot = makeLoadSnapshot({
+      existingSegments: [
+        {
+          from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 11, col: 10, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+      ],
+      resolvedDemands: [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 40 }] },
+      ],
+      loads: [],
+    });
+
+    const scored = Scorer.score([pickup], snapshot, null);
+
+    // Base: 50 + 40*0.5 = 70. With 0.15 penalty: 70 * 0.15 = 10.5
+    expect(scored[0].score!).toBeCloseTo(10.5, 0);
+    // Should be barely above PassTurn (0) but well below reachable pickup (50+)
+    expect(scored[0].score!).toBeLessThan(15);
+    expect(scored[0].score!).toBeGreaterThan(0);
+  });
+
+  it('should score unreachable pickup at 0 when bot already carries unreachable load', () => {
+    // Grid: Berlin at (50,50), Madrid at (60,60) — both far from network
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },
+      { name: 'Madrid', row: 60, col: 60 },
+    ]));
+
+    const pickup = makePickupOption('Iron', 20, 43);
+    const snapshot = makeLoadSnapshot({
+      existingSegments: [
+        {
+          from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear },
+          to: { x: 0, y: 0, row: 11, col: 10, terrain: TerrainType.Clear },
+          cost: 1,
+        },
+      ],
+      resolvedDemands: [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 40 }] },
+        { cardId: 43, demands: [{ city: 'Madrid', loadType: 'Iron', payment: 20 }] },
+      ],
+      loads: ['Coal'], // Already carrying Coal with unreachable destination (Berlin)
+    });
+
+    const scored = Scorer.score([pickup], snapshot, null);
+
+    // Bot already has an unreachable load (Coal→Berlin), so stacking
+    // another unreachable load (Iron→Madrid) should score 0
+    expect(scored[0].score!).toBe(0);
+  });
 });
 
 /* ────────────────────────────────────────────────────────────────────────

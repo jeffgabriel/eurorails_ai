@@ -359,9 +359,39 @@ export class Scorer {
       }
 
       if (!hasReachableDestination) {
-        // Halve the score for aspirational pickups — still above PassTurn
-        // but won't compete with reachable pickups or deliveries
-        score *= 0.5;
+        // Heavily penalize aspirational pickups — barely above PassTurn.
+        // The bot should not fill its train with loads it can't deliver.
+        // A load for a reachable destination should strongly dominate.
+        score *= 0.15;
+
+        // Don't stack unreachable loads: if the bot already carries loads
+        // for unreachable destinations, score this at 0
+        if (snapshot.bot.loads.length > 0) {
+          let hasExistingUnreachableLoad = false;
+          for (const existingLoad of snapshot.bot.loads) {
+            let existingLoadReachable = false;
+            for (const rd of snapshot.bot.resolvedDemands) {
+              for (const demand of rd.demands) {
+                if (demand.loadType !== existingLoad) continue;
+                for (const [key, point] of grid) {
+                  if (point.name === demand.city && onNetwork.has(key)) {
+                    existingLoadReachable = true;
+                    break;
+                  }
+                }
+                if (existingLoadReachable) break;
+              }
+              if (existingLoadReachable) break;
+            }
+            if (!existingLoadReachable) {
+              hasExistingUnreachableLoad = true;
+              break;
+            }
+          }
+          if (hasExistingUnreachableLoad) {
+            score = 0;
+          }
+        }
       }
     }
 

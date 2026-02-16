@@ -28,6 +28,12 @@ import { DemandDeckService } from '../demandDeckService';
 
 const TURN_BUILD_BUDGET = 20; // ECU 20M per turn
 
+/** Hex grid path overhead vs Euclidean distance (paths are longer due to hex grid) */
+const SEGMENTS_PER_EUCLIDEAN_UNIT = 1.2;
+
+/** Average cost per track segment (mix of clear=1, mountain=2, city=3-5) */
+const AVG_COST_PER_SEGMENT = 1.5;
+
 /** Loyalty bonus multiplier for chains matching the current build target */
 const LOYALTY_BONUS_FACTOR = 1.5;
 
@@ -914,7 +920,13 @@ export class OptionGenerator {
         if (hasLoad) {
           // Bot already carries the load — just need to reach delivery city
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
-          const chainScore = demand.payment / (deliveryDist + 1);
+          const estimatedBuildCost = deliveryDist * SEGMENTS_PER_EUCLIDEAN_UNIT * AVG_COST_PER_SEGMENT;
+          const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
+          const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+          const estimatedMoveTurns = Math.ceil(deliveryDist / trainSpeed);
+          const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
+          const chainScore = demand.payment / Math.max(totalTurns, 1);
+          // No budget penalty for loads already carried — must deliver them
           chains.push({
             cardId: rd.cardId,
             loadType: demand.loadType,
@@ -945,7 +957,19 @@ export class OptionGenerator {
           const pickupDist = minEuclidean(networkPositions, pickupTargets);
           const chainDist = minEuclidean(pickupTargets, deliveryTargets);
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
-          const chainScore = demand.payment / (pickupDist + chainDist + deliveryDist + 1);
+          const totalDist = pickupDist + chainDist + deliveryDist;
+          const estimatedBuildCost = totalDist * SEGMENTS_PER_EUCLIDEAN_UNIT * AVG_COST_PER_SEGMENT;
+          const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
+          const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+          const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
+          const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
+          let chainScore = demand.payment / Math.max(totalTurns, 1);
+
+          // Budget penalty: if estimated build cost exceeds current money, the bot
+          // can't complete this chain without earning money first
+          if (estimatedBuildCost > snapshot.bot.money) {
+            chainScore *= 0.4;
+          }
 
           chains.push({
             cardId: rd.cardId,
