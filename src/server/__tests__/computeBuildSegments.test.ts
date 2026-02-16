@@ -203,6 +203,83 @@ describe('computeBuildSegments', () => {
     });
   });
 
+  describe('contiguity guarantee (P0 fix)', () => {
+    it('should always produce strictly contiguous segments (seg[i].from == seg[i-1].to)', () => {
+      const grid = loadGridPoints();
+      const parisData = grid.get('29,32')!;
+      const clearData = grid.get('29,31')!;
+
+      // Build existing track from Paris through a clear neighbor — the Dijkstra
+      // path may traverse this edge for free, and extractSegments must not produce
+      // a gap when skipping the built edge.
+      const existingSegment: TrackSegment = {
+        from: {
+          x: 0, y: 0,
+          row: PARIS.row, col: PARIS.col,
+          terrain: parisData.terrain,
+        },
+        to: {
+          x: 0, y: 0,
+          row: CLEAR_NEAR_PARIS.row, col: CLEAR_NEAR_PARIS.col,
+          terrain: clearData.terrain,
+        },
+        cost: getTerrainCost(clearData.terrain),
+      };
+
+      const segments = computeBuildSegments([PARIS], [existingSegment], 20);
+      // Verify strict contiguity: each segment's from must match previous segment's to
+      for (let i = 1; i < segments.length; i++) {
+        const prev = segments[i - 1].to;
+        const curr = segments[i].from;
+        expect(curr.row).toBe(prev.row);
+        expect(curr.col).toBe(prev.col);
+      }
+    });
+
+    it('should produce contiguous segments even with a large existing network', () => {
+      const grid = loadGridPoints();
+
+      // Build several existing segments from Paris outward to simulate
+      // a network the Dijkstra may traverse for free mid-path
+      const existingSegments: TrackSegment[] = [];
+      const parisData = grid.get('29,32')!;
+
+      // Build 3 segments in a line from Paris
+      const coords: GridCoord[] = [
+        PARIS,
+        CLEAR_NEAR_PARIS,
+        ...getHexNeighbors(CLEAR_NEAR_PARIS.row, CLEAR_NEAR_PARIS.col)
+          .filter(n => {
+            const d = grid.get(`${n.row},${n.col}`);
+            return d && d.terrain !== TerrainType.Water &&
+              !(n.row === PARIS.row && n.col === PARIS.col);
+          })
+          .slice(0, 1),
+      ];
+
+      for (let i = 0; i < coords.length - 1; i++) {
+        const fromData = grid.get(`${coords[i].row},${coords[i].col}`)!;
+        const toData = grid.get(`${coords[i + 1].row},${coords[i + 1].col}`)!;
+        existingSegments.push({
+          from: { x: 0, y: 0, row: coords[i].row, col: coords[i].col, terrain: fromData.terrain },
+          to: { x: 0, y: 0, row: coords[i + 1].row, col: coords[i + 1].col, terrain: toData.terrain },
+          cost: getTerrainCost(toData.terrain),
+        });
+      }
+
+      const segments = computeBuildSegments([PARIS], existingSegments, 20);
+      expect(segments.length).toBeGreaterThan(0);
+
+      // Strict contiguity check
+      for (let i = 1; i < segments.length; i++) {
+        const prev = segments[i - 1].to;
+        const curr = segments[i].from;
+        expect(curr.row).toBe(prev.row);
+        expect(curr.col).toBe(prev.col);
+      }
+    });
+  });
+
   describe('intra-city edge filter (GH-213)', () => {
     it('should never produce segments where both endpoints are in the same major city', () => {
       const lookup = getMajorCityLookup();

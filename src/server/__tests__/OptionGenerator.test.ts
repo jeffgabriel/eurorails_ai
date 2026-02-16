@@ -95,7 +95,7 @@ describe('OptionGenerator', () => {
       const buildTrack = options.find((o) => o.action === AIActionType.BuildTrack);
       expect(buildTrack).toBeDefined();
       expect(buildTrack!.feasible).toBe(false);
-      expect(buildTrack!.reason).toContain('No money');
+      expect(buildTrack!.reason).toContain('below minimum');
     });
   });
 
@@ -144,12 +144,13 @@ describe('OptionGenerator', () => {
       expect(budget).toBe(20);
     });
 
-    it('should use bot money as budget when less than 20M', () => {
+    it('should use bot money minus reserve as budget when less than 20M', () => {
       mockComputeBuild.mockReturnValue([]);
-      OptionGenerator.generate(makeSnapshot({ bot: { ...makeSnapshot().bot, money: 8 } }));
+      // With money=18 and movement reserve=8 (active game), available=10
+      OptionGenerator.generate(makeSnapshot({ bot: { ...makeSnapshot().bot, money: 18 } }));
 
       const [, , budget] = mockComputeBuild.mock.calls[0];
-      expect(budget).toBe(8);
+      expect(budget).toBe(10); // 18 - 8 reserve = 10
     });
   });
 

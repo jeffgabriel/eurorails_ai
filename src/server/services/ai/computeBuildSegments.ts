@@ -483,11 +483,19 @@ function extractSegments(
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
 
-    // Skip already-built edges
-    if (builtEdges.has(`${fromKey}-${toKey}`)) continue;
+    // Skip already-built edges — but if we've already emitted segments,
+    // skipping creates a contiguity gap (seg[n].to ≠ seg[n+1].from),
+    // so break to keep the contiguous run we have.
+    if (builtEdges.has(`${fromKey}-${toKey}`)) {
+      if (segments.length > 0) break;
+      continue;
+    }
 
-    // Skip ferry crossings — these are public edges, not buildable track
-    if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) continue;
+    // Skip ferry crossings — same contiguity rule applies
+    if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) {
+      if (segments.length > 0) break;
+      continue;
+    }
 
     const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
     if (!seg) break;

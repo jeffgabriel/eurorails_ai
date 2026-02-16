@@ -40,3 +40,19 @@ User reported bot picking up Wine at Bordeaux, carrying to Paris, dropping witho
 
 ### Benefit
 Compounds skill was invoked for initial architecture search of the auto-execute load action pipeline. Direct file reads were then used for detailed tracing of the 3-way bug interaction (OptionGenerator + Scorer + AIStrategyEngine).
+
+## 2026-02-16 — Bug Diagnosis: Bot Over-building & Luxembourg Targeting
+
+### Context
+User reported bot building to Luxembourg (no reason), orphan Channel tracks trying to reach Aberdeen, and running out of money. Invoked compounds skill with 4 search queries.
+
+### Commands Run
+1. `compounds search "OptionGenerator BuildTrack target positions for computeBuildSegments"` — Found generateBuildTrackOptions, extractBuildTargets, extractTrackEndpoints, TrackBuildOptions
+2. `compounds search "how BuildTrack options determine which city to build toward"` — Found trackedCityKey, generateBuildTrackOptions full flow
+3. `compounds search "identifyTargetCity function"` — Found identifyTargetCity labels by last segment endpoint, not chain target
+4. `compounds search "Scorer scoreBuildTrack scoring"` — Found calculateBuildTrackScore formula: BASE(10) + segments*1 - cost + CITY_REACH(5) + chainScore*20
+5. `compounds search "AIStrategyEngine Phase 2 build selection"` — Confirmed try-in-score-order with validation
+6. `compounds search "rankDemandChains pickupTargets deliveryTargets"` — Found pickupTargets includes ALL cities with matching load (not just primary source)
+
+### Benefit
+Compounds mapped the full build targeting pipeline across 4 files (OptionGenerator, computeBuildSegments, Scorer, AIStrategyEngine) and revealed 3 root causes: (1) extractSegments contiguity bug causing high-scored options to fail validation, (2) identifyTargetCity mislabeling when budget insufficient to reach actual target, (3) no minimum build threshold allowing $1M wasteful stubs.

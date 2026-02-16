@@ -673,9 +673,17 @@ export class OptionGenerator {
    * @param botMemory Optional bot memory — passed to rankDemandChains for sticky target logic
    */
   private static generateBuildTrackOptions(snapshot: WorldSnapshot, botMemory?: BotMemoryState): FeasibleOption[] {
-    const budget = Math.min(TURN_BUILD_BUDGET, snapshot.bot.money);
-    if (budget <= 0) {
-      return [makeInfeasible(AIActionType.BuildTrack, 'No money to build')];
+    // Reserve money for track usage fees when game is active (not initialBuild).
+    // Without this, the bot spends all money on building and can't move next turn.
+    const MOVEMENT_RESERVE = snapshot.gameStatus === 'active' ? 8 : 0;
+    const availableMoney = Math.max(0, snapshot.bot.money - MOVEMENT_RESERVE);
+    const budget = Math.min(TURN_BUILD_BUDGET, availableMoney);
+
+    // Minimum build budget: don't waste money on micro-stubs (1-2 Clear segments).
+    // 5M can build 3-5 Clear segments or 2 Mountains — meaningful progress.
+    const MIN_BUILD_BUDGET = 5;
+    if (budget < MIN_BUILD_BUDGET) {
+      return [makeInfeasible(AIActionType.BuildTrack, `Budget ${budget}M below minimum ${MIN_BUILD_BUDGET}M`)];
     }
 
     const startPositions = OptionGenerator.determineStartPositions(snapshot);
@@ -724,10 +732,13 @@ export class OptionGenerator {
       const totalCost = segments.reduce((sum, s) => sum + s.cost, 0);
       const chainTargetCity = chain.hasLoad ? chain.deliveryCity : chain.pickupCity;
       const segTargetCity = OptionGenerator.identifyTargetCity(segments);
-      options.push(makeFeasible(AIActionType.BuildTrack, `Build toward ${segTargetCity ?? chainTargetCity} (${chain.loadType}→${chain.deliveryCity}, ${chain.payment}M)`, {
+      // P3: prefer chain target city for labeling and bot memory. The segment
+      // endpoint city is often a random milepost when budget is insufficient to
+      // reach the actual target, causing mislabeled options and wrong loyalty bonuses.
+      options.push(makeFeasible(AIActionType.BuildTrack, `Build toward ${chainTargetCity ?? segTargetCity} (${chain.loadType}→${chain.deliveryCity}, ${chain.payment}M)`, {
         segments,
         estimatedCost: totalCost,
-        targetCity: segTargetCity ?? chainTargetCity ?? undefined,
+        targetCity: chainTargetCity ?? segTargetCity ?? undefined,
         payment: chain.payment,
         chainScore: chain.chainScore,
       }));
