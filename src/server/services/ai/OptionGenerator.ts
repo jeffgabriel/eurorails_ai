@@ -14,6 +14,8 @@ import {
   TrainType,
   TRAIN_PROPERTIES,
   TRACK_USAGE_FEE,
+  ResolvedDemand,
+  BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { computeBuildSegments } from './computeBuildSegments';
@@ -25,6 +27,12 @@ import {
 import { DemandDeckService } from '../demandDeckService';
 
 const TURN_BUILD_BUDGET = 20; // ECU 20M per turn
+
+/** Loyalty bonus multiplier for chains matching the current build target */
+const LOYALTY_BONUS_FACTOR = 1.5;
+
+/** Turns on the same target before it's considered stale (loyalty bonus removed) */
+const STALE_TARGET_THRESHOLD = 5;
 
 function makeFeasible(
   action: AIActionType,
@@ -41,38 +49,87 @@ function makeInfeasible(
   return { action, feasible: false, reason };
 }
 
+/** Compute minimum Euclidean distance between two sets of grid coordinates */
+function minEuclidean(from: GridCoord[], to: GridCoord[]): number {
+  let min = Infinity;
+  for (const f of from) {
+    for (const t of to) {
+      const dist = Math.sqrt((f.row - t.row) ** 2 + (f.col - t.col) ** 2);
+      if (dist < min) min = dist;
+    }
+  }
+  return min === Infinity ? 999 : min;
+}
+
+/** A demand chain: pickup_city → delivery_city for a specific load/card */
+interface DemandChain {
+  cardId: number;
+  loadType: string;
+  pickupCity: string;
+  deliveryCity: string;
+  payment: number;
+  pickupTargets: GridCoord[];
+  deliveryTargets: GridCoord[];
+  chainScore: number;
+  hasLoad: boolean;
+}
+
 export class OptionGenerator {
   /**
-   * Generate all feasible options for this bot's turn.
+   * Generate feasible options for this bot's turn.
    * During initialBuild phase, only BuildTrack and PassTurn are offered.
+   * @param actions Optional filter — only generate options for these action types.
    */
-  static generate(snapshot: WorldSnapshot): FeasibleOption[] {
+  static generate(snapshot: WorldSnapshot, actions?: Set<AIActionType>, botMemory?: BotMemoryState): FeasibleOption[] {
     const options: FeasibleOption[] = [];
+    const shouldGen = (a: AIActionType) => !actions || actions.has(a);
 
     // MoveTrain options (only when active and bot has a position)
-    if (snapshot.gameStatus === 'active' && snapshot.bot.position) {
+    if (shouldGen(AIActionType.MoveTrain) && snapshot.gameStatus === 'active' && snapshot.bot.position) {
       const moveOptions = OptionGenerator.generateMoveOptions(snapshot);
       options.push(...moveOptions);
     }
 
     // PickupLoad options (only when active and bot has a position)
-    if (snapshot.gameStatus === 'active' && snapshot.bot.position) {
+    if (shouldGen(AIActionType.PickupLoad) && snapshot.gameStatus === 'active' && snapshot.bot.position) {
       const pickupOptions = OptionGenerator.generatePickupOptions(snapshot);
       options.push(...pickupOptions);
     }
 
     // DeliverLoad options (only when active and bot has a position)
-    if (snapshot.gameStatus === 'active' && snapshot.bot.position) {
+    if (shouldGen(AIActionType.DeliverLoad) && snapshot.gameStatus === 'active' && snapshot.bot.position) {
       const deliveryOptions = OptionGenerator.generateDeliveryOptions(snapshot);
       options.push(...deliveryOptions);
     }
 
+    // DropLoad options (only when active and bot has a position)
+    if (shouldGen(AIActionType.DropLoad) && snapshot.gameStatus === 'active' && snapshot.bot.position) {
+      const dropOptions = OptionGenerator.generateDropLoadOptions(snapshot);
+      options.push(...dropOptions);
+    }
+
     // BuildTrack options
-    const buildOptions = OptionGenerator.generateBuildTrackOptions(snapshot);
-    options.push(...buildOptions);
+    if (shouldGen(AIActionType.BuildTrack)) {
+      const buildOptions = OptionGenerator.generateBuildTrackOptions(snapshot, botMemory);
+      options.push(...buildOptions);
+    }
+
+    // UpgradeTrain options (only when active)
+    if (shouldGen(AIActionType.UpgradeTrain) && snapshot.gameStatus === 'active') {
+      const upgradeOptions = OptionGenerator.generateUpgradeTrainOptions(snapshot);
+      options.push(...upgradeOptions);
+    }
+
+    // DiscardHand option (only when active)
+    if (shouldGen(AIActionType.DiscardHand) && snapshot.gameStatus === 'active') {
+      const discardOptions = OptionGenerator.generateDiscardHandOption(snapshot);
+      options.push(...discardOptions);
+    }
 
     // PassTurn is always available
-    options.push(OptionGenerator.generatePassTurnOption());
+    if (shouldGen(AIActionType.PassTurn)) {
+      options.push(OptionGenerator.generatePassTurnOption());
+    }
 
     return options;
   }
@@ -388,7 +445,8 @@ export class OptionGenerator {
 
   /**
    * Generate pickup options for loads available at the bot's current city.
-   * Checks train capacity and matches against resolved demand cards.
+   * Checks train capacity, matches against resolved demand cards, and
+   * verifies the delivery destination is reachable on the bot's track network.
    */
   private static generatePickupOptions(snapshot: WorldSnapshot): FeasibleOption[] {
     if (snapshot.gameStatus !== 'active') {
@@ -420,19 +478,41 @@ export class OptionGenerator {
       return [makeInfeasible(AIActionType.PickupLoad, 'No loads available at this city')];
     }
 
+    // Build reachability set from bot's track network
+    const onNetwork = OptionGenerator.buildNetworkSet(snapshot);
+
     const options: FeasibleOption[] = [];
 
     for (const loadTypeStr of availableLoads) {
       const loadType = loadTypeStr as LoadType;
 
-      // Find matching demand cards for this load type
+      // Find matching demand cards for this load type, preferring reachable destinations
       let bestPayment = 0;
       let bestCity: string | undefined;
       let bestCardId: number | undefined;
+      let bestReachable = false;
 
       for (const rd of snapshot.bot.resolvedDemands) {
         for (const demand of rd.demands) {
-          if (demand.loadType === loadTypeStr && demand.payment > bestPayment) {
+          if (demand.loadType !== loadTypeStr) continue;
+
+          // Check if this demand's destination is on the bot's track network
+          let reachable = false;
+          for (const [key, point] of grid) {
+            if (point.name === demand.city && onNetwork.has(key)) {
+              reachable = true;
+              break;
+            }
+          }
+
+          // Prefer reachable destinations; among same reachability, prefer higher payment
+          if (reachable && !bestReachable) {
+            // First reachable demand beats any unreachable one
+            bestPayment = demand.payment;
+            bestCity = demand.city;
+            bestCardId = rd.cardId;
+            bestReachable = true;
+          } else if (reachable === bestReachable && demand.payment > bestPayment) {
             bestPayment = demand.payment;
             bestCity = demand.city;
             bestCardId = rd.cardId;
@@ -440,19 +520,15 @@ export class OptionGenerator {
         }
       }
 
+      // Generate pickup — reachability is a soft scoring preference, not a hard gate.
+      // The bot may need to pick up loads for not-yet-reachable destinations to earn
+      // money and expand its network. DropLoad provides an escape valve if stuck.
       if (bestCardId !== undefined) {
-        // Load matches a demand card — high-value pickup
-        options.push(makeFeasible(AIActionType.PickupLoad, `Pick up ${loadTypeStr} for delivery to ${bestCity}`, {
+        options.push(makeFeasible(AIActionType.PickupLoad, `Pick up ${loadTypeStr} for delivery to ${bestCity}${bestReachable ? '' : ' (aspirational)'}`, {
           loadType,
-          targetCity: bestCity,
+          targetCity: currentCityName,  // pickup city, not delivery city
           cardId: bestCardId,
           payment: bestPayment,
-        }));
-      } else {
-        // Load available but no matching demand — speculative pickup
-        options.push(makeFeasible(AIActionType.PickupLoad, `Pick up ${loadTypeStr} (no matching demand)`, {
-          loadType,
-          targetCity: currentCityName,
         }));
       }
     }
@@ -521,7 +597,70 @@ export class OptionGenerator {
     return options;
   }
 
-  private static generateBuildTrackOptions(snapshot: WorldSnapshot): FeasibleOption[] {
+  /**
+   * Build a set of all grid positions on the bot's track network.
+   * Used for reachability checks in pickup and drop decisions.
+   */
+  private static buildNetworkSet(snapshot: WorldSnapshot): Set<string> {
+    const onNetwork = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      onNetwork.add(`${seg.from.row},${seg.from.col}`);
+      onNetwork.add(`${seg.to.row},${seg.to.col}`);
+    }
+    return onNetwork;
+  }
+
+  /**
+   * Generate drop load options when the bot is carrying loads it can't deliver.
+   * Per game rules: "Any load may be dropped at any city without a payoff."
+   * Only offers dropping loads whose demand destinations are NOT reachable.
+   */
+  private static generateDropLoadOptions(snapshot: WorldSnapshot): FeasibleOption[] {
+    if (snapshot.gameStatus !== 'active') return [];
+    if (!snapshot.bot.position) return [];
+    if (snapshot.bot.loads.length === 0) return [];
+
+    // Must be at a city to drop
+    const grid = loadGridPoints();
+    const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+    const currentPoint = grid.get(posKey);
+    const currentCityName = currentPoint?.name ?? null;
+    if (!currentCityName) return [];
+
+    const onNetwork = OptionGenerator.buildNetworkSet(snapshot);
+    const options: FeasibleOption[] = [];
+
+    for (const loadTypeStr of snapshot.bot.loads) {
+      const loadType = loadTypeStr as LoadType;
+
+      // Check if ANY demand destination for this load is reachable
+      let hasReachableDemand = false;
+      for (const rd of snapshot.bot.resolvedDemands) {
+        for (const demand of rd.demands) {
+          if (demand.loadType !== loadTypeStr) continue;
+          for (const [key, point] of grid) {
+            if (point.name === demand.city && onNetwork.has(key)) {
+              hasReachableDemand = true;
+              break;
+            }
+          }
+          if (hasReachableDemand) break;
+        }
+        if (hasReachableDemand) break;
+      }
+
+      if (!hasReachableDemand) {
+        options.push(makeFeasible(AIActionType.DropLoad, `Drop ${loadTypeStr} at ${currentCityName} (no reachable demand)`, {
+          loadType,
+          targetCity: currentCityName,
+        }));
+      }
+    }
+
+    return options;
+  }
+
+  private static generateBuildTrackOptions(snapshot: WorldSnapshot, botMemory?: BotMemoryState): FeasibleOption[] {
     const budget = Math.min(TURN_BUILD_BUDGET, snapshot.bot.money);
     if (budget <= 0) {
       return [makeInfeasible(AIActionType.BuildTrack, 'No money to build')];
@@ -544,28 +683,68 @@ export class OptionGenerator {
       }
     }
 
-    const segments = computeBuildSegments(
-      startPositions,
-      snapshot.bot.existingSegments,
-      budget,
-      undefined, // maxSegments default
-      occupiedEdges,
-    );
+    // Chain-based build targeting: rank demand chains by completability,
+    // then build toward the top chains' pickup or delivery cities.
+    const options: FeasibleOption[] = [];
+    const seenFirstSegKey = new Set<string>();
 
-    if (segments.length === 0) {
-      return [makeInfeasible(AIActionType.BuildTrack, 'No buildable segments found')];
+    const chains = OptionGenerator.rankDemandChains(snapshot, botMemory);
+    const tag = `[BuildGen ${snapshot.gameId.slice(0, 8)}]`;
+    if (chains.length > 0) {
+      console.log(`${tag} Ranked ${chains.length} demand chains: ${chains.slice(0, 5).map(c => `${c.loadType}@${c.pickupCity}→${c.deliveryCity} score=${c.chainScore.toFixed(2)} pay=${c.payment}`).join(', ')}`);
     }
 
-    const totalCost = segments.reduce((sum, s) => sum + s.cost, 0);
-    const targetCity = OptionGenerator.identifyTargetCity(segments);
+    for (const chain of chains.slice(0, 3)) {
+      // Build toward pickup city (if bot doesn't have the load)
+      // Build toward delivery city (if bot already has the load)
+      const targets = chain.hasLoad ? chain.deliveryTargets : chain.pickupTargets;
+      const segments = computeBuildSegments(
+        startPositions, snapshot.bot.existingSegments, budget,
+        undefined, occupiedEdges, targets,
+      );
+      if (segments.length === 0) continue;
 
-    return [
-      makeFeasible(AIActionType.BuildTrack, 'Build track segments', {
+      // Dedup by first segment direction
+      const dirKey = `${segments[0].to.row},${segments[0].to.col}`;
+      if (seenFirstSegKey.has(dirKey)) continue;
+      seenFirstSegKey.add(dirKey);
+
+      const totalCost = segments.reduce((sum, s) => sum + s.cost, 0);
+      const chainTargetCity = chain.hasLoad ? chain.deliveryCity : chain.pickupCity;
+      const segTargetCity = OptionGenerator.identifyTargetCity(segments);
+      options.push(makeFeasible(AIActionType.BuildTrack, `Build toward ${segTargetCity ?? chainTargetCity} (${chain.loadType}→${chain.deliveryCity}, ${chain.payment}M)`, {
         segments,
         estimatedCost: totalCost,
-        targetCity: targetCity ?? undefined,
-      }),
-    ];
+        targetCity: segTargetCity ?? chainTargetCity ?? undefined,
+        payment: chain.payment,
+        chainScore: chain.chainScore,
+      }));
+    }
+
+    // Also try with ALL targets combined (may find a direction not covered by individual cards,
+    // or provide untargeted building when resolvedDemands is empty).
+    const allTargets = OptionGenerator.extractBuildTargets(snapshot);
+    const allSegments = computeBuildSegments(
+      startPositions, snapshot.bot.existingSegments, budget,
+      undefined, occupiedEdges, allTargets.length > 0 ? allTargets : undefined,
+    );
+    if (allSegments.length > 0) {
+      const dirKey = `${allSegments[0].to.row},${allSegments[0].to.col}`;
+      if (!seenFirstSegKey.has(dirKey)) {
+        const totalCost = allSegments.reduce((sum, s) => sum + s.cost, 0);
+        const targetCity = OptionGenerator.identifyTargetCity(allSegments);
+        options.push(makeFeasible(AIActionType.BuildTrack, 'Build track', {
+          segments: allSegments,
+          estimatedCost: totalCost,
+          targetCity: targetCity ?? undefined,
+        }));
+      }
+    }
+
+    if (options.length === 0) {
+      return [makeInfeasible(AIActionType.BuildTrack, 'No buildable segments found')];
+    }
+    return options;
   }
 
   private static generatePassTurnOption(): FeasibleOption {
@@ -607,6 +786,62 @@ export class OptionGenerator {
   }
 
   /**
+   * Extract demand-related city grid positions for target-aware track building.
+   * Collects delivery targets, pickup source cities, and general demand cities.
+   */
+  private static extractBuildTargets(snapshot: WorldSnapshot): GridCoord[] {
+    const grid = loadGridPoints();
+    const demandDeck = DemandDeckService.getInstance();
+    const seen = new Set<string>();
+    const targets: GridCoord[] = [];
+
+    const addTarget = (row: number, col: number) => {
+      const key = `${row},${col}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      targets.push({ row, col });
+    };
+
+    // 1. Delivery targets: cities where the bot can deliver loads it's carrying
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (const demand of rd.demands) {
+        if (!snapshot.bot.loads.includes(demand.loadType)) continue;
+        for (const [, point] of grid) {
+          if (point.name === demand.city) addTarget(point.row, point.col);
+        }
+      }
+    }
+
+    // 2. Pickup source cities: cities where loads matching demand cards are available
+    for (const [cityName, availableLoads] of Object.entries(snapshot.loadAvailability)) {
+      for (const loadTypeStr of availableLoads) {
+        for (const rd of snapshot.bot.resolvedDemands) {
+          for (const demand of rd.demands) {
+            if (demand.loadType === loadTypeStr) {
+              for (const [, point] of grid) {
+                if (point.name === cityName) addTarget(point.row, point.col);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 3. General demand card destination cities
+    for (const cardId of snapshot.bot.demandCards) {
+      const card = demandDeck.getCard(cardId);
+      if (!card) continue;
+      for (const demand of card.demands) {
+        for (const [, point] of grid) {
+          if (point.name === demand.city) addTarget(point.row, point.col);
+        }
+      }
+    }
+
+    return targets;
+  }
+
+  /**
    * Check if any segment endpoint is a named city.
    */
   private static identifyTargetCity(segments: TrackSegment[]): string | null {
@@ -618,5 +853,180 @@ export class OptionGenerator {
       if (point?.name) return point.name;
     }
     return null;
+  }
+
+  /**
+   * Rank demand chains by completability (payment / total distance).
+   * A chain is: pickup_city → delivery_city for a specific load/card.
+   * Returns chains sorted best-first so generateBuildTrackOptions targets the top N.
+   */
+  private static rankDemandChains(snapshot: WorldSnapshot, botMemory?: BotMemoryState): DemandChain[] {
+    const grid = loadGridPoints();
+
+    // Get network positions for distance calculations
+    const networkPositions: GridCoord[] = [];
+    if (snapshot.bot.existingSegments.length > 0) {
+      const seen = new Set<string>();
+      for (const seg of snapshot.bot.existingSegments) {
+        for (const end of [seg.from, seg.to]) {
+          const key = `${end.row},${end.col}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            networkPositions.push({ row: end.row, col: end.col });
+          }
+        }
+      }
+    } else {
+      const groups = getMajorCityGroups();
+      for (const g of groups) {
+        for (const o of g.outposts) {
+          networkPositions.push({ row: o.row, col: o.col });
+        }
+      }
+    }
+
+    const chains: DemandChain[] = [];
+
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (const demand of rd.demands) {
+        const hasLoad = snapshot.bot.loads.includes(demand.loadType);
+
+        // Find delivery city grid points
+        const deliveryTargets: GridCoord[] = [];
+        for (const [, point] of grid) {
+          if (point.name === demand.city) {
+            deliveryTargets.push({ row: point.row, col: point.col });
+          }
+        }
+        if (deliveryTargets.length === 0) continue;
+
+        if (hasLoad) {
+          // Bot already carries the load — just need to reach delivery city
+          const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
+          const chainScore = demand.payment / (deliveryDist + 1);
+          chains.push({
+            cardId: rd.cardId,
+            loadType: demand.loadType,
+            pickupCity: '(carrying)',
+            deliveryCity: demand.city,
+            payment: demand.payment,
+            pickupTargets: [],
+            deliveryTargets,
+            chainScore,
+            hasLoad: true,
+          });
+        } else {
+          // Find pickup source cities from loadAvailability
+          const pickupTargets: GridCoord[] = [];
+          let pickupCityName = '';
+          for (const [cityName, availableLoads] of Object.entries(snapshot.loadAvailability)) {
+            if (availableLoads.includes(demand.loadType)) {
+              if (!pickupCityName) pickupCityName = cityName;
+              for (const [, point] of grid) {
+                if (point.name === cityName) {
+                  pickupTargets.push({ row: point.row, col: point.col });
+                }
+              }
+            }
+          }
+          if (pickupTargets.length === 0) continue;
+
+          const pickupDist = minEuclidean(networkPositions, pickupTargets);
+          const chainDist = minEuclidean(pickupTargets, deliveryTargets);
+          const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
+          const chainScore = demand.payment / (pickupDist + chainDist + deliveryDist + 1);
+
+          chains.push({
+            cardId: rd.cardId,
+            loadType: demand.loadType,
+            pickupCity: pickupCityName,
+            deliveryCity: demand.city,
+            payment: demand.payment,
+            pickupTargets,
+            deliveryTargets,
+            chainScore,
+            hasLoad: false,
+          });
+        }
+      }
+    }
+
+    // Sticky target: apply loyalty bonus to chains matching the current build target,
+    // unless the target is stale (too many turns without progress).
+    if (botMemory?.currentBuildTarget) {
+      const isStale = botMemory.turnsOnTarget >= STALE_TARGET_THRESHOLD;
+      if (!isStale) {
+        for (const chain of chains) {
+          // Match delivery city (if carrying load) or pickup city (if not)
+          const targetCity = chain.hasLoad ? chain.deliveryCity : chain.pickupCity;
+          if (targetCity === botMemory.currentBuildTarget || chain.deliveryCity === botMemory.currentBuildTarget) {
+            chain.chainScore *= LOYALTY_BONUS_FACTOR;
+          }
+        }
+      }
+    }
+
+    chains.sort((a, b) => b.chainScore - a.chainScore);
+    return chains;
+  }
+
+  /**
+   * P3: Generate upgrade train options when the bot can afford an upgrade.
+   * Per game rules, upgrades replace the build phase (costs ECU 20M or 5M for crossgrade).
+   */
+  private static generateUpgradeTrainOptions(snapshot: WorldSnapshot): FeasibleOption[] {
+    const trainType = snapshot.bot.trainType as TrainType;
+    const money = snapshot.bot.money;
+    const options: FeasibleOption[] = [];
+
+    // Upgrade options (20M, replaces build phase)
+    if (money >= 20) {
+      if (trainType === TrainType.Freight) {
+        options.push(makeFeasible(AIActionType.UpgradeTrain, 'Upgrade to Fast Freight (speed 12)', {
+          targetTrainType: TrainType.FastFreight,
+          upgradeKind: 'upgrade' as const,
+          estimatedCost: 20,
+        }));
+        options.push(makeFeasible(AIActionType.UpgradeTrain, 'Upgrade to Heavy Freight (capacity 3)', {
+          targetTrainType: TrainType.HeavyFreight,
+          upgradeKind: 'upgrade' as const,
+          estimatedCost: 20,
+        }));
+      } else if (trainType === TrainType.FastFreight || trainType === TrainType.HeavyFreight) {
+        options.push(makeFeasible(AIActionType.UpgradeTrain, 'Upgrade to Superfreight (speed 12, capacity 3)', {
+          targetTrainType: TrainType.Superfreight,
+          upgradeKind: 'upgrade' as const,
+          estimatedCost: 20,
+        }));
+      }
+    }
+
+    // Crossgrade options (5M)
+    if (money >= 5) {
+      if (trainType === TrainType.FastFreight && snapshot.bot.loads.length <= 3) {
+        options.push(makeFeasible(AIActionType.UpgradeTrain, 'Crossgrade to Heavy Freight (capacity 3)', {
+          targetTrainType: TrainType.HeavyFreight,
+          upgradeKind: 'crossgrade' as const,
+          estimatedCost: 5,
+        }));
+      } else if (trainType === TrainType.HeavyFreight && snapshot.bot.loads.length <= 2) {
+        options.push(makeFeasible(AIActionType.UpgradeTrain, 'Crossgrade to Fast Freight (speed 12)', {
+          targetTrainType: TrainType.FastFreight,
+          upgradeKind: 'crossgrade' as const,
+          estimatedCost: 5,
+        }));
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * P4: Generate discard hand option. Always available when game is active.
+   * Scorer determines when discarding is better than other actions.
+   */
+  private static generateDiscardHandOption(snapshot: WorldSnapshot): FeasibleOption[] {
+    if (snapshot.bot.demandCards.length === 0) return [];
+    return [makeFeasible(AIActionType.DiscardHand, 'Discard hand and draw 3 new cards')];
   }
 }

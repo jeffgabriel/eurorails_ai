@@ -27,6 +27,8 @@ import {
 import { db } from '../../db/index';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { gridToPixel, loadGridPoints } from './MapTopology';
+import { getMemory, updateMemory } from './BotMemory';
+import { initTurnLog, logPhase, flushTurnLog } from './DecisionLogger';
 
 const MAX_RETRIES = 3;
 
@@ -42,6 +44,7 @@ export interface BotTurnResult {
   trackUsageFee?: number;
   loadsPickedUp?: Array<{ loadType: string; city: string }>;
   loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
+  buildTargetCity?: string;
 }
 
 export class AIStrategyEngine {
@@ -60,6 +63,12 @@ export class AIStrategyEngine {
     // Accumulators for load actions across all phases
     const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
     const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
+
+    // Load bot memory for state continuity across turns
+    const memory = getMemory(gameId, botPlayerId);
+
+    // Initialize decision logging for this turn
+    initTurnLog(gameId, botPlayerId, memory.turnNumber + 1);
 
     try {
       // 1. Capture world snapshot
@@ -85,9 +94,8 @@ export class AIStrategyEngine {
         }
       }
 
-      // ── Phase 0: Immediate delivery/pickup at current position ──────
+      // ── Phase 0: Immediate delivery/pickup/drop at current position ──
       if (snapshot.bot.position && snapshot.gameStatus === 'active') {
-        console.log(`${tag} Phase 0: Immediate delivery/pickup at current position`);
         const phase0Result = await AIStrategyEngine.executeLoadActions(
           snapshot, botConfig, tag, 'Phase 0',
         );
@@ -97,37 +105,38 @@ export class AIStrategyEngine {
         // Re-capture snapshot if any state-mutating actions occurred
         if (phase0Result.stateChanged) {
           snapshot = await capture(gameId, botPlayerId);
-          console.log(`${tag} Phase 0: Re-captured snapshot after ${phase0Result.delivered.length} deliveries, ${phase0Result.pickedUp.length} pickups`);
         }
+
+        logPhase('Phase 0', [], null, null);
       }
 
       // ── Phase 1: Movement ──────────────────────────────────────────────
       let moveResult: { movedTo?: { row: number; col: number }; milepostsMoved?: number; trackUsageFee?: number } = {};
+      let phase1Options: FeasibleOption[] = [];
+      let phase1Chosen: FeasibleOption | null = null;
 
       if (snapshot.bot.position && snapshot.gameStatus === 'active') {
-        console.log(`${tag} Phase 1: Movement`);
         try {
-          const moveOptions = OptionGenerator.generate(snapshot)
-            .filter(o => o.action === AIActionType.MoveTrain && o.feasible);
+          const moveActions = new Set([AIActionType.MoveTrain]);
+          const moveOptions = OptionGenerator.generate(snapshot, moveActions)
+            .filter(o => o.feasible);
+          phase1Options = moveOptions;
 
           if (moveOptions.length > 0) {
             const scoredMoves = Scorer.score(moveOptions, snapshot, botConfig);
-            console.log(`${tag} Move options: ${scoredMoves.map(o => `${o.targetCity}(score=${o.score?.toFixed(1)}, miles=${o.mileposts}, fee=${o.estimatedCost ?? 0})`).join(', ')}`);
+            phase1Options = scoredMoves;
 
             for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
               const candidate = scoredMoves[attempt] ?? null;
               if (!candidate || !candidate.feasible) break;
 
               const validation = validate(candidate, snapshot);
-              if (!validation.valid) {
-                console.log(`${tag} Move attempt ${attempt}: validation failed — ${validation.reason}`);
-                continue;
-              }
+              if (!validation.valid) continue;
 
               try {
-                console.log(`${tag} Move attempt ${attempt}: executing MoveTrain to ${candidate.targetCity} (${candidate.mileposts} mileposts, fee=${candidate.estimatedCost ?? 0})`);
                 const result = await TurnExecutor.execute(candidate, snapshot);
                 if (result.success) {
+                  phase1Chosen = candidate;
                   // Update snapshot position and money for subsequent phases
                   const dest = candidate.movementPath?.[candidate.movementPath.length - 1];
                   if (dest) {
@@ -139,26 +148,29 @@ export class AIStrategyEngine {
                     milepostsMoved: candidate.mileposts,
                     trackUsageFee: result.cost,
                   };
-                  console.log(`${tag} Phase 1 SUCCESS: moved to ${dest?.row},${dest?.col}, fee=${result.cost}, money=${result.remainingMoney}`);
+                  logPhase('Phase 1', phase1Options, phase1Chosen, result);
                   break;
                 }
               } catch (execError) {
-                console.error(`${tag} Move attempt ${attempt}: execution threw:`, execError instanceof Error ? execError.message : execError);
+                console.error(`${tag} Move attempt ${attempt} threw:`, execError instanceof Error ? execError.message : execError);
               }
             }
-          } else {
-            console.log(`${tag} Phase 1: No feasible move options`);
+          }
+
+          // Log Phase 1 if no move succeeded
+          if (!phase1Chosen) {
+            logPhase('Phase 1', phase1Options, null, null);
           }
         } catch (moveError) {
           console.warn(`${tag} Phase 1 failed (continuing to building):`, moveError instanceof Error ? moveError.message : moveError);
+          logPhase('Phase 1', phase1Options, null, null);
         }
       }
 
-      // ── Phase 1.5: Post-movement delivery/pickup at new position ────
+      // ── Phase 1.5: Post-movement delivery/pickup/drop at new position
       if (moveResult.movedTo && snapshot.gameStatus === 'active') {
         // Re-capture snapshot to get updated state after movement
         snapshot = await capture(gameId, botPlayerId);
-        console.log(`${tag} Phase 1.5: Post-movement delivery/pickup at ${moveResult.movedTo.row},${moveResult.movedTo.col}`);
 
         const phase15Result = await AIStrategyEngine.executeLoadActions(
           snapshot, botConfig, tag, 'Phase 1.5',
@@ -169,39 +181,57 @@ export class AIStrategyEngine {
         // Re-capture snapshot if state changed (for Phase 2 building)
         if (phase15Result.stateChanged) {
           snapshot = await capture(gameId, botPlayerId);
-          console.log(`${tag} Phase 1.5: Re-captured snapshot after ${phase15Result.delivered.length} deliveries, ${phase15Result.pickedUp.length} pickups`);
         }
+
+        logPhase('Phase 1.5', [], null, null);
       }
 
       // ── Phase 2: Building ──────────────────────────────────────────────
-      console.log(`${tag} Phase 2: Building`);
-      const buildOptions = OptionGenerator.generate(snapshot)
-        .filter(o => o.action === AIActionType.BuildTrack || o.action === AIActionType.PassTurn);
-      console.log(`${tag} Build options: ${buildOptions.map(o => `${o.action}(feasible=${o.feasible}, segments=${o.segments?.length ?? 0}, cost=${o.estimatedCost ?? 0}, reason="${o.reason}")`).join(', ')}`);
+      const buildActions = new Set([AIActionType.BuildTrack, AIActionType.UpgradeTrain, AIActionType.PassTurn]);
+      const buildOptions = OptionGenerator.generate(snapshot, buildActions, memory);
 
-      const scoredBuild = Scorer.score(buildOptions, snapshot, botConfig);
-      console.log(`${tag} Build scored: ${scoredBuild.map(o => `${o.action}(score=${o.score?.toFixed(1)}, feasible=${o.feasible})`).join(', ')}`);
+      const scoredBuild = Scorer.score(buildOptions, snapshot, botConfig, memory);
 
       // Try each build option in score order
       for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
         const candidate = scoredBuild[attempt] ?? null;
-        if (!candidate || !candidate.feasible) {
-          console.log(`${tag} Build attempt ${attempt}: no feasible candidate, breaking`);
-          break;
-        }
+        if (!candidate || !candidate.feasible) break;
 
         const validation = validate(candidate, snapshot);
-        if (!validation.valid) {
-          console.log(`${tag} Build attempt ${attempt}: validation failed — ${validation.reason}`);
-          continue;
-        }
+        if (!validation.valid) continue;
 
         try {
-          console.log(`${tag} Build attempt ${attempt}: executing ${candidate.action} (segments=${candidate.segments?.length ?? 0}, cost=${candidate.estimatedCost ?? 0})`);
           const result = await TurnExecutor.execute(candidate, snapshot);
           if (result.success) {
             const durationMs = Date.now() - startTime;
-            console.log(`${tag} SUCCESS: ${result.action}, built=${result.segmentsBuilt}, cost=${result.cost}, ${durationMs}ms`);
+
+            // Concise turn summary
+            const parts: string[] = [];
+            if (moveResult.movedTo) parts.push(`Move→${moveResult.movedTo.row},${moveResult.movedTo.col}(${moveResult.milepostsMoved}mi)`);
+            for (const d of loadsDelivered) parts.push(`Deliver→${d.loadType}@${d.city}/$${d.payment}M`);
+            for (const p of loadsPickedUp) parts.push(`Pickup→${p.loadType}@${p.city}`);
+            if (result.action === AIActionType.BuildTrack) parts.push(`Build→${result.segmentsBuilt}seg/$${result.cost}M→${candidate.targetCity ?? '?'}`);
+            else if (result.action === AIActionType.UpgradeTrain) parts.push(`Upgrade→${candidate.targetTrainType}`);
+            console.log(`${tag} Turn complete: ${parts.join(', ') || 'PassTurn'} | money=${snapshot.bot.money}→${result.remainingMoney}`);
+
+            // Update bot memory after successful Phase 2
+            const deliveryEarnings = loadsDelivered.reduce((sum, d) => sum + d.payment, 0);
+            const buildTarget = result.action === AIActionType.BuildTrack ? (candidate.targetCity ?? null) : memory.currentBuildTarget;
+            updateMemory(gameId, botPlayerId, {
+              lastAction: result.action,
+              consecutivePassTurns: 0,
+              deliveryCount: memory.deliveryCount + loadsDelivered.length,
+              totalEarnings: memory.totalEarnings + deliveryEarnings,
+              turnNumber: snapshot.turnNumber,
+              currentBuildTarget: buildTarget,
+              turnsOnTarget: buildTarget === memory.currentBuildTarget
+                ? memory.turnsOnTarget + 1
+                : (buildTarget ? 1 : 0),
+            });
+
+            logPhase('Phase 2', scoredBuild, candidate, result);
+            flushTurnLog();
+
             return {
               action: result.action,
               segmentsBuilt: result.segmentsBuilt,
@@ -211,15 +241,15 @@ export class AIStrategyEngine {
               ...moveResult,
               loadsPickedUp: loadsPickedUp.length > 0 ? loadsPickedUp : undefined,
               loadsDelivered: loadsDelivered.length > 0 ? loadsDelivered : undefined,
+              buildTargetCity: candidate.targetCity,
             };
           }
         } catch (execError) {
-          console.error(`${tag} Build attempt ${attempt}: execution threw:`, execError instanceof Error ? execError.message : execError);
+          console.error(`${tag} Build attempt ${attempt} threw:`, execError instanceof Error ? execError.message : execError);
         }
       }
 
       // All retries exhausted: fall back to PassTurn
-      console.log(`${tag} All build retries exhausted, falling back to PassTurn`);
       const passPlan: FeasibleOption = {
         action: AIActionType.PassTurn,
         feasible: true,
@@ -227,6 +257,27 @@ export class AIStrategyEngine {
       };
       const passResult = await TurnExecutor.execute(passPlan, snapshot);
       const durationMs = Date.now() - startTime;
+
+      // Concise summary for PassTurn fallback
+      const parts: string[] = [];
+      if (moveResult.movedTo) parts.push(`Move→${moveResult.movedTo.row},${moveResult.movedTo.col}(${moveResult.milepostsMoved}mi)`);
+      for (const d of loadsDelivered) parts.push(`Deliver→${d.loadType}@${d.city}/$${d.payment}M`);
+      for (const p of loadsPickedUp) parts.push(`Pickup→${p.loadType}@${p.city}`);
+      parts.push('PassTurn(fallback)');
+      console.log(`${tag} Turn complete: ${parts.join(', ')} | money=${snapshot.bot.money}`);
+
+      // Update bot memory for PassTurn fallback
+      const ptDeliveryEarnings = loadsDelivered.reduce((sum, d) => sum + d.payment, 0);
+      updateMemory(gameId, botPlayerId, {
+        lastAction: AIActionType.PassTurn,
+        consecutivePassTurns: memory.consecutivePassTurns + 1,
+        deliveryCount: memory.deliveryCount + loadsDelivered.length,
+        totalEarnings: memory.totalEarnings + ptDeliveryEarnings,
+        turnNumber: snapshot.turnNumber,
+      });
+
+      logPhase('Phase 2', scoredBuild, passPlan, passResult);
+      flushTurnLog();
 
       return {
         action: AIActionType.PassTurn,
@@ -241,6 +292,16 @@ export class AIStrategyEngine {
     } catch (error) {
       const durationMs = Date.now() - startTime;
       console.error(`${tag} PIPELINE ERROR (${durationMs}ms):`, error instanceof Error ? error.stack : error);
+
+      // Update bot memory even on pipeline error
+      updateMemory(gameId, botPlayerId, {
+        lastAction: AIActionType.PassTurn,
+        consecutivePassTurns: memory.consecutivePassTurns + 1,
+        turnNumber: memory.turnNumber + 1,
+      });
+
+      flushTurnLog();
+
       return {
         action: AIActionType.PassTurn,
         segmentsBuilt: 0,
@@ -274,7 +335,8 @@ export class AIStrategyEngine {
     let stateChanged = false;
 
     // Try deliveries first (highest priority — immediate income)
-    const deliveryOptions = OptionGenerator.generate(snapshot)
+    const loadActions = new Set([AIActionType.DeliverLoad, AIActionType.PickupLoad, AIActionType.DropLoad]);
+    const deliveryOptions = OptionGenerator.generate(snapshot, loadActions)
       .filter(o => o.action === AIActionType.DeliverLoad && o.feasible);
 
     if (deliveryOptions.length > 0) {
@@ -312,35 +374,65 @@ export class AIStrategyEngine {
       }
     }
 
-    // Try pickups (only after deliveries — may have freed capacity)
-    const pickupOptions = OptionGenerator.generate(snapshot)
-      .filter(o => o.action === AIActionType.PickupLoad && o.feasible);
+    // Try drop loads (escape valve — drop undeliverable loads before pickups)
+    const dropOptions = OptionGenerator.generate(snapshot, loadActions)
+      .filter(o => o.action === AIActionType.DropLoad && o.feasible);
 
-    if (pickupOptions.length > 0) {
-      const scoredPickups = Scorer.score(pickupOptions, snapshot, botConfig);
-      for (const candidate of scoredPickups) {
+    if (dropOptions.length > 0) {
+      const scoredDrops = Scorer.score(dropOptions, snapshot, botConfig);
+      for (const candidate of scoredDrops) {
         if (!candidate.feasible) continue;
         const validation = validate(candidate, snapshot);
-        if (!validation.valid) {
-          console.log(`${tag} ${phase} pickup validation failed: ${validation.reason}`);
-          continue;
-        }
+        if (!validation.valid) continue;
         try {
-          console.log(`${tag} ${phase}: executing PickupLoad ${candidate.loadType} at ${candidate.targetCity}`);
+          console.log(`${tag} ${phase}: executing DropLoad ${candidate.loadType} at ${candidate.targetCity}`);
           const result = await TurnExecutor.execute(candidate, snapshot);
           if (result.success) {
-            pickedUp.push({
-              loadType: candidate.loadType!,
-              city: candidate.targetCity!,
-            });
-            // Update snapshot inline
-            snapshot.bot.loads.push(candidate.loadType!);
+            snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== candidate.loadType);
             stateChanged = true;
-            console.log(`${tag} ${phase}: picked up ${candidate.loadType}, loads=[${snapshot.bot.loads.join(',')}]`);
+            console.log(`${tag} ${phase}: dropped ${candidate.loadType}, loads=[${snapshot.bot.loads.join(',')}]`);
           }
         } catch (execError) {
-          console.error(`${tag} ${phase} pickup execution threw:`, execError instanceof Error ? execError.message : execError);
+          console.error(`${tag} ${phase} drop execution threw:`, execError instanceof Error ? execError.message : execError);
         }
+      }
+    }
+
+    // Try pickups (only after deliveries/drops — may have freed capacity)
+    // Re-generate options before each pickup to respect train capacity limits
+    let pickupAttempts = 0;
+    const maxPickupAttempts = 3; // safety bound
+    while (pickupAttempts < maxPickupAttempts) {
+      pickupAttempts++;
+      const pickupOptions = OptionGenerator.generate(snapshot, loadActions)
+        .filter(o => o.action === AIActionType.PickupLoad && o.feasible);
+
+      if (pickupOptions.length === 0) break;
+
+      const scoredPickups = Scorer.score(pickupOptions, snapshot, botConfig);
+      const candidate = scoredPickups.find(o => o.feasible);
+      if (!candidate) break;
+
+      const validation = validate(candidate, snapshot);
+      if (!validation.valid) break;
+      try {
+        console.log(`${tag} ${phase}: executing PickupLoad ${candidate.loadType} at ${candidate.targetCity}`);
+        const result = await TurnExecutor.execute(candidate, snapshot);
+        if (result.success) {
+          pickedUp.push({
+            loadType: candidate.loadType!,
+            city: candidate.targetCity!,
+          });
+          // Update snapshot inline
+          snapshot.bot.loads.push(candidate.loadType!);
+          stateChanged = true;
+          console.log(`${tag} ${phase}: picked up ${candidate.loadType}, loads=[${snapshot.bot.loads.join(',')}]`);
+        } else {
+          break;
+        }
+      } catch (execError) {
+        console.error(`${tag} ${phase} pickup execution threw:`, execError instanceof Error ? execError.message : execError);
+        break;
       }
     }
 

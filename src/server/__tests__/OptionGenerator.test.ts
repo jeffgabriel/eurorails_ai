@@ -1,5 +1,5 @@
 import { OptionGenerator } from '../services/ai/OptionGenerator';
-import { WorldSnapshot, AIActionType, TrackSegment, TerrainType, TrainType, TRACK_USAGE_FEE } from '../../shared/types/GameTypes';
+import { WorldSnapshot, AIActionType, TrackSegment, TerrainType, TrainType, TRACK_USAGE_FEE, BotMemoryState } from '../../shared/types/GameTypes';
 import { computeBuildSegments } from '../services/ai/computeBuildSegments';
 import { getMajorCityGroups } from '../../shared/services/majorCityGroups';
 import { buildUnionTrackGraph } from '../../shared/services/trackUsageFees';
@@ -533,12 +533,14 @@ describe('OptionGenerator — generatePickupOptions', () => {
     const { loadGridPoints } = require('../services/ai/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['10,10', { row: 10, col: 10, terrain: TerrainType.MediumCity, name: 'Hamburg' }],
+      ['11,10', { row: 11, col: 10, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
 
     const snapshot = makeActiveSnapshot(
       {
         position: { row: 10, col: 10 },
         loads: [],
+        existingSegments: [makeSegment(10, 10, 11, 10, 1)],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }] },
         ],
@@ -596,7 +598,7 @@ describe('OptionGenerator — generatePickupOptions', () => {
     expect(pickups).toHaveLength(0);
   });
 
-  it('should generate speculative pickup when no demand matches', () => {
+  it('should NOT generate speculative pickup when no demand matches (P5 fix)', () => {
     const { loadGridPoints } = require('../services/ai/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['10,10', { row: 10, col: 10, terrain: TerrainType.MediumCity, name: 'Hamburg' }],
@@ -614,9 +616,8 @@ describe('OptionGenerator — generatePickupOptions', () => {
     const options = OptionGenerator.generate(snapshot);
     const pickups = options.filter(o => o.action === AIActionType.PickupLoad && o.feasible);
 
-    expect(pickups.length).toBeGreaterThanOrEqual(1);
-    expect(pickups[0].loadType).toBe('Coal');
-    expect(pickups[0].payment).toBeUndefined(); // no matching demand
+    // P5 fix: speculative pickups (no matching demand) are no longer generated
+    expect(pickups).toHaveLength(0);
   });
 
   it('should not generate pickup during initialBuild phase', () => {
@@ -744,5 +745,158 @@ describe('OptionGenerator — generateDeliveryOptions', () => {
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0].loadType).toBe('Wine');
     expect(deliveries[0].payment).toBe(12);
+  });
+});
+
+describe('OptionGenerator — sticky build target', () => {
+  const { loadGridPoints } = require('../services/ai/MapTopology');
+
+  function makeGridMap(): Map<string, { row: number; col: number; name: string; terrain: number }> {
+    const map = new Map();
+    map.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: TerrainType.MajorCity });
+    map.set('20,20', { row: 20, col: 20, name: 'Paris', terrain: TerrainType.MajorCity });
+    map.set('30,30', { row: 30, col: 30, name: 'Hamburg', terrain: TerrainType.MediumCity });
+    return map;
+  }
+
+  function makeStickySnapshot(overrides?: Partial<WorldSnapshot>): WorldSnapshot {
+    return {
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 5,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-bot-1',
+        money: 50,
+        position: { row: 5, col: 5 },
+        existingSegments: [makeSegment(5, 5, 6, 5, 1)],
+        demandCards: [42, 43],
+        resolvedDemands: [
+          {
+            cardId: 42,
+            demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }],
+          },
+          {
+            cardId: 43,
+            demands: [{ city: 'Paris', loadType: 'Wine', payment: 12 }],
+          },
+        ],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {
+        'Hamburg': ['Coal'],
+        'Paris': ['Wine'],
+      },
+      ...overrides,
+    };
+  }
+
+  function defaultMemory(overrides?: Partial<BotMemoryState>): BotMemoryState {
+    return {
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      consecutivePassTurns: 0,
+      deliveryCount: 0,
+      totalEarnings: 0,
+      turnNumber: 0,
+      ...overrides,
+    };
+  }
+
+  function setupBuildMock(): void {
+    let callCount = 0;
+    mockComputeBuild.mockImplementation(() => {
+      callCount++;
+      // Return unique segments per call to avoid dedup in generateBuildTrackOptions
+      return [makeSegment(5, 5, 5 + callCount, 5 + callCount, 1)];
+    });
+  }
+
+  beforeEach(() => {
+    loadGridPoints.mockReturnValue(makeGridMap());
+    // Mock DemandDeckService for extractBuildTargets
+    setupMockDemandDeck([
+      { id: 42, demands: [{ city: 'Berlin', payment: 10, resource: 'Coal' }] },
+      { id: 43, demands: [{ city: 'Paris', payment: 12, resource: 'Wine' }] },
+    ]);
+    setupBuildMock();
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('should apply loyalty bonus when currentBuildTarget matches a chain delivery city', () => {
+    const snapshot = makeStickySnapshot();
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    // Without memory — natural chain ordering (Berlin chainScore = 0.14)
+    const optionsNoMemory = OptionGenerator.generate(snapshot, buildOnly);
+    const buildsNoMemory = optionsNoMemory.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const berlinNoMemory = buildsNoMemory.find(b => b.reason?.includes('Berlin'));
+
+    // Reset mock for fresh call count
+    setupBuildMock();
+
+    // With memory targeting Berlin — loyalty bonus applies (Berlin chainScore = 0.14 * 1.5 = 0.21)
+    const memoryBerlin = defaultMemory({ currentBuildTarget: 'Berlin', turnsOnTarget: 1 });
+    const optionsWithMemory = OptionGenerator.generate(snapshot, buildOnly, memoryBerlin);
+    const buildsWithMemory = optionsWithMemory.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const berlinWithMemory = buildsWithMemory.find(b => b.reason?.includes('Berlin'));
+
+    // Both should produce build options
+    expect(buildsNoMemory.length).toBeGreaterThan(0);
+    expect(buildsWithMemory.length).toBeGreaterThan(0);
+
+    // Berlin chain should exist in both
+    expect(berlinNoMemory).toBeDefined();
+    expect(berlinWithMemory).toBeDefined();
+
+    // With loyalty bonus, Berlin's chainScore should be 1.5x higher
+    expect(berlinWithMemory!.chainScore).toBeCloseTo(berlinNoMemory!.chainScore! * 1.5, 2);
+  });
+
+  it('should NOT apply loyalty bonus when target is stale (>= 5 turns)', () => {
+    const snapshot = makeStickySnapshot();
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    // Fresh target — loyalty bonus applies
+    const freshMemory = defaultMemory({ currentBuildTarget: 'Berlin', turnsOnTarget: 2 });
+    const freshOptions = OptionGenerator.generate(snapshot, buildOnly, freshMemory);
+    const freshBuilds = freshOptions.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const freshBerlin = freshBuilds.find(b => b.reason?.includes('Berlin'));
+
+    // Reset mock for fresh call count
+    setupBuildMock();
+
+    // Stale target — loyalty bonus should NOT apply
+    const staleMemory = defaultMemory({ currentBuildTarget: 'Berlin', turnsOnTarget: 5 });
+    const staleOptions = OptionGenerator.generate(snapshot, buildOnly, staleMemory);
+    const staleBuilds = staleOptions.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const staleBerlin = staleBuilds.find(b => b.reason?.includes('Berlin'));
+
+    // Both should produce build options
+    expect(freshBuilds.length).toBeGreaterThan(0);
+    expect(staleBuilds.length).toBeGreaterThan(0);
+
+    // Both should contain Berlin-targeting builds
+    expect(freshBerlin).toBeDefined();
+    expect(staleBerlin).toBeDefined();
+
+    // Fresh Berlin should have loyalty bonus (1.5x chainScore), stale should not
+    expect(freshBerlin!.chainScore).toBeGreaterThan(staleBerlin!.chainScore!);
+    expect(freshBerlin!.chainScore).toBeCloseTo(staleBerlin!.chainScore! * 1.5, 2);
+  });
+
+  it('should work without BotMemoryState (backward compatible)', () => {
+    const snapshot = makeStickySnapshot();
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    // No memory at all — should not crash
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    expect(builds.length).toBeGreaterThan(0);
   });
 });

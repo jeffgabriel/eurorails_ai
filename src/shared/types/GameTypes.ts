@@ -290,6 +290,9 @@ export interface FeasibleOption {
     loadType?: LoadType;
     cardId?: number;
     payment?: number;
+    chainScore?: number;
+    targetTrainType?: TrainType;
+    upgradeKind?: 'upgrade' | 'crossgrade';
 }
 
 /** Resolved demand card data for AI decision-making */
@@ -335,6 +338,59 @@ export enum AIActionType {
     MoveTrain = 'MoveTrain',
     PickupLoad = 'PickupLoad',
     DeliverLoad = 'DeliverLoad',
+    DropLoad = 'DropLoad',
+    UpgradeTrain = 'UpgradeTrain',
+    DiscardHand = 'DiscardHand',
+}
+
+/** Persistent bot state that spans across turns within a game */
+export interface BotMemoryState {
+    /** City name the bot is building toward */
+    currentBuildTarget: string | null;
+    /** How many turns the bot has been building toward this target */
+    turnsOnTarget: number;
+    /** What the bot did last turn (Phase 2 action) */
+    lastAction: AIActionType | null;
+    /** Consecutive PassTurn actions — used to detect stuck loops */
+    consecutivePassTurns: number;
+    /** Total deliveries completed this game */
+    deliveryCount: number;
+    /** Total money earned from deliveries */
+    totalEarnings: number;
+    /** Last turn number processed */
+    turnNumber: number;
+}
+
+/** Simplified option summary for decision logging */
+export interface LoggedOption {
+    action: AIActionType;
+    score?: number;
+    feasible: boolean;
+    reason?: string;
+    targetCity?: string;
+    loadType?: string;
+    payment?: number;
+}
+
+/** A single phase's decision data within a turn */
+export interface PhaseDecisionLog {
+    phase: string;
+    options: LoggedOption[];
+    chosen: LoggedOption | null;
+    result: {
+        success: boolean;
+        action: AIActionType;
+        cost: number;
+        remainingMoney: number;
+    } | null;
+}
+
+/** Complete decision log for one bot turn */
+export interface TurnDecisionLog {
+    gameId: string;
+    playerId: string;
+    turn: number;
+    phases: PhaseDecisionLog[];
 }
 
 /** Human-readable labels for each AIActionType, used by UI components */
@@ -344,4 +400,7 @@ export const AI_ACTION_LABELS: Record<AIActionType, string> = {
     [AIActionType.MoveTrain]: 'Move Train',
     [AIActionType.PickupLoad]: 'Pick Up Load',
     [AIActionType.DeliverLoad]: 'Deliver Load',
+    [AIActionType.DropLoad]: 'Drop Load',
+    [AIActionType.UpgradeTrain]: 'Upgrade Train',
+    [AIActionType.DiscardHand]: 'Discard Hand',
 };

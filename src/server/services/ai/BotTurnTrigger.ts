@@ -10,6 +10,7 @@ import { emitToGame, getSocketIO } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
 import { AIStrategyEngine } from './AIStrategyEngine';
+import { clearMemory } from './BotMemory';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -72,7 +73,10 @@ export async function onTurnChange(
     [gameId],
   );
   const status = gameResult.rows[0]?.status;
-  if (status === 'completed' || status === 'abandoned') return;
+  if (status === 'completed' || status === 'abandoned') {
+    clearMemory(gameId, currentPlayerId);
+    return;
+  }
 
   // Double execution guard
   if (pendingBotTurns.has(gameId)) return;
@@ -128,6 +132,13 @@ export async function onTurnChange(
       durationMs: result.durationMs,
       loadsPickedUp: result.loadsPickedUp,
       loadsDelivered: result.loadsDelivered,
+      buildTargetCity: result.buildTargetCity,
+      movementData: result.movedTo ? {
+        from: result.movedTo, // approximate — we don't track original position
+        to: result.movedTo,
+        mileposts: result.milepostsMoved,
+        trackUsageFee: result.trackUsageFee,
+      } : undefined,
     });
 
     // Advance to next player
