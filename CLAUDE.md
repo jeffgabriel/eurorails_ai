@@ -24,6 +24,8 @@ Do NOT fall back to raw grep/glob for architectural or cross-module questions.
 - `compounds-usage-log.md` — when you used it and what benefit it provided
 - `compounds-missed-log.md` — when you skipped it but should have used it
 
+After significant code generation Run "compounds agent-prompt cli-usage" and index my apps and services in this repo.
+
 ## Commands
 - Build: `npm run build` (client + server)
 - Development: `npm run dev` (client + server concurrently)

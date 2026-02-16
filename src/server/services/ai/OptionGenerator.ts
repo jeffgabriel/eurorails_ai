@@ -19,7 +19,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { computeBuildSegments } from './computeBuildSegments';
-import { loadGridPoints, GridCoord } from './MapTopology';
+import { loadGridPoints, GridCoord, getTerrainCost, GridPointData } from './MapTopology';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import {
   buildUnionTrackGraph,
@@ -31,8 +31,11 @@ const TURN_BUILD_BUDGET = 20; // ECU 20M per turn
 /** Hex grid path overhead vs Euclidean distance (paths are longer due to hex grid) */
 const SEGMENTS_PER_EUCLIDEAN_UNIT = 1.2;
 
-/** Average cost per track segment (mix of clear=1, mountain=2, city=3-5) */
-const AVG_COST_PER_SEGMENT = 1.5;
+/** Fallback average cost per track segment when terrain sampling unavailable */
+const AVG_COST_PER_SEGMENT = 2.0;
+
+/** Representative ferry port build cost (ECU M) for terrain sampling */
+const FERRY_PORT_REPRESENTATIVE_COST = 8;
 
 /** Loyalty bonus multiplier for chains matching the current build target */
 const LOYALTY_BONUS_FACTOR = 1.5;
@@ -65,6 +68,58 @@ function minEuclidean(from: GridCoord[], to: GridCoord[]): number {
     }
   }
   return min === Infinity ? 999 : min;
+}
+
+/** Find the closest pair of points between two coordinate sets */
+function closestPair(from: GridCoord[], to: GridCoord[]): [GridCoord, GridCoord] | null {
+  let minDist = Infinity;
+  let best: [GridCoord, GridCoord] | null = null;
+  for (const f of from) {
+    for (const t of to) {
+      const dist = (f.row - t.row) ** 2 + (f.col - t.col) ** 2; // squared is fine for comparison
+      if (dist < minDist) {
+        minDist = dist;
+        best = [f, t];
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Sample terrain along the straight line between two grid points and return
+ * the average build cost per segment. Catches expensive corridors (Alps at 5M,
+ * mountains at 2M, cities at 3-5M, ferry ports at 4-16M) that a flat constant misses.
+ */
+function sampleAvgTerrainCost(
+  from: GridCoord,
+  to: GridCoord,
+  grid: Map<string, GridPointData>,
+): number {
+  const dr = to.row - from.row;
+  const dc = to.col - from.col;
+  const dist = Math.sqrt(dr * dr + dc * dc);
+  if (dist < 1) return AVG_COST_PER_SEGMENT;
+
+  // Sample at ~1 hex intervals along the straight line
+  const numSamples = Math.max(Math.ceil(dist), 3);
+  let totalCost = 0;
+  let validSamples = 0;
+
+  for (let i = 1; i <= numSamples; i++) {
+    const t = i / numSamples;
+    const row = Math.round(from.row + t * dr);
+    const col = Math.round(from.col + t * dc);
+    const data = grid.get(`${row},${col}`);
+    if (!data) continue;
+    const cost = getTerrainCost(data.terrain);
+    if (cost === Infinity) continue; // skip water hexes
+    // Ferry ports return 0 from getTerrainCost; use representative cost
+    totalCost += cost === 0 ? FERRY_PORT_REPRESENTATIVE_COST : cost;
+    validSamples++;
+  }
+
+  return validSamples > 0 ? totalCost / validSamples : AVG_COST_PER_SEGMENT;
 }
 
 /** A demand chain: pickup_city → delivery_city for a specific load/card */
@@ -905,10 +960,31 @@ export class OptionGenerator {
         }
       }
     } else {
+      // No track — evaluate each major city as a starting hub.
+      // Using ALL outposts makes minEuclidean return ~0 for any chain,
+      // causing the highest-payment chain to win regardless of geography.
+      // Instead, pick the hub that maximizes the best achievable delivery.
       const groups = getMajorCityGroups();
+      let bestHub: GridCoord[] = [];
+      let bestHubScore = -Infinity;
+
       for (const g of groups) {
-        for (const o of g.outposts) {
-          networkPositions.push({ row: o.row, col: o.col });
+        const hubPos = g.outposts.map(o => ({ row: o.row, col: o.col }));
+        const hubScore = OptionGenerator.evaluateHubScore(hubPos, snapshot, grid);
+        if (hubScore > bestHubScore) {
+          bestHubScore = hubScore;
+          bestHub = hubPos;
+        }
+      }
+
+      if (bestHub.length > 0) {
+        networkPositions.push(...bestHub);
+      } else {
+        // Fallback: all outposts (no valid chains found)
+        for (const g of groups) {
+          for (const o of g.outposts) {
+            networkPositions.push({ row: o.row, col: o.col });
+          }
         }
       }
     }
@@ -931,13 +1007,19 @@ export class OptionGenerator {
         if (hasLoad) {
           // Bot already carries the load — just need to reach delivery city
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
-          const estimatedBuildCost = deliveryDist * SEGMENTS_PER_EUCLIDEAN_UNIT * AVG_COST_PER_SEGMENT;
+          const pair = closestPair(networkPositions, deliveryTargets);
+          const avgCost = pair ? sampleAvgTerrainCost(pair[0], pair[1], grid) : AVG_COST_PER_SEGMENT;
+          const estimatedBuildCost = deliveryDist * SEGMENTS_PER_EUCLIDEAN_UNIT * avgCost;
           const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
           const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
           const estimatedMoveTurns = Math.ceil(deliveryDist / trainSpeed);
           const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
-          const chainScore = demand.payment / Math.max(totalTurns, 1);
-          // No budget penalty for loads already carried — must deliver them
+          let chainScore = demand.payment / Math.max(totalTurns, 1);
+          // Budget penalty: even for carried loads, if the delivery route is
+          // unaffordable the bot should prioritize cheaper deliveries first
+          if (estimatedBuildCost > snapshot.bot.money) {
+            chainScore *= 0.4;
+          }
           chains.push({
             cardId: rd.cardId,
             loadType: demand.loadType,
@@ -969,7 +1051,12 @@ export class OptionGenerator {
           const chainDist = minEuclidean(pickupTargets, deliveryTargets);
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
           const totalDist = pickupDist + chainDist + deliveryDist;
-          const estimatedBuildCost = totalDist * SEGMENTS_PER_EUCLIDEAN_UNIT * AVG_COST_PER_SEGMENT;
+          // Terrain-aware cost: sample terrain along the two main build legs
+          const pickupPair = closestPair(networkPositions, pickupTargets);
+          const chainPair = closestPair(pickupTargets, deliveryTargets);
+          const pickupAvgCost = pickupPair ? sampleAvgTerrainCost(pickupPair[0], pickupPair[1], grid) : AVG_COST_PER_SEGMENT;
+          const chainAvgCost = chainPair ? sampleAvgTerrainCost(chainPair[0], chainPair[1], grid) : AVG_COST_PER_SEGMENT;
+          const estimatedBuildCost = (pickupDist * pickupAvgCost + (chainDist + deliveryDist) * chainAvgCost) * SEGMENTS_PER_EUCLIDEAN_UNIT;
           const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
           const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
           const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
@@ -1014,6 +1101,71 @@ export class OptionGenerator {
 
     chains.sort((a, b) => b.chainScore - a.chainScore);
     return chains;
+  }
+
+  /**
+   * Evaluate a major city hub for starting position quality.
+   * Returns the best achievable chain score if the bot starts at this hub.
+   * Used by rankDemandChains to pick the optimal starting city when no track exists.
+   */
+  private static evaluateHubScore(
+    hubPositions: GridCoord[],
+    snapshot: WorldSnapshot,
+    grid: Map<string, GridPointData>,
+  ): number {
+    let bestScore = 0;
+
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (const demand of rd.demands) {
+        if (snapshot.bot.loads.includes(demand.loadType)) continue;
+
+        const deliveryTargets: GridCoord[] = [];
+        for (const [, point] of grid) {
+          if (point.name === demand.city) {
+            deliveryTargets.push({ row: point.row, col: point.col });
+          }
+        }
+        if (deliveryTargets.length === 0) continue;
+
+        const pickupTargets: GridCoord[] = [];
+        for (const [cityName, loads] of Object.entries(snapshot.loadAvailability)) {
+          if (loads.includes(demand.loadType)) {
+            for (const [, point] of grid) {
+              if (point.name === cityName) {
+                pickupTargets.push({ row: point.row, col: point.col });
+              }
+            }
+          }
+        }
+        if (pickupTargets.length === 0) continue;
+
+        const pickupDist = minEuclidean(hubPositions, pickupTargets);
+        const chainDist = minEuclidean(pickupTargets, deliveryTargets);
+        const totalDist = pickupDist + chainDist;
+
+        const pickupPair = closestPair(hubPositions, pickupTargets);
+        const chainPair = closestPair(pickupTargets, deliveryTargets);
+        const pickupAvg = pickupPair ? sampleAvgTerrainCost(pickupPair[0], pickupPair[1], grid) : AVG_COST_PER_SEGMENT;
+        const chainAvg = chainPair ? sampleAvgTerrainCost(chainPair[0], chainPair[1], grid) : AVG_COST_PER_SEGMENT;
+        const estimatedBuildCost = (pickupDist * pickupAvg + chainDist * chainAvg) * SEGMENTS_PER_EUCLIDEAN_UNIT;
+
+        const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
+        const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+        const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
+        const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
+        let chainScore = demand.payment / Math.max(totalTurns, 1);
+
+        if (estimatedBuildCost > snapshot.bot.money) {
+          chainScore *= 0.4;
+        }
+
+        if (chainScore > bestScore) {
+          bestScore = chainScore;
+        }
+      }
+    }
+
+    return bestScore;
   }
 
   /**

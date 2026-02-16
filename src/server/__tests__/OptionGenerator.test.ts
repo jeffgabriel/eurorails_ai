@@ -1008,3 +1008,237 @@ describe('OptionGenerator — chain ranking: short-haul beats long-haul', () => 
     expect(beerBuild).toBeDefined();
   });
 });
+
+describe('OptionGenerator — terrain-aware cost estimation', () => {
+  const { loadGridPoints, getTerrainCost } = require('../services/ai/MapTopology');
+
+  function makeTerrainGrid(terrain: TerrainType): Map<string, any> {
+    const grid = new Map();
+    // Bot network at (5,5)-(5,6)
+    grid.set('5,5', { row: 5, col: 5, terrain: TerrainType.Clear });
+    grid.set('5,6', { row: 5, col: 6, terrain: TerrainType.Clear });
+    // Intermediate hexes (5,7) through (5,14) — filled with provided terrain
+    for (let c = 7; c <= 14; c++) {
+      grid.set(`5,${c}`, { row: 5, col: c, terrain });
+    }
+    // Delivery city at (5,15)
+    grid.set('5,15', { row: 5, col: 15, terrain: TerrainType.SmallCity, name: 'TargetCity' });
+    return grid;
+  }
+
+  function makeHasLoadSnapshot(money: number): WorldSnapshot {
+    return {
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 5,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-bot-1',
+        money,
+        position: { row: 5, col: 5 },
+        existingSegments: [makeSegment(5, 5, 5, 6, 1)],
+        demandCards: [42],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'TargetCity', loadType: 'Tourists', payment: 20 }] },
+        ],
+        trainType: 'Freight',
+        loads: ['Tourists'], // carrying the load → hasLoad = true
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {},
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockComputeBuild.mockReturnValue([makeSegment(5, 5, 5, 6, 1)]);
+    setupMockDemandDeck([
+      { id: 42, demands: [{ city: 'TargetCity', payment: 20, resource: 'Tourists' }] },
+    ]);
+    setupMockGraph({});
+    // Restore realistic terrain costs for sampling
+    (getTerrainCost as jest.Mock).mockImplementation((terrain: TerrainType) => {
+      switch (terrain) {
+        case TerrainType.Clear: return 1;
+        case TerrainType.Mountain: return 2;
+        case TerrainType.Alpine: return 5;
+        case TerrainType.SmallCity: return 3;
+        case TerrainType.MediumCity: return 3;
+        case TerrainType.MajorCity: return 5;
+        case TerrainType.FerryPort: return 0;
+        case TerrainType.Water: return Infinity;
+        default: return 1;
+      }
+    });
+  });
+
+  afterEach(() => jest.clearAllMocks());
+
+  it('should penalize hasLoad chain through Alpine terrain when unaffordable', () => {
+    // Alpine terrain between bot and delivery city — cost ~52M, bot has 30M
+    loadGridPoints.mockReturnValue(makeTerrainGrid(TerrainType.Alpine));
+    const snapshot = makeHasLoadSnapshot(30);
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const targetBuild = builds.find(b => b.reason?.includes('TargetCity'));
+
+    expect(targetBuild).toBeDefined();
+    // Alpine estimate: ~9 dist * 1.2 * ~4.8 avg = ~51.6M > 30M → 0.4x penalty
+    // Base chainScore = 20 / 4 turns = 5.0, penalized = 2.0
+    expect(targetBuild!.chainScore).toBeLessThanOrEqual(2.5);
+  });
+
+  it('should NOT penalize hasLoad chain through clear terrain at same distance', () => {
+    // Clear terrain — cost ~13M, bot has 30M — well within budget
+    loadGridPoints.mockReturnValue(makeTerrainGrid(TerrainType.Clear));
+    const snapshot = makeHasLoadSnapshot(30);
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+    const targetBuild = builds.find(b => b.reason?.includes('TargetCity'));
+
+    expect(targetBuild).toBeDefined();
+    // Clear estimate: ~9 dist * 1.2 * ~1.2 avg = ~13M < 30M → no penalty
+    // chainScore = 20 / 2 turns = 10.0 (no penalty)
+    expect(targetBuild!.chainScore).toBeGreaterThan(5.0);
+  });
+
+  it('should produce lower chainScore for Alpine vs clear terrain at equal distance', () => {
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+
+    // Alpine route
+    loadGridPoints.mockReturnValue(makeTerrainGrid(TerrainType.Alpine));
+    const alpineOptions = OptionGenerator.generate(makeHasLoadSnapshot(30), buildOnly);
+    const alpineBuild = alpineOptions
+      .filter(o => o.action === AIActionType.BuildTrack && o.feasible)
+      .find(b => b.reason?.includes('TargetCity'));
+
+    // Clear route (reset mocks for fresh call)
+    jest.clearAllMocks();
+    mockComputeBuild.mockReturnValue([makeSegment(5, 5, 5, 6, 1)]);
+    setupMockDemandDeck([
+      { id: 42, demands: [{ city: 'TargetCity', payment: 20, resource: 'Tourists' }] },
+    ]);
+    setupMockGraph({});
+    (getTerrainCost as jest.Mock).mockImplementation((terrain: TerrainType) => {
+      switch (terrain) {
+        case TerrainType.Clear: return 1;
+        case TerrainType.Mountain: return 2;
+        case TerrainType.Alpine: return 5;
+        case TerrainType.SmallCity: return 3;
+        case TerrainType.MediumCity: return 3;
+        case TerrainType.MajorCity: return 5;
+        case TerrainType.FerryPort: return 0;
+        case TerrainType.Water: return Infinity;
+        default: return 1;
+      }
+    });
+    loadGridPoints.mockReturnValue(makeTerrainGrid(TerrainType.Clear));
+    const clearOptions = OptionGenerator.generate(makeHasLoadSnapshot(30), buildOnly);
+    const clearBuild = clearOptions
+      .filter(o => o.action === AIActionType.BuildTrack && o.feasible)
+      .find(b => b.reason?.includes('TargetCity'));
+
+    expect(alpineBuild).toBeDefined();
+    expect(clearBuild).toBeDefined();
+    // Clear terrain should be scored significantly higher than Alpine
+    expect(clearBuild!.chainScore).toBeGreaterThan(alpineBuild!.chainScore! * 2);
+  });
+});
+
+describe('OptionGenerator — starting city hub evaluation (Bug 8)', () => {
+  const { loadGridPoints, getTerrainCost } = require('../services/ai/MapTopology');
+  const majorCityGroupsModule = require('../../shared/services/majorCityGroups');
+  let hubSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockComputeBuild.mockReturnValue([makeSegment(10, 10, 10, 11, 1)]);
+    setupMockGraph({});
+
+    (getTerrainCost as jest.Mock).mockImplementation((terrain: TerrainType) => {
+      switch (terrain) {
+        case TerrainType.Clear: return 1;
+        case TerrainType.MajorCity: return 5;
+        case TerrainType.MediumCity: return 3;
+        default: return 1;
+      }
+    });
+
+    // Two hubs: Paris (near Bordeaux) and London (far from Bordeaux)
+    hubSpy = jest.spyOn(majorCityGroupsModule, 'getMajorCityGroups').mockReturnValue([
+      {
+        name: 'Paris',
+        center: { row: 10, col: 10 },
+        outposts: [{ row: 9, col: 10 }, { row: 11, col: 10 }],
+      },
+      {
+        name: 'London',
+        center: { row: 10, col: 40 },
+        outposts: [{ row: 9, col: 40 }, { row: 11, col: 40 }],
+      },
+    ]);
+
+    loadGridPoints.mockReturnValue(new Map([
+      ['9,10', { row: 9, col: 10, terrain: TerrainType.MajorCity, name: 'Paris' }],
+      ['11,10', { row: 11, col: 10, terrain: TerrainType.MajorCity }],
+      ['9,40', { row: 9, col: 40, terrain: TerrainType.MajorCity, name: 'London' }],
+      ['11,40', { row: 11, col: 40, terrain: TerrainType.MajorCity }],
+      ['15,12', { row: 15, col: 12, terrain: TerrainType.MediumCity, name: 'Bordeaux' }],
+      ['10,10', { row: 10, col: 10, terrain: TerrainType.MajorCity, name: 'Paris' }],
+    ]));
+
+    setupMockDemandDeck([
+      { id: 42, demands: [{ city: 'Paris', payment: 11, resource: 'Wine' }] },
+    ]);
+  });
+
+  afterEach(() => {
+    hubSpy.mockRestore();
+    jest.clearAllMocks();
+  });
+
+  it('should select Paris hub when Wine→Paris is cheapest from there', () => {
+    // Bordeaux (15,12) is ~6 units from Paris outposts but ~30 units from London.
+    // With no track, hub evaluation should pick Paris as the best starting city.
+    const snapshot: WorldSnapshot = {
+      gameId: 'game-1',
+      gameStatus: 'initialBuild',
+      turnNumber: 1,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-bot-1',
+        money: 50,
+        position: null,
+        existingSegments: [], // NO TRACK — triggers hub evaluation
+        demandCards: [42],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'Paris', loadType: 'Wine', payment: 11 }] },
+        ],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: { 'Bordeaux': ['Wine'] },
+    };
+
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+
+    // Should find Wine→Paris build option
+    const wineBuild = builds.find(b => b.reason?.includes('Wine') && b.reason?.includes('Paris'));
+    expect(wineBuild).toBeDefined();
+    // Chain score should reflect short Paris-to-Bordeaux distance (~6 units),
+    // NOT the near-zero distance that would result from using all hubs
+    expect(wineBuild!.chainScore).toBeGreaterThan(0);
+    expect(wineBuild!.chainScore).toBeLessThan(11); // payment=11, so score < 11
+  });
+});

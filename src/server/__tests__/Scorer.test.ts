@@ -438,8 +438,10 @@ describe('Scorer — calculatePickupScore', () => {
 
     const scored = Scorer.score([pickup], snapshot, null);
 
-    // Base: 50 + 40*0.5 = 70. With 0.15 penalty: 70 * 0.15 = 10.5
-    expect(scored[0].score!).toBeCloseTo(10.5, 0);
+    // Base: 50 + 40*0.5 = 70. Berlin (50,50) is ~56 units from network (11,10).
+    // Estimated build cost = 56 * 1.2 * 2.0 = ~134M > 50M money → unaffordable.
+    // Affordability penalty (0.05x): 70 * 0.05 = 3.5
+    expect(scored[0].score!).toBeCloseTo(3.5, 0);
     // Should be barely above PassTurn (0) but well below reachable pickup (50+)
     expect(scored[0].score!).toBeLessThan(15);
     expect(scored[0].score!).toBeGreaterThan(0);

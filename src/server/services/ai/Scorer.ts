@@ -362,7 +362,35 @@ export class Scorer {
         // Heavily penalize aspirational pickups — barely above PassTurn.
         // The bot should not fill its train with loads it can't deliver.
         // A load for a reachable destination should strongly dominate.
-        score *= 0.15;
+        let reachabilityPenalty = 0.15;
+
+        // Affordability check: estimate build cost to delivery city.
+        // If unaffordable, apply even heavier penalty to prevent the bot
+        // from picking up loads it can never deliver (e.g., Tourists→Oslo).
+        if (option.loadType) {
+          let minDeliveryCost = Infinity;
+          for (const rd of snapshot.bot.resolvedDemands) {
+            for (const demand of rd.demands) {
+              if (demand.loadType !== option.loadType) continue;
+              for (const [, point] of grid) {
+                if (point.name !== demand.city) continue;
+                for (const seg of snapshot.bot.existingSegments) {
+                  const dr = point.row - seg.to.row;
+                  const dc = point.col - seg.to.col;
+                  const dist = Math.sqrt(dr * dr + dc * dc);
+                  // Conservative flat estimate: 2.0M per segment
+                  const cost = dist * 1.2 * 2.0;
+                  if (cost < minDeliveryCost) minDeliveryCost = cost;
+                }
+              }
+            }
+          }
+          if (minDeliveryCost > snapshot.bot.money) {
+            reachabilityPenalty = 0.05; // near-zero: delivery is unaffordable
+          }
+        }
+
+        score *= reachabilityPenalty;
 
         // Don't stack unreachable loads: if the bot already carries loads
         // for unreachable destinations, score this at 0

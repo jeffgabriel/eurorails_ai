@@ -4,6 +4,7 @@ Tracks when the compounds skill was used and what benefit it provided.
 
 | Date | Task/Context | Benefit |
 |------|-------------|---------|
+| 2026-02-16 | Terrain-aware cost estimation — rankDemandChains AVG_COST_PER_SEGMENT=1.5 underestimates Alpine/ferry routes | Compounds search "terrain cost per milepost building cost calculation" mapped the full cost calculation architecture: TrackBuildingService.calculateNewSegmentCost (authoritative), MapTopology.getTerrainCost (1/2/5/3/5 costs), computeBuildSegments.getWaterCrossingCost (+2/3M rivers/lakes), and ferryPortCosts (4-16M). Confirmed rankDemandChains uses flat 1.5M average that misses all terrain variation. |
 | 2026-02-14 | Track usage fee bug — BFS picks shortest path through opponent track instead of own track | Identified all key files (trackUsageFees.ts, MovementExecutor.ts, UIManager.ts, PlayerStateService.ts) and the full data flow (computeTrackUsageForMove → bfsPath → confirmOpponentTrackFee popup) in a single query, enabling quick root cause identification |
 | 2026-02-14 | Bot builds track randomly, never reaches demand cities | Compounds identified OptionGenerator, computeBuildSegments, identifyTargetCity, and determineStartPositions as the key components. Revealed that computeBuildSegments had no target parameter and generateBuildTrackOptions never passed demand info. Confirmed BuildTowardMajorCity action type existed but was never generated. |
 | 2026-02-14 | Investigate server-side reversal enforcement | Compounds traced the full movement flow: moveTrainForUser → position update → movement_history. Found the client-side reversal logic (isReversalByDirectionFallback, isTerrainCityOrFerry) in TrainMovementManager.ts and confirmed no equivalent exists server-side. Also identified that movement_history already stores per-move segments server-side, providing the data needed for direction detection. |
@@ -13,6 +14,7 @@ Tracks when the compounds skill was used and what benefit it provided.
 | 2026-02-15 | Strategy Inspector gap analysis — 7 compounds queries | Mapped all 14 derived implementation needs across server and client. Compounds confirmed: no StrategyAudit type exists, no ScoreBreakdown type, no snapshotSummary generator, infeasible options have reason strings but no structured rejection tracking, ExecutionResult exists but lacks per-step logging, bot_turn_audits stores flat action rows (not rich audit JSON), bot:turn-complete emits basic BotTurnResult (no scoring data). Client-side: StrategyInspectorModal was built in prior branch (compounds/204) but deleted; DebugOverlay with backtick toggle exists as integration point. |
 | 2026-02-15 | DropLoad implementation — 3 compounds queries | Investigated AI bot pickup/delivery pipeline, LoadService drop/return methods, and AIStrategyEngine executeLoadActions orchestration. Compounds confirmed setLoadInCity/returnLoad/isLoadAvailableAtCity patterns in server LoadService, identified the full Phase 0/1.5 load action flow, and mapped OptionGenerator demand-matching logic for reachability checks. |
 | 2026-02-15 | Debug bot stuck at money=0 — 2 compounds queries | Investigated WorldSnapshotService loadAvailability population. Compounds immediately showed `getAvailableLoadsForCity` is called for `citiesOfInterest` (demand destinations + source cities), confirming load data was correct and the hard reachability gate in OptionGenerator was the root cause. |
+| 2026-02-16 | LLM-as-Strategy-Brain PRD analysis — 6 compounds queries | Validated pipeline architecture claims: confirmed Scorer is called 5 times per turn (Phase 0 deliveries, Phase 0 drops, Phase 0 pickups, Phase 1 movement, Phase 2 building), WorldSnapshot lacks opponent money/position/loads/trainType (PRD assumes this exists for Medium/Hard), FeasibleOption uses `action` field not `type` field (PRD uses wrong field name in guardrails). Traced full data flow and integration points. |
 | 2026-02-16 | PRD gap analysis — 18 compounds search queries | Systematic search across all 8 known issues: multi-delivery sequencing, scoring constants, drop load logic, state continuity, build oscillation, upgrade timing, discard hand scoring, victory tracking. Also searched for test infrastructure, bot-vs-bot loop, BotConfig, and load service. Compounds mapped the full component graph for each issue area, identifying what exists (AIStrategyEngine phases, Scorer constants, OptionGenerator chains, VictoryService BFS) and what's missing (no bot-side victory check, no state persistence between turns, no automated test harness, hard-coded discard score). |
 
 ## 2026-02-14 — Strategy Inspector Tech Spec Research
@@ -56,3 +58,16 @@ User reported bot building to Luxembourg (no reason), orphan Channel tracks tryi
 
 ### Benefit
 Compounds mapped the full build targeting pipeline across 4 files (OptionGenerator, computeBuildSegments, Scorer, AIStrategyEngine) and revealed 3 root causes: (1) extractSegments contiguity bug causing high-scored options to fail validation, (2) identifyTargetCity mislabeling when budget insufficient to reach actual target, (3) no minimum build threshold allowing $1M wasteful stubs.
+
+## 2026-02-16 — Bug Diagnosis: Bot Commits to Unaffordable Oslo Route
+
+### Context
+Bot picked up Tourists at London and committed all resources to building toward Oslo (30M delivery). This was unaffordable with 37M cash. Used 3 compounds queries to investigate the hasLoad budget penalty gap and Phase 0 pickup eagerness.
+
+### Commands Run
+1. `compounds search "rankDemandChains hasLoad budget penalty chainScore carried load"` — Confirmed rankDemandChains architecture, identified hasLoad scoring path
+2. `compounds search "Phase 0 pickup load decision before movement executeLoadActions"` — Mapped executeLoadActions→generatePickupOptions→Scorer pipeline for pre-movement pickups
+3. `compounds search "generatePickupOptions reachability gate aspirational pickup"` — Found pickup scoring with reachability soft-gate (0.15x penalty) but no affordability check
+
+### Benefit
+Compounds confirmed two root causes: (1) hasLoad branch in rankDemandChains has NO budget penalty (comment says "must deliver them"), causing Tourists→Oslo to score 5.0 and dominate all chains; (2) Phase 0 picks up loads matching any demand card without checking if delivery is affordable.

@@ -241,3 +241,82 @@ When adding a new code path that writes to shared state, audit all readers. They
 
 ### 14. Socket events are the client's only signal
 After any database write that changes player-visible state, emit the same socket event that the equivalent human-triggered code path emits. If you miss one, the client will never know the state changed.
+
+### 15. Heuristic cost estimates must account for terrain variation
+A flat average cost per segment (e.g., 1.5M) systematically underestimates routes through expensive terrain (Alpine 5M, ferries 4-16M) and over-estimates flat routes. Sample terrain along the straight-line path to get route-specific averages.
+
+### 16. Budget penalties must apply to ALL chains, including carried loads
+Even when the bot is already carrying a load, the delivery route may be unaffordable. Skipping the budget penalty for hasLoad chains causes the bot to commit to expensive routes it can never complete.
+
+### 17. Starting city selection requires demand-aware evaluation
+When the bot has no track, using all major city outposts as "distance 0" start positions makes every chain appear equally reachable. The starting city should be chosen by evaluating which hub enables the cheapest first delivery.
+
+---
+
+## Investigation Log — 2026-02-16: Bot Strategic Decision Bugs
+
+### Context
+Game 843fa390: Bot picked London as starting city, built toward Birmingham (Steel→Venezia chain), then picked up 2x Tourists and committed to building toward Oslo (30M delivery). With only 37M cash and an estimated 48-80M build cost to Oslo, the bot got permanently stuck oscillating with 12M and 2 undeliverable Tourists.
+
+### Bug 1: Ferry-unaware pathfinding (FIXED — `97ac695`)
+**Severity**: Critical | **File**: `computeBuildSegments.ts`
+
+`computeBuildSegments` Dijkstra only expanded via `getHexNeighbors()` — no concept of ferry crossings. The bot could build TO a ferry port but never cross to the other side. Affected all water-separated routes: England↔Ireland, English Channel, Denmark↔Sweden.
+
+**Fix**: Built `ferryAdjacency` map from `getFerryEdges()`, expanded ferry partner ports in Dijkstra loop at zero crossing cost (port build cost already paid), added `ferryEdgeKeys` set to skip ferry edges in `extractSegments`/`countNewSegments`.
+
+### Bug 2: extractSegments contiguity break (FIXED — `a152bc4`)
+**Severity**: High | **File**: `computeBuildSegments.ts`
+
+When extracting segments from a Dijkstra path, skipping built or ferry edges mid-sequence broke contiguity (`seg[n].to ≠ seg[n+1].from`). PlanValidator rejected these as invalid, consuming retry budget.
+
+**Fix**: Changed `continue` to `break` when skipping built/ferry edges after segments have already been emitted — preserves the contiguous prefix.
+
+### Bug 3: No minimum build budget threshold (FIXED — `a152bc4`)
+**Severity**: Medium | **File**: `OptionGenerator.ts`
+
+Bot attempted builds with 1-2M budget, producing single-segment stubs that wasted money without strategic progress.
+
+**Fix**: Added `MIN_BUILD_BUDGET = 5` threshold. Returns infeasible if budget is below minimum.
+
+### Bug 4: No movement reserve (FIXED — `a152bc4`)
+**Severity**: Medium | **File**: `OptionGenerator.ts`
+
+Bot spent all money on track, leaving 0M for track usage fees needed to move on opponent track. Got stuck unable to move.
+
+**Fix**: Added `MOVEMENT_RESERVE = 8` (during active game) deducted from available build budget.
+
+### Bug 5: Target city mislabeling (FIXED — `a152bc4`)
+**Severity**: Low | **File**: `OptionGenerator.ts`
+
+`identifyTargetCity` detected target by last segment endpoint, which was often a random milepost when budget was insufficient to reach the actual chain target. Caused wrong sticky target bonuses.
+
+**Fix**: Chain target city takes priority over segment endpoint detection.
+
+### Bug 6: Flat cost estimate ignores terrain (FIXED — uncommitted)
+**Severity**: High | **File**: `OptionGenerator.ts:34`
+
+`AVG_COST_PER_SEGMENT = 1.5` used for all chain cost estimates. Birmingham→Venezia crosses the Alps — actual average terrain cost is ~1.9M/segment (with Alpine hexes at 5M each), making the real build cost ~74M vs the estimated ~59M. Budget penalty never fired for routes that were actually unaffordable.
+
+**Fix**: Added `sampleAvgTerrainCost()` that walks the straight line between source and target, samples actual terrain at each hex, returns route-specific average. Catches Alpine corridors, mountains, cities, ferry ports. Raised fallback from 1.5 to 2.0.
+
+### Bug 7: No budget penalty for hasLoad chains (FIXED — uncommitted)
+**Severity**: Critical | **File**: `OptionGenerator.ts:940`
+
+When bot carries a load, `rankDemandChains` computed chainScore without ANY affordability check (comment: "must deliver them"). Tourists→Oslo scored 5.0 unchecked while Wine→Paris scored lower. Bot committed all resources to an unaffordable route.
+
+**Fix**: Applied same `chainScore *= 0.4` budget penalty when `estimatedBuildCost > bot.money` for hasLoad chains.
+
+### Bug 8: Starting city has no demand awareness (IDENTIFIED — not yet fixed)
+**Severity**: Critical | **File**: `OptionGenerator.ts:907-914`
+
+When bot has no track, `rankDemandChains` builds `networkPositions` from ALL 48 major city outposts. `minEuclidean` returns ~0 for ANY major city, making chain ranking blind to which starting city is optimal. Bot picked London/Birmingham for Steel→Venezia (~80M route) instead of Paris for Wine→Paris (~11M route).
+
+**Root cause**: `determineStartPositions` returns all major city outposts when no track exists. `rankDemandChains` uses these as `networkPositions`, making all cities appear equidistant.
+
+### Bug 9: Phase 0 eager pickup without affordability check (IDENTIFIED — not yet fixed)
+**Severity**: High | **File**: `AIStrategyEngine.ts:98-111`
+
+Phase 0 `executeLoadActions` auto-executes pickup options before movement. When bot is at London with Tourists available, it picks them up without checking if the delivery route (London→Oslo) is affordable. Once carried, hasLoad=true drives chain ranking.
+
+**Root cause**: `generatePickupOptions` and Scorer check reachability (0.15x penalty) but not affordability.
