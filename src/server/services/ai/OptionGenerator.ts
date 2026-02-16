@@ -78,7 +78,9 @@ export class OptionGenerator {
   /**
    * Generate feasible options for this bot's turn.
    * During initialBuild phase, only BuildTrack and PassTurn are offered.
+   * @param snapshot Current game state snapshot
    * @param actions Optional filter — only generate options for these action types.
+   * @param botMemory Optional bot memory for sticky build target logic (loyalty bonus).
    */
   static generate(snapshot: WorldSnapshot, actions?: Set<AIActionType>, botMemory?: BotMemoryState): FeasibleOption[] {
     const options: FeasibleOption[] = [];
@@ -660,6 +662,13 @@ export class OptionGenerator {
     return options;
   }
 
+  /**
+   * Generate BuildTrack options based on demand chain analysis.
+   * Uses ranked demand chains to determine which cities to build toward,
+   * then computes actual segments via Dijkstra pathfinding.
+   * @param snapshot Current game state
+   * @param botMemory Optional bot memory — passed to rankDemandChains for sticky target logic
+   */
   private static generateBuildTrackOptions(snapshot: WorldSnapshot, botMemory?: BotMemoryState): FeasibleOption[] {
     const budget = Math.min(TURN_BUILD_BUDGET, snapshot.bot.money);
     if (budget <= 0) {
@@ -859,6 +868,11 @@ export class OptionGenerator {
    * Rank demand chains by completability (payment / total distance).
    * A chain is: pickup_city → delivery_city for a specific load/card.
    * Returns chains sorted best-first so generateBuildTrackOptions targets the top N.
+   *
+   * When botMemory is provided, applies a loyalty bonus (1.5x chainScore) to chains
+   * matching the current build target, unless the target is stale (>= 5 turns).
+   * @param snapshot Current game state
+   * @param botMemory Optional bot memory for sticky build target loyalty bonus
    */
   private static rankDemandChains(snapshot: WorldSnapshot, botMemory?: BotMemoryState): DemandChain[] {
     const grid = loadGridPoints();
