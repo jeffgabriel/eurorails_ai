@@ -124,6 +124,7 @@ export interface ServerToClientEvents {
   'new-chat-message': (data: { gameId: ID; message: any }) => void;
   'chat-status': (data: { gameId: ID; messageId: number; status: 'delivered' | 'read' }) => void;
   'chat-error': (data: { error: string; message: string }) => void;
+  'message-error': (data: { tempId: string; error: string; message: string }) => void;
 }
 
 // Form validation types

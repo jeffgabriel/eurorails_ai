@@ -44,6 +44,7 @@ function getDMKey(gameId: string, otherUserId: string): string {
 type MessageListener = (message: ChatMessage) => void;
 type UnreadCountListener = (gameId: string, count: number) => void;
 type ErrorListener = (error: { code: string; message: string }) => void;
+type FlaggedListener = (optimisticId: string, errorMessage: string) => void;
 
 /**
  * Manages chat state and real-time messaging for games
@@ -55,6 +56,8 @@ export class ChatStateService {
   private messageListeners: Map<string, Set<MessageListener>> = new Map();
   private unreadCountListeners: Set<UnreadCountListener> = new Set();
   private errorListeners: Set<ErrorListener> = new Set();
+  private flaggedListeners: Set<FlaggedListener> = new Set();
+  private flaggedOptimisticIds: Set<string> = new Set();
   private userId: string | null = null;
   private initialized = false;
 
@@ -95,6 +98,11 @@ export class ChatStateService {
     // Listen for chat errors
     socketService.onChatError?.((data: { error: string; message: string }) => {
       this.notifyError({ code: data.error, message: data.message });
+    });
+
+    // Listen for message-level errors (moderation, validation, etc.)
+    socketService.onMessageError?.((data: { tempId: string; error: string; message: string }) => {
+      this.handleMessageError(data.tempId, data.error, data.message);
     });
   }
 
@@ -236,7 +244,7 @@ export class ChatStateService {
   /**
    * Send a message (optimistic UI update)
    */
-  async sendMessage(gameId: string, message: string, recipientType: 'game' | 'player' = 'game', recipientId?: string): Promise<void> {
+  async sendMessage(gameId: string, message: string, recipientType: 'game' | 'player' = 'game', recipientId?: string): Promise<string> {
     if (!this.userId) {
       throw new Error('ChatStateService not initialized');
     }
@@ -298,12 +306,13 @@ export class ChatStateService {
 
       // Note: The actual message confirmation will come via socket 'new-chat-message' event
       // At that point, we'll remove the optimistic message and add the real one
+      return optimisticId;
     } catch (error) {
       // Mark optimistic message as failed
       optimisticMessage.isPending = false;
       optimisticMessage.error = 'Failed to send message';
       console.error('[ChatStateService] Failed to send message:', error);
-      throw error;
+      return optimisticId;
     }
   }
 
@@ -620,6 +629,54 @@ export class ChatStateService {
   }
 
   /**
+   * Handle a message-error event from the server (moderation, rate limit, etc.)
+   * Finds the optimistic message by tempId and marks it as flagged.
+   */
+  private handleMessageError(tempId: string, error: string, errorMessage: string): void {
+    // Search game chats and DM chats for the matching optimistic message
+    for (const state of [...this.gameChats.values(), ...this.dmChats.values()]) {
+      const opt = state.optimisticMessages.find((m) => m.optimisticId === tempId);
+      if (opt) {
+        opt.isPending = false;
+        opt.error = errorMessage;
+        this.flaggedOptimisticIds.add(tempId);
+        this.notifyFlaggedListeners(tempId, errorMessage);
+        return;
+      }
+    }
+  }
+
+  /**
+   * Subscribe to flagged message notifications
+   */
+  onMessageFlagged(listener: FlaggedListener): () => void {
+    this.flaggedListeners.add(listener);
+    return () => {
+      this.flaggedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Check if an optimistic message was flagged
+   */
+  isFlagged(optimisticId: string): boolean {
+    return this.flaggedOptimisticIds.has(optimisticId);
+  }
+
+  /**
+   * Notify flagged listeners
+   */
+  private notifyFlaggedListeners(optimisticId: string, errorMessage: string): void {
+    for (const listener of this.flaggedListeners) {
+      try {
+        listener(optimisticId, errorMessage);
+      } catch (err) {
+        console.error('[ChatStateService] Flagged listener error:', err);
+      }
+    }
+  }
+
+  /**
    * Clean up when leaving a game
    */
   cleanup(gameId?: string): void {
@@ -644,6 +701,8 @@ export class ChatStateService {
       this.messageListeners.clear();
       this.unreadCountListeners.clear();
       this.errorListeners.clear();
+      this.flaggedListeners.clear();
+      this.flaggedOptimisticIds.clear();
     }
   }
 }

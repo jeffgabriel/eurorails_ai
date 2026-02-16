@@ -440,7 +440,9 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         // 4. Run content moderation
         if (moderationService.isReady()) {
           const moderationResult = await moderationService.checkMessage(trimmedMessage);
+
           if (!moderationResult.isAppropriate) {
+            console.log(`[Chat] Message rejected by moderation for user ${userId}`);
             socket.emit('message-error', {
               tempId,
               error: 'inappropriate_content',
@@ -448,6 +450,8 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
             });
             return;
           }
+        } else {
+          console.log('[Chat] Moderation service not ready, skipping moderation check');
         }
 
         // 5. Store message

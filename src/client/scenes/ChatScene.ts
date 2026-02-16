@@ -26,6 +26,8 @@ export class ChatScene extends Phaser.Scene {
   private dmRecipientId: string | null = null;
   private dmRecipientName: string | null = null;
   private messageUnsubscribe: (() => void) | null = null;
+  private flaggedUnsubscribe: (() => void) | null = null;
+  private optimisticBubbleMap: Map<string, ChatMessageBubble> = new Map();
 
   // UI components
   private container!: Phaser.GameObjects.Container;
@@ -37,6 +39,9 @@ export class ChatScene extends Phaser.Scene {
   private inputField?: HTMLInputElement;
   private scrollPosition: number = 0;
   private maxScroll: number = 0;
+  private tooltipContainer: Phaser.GameObjects.Container | null = null;
+  private tooltipBg: Phaser.GameObjects.Graphics | null = null;
+  private tooltipText: Phaser.GameObjects.Text | null = null;
 
   // Constants
   private readonly SIDEBAR_WIDTH_DESKTOP = 350;
@@ -187,7 +192,13 @@ export class ChatScene extends Phaser.Scene {
         const deltaY = startY - pointer.y;
         this.scroll(deltaY);
         startY = pointer.y;
+      } else {
+        this.handleFlaggedBubbleHover(pointer);
       }
+    });
+
+    scrollZone.on('pointerout', () => {
+      this.hideFlaggedTooltip();
     });
 
     this.container.add(scrollZone);
@@ -267,6 +278,14 @@ export class ChatScene extends Phaser.Scene {
     chatStateService.onError((error) => {
       this.showError(error.message);
     });
+
+    // Listen for flagged messages (moderation)
+    this.flaggedUnsubscribe = chatStateService.onMessageFlagged((optimisticId: string, errorMessage: string) => {
+      const bubble = this.optimisticBubbleMap.get(optimisticId);
+      if (bubble) {
+        bubble.markAsFlagged(errorMessage);
+      }
+    });
   }
 
   /**
@@ -345,10 +364,17 @@ export class ChatScene extends Phaser.Scene {
     this.inputField.value = '';
 
     try {
+      let optimisticId: string;
       if (this.dmRecipientId) {
-        await chatStateService.sendMessage(this.gameId, message, 'player', this.dmRecipientId);
+        optimisticId = await chatStateService.sendMessage(this.gameId, message, 'player', this.dmRecipientId);
       } else {
-        await chatStateService.sendMessage(this.gameId, message);
+        optimisticId = await chatStateService.sendMessage(this.gameId, message);
+      }
+
+      // Map the optimisticId to the last bubble (just created by the listener)
+      const lastBubble = this.messagesList[this.messagesList.length - 1];
+      if (lastBubble) {
+        this.optimisticBubbleMap.set(optimisticId, lastBubble);
       }
     } catch (error) {
       console.error('[ChatScene] Failed to send message:', error);
@@ -527,6 +553,7 @@ export class ChatScene extends Phaser.Scene {
       bubble.destroy();
     }
     this.messagesList = [];
+    this.optimisticBubbleMap.clear();
     this.updateScrollBounds();
   }
 
@@ -595,11 +622,78 @@ export class ChatScene extends Phaser.Scene {
   }
 
   /**
+   * Check if the pointer is hovering over a flagged bubble and show/hide tooltip
+   */
+  private handleFlaggedBubbleHover(pointer: Phaser.Input.Pointer): void {
+    // Convert pointer world coords to local coords within messagesContainer
+    const containerX = this.container.x;
+    const localX = pointer.x - containerX;
+    const localY = pointer.y - this.messagesContainer.y - this.container.y + this.scrollPosition;
+
+    for (const bubble of this.messagesList) {
+      const tooltipText = bubble.getFlaggedTooltipText();
+      if (tooltipText && bubble.containsPoint(localX, localY)) {
+        this.showFlaggedTooltip(pointer.x, pointer.y, tooltipText);
+        return;
+      }
+    }
+
+    this.hideFlaggedTooltip();
+  }
+
+  /**
+   * Show the flagged message tooltip at the given screen position
+   */
+  private showFlaggedTooltip(screenX: number, screenY: number, text: string): void {
+    if (!this.tooltipContainer) {
+      this.tooltipBg = this.add.graphics();
+      this.tooltipText = this.add.text(0, 0, '', {
+        fontSize: '11px',
+        fontFamily: UI_FONT_FAMILY,
+        color: '#ffffff',
+        wordWrap: { width: 220 },
+      });
+      this.tooltipContainer = this.add.container(0, 0, [this.tooltipBg, this.tooltipText]);
+      this.tooltipContainer.setDepth(1000);
+    }
+
+    const padding = 8;
+    this.tooltipText!.setText(text);
+    const tooltipWidth = this.tooltipText!.width + padding * 2;
+    const tooltipHeight = this.tooltipText!.height + padding * 2;
+
+    this.tooltipBg!.clear();
+    this.tooltipBg!.fillStyle(0x222222, 0.95);
+    this.tooltipBg!.fillRoundedRect(0, 0, tooltipWidth, tooltipHeight, 4);
+
+    this.tooltipText!.setPosition(padding, padding);
+
+    // Position above the pointer
+    this.tooltipContainer.setPosition(
+      screenX - tooltipWidth / 2,
+      screenY - tooltipHeight - 10
+    );
+    this.tooltipContainer.setVisible(true);
+  }
+
+  /**
+   * Hide the flagged message tooltip
+   */
+  private hideFlaggedTooltip(): void {
+    if (this.tooltipContainer) {
+      this.tooltipContainer.setVisible(false);
+    }
+  }
+
+  /**
    * Clean up when scene is destroyed
    */
   shutdown(): void {
     this.messageUnsubscribe?.();
     this.messageUnsubscribe = null;
+    this.flaggedUnsubscribe?.();
+    this.flaggedUnsubscribe = null;
+    this.optimisticBubbleMap.clear();
 
     // Clean up HTML input
     if (this.inputField) {
