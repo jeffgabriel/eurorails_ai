@@ -1,110 +1,205 @@
 /**
  * ModerationService Unit Tests
- * Tests for content moderation with Llama Guard model
- * Note: These tests use the placeholder implementation
+ * Tests for content moderation via Llama Guard model served by Ollama.
+ * Llama Guard 3 returns binary "safe" / "unsafe\nS10" responses.
  */
 
-import { moderationService } from '../services/moderationService';
+import { ModerationService } from '../services/moderationService';
 
-// Mock S3 and filesystem for testing
-jest.mock('@aws-sdk/client-s3');
-jest.mock('fs');
-jest.mock('stream/promises');
+// Helper to create a mock fetch response
+function mockFetchResponse(body: any, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  } as Response;
+}
 
 describe('ModerationService', () => {
-  beforeAll(async () => {
-    // Mock initialization to bypass S3 download in tests
-    (moderationService as any).isInitialized = true;
-    (moderationService as any).model = { loaded: true };
+  let service: ModerationService;
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    service = new ModerationService();
+    global.fetch = jest.fn();
   });
 
-  describe('getHealthStatus', () => {
-    it('should return health status', () => {
-      const status = moderationService.getHealthStatus();
+  afterEach(() => {
+    global.fetch = originalFetch;
+    jest.restoreAllMocks();
+  });
 
-      expect(status).toBeDefined();
-      expect(status.initialized).toBeDefined();
-      expect(status.modelPath).toBe('/tmp/llama-guard');
-      expect(status.confidenceThreshold).toBeDefined();
-      expect(typeof status.confidenceThreshold).toBe('number');
+  describe('initialize', () => {
+    it('should initialize successfully when Ollama has the model', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue(
+        mockFetchResponse({ name: 'llama-guard3:1b' })
+      );
+
+      await service.initialize();
+
+      expect(service.isReady()).toBe(true);
+      expect(global.fetch).toHaveBeenCalledWith(
+        'http://localhost:11434/api/show',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ name: 'llama-guard3:1b' }),
+        })
+      );
+    });
+
+    it('should skip if already initialized', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue(
+        mockFetchResponse({ name: 'llama-guard3:1b' })
+      );
+
+      await service.initialize();
+      await service.initialize();
+
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw when Ollama server is unreachable', async () => {
+      (global.fetch as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(service.initialize()).rejects.toThrow(
+        'MODERATION_INITIALIZATION_FAILED'
+      );
+      expect(service.isReady()).toBe(false);
+    });
+
+    it('should throw when model is not found', async () => {
+      (global.fetch as jest.Mock).mockResolvedValue(
+        mockFetchResponse({ error: 'model not found' }, 404)
+      );
+
+      await expect(service.initialize()).rejects.toThrow(
+        'MODERATION_INITIALIZATION_FAILED'
+      );
+      expect(service.isReady()).toBe(false);
     });
   });
 
-  describe('isReady', () => {
-    it('should return boolean ready state', () => {
-      const isReady = moderationService.isReady();
-
-      expect(typeof isReady).toBe('boolean');
+  describe('checkMessage', () => {
+    beforeEach(async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ name: 'llama-guard3:1b' })
+      );
+      await service.initialize();
     });
-  });
 
-  describe('checkMessage (placeholder implementation)', () => {
     it('should reject empty messages', async () => {
-      const result = await moderationService.checkMessage('');
+      const result = await service.checkMessage('');
 
       expect(result.isAppropriate).toBe(false);
-      expect(result.confidence).toBe(1.0);
+      expect(result.violatedCategories).toEqual([]);
     });
 
     it('should reject whitespace-only messages', async () => {
-      const result = await moderationService.checkMessage('   ');
+      const result = await service.checkMessage('   ');
 
       expect(result.isAppropriate).toBe(false);
-      expect(result.confidence).toBe(1.0);
     });
 
-    it('should approve normal messages', async () => {
-      const result = await moderationService.checkMessage('Hello, how are you?');
+    it('should approve safe messages', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ response: 'safe' })
+      );
+
+      const result = await service.checkMessage('Hello, how are you?');
 
       expect(result.isAppropriate).toBe(true);
-      expect(result.confidence).toBeGreaterThan(0);
+      expect(result.violatedCategories).toEqual([]);
     });
 
-    it('should flag messages with inappropriate content (placeholder)', async () => {
-      const result = await moderationService.checkMessage('This is spam content');
+    it('should reject unsafe messages with category', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ response: 'unsafe\nS10' })
+      );
+
+      const result = await service.checkMessage('some hateful content');
 
       expect(result.isAppropriate).toBe(false);
-      expect(result.confidence).toBeGreaterThan(0);
+      expect(result.violatedCategories).toEqual(['S10']);
     });
 
-    it('should handle various message lengths', async () => {
-      const shortMessage = await moderationService.checkMessage('Hi');
-      const mediumMessage = await moderationService.checkMessage('Hello, this is a test message.');
-      const longMessage = await moderationService.checkMessage('A'.repeat(500));
+    it('should reject unsafe messages with multiple categories', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ response: 'unsafe\nS1,S10' })
+      );
 
-      expect(shortMessage.isAppropriate).toBeDefined();
-      expect(mediumMessage.isAppropriate).toBeDefined();
-      expect(longMessage.isAppropriate).toBeDefined();
+      const result = await service.checkMessage('violent and hateful content');
+
+      expect(result.isAppropriate).toBe(false);
+      expect(result.violatedCategories).toEqual(['S1', 'S10']);
     });
 
-    it('should return confidence scores', async () => {
-      const result = await moderationService.checkMessage('Test message');
+    it('should fail closed on API error', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ error: 'internal error' }, 500)
+      );
 
-      expect(result.confidence).toBeDefined();
-      expect(typeof result.confidence).toBe('number');
-      expect(result.confidence).toBeGreaterThanOrEqual(0);
-      expect(result.confidence).toBeLessThanOrEqual(1);
+      const result = await service.checkMessage('test message');
+
+      expect(result.isAppropriate).toBe(false);
     });
 
-    it('should handle unicode and special characters', async () => {
-      const emojiResult = await moderationService.checkMessage('Hello! 👋 🎉');
-      const unicodeResult = await moderationService.checkMessage('Ñoño café');
-      const specialCharsResult = await moderationService.checkMessage('Test @ #$% message');
+    it('should fail closed on network error', async () => {
+      (global.fetch as jest.Mock).mockRejectedValueOnce(
+        new Error('ECONNREFUSED')
+      );
 
-      expect(emojiResult.isAppropriate).toBeDefined();
-      expect(unicodeResult.isAppropriate).toBeDefined();
-      expect(specialCharsResult.isAppropriate).toBeDefined();
+      const result = await service.checkMessage('test message');
+
+      expect(result.isAppropriate).toBe(false);
+    });
+
+    it('should fail closed on unparseable response', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ response: 'gibberish output' })
+      );
+
+      const result = await service.checkMessage('test message');
+
+      expect(result.isAppropriate).toBe(false);
+    });
+
+    it('should send correct prompt format to Ollama', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce(
+        mockFetchResponse({ response: 'safe' })
+      );
+
+      await service.checkMessage('Hello world');
+
+      const generateCall = (global.fetch as jest.Mock).mock.calls.find(
+        (call: any[]) => call[0].includes('/api/generate')
+      );
+      expect(generateCall).toBeDefined();
+
+      const body = JSON.parse(generateCall[1].body);
+      expect(body.model).toBe('llama-guard3:1b');
+      expect(body.stream).toBe(false);
+      expect(body.prompt).toContain('Hello world');
+      expect(body.prompt).toContain('<BEGIN UNSAFE CONTENT CATEGORIES>');
+      expect(body.prompt).toContain('<END UNSAFE CONTENT CATEGORIES>');
     });
   });
 
-  describe('confidence threshold', () => {
-    it('should use configured confidence threshold', () => {
-      const status = moderationService.getHealthStatus();
+  describe('checkMessage - not initialized', () => {
+    it('should throw MODERATION_NOT_INITIALIZED', async () => {
+      await expect(service.checkMessage('test')).rejects.toThrow(
+        'MODERATION_NOT_INITIALIZED'
+      );
+    });
+  });
 
-      // Default threshold from env or 0.75
-      expect(status.confidenceThreshold).toBeDefined();
-      expect(status.confidenceThreshold).toBeGreaterThanOrEqual(0);
-      expect(status.confidenceThreshold).toBeLessThanOrEqual(1);
+  describe('getHealthStatus', () => {
+    it('should return Ollama config', () => {
+      const status = service.getHealthStatus();
+
+      expect(status.initialized).toBe(false);
+      expect(status.ollamaUrl).toBe('http://localhost:11434');
+      expect(status.modelName).toBe('llama-guard3:1b');
     });
   });
 });

@@ -389,6 +389,12 @@ class SocketService {
     this.socket.on('chat-error', callback);
   }
 
+  onMessageError(callback: (data: { tempId: string; error: string; message: string }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('message-error');
+    this.socket.on('message-error', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }

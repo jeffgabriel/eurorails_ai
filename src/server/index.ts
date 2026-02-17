@@ -291,8 +291,8 @@ async function startServer() {
             process.exit(1);
         }
 
-        // Initialize moderation service (download model from S3 if needed)
-        // Note: This is async and may take 1-2 minutes on first cold start
+        // Initialize moderation service (verify Ollama model availability)
+        // Note: Requires Ollama running with llama-guard3:1b model pulled
         try {
             console.log('[Startup] Initializing moderation service...');
             await moderationService.initialize();
