@@ -798,16 +798,20 @@ export class OptionGenerator {
       // B1: Continuation build — if primary build toward pickup city used less
       // than half the budget, spend the remainder building toward delivery city.
       // Prevents wasting budget when pickup is close (e.g., Szczecin 2 hexes away).
+      // Bug A fix: start ONLY from the last primary segment endpoint. Previous
+      // version passed all endpoints, so the Dijkstra could start from the FIRST
+      // primary segment (nearest to delivery), producing non-contiguous combined
+      // segments that PlanValidator rejected.
       if (!chain.hasLoad && totalCost < budget * 0.5 && chain.deliveryTargets.length > 0) {
         const remainingBudget = budget - totalCost;
-        // Extended start positions: original starts + new segment endpoints
-        const extendedStarts = [...startPositions];
-        for (const seg of segments) {
-          extendedStarts.push({ row: seg.to.row, col: seg.to.col });
-        }
-        const combinedExisting = [...snapshot.bot.existingSegments, ...segments];
+        const lastSeg = segments[segments.length - 1];
+        const contStart = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+        // Pass empty existingSegments so computeBuildSegments uses our explicit
+        // contStart (it ignores startPositions when existingSegments is non-empty).
+        // The primary segments aren't "built" yet, so re-traversal is harmless —
+        // the Dijkstra will naturally prefer forward progress toward delivery.
         const contSegments = computeBuildSegments(
-          extendedStarts, combinedExisting, remainingBudget,
+          contStart, [], remainingBudget,
           undefined, occupiedEdges, chain.deliveryTargets,
         );
         if (contSegments.length > 0) {

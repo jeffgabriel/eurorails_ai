@@ -582,9 +582,10 @@ export class Scorer {
     }
 
     // B6: Prevent discard death spiral — max 2 consecutive discards.
-    // After 2 discards, score drops to 0 so the bot must build/move instead.
+    // Score -1 so PassTurn (0) wins the tiebreaker. Previously returned 0,
+    // which tied with PassTurn and DiscardHand won by sort order.
     if (botMemory.consecutiveDiscards >= 2) {
-      return 0;
+      return -1;
     }
 
     // Build set of grid coords on the bot's track network

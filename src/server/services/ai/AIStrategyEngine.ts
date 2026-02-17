@@ -423,13 +423,13 @@ export class AIStrategyEngine {
       const candidate = scoredPickups.find(o => o.feasible);
       if (!candidate) break;
 
-      // Score gate: don't auto-execute low-confidence pickups (e.g., unreachable
-      // or unaffordable delivery destinations). The 0.15x/0.05x penalties in
-      // calculatePickupScore bring these below ~10. Without this gate, the bot
-      // eagerly grabs Tourists→Valencia with score 3.5, then wastes turns.
-      const MIN_PICKUP_SCORE = 10;
-      if ((candidate.score ?? 0) < MIN_PICKUP_SCORE) {
-        console.log(`${tag} ${phase}: skipping PickupLoad ${candidate.loadType} (score=${candidate.score} < ${MIN_PICKUP_SCORE})`);
+      // Score gate: only block pickups that the Scorer explicitly zeroed out.
+      // Score=0 means "stacking unreachable loads" or another hard rejection.
+      // Any positive score (even heavily penalized like 3.1) means the pickup
+      // has some value — and since Phase 0/1.5 pickups are at the current city
+      // (free), even a low-confidence pickup is worth taking.
+      if ((candidate.score ?? 0) <= 0) {
+        console.log(`${tag} ${phase}: skipping PickupLoad ${candidate.loadType} (score=${candidate.score} <= 0)`);
         break;
       }
 

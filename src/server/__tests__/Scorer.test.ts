@@ -850,7 +850,7 @@ describe('Scorer — calculateDiscardScore (BE-005: intelligent discard)', () =>
     expect(discardScored.score!).toBeGreaterThan(buildScored.score!);
   });
 
-  it('should return 0 when consecutiveDiscards >= 2 (B6: prevent death spiral)', () => {
+  it('should return -1 when consecutiveDiscards >= 2 (B6: prevent death spiral)', () => {
     mockLoadGridPoints.mockReturnValue(buildGridWithCities([
       { name: 'Berlin', row: 50, col: 50 },  // unreachable
       { name: 'Paris', row: 60, col: 60 },
@@ -859,12 +859,13 @@ describe('Scorer — calculateDiscardScore (BE-005: intelligent discard)', () =>
 
     const option = makeDiscardOption();
     const snapshot = makeDiscardSnapshot();
-    // Normally this would score 20 (desperate), but 2 consecutive discards blocks it
+    // Normally this would score 20 (desperate), but 2 consecutive discards blocks it.
+    // Returns -1 so PassTurn (0) wins the tiebreaker.
     const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 2 });
 
     const scored = Scorer.score([option], snapshot, null, memory);
 
-    expect(scored[0].score).toBe(0);
+    expect(scored[0].score).toBe(-1);
   });
 
   it('should allow discard when consecutiveDiscards < 2', () => {
