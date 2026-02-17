@@ -160,7 +160,13 @@ export class Scorer {
     // ROI penalty: if estimated build investment exceeds payment, push score below PassTurn.
     // Positive ROI: no penalty (chainScore is already healthy from profit-based formula).
     // Negative ROI: chainScore≈0.01 → bonus≈0.2, plus penalty of |profit| pushes total < 0.
-    if (option.estimatedBuildCost !== undefined && option.payment !== undefined) {
+    // Skip during initialBuild — the bot MUST build track in initial turns, so penalizing
+    // negative-ROI chains would cause it to pass when building is mandatory.
+    if (
+      snapshot.gameStatus !== 'initialBuild' &&
+      option.estimatedBuildCost !== undefined &&
+      option.payment !== undefined
+    ) {
       const profit = option.payment - option.estimatedBuildCost;
       if (profit < 0) {
         score -= Math.abs(profit);

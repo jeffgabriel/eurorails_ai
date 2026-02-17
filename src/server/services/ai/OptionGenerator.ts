@@ -1247,11 +1247,10 @@ export class OptionGenerator {
         const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
         const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
         const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
-        // ROI-based scoring: profit = payment - build investment
-        const profit = demand.payment - estimatedBuildCost;
-        let chainScore = profit > 0
-          ? profit / Math.max(totalTurns, 1)
-          : 0.01; // floor negative-profit chains
+        // Hub selection uses payment/turns (not ROI) — this function compares
+        // starting locations, not build-vs-pass decisions. ROI doesn't apply
+        // when no track exists yet (every chain's build cost exceeds payment).
+        let chainScore = demand.payment / Math.max(totalTurns, 1);
 
         if (estimatedBuildCost > snapshot.bot.money) {
           const ratio = snapshot.bot.money / estimatedBuildCost;

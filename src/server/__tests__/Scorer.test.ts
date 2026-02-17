@@ -1059,4 +1059,21 @@ describe('Scorer — ROI-driven build scoring', () => {
     expect(scored[0].action).toBe(AIActionType.BuildTrack);
     expect(scored[0].score!).toBeGreaterThan(scored[1].score!);
   });
+
+  it('should skip ROI penalty during initialBuild (bot must build track)', () => {
+    // Same negative-ROI option that scores below PassTurn during active play...
+    const build = makeROIBuildOption(7, 20, 0.01);
+    const pass = makePassOption();
+
+    // ...but during initialBuild, the penalty is skipped so build beats pass
+    const initialBuildSnapshot: WorldSnapshot = {
+      ...makeSnapshot(),
+      gameStatus: 'initialBuild',
+    };
+    const scored = Scorer.score([build, pass], initialBuildSnapshot, makeBotConfig());
+
+    const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
+    const passScored = scored.find(o => o.action === AIActionType.PassTurn)!;
+    expect(buildScored.score!).toBeGreaterThan(passScored.score!);
+  });
 });
