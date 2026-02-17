@@ -133,6 +133,7 @@ interface DemandChain {
   deliveryTargets: GridCoord[];
   chainScore: number;
   hasLoad: boolean;
+  estimatedBuildCost: number;
 }
 
 export class OptionGenerator {
@@ -808,11 +809,12 @@ export class OptionGenerator {
         const contStart = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
         // Pass empty existingSegments so computeBuildSegments uses our explicit
         // contStart (it ignores startPositions when existingSegments is non-empty).
-        // The primary segments aren't "built" yet, so re-traversal is harmless —
-        // the Dijkstra will naturally prefer forward progress toward delivery.
+        // Pass knownSegments so Dijkstra deduplicates against the bot's existing
+        // track AND the primary segments we just built, preventing parallel track.
         const contSegments = computeBuildSegments(
           contStart, [], remainingBudget,
           undefined, occupiedEdges, chain.deliveryTargets,
+          [...snapshot.bot.existingSegments, ...segments],
         );
         if (contSegments.length > 0) {
           allSegments = [...segments, ...contSegments];
@@ -831,6 +833,7 @@ export class OptionGenerator {
         targetCity: chainTargetCity ?? segTargetCity ?? undefined,
         payment: chain.payment,
         chainScore: chain.chainScore,
+        estimatedBuildCost: chain.estimatedBuildCost,
       }));
     }
 
@@ -1024,6 +1027,13 @@ export class OptionGenerator {
       }
     }
 
+    // Build set of all grid coords on the bot's track network for track reuse checks
+    const onNetwork = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      onNetwork.add(`${seg.from.row},${seg.from.col}`);
+      onNetwork.add(`${seg.to.row},${seg.to.col}`);
+    }
+
     const chains: DemandChain[] = [];
 
     for (const rd of snapshot.bot.resolvedDemands) {
@@ -1041,20 +1051,26 @@ export class OptionGenerator {
 
         if (hasLoad) {
           // Bot already carries the load — just need to reach delivery city
+          // Track reuse: if delivery target is already on the bot's network, build cost is zero
+          const deliveryOnNetwork = deliveryTargets.some(t => onNetwork.has(`${t.row},${t.col}`));
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
           const pair = closestPair(networkPositions, deliveryTargets);
           const avgCost = pair ? sampleAvgTerrainCost(pair[0], pair[1], grid) : AVG_COST_PER_SEGMENT;
-          const estimatedBuildCost = deliveryDist * SEGMENTS_PER_EUCLIDEAN_UNIT * avgCost;
+          const estimatedBuildCost = deliveryOnNetwork ? 0 : deliveryDist * SEGMENTS_PER_EUCLIDEAN_UNIT * avgCost;
           const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
           const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
           const estimatedMoveTurns = Math.ceil(deliveryDist / trainSpeed);
           const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
-          let chainScore = demand.payment / Math.max(totalTurns, 1);
+          // ROI-based scoring: profit = payment - build investment
+          const profit = demand.payment - estimatedBuildCost;
+          let chainScore = profit > 0
+            ? profit / Math.max(totalTurns, 1)
+            : 0.01; // floor negative-profit chains (preserve sort, but near-zero)
           // Budget penalty: proportional — the further over budget, the harder
           // the penalty. (money/cost)² so a 50% overspend gets 0.44x, a 3x
           // overspend gets 0.11x. Prevents the bot from committing to routes
           // it can't afford (e.g., 37M cash vs 60M estimated build cost).
-          if (estimatedBuildCost > snapshot.bot.money) {
+          if (estimatedBuildCost > 0 && estimatedBuildCost > snapshot.bot.money) {
             const ratio = snapshot.bot.money / estimatedBuildCost;
             chainScore *= ratio * ratio;
           }
@@ -1068,6 +1084,7 @@ export class OptionGenerator {
             deliveryTargets,
             chainScore,
             hasLoad: true,
+            estimatedBuildCost,
           });
         } else {
           // Find the BEST pickup city: minimize total chain distance
@@ -1102,6 +1119,10 @@ export class OptionGenerator {
           }
           if (pickupTargets.length === 0) continue;
 
+          // Track reuse: zero out build cost for legs where the target is already on the network
+          const pickupOnNetwork = pickupTargets.some(t => onNetwork.has(`${t.row},${t.col}`));
+          const deliveryOnNetwork = deliveryTargets.some(t => onNetwork.has(`${t.row},${t.col}`));
+
           const pickupDist = minEuclidean(networkPositions, pickupTargets);
           const chainDist = minEuclidean(pickupTargets, deliveryTargets);
           const deliveryDist = minEuclidean(networkPositions, deliveryTargets);
@@ -1111,17 +1132,23 @@ export class OptionGenerator {
           const chainPair = closestPair(pickupTargets, deliveryTargets);
           const pickupAvgCost = pickupPair ? sampleAvgTerrainCost(pickupPair[0], pickupPair[1], grid) : AVG_COST_PER_SEGMENT;
           const chainAvgCost = chainPair ? sampleAvgTerrainCost(chainPair[0], chainPair[1], grid) : AVG_COST_PER_SEGMENT;
-          const estimatedBuildCost = (pickupDist * pickupAvgCost + (chainDist + deliveryDist) * chainAvgCost) * SEGMENTS_PER_EUCLIDEAN_UNIT;
+          const pickupBuildCost = pickupOnNetwork ? 0 : pickupDist * pickupAvgCost * SEGMENTS_PER_EUCLIDEAN_UNIT;
+          const deliveryBuildCost = deliveryOnNetwork ? 0 : (chainDist + deliveryDist) * chainAvgCost * SEGMENTS_PER_EUCLIDEAN_UNIT;
+          const estimatedBuildCost = pickupBuildCost + deliveryBuildCost;
           const estimatedBuildTurns = Math.ceil(estimatedBuildCost / TURN_BUILD_BUDGET);
           const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
           const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
           const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
-          let chainScore = demand.payment / Math.max(totalTurns, 1);
+          // ROI-based scoring: profit = payment - build investment
+          const profit = demand.payment - estimatedBuildCost;
+          let chainScore = profit > 0
+            ? profit / Math.max(totalTurns, 1)
+            : 0.01; // floor negative-profit chains (preserve sort, but near-zero)
 
           // Budget penalty: proportional — (money/cost)² so chains that are
           // slightly over budget still rank ok, but wildly unaffordable chains
           // drop to near-zero (e.g., 22M cash / 60M cost → 0.13x).
-          if (estimatedBuildCost > snapshot.bot.money) {
+          if (estimatedBuildCost > 0 && estimatedBuildCost > snapshot.bot.money) {
             const ratio = snapshot.bot.money / estimatedBuildCost;
             chainScore *= ratio * ratio;
           }
@@ -1136,6 +1163,7 @@ export class OptionGenerator {
             deliveryTargets,
             chainScore,
             hasLoad: false,
+            estimatedBuildCost,
           });
         }
       }
@@ -1219,7 +1247,11 @@ export class OptionGenerator {
         const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
         const estimatedMoveTurns = Math.ceil(totalDist / trainSpeed);
         const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
-        let chainScore = demand.payment / Math.max(totalTurns, 1);
+        // ROI-based scoring: profit = payment - build investment
+        const profit = demand.payment - estimatedBuildCost;
+        let chainScore = profit > 0
+          ? profit / Math.max(totalTurns, 1)
+          : 0.01; // floor negative-profit chains
 
         if (estimatedBuildCost > snapshot.bot.money) {
           const ratio = snapshot.bot.money / estimatedBuildCost;

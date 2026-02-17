@@ -983,3 +983,80 @@ describe('Scorer — calculateDropScore (orphaned loads only)', () => {
     expect(scored[0].score!).toBeGreaterThan(scored[1].score!);
   });
 });
+
+/* ────────────────────────────────────────────────────────────────────────
+ * TEST: ROI-driven scoring — negative ROI builds should lose to PassTurn
+ * ──────────────────────────────────────────────────────────────────────── */
+
+function makeROIBuildOption(
+  payment: number,
+  estimatedBuildCost: number,
+  chainScore: number,
+): FeasibleOption {
+  return {
+    action: AIActionType.BuildTrack,
+    feasible: true,
+    reason: 'Build track',
+    segments: [makeSegment(1)],
+    estimatedCost: 1,
+    payment,
+    chainScore,
+    estimatedBuildCost,
+  };
+}
+
+describe('Scorer — ROI-driven build scoring', () => {
+  it('should score negative-ROI build below PassTurn', () => {
+    // payment=7, estimatedBuildCost=20 → profit=-13 → penalty pushes below 0
+    const build = makeROIBuildOption(7, 20, 0.01);
+    const pass = makePassOption();
+
+    const scored = Scorer.score([build, pass], makeSnapshot(), makeBotConfig());
+
+    const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
+    const passScored = scored.find(o => o.action === AIActionType.PassTurn)!;
+    expect(buildScored.score!).toBeLessThan(passScored.score!);
+    expect(buildScored.score!).toBeLessThan(0);
+  });
+
+  it('should score positive-ROI build above PassTurn', () => {
+    // payment=23, estimatedBuildCost=12 → profit=+11 → healthy chainScore, no penalty
+    const build = makeROIBuildOption(23, 12, 2.2);
+    const pass = makePassOption();
+
+    const scored = Scorer.score([build, pass], makeSnapshot(), makeBotConfig());
+
+    const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
+    const passScored = scored.find(o => o.action === AIActionType.PassTurn)!;
+    expect(buildScored.score!).toBeGreaterThan(passScored.score!);
+    expect(buildScored.score!).toBeGreaterThan(0);
+  });
+
+  it('should score zero-build-cost chain highest', () => {
+    // On-network delivery: payment=7, buildCost=0, chainScore=7.0 (pure profit)
+    const onNetwork = makeROIBuildOption(7, 0, 7.0);
+    // Off-network delivery: payment=23, buildCost=12, chainScore=2.2
+    const offNetwork = makeROIBuildOption(23, 12, 2.2);
+
+    const scored = Scorer.score([onNetwork, offNetwork], makeSnapshot(), makeBotConfig());
+
+    // Zero-build-cost chain should beat off-network chain because:
+    // onNetwork: chainScore 7.0 * 20 = 140 bonus, no penalty
+    // offNetwork: chainScore 2.2 * 20 = 44 bonus, no penalty (profit is positive)
+    const onNetworkScored = scored.find(o => o.chainScore === 7.0)!;
+    const offNetworkScored = scored.find(o => o.chainScore === 2.2)!;
+    expect(onNetworkScored.score!).toBeGreaterThan(offNetworkScored.score!);
+  });
+
+  it('should not apply ROI penalty when estimatedBuildCost is undefined (legacy options)', () => {
+    // Legacy build option without estimatedBuildCost — should behave as before
+    const legacy = makeBuildOption([makeSegment(1)]);
+    const pass = makePassOption();
+
+    const scored = Scorer.score([legacy, pass], makeSnapshot(), makeBotConfig());
+
+    // Legacy build should still beat PassTurn (no penalty applied)
+    expect(scored[0].action).toBe(AIActionType.BuildTrack);
+    expect(scored[0].score!).toBeGreaterThan(scored[1].score!);
+  });
+});

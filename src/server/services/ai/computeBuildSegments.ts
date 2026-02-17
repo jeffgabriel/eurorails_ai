@@ -192,6 +192,10 @@ export function computeBuildSegments(
   /** Target positions to build toward (demand card cities). When provided,
    *  path selection prefers routes that get closest to a target over raw segment count. */
   targetPositions?: GridCoord[],
+  /** Already-built segments to treat as existing for edge dedup and free traversal,
+   *  but NOT used as Dijkstra sources. Used by continuation builds to avoid
+   *  duplicating the bot's existing track while starting from a specific point. */
+  knownSegments?: TrackSegment[],
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
@@ -248,11 +252,23 @@ export function computeBuildSegments(
     builtEdges.add(`${a}-${b}`);
     builtEdges.add(`${b}-${a}`);
   }
+  // Merge knownSegments into builtEdges (for continuation builds)
+  for (const seg of (knownSegments ?? [])) {
+    const a = makeKey(seg.from.row, seg.from.col);
+    const b = makeKey(seg.to.row, seg.to.col);
+    builtEdges.add(`${a}-${b}`);
+    builtEdges.add(`${b}-${a}`);
+  }
 
   // Also track which positions are already on the player's network
   const onNetwork = new Set<string>();
   for (const src of sources) {
     onNetwork.add(makeKey(src.row, src.col));
+  }
+  // Merge knownSegments positions into onNetwork (for free traversal)
+  for (const seg of (knownSegments ?? [])) {
+    onNetwork.add(makeKey(seg.from.row, seg.from.col));
+    onNetwork.add(makeKey(seg.to.row, seg.to.col));
   }
 
   // Multi-source Dijkstra

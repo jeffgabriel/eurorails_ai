@@ -157,6 +157,16 @@ export class Scorer {
       score += option.payment * 0.3;
     }
 
+    // ROI penalty: if estimated build investment exceeds payment, push score below PassTurn.
+    // Positive ROI: no penalty (chainScore is already healthy from profit-based formula).
+    // Negative ROI: chainScore≈0.01 → bonus≈0.2, plus penalty of |profit| pushes total < 0.
+    if (option.estimatedBuildCost !== undefined && option.payment !== undefined) {
+      const profit = option.payment - option.estimatedBuildCost;
+      if (profit < 0) {
+        score -= Math.abs(profit);
+      }
+    }
+
     // Demand proximity bonus: check if any segment endpoint is near a demand city
     score += Scorer.demandProximityBonus(option, snapshot);
 

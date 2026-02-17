@@ -30,10 +30,33 @@ export enum BotArchetype {
     BuilderFirst = 'builder_first'
 }
 
+export enum LLMProvider {
+    Anthropic = 'anthropic',
+    Google = 'google',
+}
+
+/** Default model per provider and skill level */
+export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, string>> = {
+    [LLMProvider.Anthropic]: {
+        [BotSkillLevel.Easy]: 'claude-haiku-4-5-20251001',
+        [BotSkillLevel.Medium]: 'claude-sonnet-4-20250514',
+        [BotSkillLevel.Hard]: 'claude-sonnet-4-20250514',
+    },
+    [LLMProvider.Google]: {
+        [BotSkillLevel.Easy]: 'gemini-2.0-flash',
+        [BotSkillLevel.Medium]: 'gemini-2.5-pro',
+        [BotSkillLevel.Hard]: 'gemini-2.5-pro',
+    },
+};
+
 export interface BotConfig {
     skillLevel: BotSkillLevel;
     archetype: BotArchetype;
     name?: string;
+    /** LLM provider. Defaults to Anthropic if omitted. */
+    provider?: LLMProvider;
+    /** Model override. If omitted, uses the default for provider + skillLevel. */
+    model?: string;
 }
 
 export interface TrainProperties {
@@ -291,6 +314,7 @@ export interface FeasibleOption {
     cardId?: number;
     payment?: number;
     chainScore?: number;
+    estimatedBuildCost?: number;
     targetTrainType?: TrainType;
     upgradeKind?: 'upgrade' | 'crossgrade';
 }
