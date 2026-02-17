@@ -327,7 +327,7 @@ Phase 0 `executeLoadActions` auto-executes pickup options before movement withou
 
 **Fix**: Scorer's `calculatePickupScore` applies 0.05x penalty when delivery is unreachable AND unaffordable. Applied in commit `c624d5f`.
 
-### Bug 10: pickupTargets includes ALL cities — builds toward wrong city (FIXED — uncommitted)
+### Bug 10: pickupTargets includes ALL cities — builds toward wrong city (FIXED — `9ad717e`)
 **Severity**: Critical | **File**: `OptionGenerator.ts:1034-1083`
 
 For chain "Iron@Birmingham→Antwerpen", `rankDemandChains` collected grid points from EVERY city where Iron is available into `pickupTargets`. When `computeBuildSegments` received these targets, it picked the path closest to ANY target — which was near Kaliningrad (a source close to an existing start position) instead of Birmingham (the strategically correct choice near delivery city Antwerpen). Bot built 13 segments toward Kaliningrad, then got auto-placed at Berlin, stranding it far from both pickup and delivery cities.
@@ -336,7 +336,7 @@ For chain "Iron@Birmingham→Antwerpen", `rankDemandChains` collected grid point
 
 **Fix**: For each available city, compute total chain distance (network→pickup + pickup→delivery). Keep only the best city's grid points as `pickupTargets`. Same fix applied to `evaluateHubScore`.
 
-### Bug 11: DiscardHand missing from Phase 2 action types (FIXED — uncommitted)
+### Bug 11: DiscardHand missing from Phase 2 action types (FIXED — `9ad717e`)
 **Severity**: High | **File**: `AIStrategyEngine.ts:190`
 
 Phase 2 `buildActions` set was `[BuildTrack, UpgradeTrain, PassTurn]` — DiscardHand was never included. Bot could never discard hand even when stuck with 11M, no loads, and demand cards requiring cities far from its track. Instead it oscillated endlessly with PassTurn.
@@ -352,7 +352,7 @@ Phase 2 `buildActions` set was `[BuildTrack, UpgradeTrain, PassTurn]` — Discar
 ### Context
 Game fd7dd66a: Bot started at Szczecin, built toward it (2 hexes away), picked up 2x Potatoes (only 1 demand card), delivered Potatoes→Ruhr for 11M, then got stuck. Picked up Tourists→Valencia (unaffordable), wasted turns discarding hand repeatedly, and spiraled into bankruptcy at 11-12M cash oscillating between discard and build.
 
-### Bug 12: Flat budget penalty too gentle (FIXED — uncommitted)
+### Bug 12: Flat budget penalty too gentle (FIXED — `9ad717e`)
 **Severity**: Critical | **File**: `OptionGenerator.ts`
 
 Budget penalty was a flat `0.4x` multiplier regardless of HOW over-budget a chain was. A chain costing 60M with 22M cash got the same 0.4x as one costing 21M with 20M cash. This meant wildly unaffordable chains (3x over budget) still scored competitively, causing the bot to commit to routes it could never complete.
@@ -361,7 +361,7 @@ Budget penalty was a flat `0.4x` multiplier regardless of HOW over-budget a chai
 
 **Fix**: Replaced with proportional penalty `(money/cost)²`. Examples: 20M/21M → 0.91x (barely over), 22M/60M → 0.13x (wildly over), 37M/80M → 0.21x. Applied in all 3 locations.
 
-### Bug 13: Duplicate load pickup — 2x load with 1 demand card (FIXED — uncommitted)
+### Bug 13: Duplicate load pickup — 2x load with 1 demand card (FIXED — `9ad717e`)
 **Severity**: High | **File**: `OptionGenerator.ts:549`
 
 `generatePickupOptions` generated one option per available load TYPE, but the Phase 0 pickup loop re-generates options each iteration. After picking up Potatoes once, the same demand card still matched, generating another Potatoes pickup. Bot carried 2x Potatoes with only 1 demand card, wasting a cargo slot.
@@ -370,7 +370,7 @@ Budget penalty was a flat `0.4x` multiplier regardless of HOW over-budget a chai
 
 **Fix**: Count demand cards needing each load type, subtract already-carried count, skip if `carriedCount >= demandCount`.
 
-### Bug 14: Phase 0 eager pickup of unaffordable loads (FIXED — uncommitted)
+### Bug 14: Phase 0 eager pickup of unaffordable loads (FIXED — `9ad717e`, regressed, re-fixed `114cef7`)
 **Severity**: High | **File**: `AIStrategyEngine.ts:418`
 
 `executeLoadActions` auto-executed ANY pickup with a positive score. Unaffordable pickups (e.g., Tourists→Valencia with estimated 60M build cost vs 22M cash) scored ~3.5 after the 0.05x penalty — still positive. Bot eagerly grabbed loads it couldn't deliver, filling cargo with dead weight.
@@ -379,7 +379,7 @@ Budget penalty was a flat `0.4x` multiplier regardless of HOW over-budget a chai
 
 **Fix**: Added `MIN_PICKUP_SCORE = 10` gate. Pickups scoring below 10 (heavily penalized unreachable/unaffordable loads) are skipped with a log message.
 
-### Bug 15: Build budget waste — pickup close, delivery far (FIXED — uncommitted)
+### Bug 15: Build budget waste — pickup close, delivery far (FIXED — `9ad717e`, regressed, re-fixed `114cef7`)
 **Severity**: Medium | **File**: `OptionGenerator.ts:795`
 
 When the top-ranked chain's pickup city was close (e.g., Szczecin 2 hexes away), `computeBuildSegments` used only 4M of a 20M budget. The remaining 16M went unused — the bot could have continued building toward the delivery city.
@@ -388,14 +388,14 @@ When the top-ranked chain's pickup city was close (e.g., Szczecin 2 hexes away),
 
 **Fix**: After the primary build, if cost < 50% of budget AND building toward pickup (not delivery), do a continuation build toward delivery with remaining budget using extended start positions that include the new segment endpoints.
 
-### Bug 16: Discard death spiral — unlimited consecutive discards (FIXED — uncommitted)
+### Bug 16: Discard death spiral — unlimited consecutive discards (FIXED — `9ad717e`, regressed, re-fixed `114cef7`)
 **Severity**: Medium | **Files**: `Scorer.ts:580`, `GameTypes.ts:BotMemoryState`, `AIStrategyEngine.ts`
 
 After delivering Potatoes and getting stuck with unaffordable/unreachable demand cards, bot scored DiscardHand at 20 (desperate). Drew new cards, still bad, discarded again. Repeated 5+ times, losing 5+ turns to pure discarding while never building or moving.
 
 **Root cause**: No limit on consecutive discards. `calculateDiscardScore` didn't check history.
 
-**Fix**: Added `consecutiveDiscards` field to `BotMemoryState`, tracked in all memory update paths. `calculateDiscardScore` returns 0 after 2 consecutive discards, forcing the bot to build/move before trying again.
+**Fix**: Added `consecutiveDiscards` field to `BotMemoryState`, tracked in all memory update paths. `calculateDiscardScore` returns -1 after 2 consecutive discards (must be below PassTurn's 0), forcing the bot to build/move before trying again.
 
 ---
 
@@ -415,3 +415,53 @@ When a chain's primary build target is close and uses less than half the budget,
 
 ### 24. Limit consecutive identical actions to prevent death spirals
 Actions that sacrifice a full turn (like DiscardHand) need consecutive-use limits. Without limits, a bot in a bad state can loop the same desperate action indefinitely, never recovering.
+
+### 25. Continuation builds must preserve segment contiguity
+When appending a second Dijkstra call's segments to a primary path, the second call must start ONLY from the last segment's endpoint — not from all endpoints of the combined existing track. Multi-source Dijkstra picks whichever source is closest to the target, which may be the FIRST segment of the primary path, breaking `seg[n].to === seg[n+1].from`.
+
+### 26. Pickup score thresholds must account for free pickups
+A minimum score threshold for auto-pickup must not block pickups that are free (bot is already at the city). Phase 0/1.5 pickups cost zero movement — even low-scoring pickups are worth taking when the alternative is wasting a cargo slot. Use `<= 0` (hard rejection only), not a positive threshold.
+
+### 27. Tiebreaker scores must produce strict ordering
+When a "blocked" action returns score 0 to prevent selection, it ties with other score-0 actions (like PassTurn). Sort order determines the winner, defeating the intent. Blocked actions must return -1 (or any value strictly below the lowest legitimate score) to ensure they always lose.
+
+---
+
+## Investigation Log — 2026-02-17: Regression Bugs from Game 43deb4a7
+
+### Context
+Game 43deb4a7: Bot started at Holland, built toward Antwerpen (Cars→Antwerpen chain), then bounced between Holland and Antwerpen for 8 turns with zero deliveries. Built toward Le Havre ferry port (not a bug — same total cost as Calais route), but never completed any chain. Orphaned track segments outside Antwerpen were a side effect of Bug 17.
+
+### Bug 17: Continuation build produces non-contiguous segments (REGRESSION, FIXED — `114cef7`)
+**Severity**: Critical | **File**: `OptionGenerator.ts:798`
+
+Bug 15's continuation build fix passed `combinedExisting = [...existingSegments, ...segments]` to `computeBuildSegments`. At line 235, the function extracts ALL endpoints as Dijkstra sources. The Dijkstra picked whichever source was closest to the delivery target — often the FIRST segment of the primary path, not the LAST. Combined segments had a contiguity break (`seg[n].to ≠ seg[n+1].from`) → PlanValidator rejected → top option failed every turn.
+
+**Root cause**: `computeBuildSegments` line 235: `const sources = trackEndpoints.length > 0 ? trackEndpoints : startPositions;` — when existingSegments has entries, explicit startPositions are IGNORED.
+
+**Fix**: Changed continuation to start ONLY from last primary segment endpoint, passing empty existingSegments so `computeBuildSegments` uses the explicit startPositions.
+
+### Bug 18: MIN_PICKUP_SCORE=10 blocks free pickups (REGRESSION, FIXED — `114cef7`)
+**Severity**: Critical | **File**: `AIStrategyEngine.ts:418`
+
+Bug 14's fix used `MIN_PICKUP_SCORE = 10` threshold. Phase 0/1.5 pickups are at the current city (free — zero movement cost). The 0.05x unaffordable penalty dropped Flowers→Belfast from 62.5 to 3.125, below the threshold. Bot sat at Holland with a 25M Flowers demand card but never picked up. No pickups → no income → no recovery.
+
+**Root cause**: Threshold of 10 was too high for penalized-but-still-worth-taking free pickups.
+
+**Fix**: Changed threshold from `< 10` to `<= 0`. Only score=0 (hard rejection from stacking unreachable loads) is blocked.
+
+### Bug 19: DiscardHand score=0 ties with PassTurn=0 (REGRESSION, FIXED — `114cef7`)
+**Severity**: Medium | **File**: `Scorer.ts:580`
+
+Bug 16's fix returned 0 when `consecutiveDiscards >= 2`, intended to block further discards. But PassTurn also scored 0. DiscardHand appeared first in sort and won the tie. Bot discarded 4+ consecutive times despite the "limit of 2."
+
+**Root cause**: Score 0 = PassTurn score 0 → tie broken by sort order, not intent.
+
+**Fix**: Changed `calculateDiscardScore` from returning 0 to returning -1 when blocked, so PassTurn (0) always wins.
+
+### Bug 20: Movement toward frontier instead of chain target (OPEN — not fixed)
+**Severity**: Medium | **File**: `Scorer.ts` (movement scoring)
+
+Turn 3 showed bot moving toward Zurich (frontier bonus, score 19.72) instead of Stuttgart (chain target, score 16.08). The movement scorer's frontier bonus (distance from existing track) outweighed chain-target relevance.
+
+**Status**: Not fixed. Medium priority — does not cause stuck states, just suboptimal movement.
