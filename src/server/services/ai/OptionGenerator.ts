@@ -549,6 +549,14 @@ export class OptionGenerator {
     for (const loadTypeStr of availableLoads) {
       const loadType = loadTypeStr as LoadType;
 
+      // B2: Don't pick up more of a load type than we have demand cards for.
+      // Count demand cards that need this load type, subtract loads already carried.
+      const demandCount = snapshot.bot.resolvedDemands.reduce((count, rd) => {
+        return count + rd.demands.filter(d => d.loadType === loadTypeStr).length;
+      }, 0);
+      const carriedCount = snapshot.bot.loads.filter(l => l === loadTypeStr).length;
+      if (carriedCount >= demandCount) continue;
+
       // Find matching demand cards for this load type, preferring reachable destinations
       let bestPayment = 0;
       let bestCity: string | undefined;
@@ -784,14 +792,37 @@ export class OptionGenerator {
       if (seenFirstSegKey.has(dirKey)) continue;
       seenFirstSegKey.add(dirKey);
 
-      const totalCost = segments.reduce((sum, s) => sum + s.cost, 0);
+      let totalCost = segments.reduce((sum, s) => sum + s.cost, 0);
+      let allSegments = segments;
+
+      // B1: Continuation build — if primary build toward pickup city used less
+      // than half the budget, spend the remainder building toward delivery city.
+      // Prevents wasting budget when pickup is close (e.g., Szczecin 2 hexes away).
+      if (!chain.hasLoad && totalCost < budget * 0.5 && chain.deliveryTargets.length > 0) {
+        const remainingBudget = budget - totalCost;
+        // Extended start positions: original starts + new segment endpoints
+        const extendedStarts = [...startPositions];
+        for (const seg of segments) {
+          extendedStarts.push({ row: seg.to.row, col: seg.to.col });
+        }
+        const combinedExisting = [...snapshot.bot.existingSegments, ...segments];
+        const contSegments = computeBuildSegments(
+          extendedStarts, combinedExisting, remainingBudget,
+          undefined, occupiedEdges, chain.deliveryTargets,
+        );
+        if (contSegments.length > 0) {
+          allSegments = [...segments, ...contSegments];
+          totalCost = allSegments.reduce((sum, s) => sum + s.cost, 0);
+        }
+      }
+
       const chainTargetCity = chain.hasLoad ? chain.deliveryCity : chain.pickupCity;
-      const segTargetCity = OptionGenerator.identifyTargetCity(segments);
+      const segTargetCity = OptionGenerator.identifyTargetCity(allSegments);
       // P3: prefer chain target city for labeling and bot memory. The segment
       // endpoint city is often a random milepost when budget is insufficient to
       // reach the actual target, causing mislabeled options and wrong loyalty bonuses.
       options.push(makeFeasible(AIActionType.BuildTrack, `Build toward ${chainTargetCity ?? segTargetCity} (${chain.loadType}→${chain.deliveryCity}, ${chain.payment}M)`, {
-        segments,
+        segments: allSegments,
         estimatedCost: totalCost,
         targetCity: chainTargetCity ?? segTargetCity ?? undefined,
         payment: chain.payment,
@@ -1015,10 +1046,13 @@ export class OptionGenerator {
           const estimatedMoveTurns = Math.ceil(deliveryDist / trainSpeed);
           const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
           let chainScore = demand.payment / Math.max(totalTurns, 1);
-          // Budget penalty: even for carried loads, if the delivery route is
-          // unaffordable the bot should prioritize cheaper deliveries first
+          // Budget penalty: proportional — the further over budget, the harder
+          // the penalty. (money/cost)² so a 50% overspend gets 0.44x, a 3x
+          // overspend gets 0.11x. Prevents the bot from committing to routes
+          // it can't afford (e.g., 37M cash vs 60M estimated build cost).
           if (estimatedBuildCost > snapshot.bot.money) {
-            chainScore *= 0.4;
+            const ratio = snapshot.bot.money / estimatedBuildCost;
+            chainScore *= ratio * ratio;
           }
           chains.push({
             cardId: rd.cardId,
@@ -1032,17 +1066,34 @@ export class OptionGenerator {
             hasLoad: true,
           });
         } else {
-          // Find pickup source cities from loadAvailability
-          const pickupTargets: GridCoord[] = [];
+          // Find the BEST pickup city: minimize total chain distance
+          // (network → pickup + pickup → delivery). Previously all cities with the
+          // load were included, causing computeBuildSegments to aim at whichever
+          // city was cheapest to reach (e.g., Kaliningrad) instead of the one that
+          // completes the chain efficiently (e.g., Birmingham near Antwerpen).
           let pickupCityName = '';
+          let pickupTargets: GridCoord[] = [];
+          let bestChainDist = Infinity;
+
           for (const [cityName, availableLoads] of Object.entries(snapshot.loadAvailability)) {
-            if (availableLoads.includes(demand.loadType)) {
-              if (!pickupCityName) pickupCityName = cityName;
-              for (const [, point] of grid) {
-                if (point.name === cityName) {
-                  pickupTargets.push({ row: point.row, col: point.col });
-                }
+            if (!availableLoads.includes(demand.loadType)) continue;
+
+            const cityTargets: GridCoord[] = [];
+            for (const [, point] of grid) {
+              if (point.name === cityName) {
+                cityTargets.push({ row: point.row, col: point.col });
               }
+            }
+            if (cityTargets.length === 0) continue;
+
+            const toPickup = minEuclidean(networkPositions, cityTargets);
+            const toDelivery = minEuclidean(cityTargets, deliveryTargets);
+            const totalChainDist = toPickup + toDelivery;
+
+            if (totalChainDist < bestChainDist) {
+              bestChainDist = totalChainDist;
+              pickupCityName = cityName;
+              pickupTargets = cityTargets;
             }
           }
           if (pickupTargets.length === 0) continue;
@@ -1063,10 +1114,12 @@ export class OptionGenerator {
           const totalTurns = estimatedBuildTurns + estimatedMoveTurns;
           let chainScore = demand.payment / Math.max(totalTurns, 1);
 
-          // Budget penalty: if estimated build cost exceeds current money, the bot
-          // can't complete this chain without earning money first
+          // Budget penalty: proportional — (money/cost)² so chains that are
+          // slightly over budget still rank ok, but wildly unaffordable chains
+          // drop to near-zero (e.g., 22M cash / 60M cost → 0.13x).
           if (estimatedBuildCost > snapshot.bot.money) {
-            chainScore *= 0.4;
+            const ratio = snapshot.bot.money / estimatedBuildCost;
+            chainScore *= ratio * ratio;
           }
 
           chains.push({
@@ -1127,14 +1180,23 @@ export class OptionGenerator {
         }
         if (deliveryTargets.length === 0) continue;
 
-        const pickupTargets: GridCoord[] = [];
+        // Best pickup city: minimize hub → pickup + pickup → delivery
+        let pickupTargets: GridCoord[] = [];
+        let bestChainDist = Infinity;
         for (const [cityName, loads] of Object.entries(snapshot.loadAvailability)) {
-          if (loads.includes(demand.loadType)) {
-            for (const [, point] of grid) {
-              if (point.name === cityName) {
-                pickupTargets.push({ row: point.row, col: point.col });
-              }
+          if (!loads.includes(demand.loadType)) continue;
+          const cityTargets: GridCoord[] = [];
+          for (const [, point] of grid) {
+            if (point.name === cityName) {
+              cityTargets.push({ row: point.row, col: point.col });
             }
+          }
+          if (cityTargets.length === 0) continue;
+          const toPickup = minEuclidean(hubPositions, cityTargets);
+          const toDelivery = minEuclidean(cityTargets, deliveryTargets);
+          if (toPickup + toDelivery < bestChainDist) {
+            bestChainDist = toPickup + toDelivery;
+            pickupTargets = cityTargets;
           }
         }
         if (pickupTargets.length === 0) continue;
@@ -1156,7 +1218,8 @@ export class OptionGenerator {
         let chainScore = demand.payment / Math.max(totalTurns, 1);
 
         if (estimatedBuildCost > snapshot.bot.money) {
-          chainScore *= 0.4;
+          const ratio = snapshot.bot.money / estimatedBuildCost;
+          chainScore *= ratio * ratio;
         }
 
         if (chainScore > bestScore) {

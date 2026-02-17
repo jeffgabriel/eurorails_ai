@@ -521,6 +521,7 @@ function makeMemory(overrides?: Partial<BotMemoryState>): BotMemoryState {
     turnsOnTarget: 0,
     lastAction: null,
     consecutivePassTurns: 0,
+    consecutiveDiscards: 0,
     deliveryCount: 3,
     totalEarnings: 60,
     turnNumber: 10,
@@ -847,6 +848,39 @@ describe('Scorer — calculateDiscardScore (BE-005: intelligent discard)', () =>
     const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
     // Desperate discard (20) should beat basic build (10 base - 1 cost + 1 segment = 10)
     expect(discardScored.score!).toBeGreaterThan(buildScored.score!);
+  });
+
+  it('should return 0 when consecutiveDiscards >= 2 (B6: prevent death spiral)', () => {
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },  // unreachable
+      { name: 'Paris', row: 60, col: 60 },
+      { name: 'Madrid', row: 70, col: 70 },
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    // Normally this would score 20 (desperate), but 2 consecutive discards blocks it
+    const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 2 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(0);
+  });
+
+  it('should allow discard when consecutiveDiscards < 2', () => {
+    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
+      { name: 'Berlin', row: 50, col: 50 },
+      { name: 'Paris', row: 60, col: 60 },
+      { name: 'Madrid', row: 70, col: 70 },
+    ]));
+
+    const option = makeDiscardOption();
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 1 });
+
+    const scored = Scorer.score([option], snapshot, null, memory);
+
+    expect(scored[0].score).toBe(20); // still desperate, 1 discard is ok
   });
 });
 

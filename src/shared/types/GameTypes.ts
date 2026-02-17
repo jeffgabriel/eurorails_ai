@@ -355,6 +355,8 @@ export interface BotMemoryState {
     lastAction: AIActionType | null;
     /** Consecutive PassTurn actions — used to detect stuck loops */
     consecutivePassTurns: number;
+    /** Consecutive DiscardHand actions — used to prevent discard death spirals */
+    consecutiveDiscards: number;
     /** Total deliveries completed this game */
     deliveryCount: number;
     /** Total money earned from deliveries */

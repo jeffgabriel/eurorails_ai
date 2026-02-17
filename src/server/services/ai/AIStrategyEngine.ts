@@ -187,7 +187,7 @@ export class AIStrategyEngine {
       }
 
       // ── Phase 2: Building ──────────────────────────────────────────────
-      const buildActions = new Set([AIActionType.BuildTrack, AIActionType.UpgradeTrain, AIActionType.PassTurn]);
+      const buildActions = new Set([AIActionType.BuildTrack, AIActionType.UpgradeTrain, AIActionType.DiscardHand, AIActionType.PassTurn]);
       const buildOptions = OptionGenerator.generate(snapshot, buildActions, memory);
 
       const scoredBuild = Scorer.score(buildOptions, snapshot, botConfig, memory);
@@ -220,6 +220,8 @@ export class AIStrategyEngine {
             updateMemory(gameId, botPlayerId, {
               lastAction: result.action,
               consecutivePassTurns: 0,
+              consecutiveDiscards: result.action === AIActionType.DiscardHand
+                ? memory.consecutiveDiscards + 1 : 0,
               deliveryCount: memory.deliveryCount + loadsDelivered.length,
               totalEarnings: memory.totalEarnings + deliveryEarnings,
               turnNumber: snapshot.turnNumber,
@@ -271,6 +273,7 @@ export class AIStrategyEngine {
       updateMemory(gameId, botPlayerId, {
         lastAction: AIActionType.PassTurn,
         consecutivePassTurns: memory.consecutivePassTurns + 1,
+        consecutiveDiscards: 0,
         deliveryCount: memory.deliveryCount + loadsDelivered.length,
         totalEarnings: memory.totalEarnings + ptDeliveryEarnings,
         turnNumber: snapshot.turnNumber,
@@ -297,6 +300,7 @@ export class AIStrategyEngine {
       updateMemory(gameId, botPlayerId, {
         lastAction: AIActionType.PassTurn,
         consecutivePassTurns: memory.consecutivePassTurns + 1,
+        consecutiveDiscards: 0,
         turnNumber: memory.turnNumber + 1,
       });
 
@@ -418,6 +422,16 @@ export class AIStrategyEngine {
       const scoredPickups = Scorer.score(pickupOptions, snapshot, botConfig);
       const candidate = scoredPickups.find(o => o.feasible);
       if (!candidate) break;
+
+      // Score gate: don't auto-execute low-confidence pickups (e.g., unreachable
+      // or unaffordable delivery destinations). The 0.15x/0.05x penalties in
+      // calculatePickupScore bring these below ~10. Without this gate, the bot
+      // eagerly grabs Tourists→Valencia with score 3.5, then wastes turns.
+      const MIN_PICKUP_SCORE = 10;
+      if ((candidate.score ?? 0) < MIN_PICKUP_SCORE) {
+        console.log(`${tag} ${phase}: skipping PickupLoad ${candidate.loadType} (score=${candidate.score} < ${MIN_PICKUP_SCORE})`);
+        break;
+      }
 
       const validation = validate(candidate, snapshot);
       if (!validation.valid) break;

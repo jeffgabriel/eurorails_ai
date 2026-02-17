@@ -804,6 +804,7 @@ describe('OptionGenerator — sticky build target', () => {
       turnsOnTarget: 0,
       lastAction: null,
       consecutivePassTurns: 0,
+      consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
       turnNumber: 0,
@@ -1201,6 +1202,56 @@ describe('OptionGenerator — starting city hub evaluation (Bug 8)', () => {
   afterEach(() => {
     hubSpy.mockRestore();
     jest.clearAllMocks();
+  });
+
+  it('should target closest pickup city, not any available city', () => {
+    // Two cities have Wine: Bordeaux (15,12) near Paris, and London (9,40) far from Paris.
+    // Delivery is to Paris (10,10). The best pickup city for Wine→Paris is Bordeaux
+    // because total chain distance (network→Bordeaux + Bordeaux→Paris) is shorter than
+    // (network→London + London→Paris).
+    const snapshot: WorldSnapshot = {
+      gameId: 'game-1',
+      gameStatus: 'initialBuild',
+      turnNumber: 1,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-bot-1',
+        money: 50,
+        position: null,
+        existingSegments: [makeSegment(10, 10, 11, 10, 1)], // Track near Paris
+        demandCards: [42],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'Paris', loadType: 'Wine', payment: 11 }] },
+        ],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      // Wine available at both Bordeaux (near Paris) and London (far from Paris)
+      loadAvailability: { 'Bordeaux': ['Wine'], 'London': ['Wine'] },
+    };
+
+    const buildOnly = new Set([AIActionType.BuildTrack, AIActionType.PassTurn]);
+    const options = OptionGenerator.generate(snapshot, buildOnly);
+    const builds = options.filter(o => o.action === AIActionType.BuildTrack && o.feasible);
+
+    // computeBuildSegments was called with targets — verify the FIRST call
+    // (chain-specific) targets Bordeaux, NOT London.
+    // Call order: [chain calls for top N chains...] then [allTargets fallback]
+    const calls = mockComputeBuild.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+
+    // First call is the chain-specific call for Wine→Paris
+    const firstCallTargets = calls[0][5] as Array<{row: number; col: number}> | undefined;
+    expect(firstCallTargets).toBeDefined();
+    // Should include Bordeaux (15,12)
+    const hasBordeaux = firstCallTargets!.some(t => t.row === 15 && t.col === 12);
+    expect(hasBordeaux).toBe(true);
+    // Should NOT include London (9,40) — that's the wrong pickup city for this chain
+    const hasLondon = firstCallTargets!.some(t => t.row === 9 && t.col === 40);
+    expect(hasLondon).toBe(false);
   });
 
   it('should select Paris hub when Wine→Paris is cheapest from there', () => {

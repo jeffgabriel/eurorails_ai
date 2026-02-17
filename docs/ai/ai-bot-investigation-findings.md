@@ -251,6 +251,12 @@ Even when the bot is already carrying a load, the delivery route may be unafford
 ### 17. Starting city selection requires demand-aware evaluation
 When the bot has no track, using all major city outposts as "distance 0" start positions makes every chain appear equally reachable. The starting city should be chosen by evaluating which hub enables the cheapest first delivery.
 
+### 18. Build targets must match chain strategy, not just load availability
+When building toward a pickup city, the targets passed to pathfinding must be the specific city chosen by chain ranking, not all cities where that load is available. Pathfinding always picks the easiest-to-reach target, which may be geographically wrong for the chain (e.g., Iron near Kaliningrad instead of Iron at Birmingham near delivery city Antwerpen).
+
+### 19. Every generated option type must be reachable from the decision engine
+If an option type exists in OptionGenerator and Scorer but its ActionType is not included in the phase's action filter set, the bot can never choose it. Audit all ActionType sets when adding new option types.
+
 ---
 
 ## Investigation Log — 2026-02-16: Bot Strategic Decision Bugs
@@ -293,30 +299,119 @@ Bot spent all money on track, leaving 0M for track usage fees needed to move on 
 
 **Fix**: Chain target city takes priority over segment endpoint detection.
 
-### Bug 6: Flat cost estimate ignores terrain (FIXED — uncommitted)
+### Bug 6: Flat cost estimate ignores terrain (FIXED — `c624d5f`)
 **Severity**: High | **File**: `OptionGenerator.ts:34`
 
 `AVG_COST_PER_SEGMENT = 1.5` used for all chain cost estimates. Birmingham→Venezia crosses the Alps — actual average terrain cost is ~1.9M/segment (with Alpine hexes at 5M each), making the real build cost ~74M vs the estimated ~59M. Budget penalty never fired for routes that were actually unaffordable.
 
 **Fix**: Added `sampleAvgTerrainCost()` that walks the straight line between source and target, samples actual terrain at each hex, returns route-specific average. Catches Alpine corridors, mountains, cities, ferry ports. Raised fallback from 1.5 to 2.0.
 
-### Bug 7: No budget penalty for hasLoad chains (FIXED — uncommitted)
+### Bug 7: No budget penalty for hasLoad chains (FIXED — `c624d5f`)
 **Severity**: Critical | **File**: `OptionGenerator.ts:940`
 
 When bot carries a load, `rankDemandChains` computed chainScore without ANY affordability check (comment: "must deliver them"). Tourists→Oslo scored 5.0 unchecked while Wine→Paris scored lower. Bot committed all resources to an unaffordable route.
 
-**Fix**: Applied same `chainScore *= 0.4` budget penalty when `estimatedBuildCost > bot.money` for hasLoad chains.
+**Fix**: Applied proportional budget penalty `(money/cost)²` when `estimatedBuildCost > bot.money` for hasLoad chains. Originally flat 0.4x, upgraded to proportional in Bug 12 fix.
 
-### Bug 8: Starting city has no demand awareness (IDENTIFIED — not yet fixed)
-**Severity**: Critical | **File**: `OptionGenerator.ts:907-914`
+### Bug 8: Starting city has no demand awareness — FIXED `c624d5f`
+**Severity**: Critical | **File**: `OptionGenerator.ts:962-990`
 
-When bot has no track, `rankDemandChains` builds `networkPositions` from ALL 48 major city outposts. `minEuclidean` returns ~0 for ANY major city, making chain ranking blind to which starting city is optimal. Bot picked London/Birmingham for Steel→Venezia (~80M route) instead of Paris for Wine→Paris (~11M route).
+When bot has no track, `rankDemandChains` builds `networkPositions` from ALL 48 major city outposts. `minEuclidean` returns ~0 for ANY major city, making chain ranking blind to which starting city is optimal.
 
-**Root cause**: `determineStartPositions` returns all major city outposts when no track exists. `rankDemandChains` uses these as `networkPositions`, making all cities appear equidistant.
+**Fix**: `evaluateHubScore()` picks the hub with best achievable chain score. Applied in commit `c624d5f`.
 
-### Bug 9: Phase 0 eager pickup without affordability check (IDENTIFIED — not yet fixed)
-**Severity**: High | **File**: `AIStrategyEngine.ts:98-111`
+### Bug 9: Phase 0 eager pickup without affordability check — FIXED `c624d5f`
+**Severity**: High | **File**: `Scorer.ts:361-393`
 
-Phase 0 `executeLoadActions` auto-executes pickup options before movement. When bot is at London with Tourists available, it picks them up without checking if the delivery route (London→Oslo) is affordable. Once carried, hasLoad=true drives chain ranking.
+Phase 0 `executeLoadActions` auto-executes pickup options before movement without checking if delivery is affordable.
 
-**Root cause**: `generatePickupOptions` and Scorer check reachability (0.15x penalty) but not affordability.
+**Fix**: Scorer's `calculatePickupScore` applies 0.05x penalty when delivery is unreachable AND unaffordable. Applied in commit `c624d5f`.
+
+### Bug 10: pickupTargets includes ALL cities — builds toward wrong city (FIXED — uncommitted)
+**Severity**: Critical | **File**: `OptionGenerator.ts:1034-1083`
+
+For chain "Iron@Birmingham→Antwerpen", `rankDemandChains` collected grid points from EVERY city where Iron is available into `pickupTargets`. When `computeBuildSegments` received these targets, it picked the path closest to ANY target — which was near Kaliningrad (a source close to an existing start position) instead of Birmingham (the strategically correct choice near delivery city Antwerpen). Bot built 13 segments toward Kaliningrad, then got auto-placed at Berlin, stranding it far from both pickup and delivery cities.
+
+**Root cause**: `pickupTargets` collected ALL cities with the needed load type, not just the best one. The Dijkstra path selection picks the target closest to any reachable endpoint, so it trivially chose the "free" target near Kaliningrad start positions.
+
+**Fix**: For each available city, compute total chain distance (network→pickup + pickup→delivery). Keep only the best city's grid points as `pickupTargets`. Same fix applied to `evaluateHubScore`.
+
+### Bug 11: DiscardHand missing from Phase 2 action types (FIXED — uncommitted)
+**Severity**: High | **File**: `AIStrategyEngine.ts:190`
+
+Phase 2 `buildActions` set was `[BuildTrack, UpgradeTrain, PassTurn]` — DiscardHand was never included. Bot could never discard hand even when stuck with 11M, no loads, and demand cards requiring cities far from its track. Instead it oscillated endlessly with PassTurn.
+
+**Root cause**: `AIActionType.DiscardHand` was omitted from the Phase 2 action type filter.
+
+**Fix**: Added `AIActionType.DiscardHand` to the `buildActions` set.
+
+---
+
+## Investigation Log — 2026-02-16: Bot Decision-Making Bugs (Game fd7dd66a)
+
+### Context
+Game fd7dd66a: Bot started at Szczecin, built toward it (2 hexes away), picked up 2x Potatoes (only 1 demand card), delivered Potatoes→Ruhr for 11M, then got stuck. Picked up Tourists→Valencia (unaffordable), wasted turns discarding hand repeatedly, and spiraled into bankruptcy at 11-12M cash oscillating between discard and build.
+
+### Bug 12: Flat budget penalty too gentle (FIXED — uncommitted)
+**Severity**: Critical | **File**: `OptionGenerator.ts`
+
+Budget penalty was a flat `0.4x` multiplier regardless of HOW over-budget a chain was. A chain costing 60M with 22M cash got the same 0.4x as one costing 21M with 20M cash. This meant wildly unaffordable chains (3x over budget) still scored competitively, causing the bot to commit to routes it could never complete.
+
+**Root cause**: `chainScore *= 0.4` applied uniformly to all over-budget chains in both hasLoad and non-hasLoad branches of `rankDemandChains`, plus `evaluateHubScore`.
+
+**Fix**: Replaced with proportional penalty `(money/cost)²`. Examples: 20M/21M → 0.91x (barely over), 22M/60M → 0.13x (wildly over), 37M/80M → 0.21x. Applied in all 3 locations.
+
+### Bug 13: Duplicate load pickup — 2x load with 1 demand card (FIXED — uncommitted)
+**Severity**: High | **File**: `OptionGenerator.ts:549`
+
+`generatePickupOptions` generated one option per available load TYPE, but the Phase 0 pickup loop re-generates options each iteration. After picking up Potatoes once, the same demand card still matched, generating another Potatoes pickup. Bot carried 2x Potatoes with only 1 demand card, wasting a cargo slot.
+
+**Root cause**: No check comparing carried load count against matching demand card count per load type.
+
+**Fix**: Count demand cards needing each load type, subtract already-carried count, skip if `carriedCount >= demandCount`.
+
+### Bug 14: Phase 0 eager pickup of unaffordable loads (FIXED — uncommitted)
+**Severity**: High | **File**: `AIStrategyEngine.ts:418`
+
+`executeLoadActions` auto-executed ANY pickup with a positive score. Unaffordable pickups (e.g., Tourists→Valencia with estimated 60M build cost vs 22M cash) scored ~3.5 after the 0.05x penalty — still positive. Bot eagerly grabbed loads it couldn't deliver, filling cargo with dead weight.
+
+**Root cause**: No minimum score threshold in the pickup execution loop.
+
+**Fix**: Added `MIN_PICKUP_SCORE = 10` gate. Pickups scoring below 10 (heavily penalized unreachable/unaffordable loads) are skipped with a log message.
+
+### Bug 15: Build budget waste — pickup close, delivery far (FIXED — uncommitted)
+**Severity**: Medium | **File**: `OptionGenerator.ts:795`
+
+When the top-ranked chain's pickup city was close (e.g., Szczecin 2 hexes away), `computeBuildSegments` used only 4M of a 20M budget. The remaining 16M went unused — the bot could have continued building toward the delivery city.
+
+**Root cause**: `generateBuildTrackOptions` called `computeBuildSegments` once per chain, toward either pickup OR delivery, never both.
+
+**Fix**: After the primary build, if cost < 50% of budget AND building toward pickup (not delivery), do a continuation build toward delivery with remaining budget using extended start positions that include the new segment endpoints.
+
+### Bug 16: Discard death spiral — unlimited consecutive discards (FIXED — uncommitted)
+**Severity**: Medium | **Files**: `Scorer.ts:580`, `GameTypes.ts:BotMemoryState`, `AIStrategyEngine.ts`
+
+After delivering Potatoes and getting stuck with unaffordable/unreachable demand cards, bot scored DiscardHand at 20 (desperate). Drew new cards, still bad, discarded again. Repeated 5+ times, losing 5+ turns to pure discarding while never building or moving.
+
+**Root cause**: No limit on consecutive discards. `calculateDiscardScore` didn't check history.
+
+**Fix**: Added `consecutiveDiscards` field to `BotMemoryState`, tracked in all memory update paths. `calculateDiscardScore` returns 0 after 2 consecutive discards, forcing the bot to build/move before trying again.
+
+---
+
+### Design Principles (continued)
+
+### 20. Budget penalties must be proportional to overspend
+A flat penalty (e.g., 0.4x) for any over-budget chain treats "barely over" the same as "3x over." Use `(money/cost)²` so slightly over-budget chains remain viable while wildly unaffordable ones drop to near-zero.
+
+### 21. Pickup count must not exceed demand card count
+When generating pickup options, count matching demand cards per load type and limit pickups accordingly. The Phase 0 loop re-generates options after each pickup, so the same demand card can match repeatedly without this check.
+
+### 22. Auto-execution needs a minimum confidence threshold
+Any action that auto-executes in a loop (Phase 0 pickups, deliveries) needs a score floor. Heavily penalized options (unreachable, unaffordable) can still be positive — below-threshold options should be skipped.
+
+### 23. Use the full budget — continuation builds
+When a chain's primary build target is close and uses less than half the budget, continue building toward the chain's other endpoint (delivery city) with the remaining budget. Don't waste 80% of the build budget on a 2-hex path.
+
+### 24. Limit consecutive identical actions to prevent death spirals
+Actions that sacrifice a full turn (like DiscardHand) need consecutive-use limits. Without limits, a bot in a bad state can loop the same desperate action indefinitely, never recovering.
