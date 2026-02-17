@@ -628,7 +628,7 @@ export class ChatScene extends Phaser.Scene {
     // Convert pointer world coords to local coords within messagesContainer
     const containerX = this.container.x;
     const localX = pointer.x - containerX;
-    const localY = pointer.y - this.messagesContainer.y - this.container.y + this.scrollPosition;
+    const localY = pointer.y - this.messagesContainer.y - this.container.y;
 
     for (const bubble of this.messagesList) {
       const tooltipText = bubble.getFlaggedTooltipText();
@@ -694,6 +694,14 @@ export class ChatScene extends Phaser.Scene {
     this.flaggedUnsubscribe?.();
     this.flaggedUnsubscribe = null;
     this.optimisticBubbleMap.clear();
+
+    // Clean up tooltip
+    if (this.tooltipContainer) {
+      this.tooltipContainer.destroy();
+      this.tooltipContainer = null;
+    }
+    this.tooltipBg = null;
+    this.tooltipText = null;
 
     // Clean up HTML input
     if (this.inputField) {

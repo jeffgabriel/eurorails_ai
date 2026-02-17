@@ -312,7 +312,7 @@ export class ChatStateService {
       optimisticMessage.isPending = false;
       optimisticMessage.error = 'Failed to send message';
       console.error('[ChatStateService] Failed to send message:', error);
-      return optimisticId;
+      throw error;
     }
   }
 
