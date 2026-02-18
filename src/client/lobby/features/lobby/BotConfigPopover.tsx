@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Bot, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { BotSkillLevel, BotArchetype } from '../../../../shared/types/GameTypes';
+import { BotSkillLevel, BotArchetype, LLMProvider, LLM_DEFAULT_MODELS } from '../../../../shared/types/GameTypes';
 import { getArchetypeDisplay, getSkillLevelDisplay } from '../../shared/botDisplayUtils';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
@@ -11,7 +11,7 @@ import { Label } from '../../components/ui/label';
 
 interface BotConfigPopoverProps {
   gameId: string;
-  onAddBot: (config: { skillLevel: string; archetype: string; name?: string }) => Promise<void>;
+  onAddBot: (config: { skillLevel: string; archetype: string; name?: string; provider?: string; model?: string }) => Promise<void>;
   disabled?: boolean;
 }
 
@@ -20,12 +20,18 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
   const [skillLevel, setSkillLevel] = useState<string>(BotSkillLevel.Medium);
   const [archetype, setArchetype] = useState<string>('random');
   const [name, setName] = useState('');
+  const [provider, setProvider] = useState<string>(LLMProvider.Anthropic);
+  const [model, setModel] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const defaultModel = LLM_DEFAULT_MODELS[provider as LLMProvider]?.[skillLevel as BotSkillLevel] ?? '';
 
   const resetForm = () => {
     setSkillLevel(BotSkillLevel.Medium);
     setArchetype('random');
     setName('');
+    setProvider(LLMProvider.Anthropic);
+    setModel('');
   };
 
   const handleSubmit = async () => {
@@ -38,6 +44,8 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
       skillLevel,
       archetype,
       name: name.trim() || undefined,
+      provider: provider || undefined,
+      model: model.trim() || undefined,
     };
     resetForm();
     try {
@@ -109,6 +117,35 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
                 })}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="bot-provider">LLM Provider</Label>
+            <Select value={provider} onValueChange={(v) => { setProvider(v); setModel(''); }} disabled={isSubmitting}>
+              <SelectTrigger id="bot-provider" aria-label="LLM provider">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.values(LLMProvider).map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p === LLMProvider.Anthropic ? 'Anthropic (Claude)' : 'Google (Gemini)'}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="bot-model">Model (optional)</Label>
+            <Input
+              id="bot-model"
+              aria-label="Model override"
+              placeholder={defaultModel}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={isSubmitting}
+            />
+            <p className="text-xs text-muted-foreground">Leave blank for default based on skill level.</p>
           </div>
 
           <div className="space-y-2">

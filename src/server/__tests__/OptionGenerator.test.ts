@@ -808,6 +808,9 @@ describe('OptionGenerator — sticky build target', () => {
       deliveryCount: 0,
       totalEarnings: 0,
       turnNumber: 0,
+      activePlan: null,
+      turnsOnPlan: 0,
+      planHistory: [],
       ...overrides,
     };
   }

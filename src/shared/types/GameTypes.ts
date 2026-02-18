@@ -344,6 +344,8 @@ export interface WorldSnapshot {
             skillLevel: string;
             archetype: string;
             name?: string;
+            provider?: string;
+            model?: string;
         } | null;
         /** Set by AIStrategyEngine when bot crosses a ferry — halves movement speed for this turn */
         ferryHalfSpeed?: boolean;
@@ -355,6 +357,8 @@ export interface WorldSnapshot {
         segments: TrackSegment[];
     }>;
     loadAvailability: Record<string, string[]>;  // city name → available load types
+    /** Opponent player data for LLM serialization (populated for Medium/Hard skill) */
+    opponents?: OpponentSnapshot[];
 }
 
 /** Actions a bot can take during its turn */
@@ -367,6 +371,18 @@ export enum AIActionType {
     DropLoad = 'DropLoad',
     UpgradeTrain = 'UpgradeTrain',
     DiscardHand = 'DiscardHand',
+}
+
+/** Delivery plan representing a committed pickup→delivery chain */
+export interface DeliveryPlan {
+  demandCardId: number;       // Which demand card we're fulfilling
+  loadType: string;           // e.g., "Steel"
+  pickupCity: string;         // e.g., "Ruhr"
+  deliveryCity: string;       // e.g., "Bruxelles"
+  payment: number;            // ECU payoff
+  phase: 'build_to_pickup' | 'travel_to_pickup' | 'pickup' | 'build_to_delivery' | 'travel_to_delivery' | 'deliver';
+  createdAtTurn: number;
+  reasoning: string;          // LLM's reasoning for choosing this chain
 }
 
 /** Persistent bot state that spans across turns within a game */
@@ -387,6 +403,12 @@ export interface BotMemoryState {
     totalEarnings: number;
     /** Last turn number processed */
     turnNumber: number;
+    /** Active delivery plan the bot is executing */
+    activePlan: DeliveryPlan | null;
+    /** How many turns the bot has been on the current plan */
+    turnsOnPlan: number;
+    /** History of completed/abandoned plans */
+    planHistory: Array<{ plan: DeliveryPlan; outcome: 'delivered' | 'abandoned'; turns: number }>;
 }
 
 /** Simplified option summary for decision logging */
@@ -411,6 +433,24 @@ export interface PhaseDecisionLog {
         cost: number;
         remainingMoney: number;
     } | null;
+    /** LLM model identifier used for this phase (e.g. "claude-sonnet-4-20250514") */
+    llmModel?: string;
+    /** LLM API call latency in milliseconds */
+    llmLatencyMs?: number;
+    /** LLM token usage for this phase */
+    llmTokenUsage?: { input: number; output: number };
+    /** LLM reasoning text explaining the decision */
+    llmReasoning?: string;
+    /** LLM multi-turn plan horizon description */
+    llmPlanHorizon?: string;
+    /** Whether a guardrail rule overrode the LLM selection */
+    wasGuardrailOverride?: boolean;
+    /** Reason for the guardrail override */
+    guardrailReason?: string;
+    /** Whether this phase fell back to heuristic scoring */
+    wasFallback?: boolean;
+    /** Reason for the heuristic fallback */
+    fallbackReason?: string;
 }
 
 /** Complete decision log for one bot turn */
@@ -419,6 +459,68 @@ export interface TurnDecisionLog {
     playerId: string;
     turn: number;
     phases: PhaseDecisionLog[];
+}
+
+// ─── LLM Strategy Brain Types ───────────────────────────────────────────────
+
+/** Configuration for constructing an LLMStrategyBrain instance */
+export interface LLMStrategyConfig {
+    archetype: BotArchetype;
+    skillLevel: BotSkillLevel;
+    provider: LLMProvider;
+    /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */
+    model?: string;
+    apiKey: string;
+    /** Timeout in ms for LLM API calls. 10000 for Easy, 15000 for Medium/Hard. */
+    timeoutMs: number;
+    /** Number of retries with minimal prompt before heuristic fallback. Default 1. */
+    maxRetries: number;
+}
+
+/** Result from LLMStrategyBrain.selectOptions() — includes both chosen indices and metadata */
+export interface LLMSelectionResult {
+    moveOptionIndex: number;    // -1 = skip movement
+    buildOptionIndex: number;
+    reasoning: string;
+    planHorizon: string;
+    model: string;
+    latencyMs: number;
+    tokenUsage: { input: number; output: number };
+    wasGuardrailOverride: boolean;
+    guardrailReason?: string;
+}
+
+/** Result from ResponseParser.parse() — extracted indices and text from LLM response */
+export interface ParsedSelection {
+    moveOptionIndex: number;
+    buildOptionIndex: number;
+    reasoning: string;
+    planHorizon: string;
+}
+
+/** Result from GuardrailEnforcer.check() — indicates whether hard rules overrode the LLM choice */
+export interface GuardrailResult {
+    moveOverridden: boolean;
+    buildOverridden: boolean;
+    correctedMoveIndex?: number;
+    correctedBuildIndex?: number;
+    reason?: string;
+}
+
+/** Normalized response from any LLM provider adapter */
+export interface ProviderResponse {
+    text: string;
+    usage: { input: number; output: number };
+}
+
+/** Opponent player data included in WorldSnapshot for Medium/Hard skill serialization */
+export interface OpponentSnapshot {
+    playerId: string;
+    money: number;
+    position: { row: number; col: number } | null;
+    trainType: string;
+    loads: string[];
+    trackSummary?: string;
 }
 
 /** Human-readable labels for each AIActionType, used by UI components */

@@ -1,6 +1,13 @@
 /**
  * Scorer — Ranks feasible options by strategic value for the AI bot.
  *
+ * FALLBACK ONLY (v6.1): When an LLM provider is configured, the LLM makes
+ * strategic decisions (which chain to pursue, where to build, when to upgrade).
+ * The Scorer is used only when:
+ * - The LLM call fails or times out (retry fallback)
+ * - Phase 0/1.5 load actions (deliver/pickup/drop remain heuristic)
+ * - No LLM provider is configured (pure heuristic mode)
+ *
  * Applies a weighted scoring system considering terrain cost, segment count,
  * and bot archetype preferences. Returns options sorted highest score first.
  */
@@ -579,67 +586,35 @@ export class Scorer {
   /**
    * P4: Score a DiscardHand option.
    *
-   * Discarding is a DESPERATE last resort: the bot loses its entire turn
-   * AND scraps all existing plans (demand cards that informed track building).
-   * Score must stay below BuildTrack (~25+) and MoveTrain (~10+) in all but
-   * the most hopeless situations. Only barely above PassTurn (0).
+   * Discarding is an ABSOLUTE LAST RESORT. The bot loses its entire turn
+   * AND scraps all demand cards that informed track building decisions.
    *
-   * Game-phase-aware (BE-005): analyzes how many demand card destinations
-   * are reachable on the bot's current track network. If none are reachable
-   * and the bot has made few deliveries, strongly encourages discarding.
+   * Default score is well below PassTurn (0) so the bot will almost never
+   * discard. Only rises above PassTurn when the bot is truly stuck:
+   * 3+ consecutive pass turns with no deliveries or progress.
    */
   private static calculateDiscardScore(
     snapshot: WorldSnapshot,
     botMemory?: BotMemoryState,
   ): number {
-    // Without memory data or network, preserve legacy behavior
-    if (!botMemory || snapshot.bot.existingSegments.length === 0) {
-      return 1;
+    if (!botMemory) {
+      return -10;
     }
 
-    // B6: Prevent discard death spiral — max 2 consecutive discards.
-    // Score -1 so PassTurn (0) wins the tiebreaker. Previously returned 0,
-    // which tied with PassTurn and DiscardHand won by sort order.
+    // Prevent discard death spiral — max 2 consecutive discards.
     if (botMemory.consecutiveDiscards >= 2) {
-      return -1;
+      return -20;
     }
 
-    // Build set of grid coords on the bot's track network
-    const onNetwork = new Set<string>();
-    for (const seg of snapshot.bot.existingSegments) {
-      onNetwork.add(`${seg.from.row},${seg.from.col}`);
-      onNetwork.add(`${seg.to.row},${seg.to.col}`);
-    }
-
-    const grid = loadGridPoints();
-
-    // Count how many demand cards have at least one reachable delivery destination
-    let reachableCount = 0;
-    for (const rd of snapshot.bot.resolvedDemands) {
-      let cardReachable = false;
-      for (const demand of rd.demands) {
-        for (const [key, point] of grid) {
-          if (point.name === demand.city && onNetwork.has(key)) {
-            cardReachable = true;
-            break;
-          }
-        }
-        if (cardReachable) break;
-      }
-      if (cardReachable) reachableCount++;
-    }
-
-    // 0/3 reachable AND few deliveries: desperate — new hand is critical
-    if (reachableCount === 0 && botMemory.deliveryCount < 3) {
-      return 20;
-    }
-
-    // 1/3 reachable: marginal hand — discarding might help
-    if (reachableCount === 1) {
+    // Only consider discarding when truly stuck: 3+ consecutive pass turns
+    // means the bot can't build, can't deliver, can't make progress.
+    // This is the ONLY scenario where fresh cards might help.
+    if (botMemory.consecutivePassTurns >= 3) {
       return 5;
     }
 
-    // 2-3/3 reachable: decent hand — keep it
-    return 1;
+    // Default: strongly prefer PassTurn over DiscardHand.
+    // The bot should commit to its current demand cards and execute.
+    return -10;
   }
 }

@@ -123,7 +123,7 @@ function sampleAvgTerrainCost(
 }
 
 /** A demand chain: pickup_city → delivery_city for a specific load/card */
-interface DemandChain {
+export interface DemandChain {
   cardId: number;
   loadType: string;
   pickupCity: string;
@@ -134,6 +134,12 @@ interface DemandChain {
   chainScore: number;
   hasLoad: boolean;
   estimatedBuildCost: number;
+  /** Number of other top chains whose targets overlap with this chain's build path */
+  sharedChainCount?: number;
+  /** Budget feasibility: 'achievable' (< 80% cash), 'tight' (80-120%), 'unachievable' (> 120%) */
+  budgetFeasibility?: 'achievable' | 'tight' | 'unachievable';
+  /** Estimated total turns to complete the chain (build + travel) */
+  estimatedTotalTurns?: number;
 }
 
 export class OptionGenerator {
@@ -196,6 +202,74 @@ export class OptionGenerator {
     }
 
     return options;
+  }
+
+  /**
+   * Get ranked demand chains with enriched metrics for LLM prompt context.
+   * Exposes the internal rankDemandChains results plus:
+   * - sharedChainCount: how many other top chains have overlapping targets
+   * - budgetFeasibility: 'achievable' | 'tight' | 'unachievable'
+   * - estimatedTotalTurns: build + travel turns
+   * @param loyaltyFactor Optional override for loyalty bonus multiplier (default 1.5x, plan mode uses 3.0x)
+   */
+  static getRankedChains(snapshot: WorldSnapshot, botMemory?: BotMemoryState, loyaltyFactor?: number): DemandChain[] {
+    const chains = OptionGenerator.rankDemandChains(snapshot, botMemory, loyaltyFactor);
+
+    const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+    const money = snapshot.bot.money;
+
+    // Collect all target grid keys from top chains for shared-track detection
+    const allTargetKeys: Map<number, Set<string>> = new Map();
+    for (let i = 0; i < chains.length; i++) {
+      const keys = new Set<string>();
+      for (const t of chains[i].pickupTargets) keys.add(`${t.row},${t.col}`);
+      for (const t of chains[i].deliveryTargets) keys.add(`${t.row},${t.col}`);
+      allTargetKeys.set(i, keys);
+    }
+
+    for (let i = 0; i < chains.length; i++) {
+      const chain = chains[i];
+      const cost = chain.estimatedBuildCost;
+
+      // Budget feasibility
+      if (cost <= 0 || cost <= money * 0.8) {
+        chain.budgetFeasibility = 'achievable';
+      } else if (cost <= money * 1.2) {
+        chain.budgetFeasibility = 'tight';
+      } else {
+        chain.budgetFeasibility = 'unachievable';
+      }
+
+      // Estimated total turns
+      const buildTurns = Math.ceil(cost / 20); // 20M per turn build budget
+      const travelDist = chain.hasLoad
+        ? minEuclidean(
+            snapshot.bot.position ? [snapshot.bot.position] : chain.deliveryTargets,
+            chain.deliveryTargets,
+          )
+        : minEuclidean(
+            snapshot.bot.position ? [snapshot.bot.position] : chain.pickupTargets,
+            chain.pickupTargets,
+          ) + minEuclidean(chain.pickupTargets, chain.deliveryTargets);
+      chain.estimatedTotalTurns = buildTurns + Math.ceil(travelDist / trainSpeed);
+
+      // Shared chain count: how many OTHER chains share targets with this one
+      const myKeys = allTargetKeys.get(i)!;
+      let shared = 0;
+      for (let j = 0; j < chains.length; j++) {
+        if (i === j) continue;
+        const otherKeys = allTargetKeys.get(j)!;
+        for (const key of myKeys) {
+          if (otherKeys.has(key)) {
+            shared++;
+            break; // count each other chain at most once
+          }
+        }
+      }
+      chain.sharedChainCount = shared;
+    }
+
+    return chains;
   }
 
   /**
@@ -735,8 +809,9 @@ export class OptionGenerator {
    * then computes actual segments via Dijkstra pathfinding.
    * @param snapshot Current game state
    * @param botMemory Optional bot memory — passed to rankDemandChains for sticky target logic
+   * @param loyaltyFactor Optional override for loyalty multiplier in chain ranking
    */
-  private static generateBuildTrackOptions(snapshot: WorldSnapshot, botMemory?: BotMemoryState): FeasibleOption[] {
+  private static generateBuildTrackOptions(snapshot: WorldSnapshot, botMemory?: BotMemoryState, loyaltyFactor?: number): FeasibleOption[] {
     // Reserve money for track usage fees when game is active (not initialBuild).
     // Without this, the bot spends all money on building and can't move next turn.
     const MOVEMENT_RESERVE = snapshot.gameStatus === 'active' ? 8 : 0;
@@ -772,13 +847,13 @@ export class OptionGenerator {
     const options: FeasibleOption[] = [];
     const seenFirstSegKey = new Set<string>();
 
-    const chains = OptionGenerator.rankDemandChains(snapshot, botMemory);
+    const chains = OptionGenerator.rankDemandChains(snapshot, botMemory, loyaltyFactor);
     const tag = `[BuildGen ${snapshot.gameId.slice(0, 8)}]`;
     if (chains.length > 0) {
       console.log(`${tag} Ranked ${chains.length} demand chains: ${chains.slice(0, 5).map(c => `${c.loadType}@${c.pickupCity}→${c.deliveryCity} score=${c.chainScore.toFixed(2)} pay=${c.payment}`).join(', ')}`);
     }
 
-    for (const chain of chains.slice(0, 3)) {
+    for (const chain of chains.slice(0, 5)) {
       // Build toward pickup city (if bot doesn't have the load)
       // Build toward delivery city (if bot already has the load)
       const targets = chain.hasLoad ? chain.deliveryTargets : chain.pickupTargets;
@@ -980,8 +1055,9 @@ export class OptionGenerator {
    * matching the current build target, unless the target is stale (>= 5 turns).
    * @param snapshot Current game state
    * @param botMemory Optional bot memory for sticky build target loyalty bonus
+   * @param loyaltyFactor Optional override for loyalty multiplier (default LOYALTY_BONUS_FACTOR = 1.5)
    */
-  private static rankDemandChains(snapshot: WorldSnapshot, botMemory?: BotMemoryState): DemandChain[] {
+  private static rankDemandChains(snapshot: WorldSnapshot, botMemory?: BotMemoryState, loyaltyFactor?: number): DemandChain[] {
     const grid = loadGridPoints();
 
     // Get network positions for distance calculations
@@ -1001,18 +1077,25 @@ export class OptionGenerator {
       // No track — evaluate each major city as a starting hub.
       // Using ALL outposts makes minEuclidean return ~0 for any chain,
       // causing the highest-payment chain to win regardless of geography.
-      // Instead, pick the hub that maximizes the best achievable delivery.
+      // Instead, pick the hub that maximizes the sum of top-3 achievable chains.
       const groups = getMajorCityGroups();
       let bestHub: GridCoord[] = [];
       let bestHubScore = -Infinity;
+      let bestHubName = '';
+      const hubTag = `[HubSelect ${snapshot.gameId.slice(0, 8)}]`;
 
       for (const g of groups) {
         const hubPos = g.outposts.map(o => ({ row: o.row, col: o.col }));
         const hubScore = OptionGenerator.evaluateHubScore(hubPos, snapshot, grid);
+        console.log(`${hubTag} ${g.cityName}: score=${hubScore.toFixed(2)}`);
         if (hubScore > bestHubScore) {
           bestHubScore = hubScore;
           bestHub = hubPos;
+          bestHubName = g.cityName;
         }
+      }
+      if (bestHubName) {
+        console.log(`${hubTag} Selected hub: ${bestHubName} (score=${bestHubScore.toFixed(2)})`);
       }
 
       if (bestHub.length > 0) {
@@ -1065,7 +1148,12 @@ export class OptionGenerator {
           const profit = demand.payment - estimatedBuildCost;
           let chainScore = profit > 0
             ? profit / Math.max(totalTurns, 1)
-            : 0.01; // floor negative-profit chains (preserve sort, but near-zero)
+            // Negative-profit chains still need meaningful differentiation.
+            // Use payment/turns * 0.1 so high-payment chains rank above low-payment
+            // ones even when all chains are unprofitable (common during initialBuild
+            // when everything costs more than it pays). Old floor of 0.01 made ALL
+            // chains equal, producing random ordering.
+            : (demand.payment / Math.max(totalTurns, 1)) * 0.1;
           // Budget penalty: proportional — the further over budget, the harder
           // the penalty. (money/cost)² so a 50% overspend gets 0.44x, a 3x
           // overspend gets 0.11x. Prevents the bot from committing to routes
@@ -1143,7 +1231,9 @@ export class OptionGenerator {
           const profit = demand.payment - estimatedBuildCost;
           let chainScore = profit > 0
             ? profit / Math.max(totalTurns, 1)
-            : 0.01; // floor negative-profit chains (preserve sort, but near-zero)
+            // Negative-profit chains: use payment/turns * 0.1 for meaningful
+            // differentiation (see hasLoad branch comment for rationale).
+            : (demand.payment / Math.max(totalTurns, 1)) * 0.1;
 
           // Budget penalty: proportional — (money/cost)² so chains that are
           // slightly over budget still rank ok, but wildly unaffordable chains
@@ -1174,11 +1264,12 @@ export class OptionGenerator {
     if (botMemory?.currentBuildTarget) {
       const isStale = botMemory.turnsOnTarget >= STALE_TARGET_THRESHOLD;
       if (!isStale) {
+        const factor = loyaltyFactor ?? LOYALTY_BONUS_FACTOR;
         for (const chain of chains) {
           // Match delivery city (if carrying load) or pickup city (if not)
           const targetCity = chain.hasLoad ? chain.deliveryCity : chain.pickupCity;
           if (targetCity === botMemory.currentBuildTarget || chain.deliveryCity === botMemory.currentBuildTarget) {
-            chain.chainScore *= LOYALTY_BONUS_FACTOR;
+            chain.chainScore *= factor;
           }
         }
       }
@@ -1198,7 +1289,7 @@ export class OptionGenerator {
     snapshot: WorldSnapshot,
     grid: Map<string, GridPointData>,
   ): number {
-    let bestScore = 0;
+    const chainScores: number[] = [];
 
     for (const rd of snapshot.bot.resolvedDemands) {
       for (const demand of rd.demands) {
@@ -1257,13 +1348,19 @@ export class OptionGenerator {
           chainScore *= ratio * ratio;
         }
 
-        if (chainScore > bestScore) {
-          bestScore = chainScore;
-        }
+        chainScores.push(chainScore);
       }
     }
 
-    return bestScore;
+    if (chainScores.length === 0) return 0;
+
+    // Sum top 3 chain scores instead of just the best one.
+    // This rewards hubs that enable MULTIPLE achievable delivery chains,
+    // naturally favoring central European hubs (Ruhr, Berlin, Paris, Holland)
+    // over peripheral ones (Madrid, Bilbao, Lisboa) that may have one decent
+    // chain but few alternatives after delivering it.
+    chainScores.sort((a, b) => b - a);
+    return chainScores.slice(0, 3).reduce((sum, s) => sum + s, 0);
   }
 
   /**

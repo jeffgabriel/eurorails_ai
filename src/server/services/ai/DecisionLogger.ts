@@ -50,6 +50,19 @@ export function initTurnLog(gameId: string, playerId: string, turn: number): voi
   };
 }
 
+/** Optional LLM-specific fields for a decision phase */
+export interface LLMPhaseFields {
+  llmModel?: string;
+  llmLatencyMs?: number;
+  llmTokenUsage?: { input: number; output: number };
+  llmReasoning?: string;
+  llmPlanHorizon?: string;
+  wasGuardrailOverride?: boolean;
+  guardrailReason?: string;
+  wasFallback?: boolean;
+  fallbackReason?: string;
+}
+
 /**
  * Log a decision phase. Called after each major phase (0, 1, 1.5, 2)
  * in AIStrategyEngine.takeTurn().
@@ -58,12 +71,14 @@ export function initTurnLog(gameId: string, playerId: string, turn: number): voi
  * @param options - All options generated and scored for this phase
  * @param chosen - The option that was selected for execution (null if none)
  * @param result - The execution result (null if no action executed)
+ * @param llmFields - Optional LLM-specific metadata (model, latency, reasoning, etc.)
  */
 export function logPhase(
   phase: string,
   options: FeasibleOption[],
   chosen: FeasibleOption | null,
   result: ExecutionResult | null,
+  llmFields?: LLMPhaseFields,
 ): void {
   if (!currentLog) return;
 
@@ -77,6 +92,7 @@ export function logPhase(
       cost: result.cost,
       remainingMoney: result.remainingMoney,
     } : null,
+    ...llmFields,
   };
 
   currentLog.phases.push(phaseLog);

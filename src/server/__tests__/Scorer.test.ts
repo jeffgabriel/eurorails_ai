@@ -525,6 +525,9 @@ function makeMemory(overrides?: Partial<BotMemoryState>): BotMemoryState {
     deliveryCount: 3,
     totalEarnings: 60,
     turnNumber: 10,
+    activePlan: null,
+    turnsOnPlan: 0,
+    planHistory: [],
     ...overrides,
   };
 }
@@ -715,173 +718,71 @@ function makeDiscardSnapshot(overrides?: Partial<WorldSnapshot['bot']>): WorldSn
   };
 }
 
-describe('Scorer — calculateDiscardScore (BE-005: intelligent discard)', () => {
-  afterEach(() => {
-    // Restore default empty grid mock
-    mockLoadGridPoints.mockReturnValue(new Map());
-  });
-
-  it('should return 1 when botMemory is undefined (legacy behavior)', () => {
+describe('Scorer — calculateDiscardScore (last resort only)', () => {
+  it('should return -10 when botMemory is undefined', () => {
     const option = makeDiscardOption();
     const snapshot = makeDiscardSnapshot();
 
     const scored = Scorer.score([option], snapshot, null);
 
-    expect(scored[0].score).toBe(1);
+    expect(scored[0].score).toBe(-10);
   });
 
-  it('should return 1 when bot has no track segments', () => {
+  it('should return -10 by default (below PassTurn at 0)', () => {
     const option = makeDiscardOption();
-    const snapshot = makeDiscardSnapshot({ existingSegments: [] });
-    const memory = makeMemory({ deliveryCount: 0 });
+    const snapshot = makeDiscardSnapshot();
+    const memory = makeMemory({ deliveryCount: 0, consecutivePassTurns: 0 });
 
     const scored = Scorer.score([option], snapshot, null, memory);
 
-    expect(scored[0].score).toBe(1);
+    expect(scored[0].score).toBe(-10);
   });
 
-  it('should return 20 when 0/3 demands are reachable and deliveryCount < 3', () => {
-    // Grid has cities but none match the bot's network coordinates
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },  // far from network
-      { name: 'Paris', row: 60, col: 60 },
-      { name: 'Madrid', row: 70, col: 70 },
-    ]));
-
+  it('should return 5 when bot is truly stuck (3+ consecutive pass turns)', () => {
     const option = makeDiscardOption();
     const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 1 });
-
-    const scored = Scorer.score([option], snapshot, null, memory);
-
-    expect(scored[0].score).toBe(20);
-  });
-
-  it('should return 1 when 0/3 demands are reachable but deliveryCount >= 3', () => {
-    // Grid has cities but none match the bot's network coordinates
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },
-      { name: 'Paris', row: 60, col: 60 },
-      { name: 'Madrid', row: 70, col: 70 },
-    ]));
-
-    const option = makeDiscardOption();
-    const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 5 });
-
-    const scored = Scorer.score([option], snapshot, null, memory);
-
-    // With 0 reachable but deliveryCount >= 3, the 0-reachable branch
-    // doesn't fire because deliveryCount >= 3. Falls through to reachableCount check:
-    // reachableCount is 0, but since deliveryCount >= 3, falls to bottom → 1
-    expect(scored[0].score).toBe(1);
-  });
-
-  it('should return 5 when exactly 1/3 demands are reachable', () => {
-    // Berlin at (1,0) is on the network; Paris and Madrid are NOT
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 1, col: 0 },    // on network
-      { name: 'Paris', row: 60, col: 60 },    // off network
-      { name: 'Madrid', row: 70, col: 70 },   // off network
-    ]));
-
-    const option = makeDiscardOption();
-    const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 2 });
+    const memory = makeMemory({ deliveryCount: 0, consecutivePassTurns: 3 });
 
     const scored = Scorer.score([option], snapshot, null, memory);
 
     expect(scored[0].score).toBe(5);
   });
 
-  it('should return 1 when 2/3 demands are reachable', () => {
-    // Berlin at (1,0) and Paris at (2,0) are on the network; Madrid is NOT
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 1, col: 0 },    // on network
-      { name: 'Paris', row: 2, col: 0 },      // on network
-      { name: 'Madrid', row: 70, col: 70 },   // off network
-    ]));
-
+  it('should return -10 when only 2 consecutive pass turns (not yet stuck)', () => {
     const option = makeDiscardOption();
     const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 2 });
+    const memory = makeMemory({ deliveryCount: 0, consecutivePassTurns: 2 });
 
     const scored = Scorer.score([option], snapshot, null, memory);
 
-    expect(scored[0].score).toBe(1);
+    expect(scored[0].score).toBe(-10);
   });
 
-  it('should return 1 when all 3/3 demands are reachable', () => {
-    // All three cities are on the network
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 1, col: 0 },
-      { name: 'Paris', row: 2, col: 0 },
-      { name: 'Madrid', row: 0, col: 0 },  // on network (segment from 0,0)
-    ]));
-
+  it('should return -20 when consecutiveDiscards >= 2 (prevent death spiral)', () => {
     const option = makeDiscardOption();
     const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 2 });
+    const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 2, consecutivePassTurns: 5 });
 
     const scored = Scorer.score([option], snapshot, null, memory);
 
-    expect(scored[0].score).toBe(1);
+    expect(scored[0].score).toBe(-20);
   });
 
-  it('should score discard (20) higher than BuildTrack base (10) when hand is desperate', () => {
-    // No cities reachable, few deliveries
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },
-      { name: 'Paris', row: 60, col: 60 },
-      { name: 'Madrid', row: 70, col: 70 },
-    ]));
-
+  it('should score discard below BuildTrack and PassTurn normally', () => {
     const discard = makeDiscardOption();
     const build = makeBuildOption([makeSegment(1)]);
     const pass = makePassOption();
     const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 0 });
+    const memory = makeMemory({ deliveryCount: 0, consecutivePassTurns: 0 });
 
     const scored = Scorer.score([discard, build, pass], snapshot, null, memory);
 
     const discardScored = scored.find(o => o.action === AIActionType.DiscardHand)!;
     const buildScored = scored.find(o => o.action === AIActionType.BuildTrack)!;
-    // Desperate discard (20) should beat basic build (10 base - 1 cost + 1 segment = 10)
-    expect(discardScored.score!).toBeGreaterThan(buildScored.score!);
-  });
-
-  it('should return -1 when consecutiveDiscards >= 2 (B6: prevent death spiral)', () => {
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },  // unreachable
-      { name: 'Paris', row: 60, col: 60 },
-      { name: 'Madrid', row: 70, col: 70 },
-    ]));
-
-    const option = makeDiscardOption();
-    const snapshot = makeDiscardSnapshot();
-    // Normally this would score 20 (desperate), but 2 consecutive discards blocks it.
-    // Returns -1 so PassTurn (0) wins the tiebreaker.
-    const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 2 });
-
-    const scored = Scorer.score([option], snapshot, null, memory);
-
-    expect(scored[0].score).toBe(-1);
-  });
-
-  it('should allow discard when consecutiveDiscards < 2', () => {
-    mockLoadGridPoints.mockReturnValue(buildGridWithCities([
-      { name: 'Berlin', row: 50, col: 50 },
-      { name: 'Paris', row: 60, col: 60 },
-      { name: 'Madrid', row: 70, col: 70 },
-    ]));
-
-    const option = makeDiscardOption();
-    const snapshot = makeDiscardSnapshot();
-    const memory = makeMemory({ deliveryCount: 0, consecutiveDiscards: 1 });
-
-    const scored = Scorer.score([option], snapshot, null, memory);
-
-    expect(scored[0].score).toBe(20); // still desperate, 1 discard is ok
+    const passScored = scored.find(o => o.action === AIActionType.PassTurn)!;
+    // Discard (-10) should be below both BuildTrack and PassTurn (0)
+    expect(discardScored.score!).toBeLessThan(buildScored.score!);
+    expect(discardScored.score!).toBeLessThan(passScored.score!);
   });
 });
 

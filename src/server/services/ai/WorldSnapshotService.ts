@@ -6,7 +6,7 @@
  */
 
 import { db } from '../../db/index';
-import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand, OpponentSnapshot, BotSkillLevel } from '../../../shared/types/GameTypes';
 import { DemandDeckService } from '../demandDeckService';
 import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
@@ -70,6 +70,8 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
         skillLevel: rawConfig.skillLevel ?? 'medium',
         archetype: rawConfig.archetype ?? 'balanced',
         name: rawConfig.name,
+        provider: rawConfig.provider,
+        model: rawConfig.model,
       }
     : null;
 
@@ -94,6 +96,24 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
         payment: d.payment,
       })),
     });
+  }
+
+  // Build opponent snapshots for Medium/Hard skill levels
+  const skillLevel = botConfig?.skillLevel?.toLowerCase();
+  let opponents: OpponentSnapshot[] | undefined;
+  if (skillLevel === BotSkillLevel.Medium || skillLevel === BotSkillLevel.Hard) {
+    opponents = result.rows
+      .filter((row) => row.player_id !== botPlayerId)
+      .map((row) => ({
+        playerId: row.player_id as string,
+        money: row.money ?? 0,
+        position:
+          row.position_row != null && row.position_col != null
+            ? { row: row.position_row, col: row.position_col }
+            : null,
+        trainType: row.train_type ?? 'Freight',
+        loads: Array.isArray(row.loads) ? row.loads : [],
+      }));
   }
 
   // Build load availability for cities relevant to the bot's demands
@@ -144,6 +164,7 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     },
     allPlayerTracks,
     loadAvailability,
+    opponents,
   };
 }
 
