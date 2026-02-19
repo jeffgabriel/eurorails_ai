@@ -8,13 +8,14 @@ ollama serve &
 SERVER_PID=$!
 
 echo "[Ollama] Waiting for server to be ready..."
-MAX_WAIT=60
+MAX_WAIT=120
 ELAPSED=0
 until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
   if [ $ELAPSED -ge $MAX_WAIT ]; then
     echo "[Ollama] ERROR: Server failed to start within ${MAX_WAIT}s"
     exit 1
   fi
+  echo "[Ollama] Not ready yet... (${ELAPSED}s elapsed)"
   sleep 2
   ELAPSED=$((ELAPSED + 2))
 done
