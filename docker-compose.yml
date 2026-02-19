@@ -22,20 +22,23 @@ services:
       - ${INIT_SCRIPTS_DIR:-./db/scripts}:/docker-entrypoint-initdb.d:ro
       - ./db/migrations:/migrations
   ollama:
-    image: ollama/ollama:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
     restart: unless-stopped
     ports:
       - "11434:11434"
     environment:
       - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_MODEL=${LLAMA_GUARD_MODEL:-llama-guard3:1b}
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -X POST http://localhost:11434/api/show -d '{\"name\":\"'${OLLAMA_MODEL:-llama-guard3:1b}'\"}'  || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 30s
+      retries: 60
+      start_period: 60s
   app:
     depends_on:
       postgresdb:
