@@ -19,13 +19,16 @@ function mockFetchResponse(body: any, status = 200): Response {
 describe('ModerationService', () => {
   let service: ModerationService;
   const originalFetch = global.fetch;
+  const originalEnv = process.env;
 
   beforeEach(() => {
+    process.env = { ...originalEnv, LLAMA_GUARD_URL: 'http://localhost:11434', LLAMA_GUARD_MODEL: 'llama-guard3:1b' };
     service = new ModerationService();
     global.fetch = jest.fn();
   });
 
   afterEach(() => {
+    process.env = originalEnv;
     global.fetch = originalFetch;
     jest.restoreAllMocks();
   });
