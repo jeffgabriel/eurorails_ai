@@ -36,7 +36,7 @@ describe('ModerationService', () => {
         mockFetchResponse({ name: 'llama-guard3:1b' })
       );
 
-      await service.initialize();
+      await service.initialize(1000);
 
       expect(service.isReady()).toBe(true);
       expect(global.fetch).toHaveBeenCalledWith(
@@ -53,8 +53,8 @@ describe('ModerationService', () => {
         mockFetchResponse({ name: 'llama-guard3:1b' })
       );
 
-      await service.initialize();
-      await service.initialize();
+      await service.initialize(1000);
+      await service.initialize(1000);
 
       expect(global.fetch).toHaveBeenCalledTimes(1);
     });
@@ -62,7 +62,7 @@ describe('ModerationService', () => {
     it('should throw when Ollama server is unreachable', async () => {
       (global.fetch as jest.Mock).mockRejectedValue(new Error('ECONNREFUSED'));
 
-      await expect(service.initialize()).rejects.toThrow(
+      await expect(service.initialize(0)).rejects.toThrow(
         'MODERATION_INITIALIZATION_FAILED'
       );
       expect(service.isReady()).toBe(false);
@@ -73,7 +73,7 @@ describe('ModerationService', () => {
         mockFetchResponse({ error: 'model not found' }, 404)
       );
 
-      await expect(service.initialize()).rejects.toThrow(
+      await expect(service.initialize(0)).rejects.toThrow(
         'MODERATION_INITIALIZATION_FAILED'
       );
       expect(service.isReady()).toBe(false);
@@ -85,7 +85,7 @@ describe('ModerationService', () => {
       (global.fetch as jest.Mock).mockResolvedValueOnce(
         mockFetchResponse({ name: 'llama-guard3:1b' })
       );
-      await service.initialize();
+      await service.initialize(1000);
     });
 
     it('should reject empty messages', async () => {
