@@ -291,18 +291,15 @@ async function startServer() {
             process.exit(1);
         }
 
-        // Initialize moderation service (verify Ollama model availability)
-        // Note: Requires Ollama running with llama-guard3:1b model pulled
-        try {
-            console.log('[Startup] Initializing moderation service...');
-            await moderationService.initialize();
+        // Initialize moderation service in background (polls until Ollama is ready)
+        // Server starts immediately; moderation becomes available once Ollama responds
+        console.log('[Startup] Initializing moderation service (background)...');
+        moderationService.initialize().then(() => {
             console.log('[Startup] Moderation service ready');
-        } catch (error) {
+        }).catch((error) => {
             console.error('[Startup] Failed to initialize moderation service:', error);
             console.error('[Startup] Chat moderation will not be available');
-            // Don't exit - allow server to start without moderation
-            // Chat will still work, just without content filtering
-        }
+        });
 
         // Initialize cleanup jobs (cron)
         try {
