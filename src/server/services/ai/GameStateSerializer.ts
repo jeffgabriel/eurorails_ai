@@ -109,7 +109,7 @@ export class GameStateSerializer {
     const cappedBuilds = feasibleBuilds.slice(0, maxOpts);
     lines.push('BUILD OPTIONS (pick one by buildOption index):');
     for (let i = 0; i < cappedBuilds.length; i++) {
-      lines.push(GameStateSerializer.describeBuildOption(cappedBuilds[i], i, snapshot, rankedChains));
+      lines.push(GameStateSerializer.describeBuildOption(cappedBuilds[i], i, snapshot, rankedChains, memory));
     }
 
     return lines.join('\n');
@@ -632,6 +632,21 @@ export class GameStateSerializer {
   }
 
   /**
+   * Resolve the origin (start point) of a build option to a city name.
+   * Uses segments[0].from to find where the build branches off existing track.
+   */
+  private static resolveBuildOrigin(segments: TrackSegment[]): string | null {
+    if (!segments || segments.length === 0) return null;
+    const from = segments[0].from;
+    const grid = loadGridPoints();
+    const key = `${from.row},${from.col}`;
+    const point = grid.get(key);
+    if (point?.name) return point.name;
+    const desc = GameStateSerializer.findNearestCityDescription(from.row, from.col, grid);
+    return desc === 'in transit' ? null : desc;
+  }
+
+  /**
    * Describe a build option for the LLM prompt.
    */
   private static describeBuildOption(
@@ -639,6 +654,7 @@ export class GameStateSerializer {
     index: number,
     snapshot: WorldSnapshot,
     chains?: DemandChain[],
+    memory?: BotMemoryState,
   ): string {
     const parts: string[] = [];
     parts.push(`[B${index}]`);
@@ -648,7 +664,20 @@ export class GameStateSerializer {
         const target = option.targetCity ?? 'extend track';
         const cost = option.estimatedCost ?? 0;
         const segCount = option.segments?.length ?? 0;
-        parts.push(`BUILD: toward ${target} (${segCount} segments, ${cost}M).`);
+        const origin = option.segments
+          ? GameStateSerializer.resolveBuildOrigin(option.segments) : null;
+        const originStr = origin ? ` from ${origin}` : '';
+
+        let spurTag = '';
+        if (memory?.currentBuildTarget && origin) {
+          if (target === memory.currentBuildTarget) {
+            spurTag = ' [CONTINUES current build]';
+          } else {
+            spurTag = ' [NEW SPUR]';
+          }
+        }
+
+        parts.push(`BUILD:${originStr} toward ${target} (${segCount} segments, ${cost}M).${spurTag}`);
         if (option.payment) {
           parts.push(`Enables ${option.payment}M delivery.`);
         }
