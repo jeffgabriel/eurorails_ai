@@ -34,7 +34,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -X POST http://localhost:11434/api/show -d '{\"name\":\"'${OLLAMA_MODEL:-llama-guard3:1b}'\"}'  || exit 1"]
+      test: ["CMD-SHELL", "ollama list | grep -q llama-guard"]
       interval: 10s
       timeout: 5s
       retries: 60
