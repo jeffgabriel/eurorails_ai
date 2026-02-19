@@ -3,21 +3,21 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 // Mock db before importing InitialBuildService
 jest.mock('../db/index', () => ({
   db: {
-    query: jest.fn(),
+    query: jest.fn<() => Promise<any>>(),
   },
 }));
 
 // Mock socketService
 jest.mock('../services/socketService', () => ({
-  emitTurnChange: jest.fn(),
-  emitStatePatch: jest.fn().mockResolvedValue(undefined),
+  emitTurnChange: jest.fn<() => void>(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
 }));
 
 import { db } from '../db/index';
 import { emitTurnChange, emitStatePatch } from '../services/socketService';
 import { InitialBuildService } from '../services/InitialBuildService';
 
-const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
+const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockEmitTurnChange = emitTurnChange as jest.MockedFunction<typeof emitTurnChange>;
 const mockEmitStatePatch = emitStatePatch as jest.MockedFunction<typeof emitStatePatch>;
 
@@ -29,7 +29,7 @@ function mockResult(rows: any[]) {
 describe('InitialBuildService', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    (mockEmitStatePatch as jest.Mock).mockResolvedValue(undefined);
+    (mockEmitStatePatch as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
   });
 
   // Standard player ordering: [A, B, C] with indices [0, 1, 2]

@@ -12,6 +12,7 @@ import {
   AIActionType,
   TrainType,
   TRAIN_PROPERTIES,
+  TurnPlan,
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
 import { emitToGame, emitStatePatch } from '../socketService';
@@ -70,6 +71,143 @@ export class TurnExecutor {
           durationMs: Date.now() - startTime,
         };
     }
+  }
+
+  /**
+   * Execute a TurnPlan (v6.3 pipeline).
+   *
+   * Converts the discriminated-union TurnPlan into a FeasibleOption and delegates
+   * to the existing execute() method. For MultiAction plans, executes each step
+   * sequentially and returns the aggregate result.
+   */
+  static async executePlan(
+    plan: TurnPlan,
+    snapshot: WorldSnapshot,
+  ): Promise<ExecutionResult> {
+    if (plan.type === 'MultiAction') {
+      return TurnExecutor.executeMultiAction(plan.steps, snapshot);
+    }
+
+    const option = TurnExecutor.planToOption(plan);
+    return TurnExecutor.execute(option, snapshot);
+  }
+
+  /**
+   * Convert a TurnPlan discriminated union into a FeasibleOption for the existing handlers.
+   */
+  private static planToOption(plan: TurnPlan): FeasibleOption {
+    switch (plan.type) {
+      case AIActionType.BuildTrack:
+        return {
+          action: AIActionType.BuildTrack,
+          feasible: true,
+          reason: 'v6.3 plan',
+          segments: plan.segments,
+          estimatedCost: plan.segments.reduce((s, seg) => s + seg.cost, 0),
+        };
+      case AIActionType.MoveTrain:
+        return {
+          action: AIActionType.MoveTrain,
+          feasible: true,
+          reason: 'v6.3 plan',
+          movementPath: plan.path,
+          mileposts: plan.path.length > 0 ? plan.path.length - 1 : 0,
+        };
+      case AIActionType.DeliverLoad:
+        return {
+          action: AIActionType.DeliverLoad,
+          feasible: true,
+          reason: 'v6.3 plan',
+          loadType: plan.load as LoadType,
+          targetCity: plan.city,
+          cardId: plan.cardId,
+          payment: plan.payout,
+        };
+      case AIActionType.PickupLoad:
+        return {
+          action: AIActionType.PickupLoad,
+          feasible: true,
+          reason: 'v6.3 plan',
+          loadType: plan.load as LoadType,
+          targetCity: plan.city,
+        };
+      case AIActionType.UpgradeTrain: {
+        // Determine upgrade kind based on cost
+        const upgradeKind = plan.cost === 5 ? 'crossgrade' : 'upgrade';
+        return {
+          action: AIActionType.UpgradeTrain,
+          feasible: true,
+          reason: 'v6.3 plan',
+          targetTrainType: plan.targetTrain as TrainType,
+          upgradeKind,
+          estimatedCost: plan.cost,
+        };
+      }
+      case AIActionType.DiscardHand:
+        return {
+          action: AIActionType.DiscardHand,
+          feasible: true,
+          reason: 'v6.3 plan',
+        };
+      case AIActionType.PassTurn:
+        return {
+          action: AIActionType.PassTurn,
+          feasible: true,
+          reason: 'v6.3 plan',
+        };
+      default:
+        return {
+          action: AIActionType.PassTurn,
+          feasible: true,
+          reason: 'v6.3 plan (unknown type)',
+        };
+    }
+  }
+
+  /**
+   * Execute a MultiAction plan: run each step sequentially.
+   * Returns aggregate cost/segments. Stops on first failure.
+   */
+  private static async executeMultiAction(
+    steps: TurnPlan[],
+    snapshot: WorldSnapshot,
+  ): Promise<ExecutionResult> {
+    const startTime = Date.now();
+    let totalCost = 0;
+    let totalSegments = 0;
+    let lastAction = AIActionType.PassTurn;
+    let lastResult: ExecutionResult | null = null;
+
+    for (const step of steps) {
+      const option = TurnExecutor.planToOption(step);
+      const result = await TurnExecutor.execute(option, snapshot);
+
+      if (!result.success) {
+        return {
+          ...result,
+          cost: totalCost + result.cost,
+          segmentsBuilt: totalSegments + result.segmentsBuilt,
+          durationMs: Date.now() - startTime,
+        };
+      }
+
+      totalCost += result.cost;
+      totalSegments += result.segmentsBuilt;
+      lastAction = result.action;
+      snapshot.bot.money = result.remainingMoney;
+      lastResult = result;
+    }
+
+    return {
+      success: true,
+      action: lastAction,
+      cost: totalCost,
+      segmentsBuilt: totalSegments,
+      remainingMoney: snapshot.bot.money,
+      durationMs: Date.now() - startTime,
+      payment: lastResult?.payment,
+      newCardId: lastResult?.newCardId,
+    };
   }
 
   /**

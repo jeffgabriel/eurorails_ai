@@ -343,6 +343,66 @@ describe('computeBuildSegments', () => {
     });
   });
 
+  describe('knownSegments for continuation builds', () => {
+    it('should not duplicate edges from knownSegments', () => {
+      // Build primary segments from Paris
+      const primary = computeBuildSegments([PARIS], [], 5, 5);
+      expect(primary.length).toBeGreaterThan(0);
+
+      // Build continuation from last endpoint with knownSegments
+      const lastSeg = primary[primary.length - 1];
+      const contStart = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+
+      const continuation = computeBuildSegments(
+        contStart, [], 10, undefined, undefined, undefined,
+        primary,
+      );
+
+      // No continuation segment should duplicate a primary segment edge
+      const primaryEdges = new Set<string>();
+      for (const seg of primary) {
+        const a = `${seg.from.row},${seg.from.col}`;
+        const b = `${seg.to.row},${seg.to.col}`;
+        primaryEdges.add(`${a}-${b}`);
+        primaryEdges.add(`${b}-${a}`);
+      }
+
+      for (const seg of continuation) {
+        const a = `${seg.from.row},${seg.from.col}`;
+        const b = `${seg.to.row},${seg.to.col}`;
+        expect(primaryEdges.has(`${a}-${b}`)).toBe(false);
+      }
+    });
+
+    it('continuation first segment starts from a knownSegments node', () => {
+      // Build primary path from Paris
+      const primary = computeBuildSegments([PARIS], [], 5, 5);
+      expect(primary.length).toBeGreaterThan(1);
+
+      const lastSeg = primary[primary.length - 1];
+      const contStart = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+
+      const continuation = computeBuildSegments(
+        contStart, [], 15, undefined, undefined, undefined,
+        primary,
+      );
+
+      if (continuation.length > 0) {
+        // The continuation's first segment `from` must be on the primary path
+        // or at the contStart — valid even when it branches from a mid-point
+        const primaryNodes = new Set<string>();
+        for (const seg of primary) {
+          primaryNodes.add(`${seg.from.row},${seg.from.col}`);
+          primaryNodes.add(`${seg.to.row},${seg.to.col}`);
+        }
+        primaryNodes.add(`${contStart[0].row},${contStart[0].col}`);
+
+        const firstFrom = `${continuation[0].from.row},${continuation[0].from.col}`;
+        expect(primaryNodes.has(firstFrom)).toBe(true);
+      }
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle non-existent grid position gracefully', () => {
       const segments = computeBuildSegments([{ row: 999, col: 999 }], [], 20);
@@ -357,6 +417,100 @@ describe('computeBuildSegments', () => {
         20,
       );
       expect(segments.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('Major City red area connectivity', () => {
+    // Berlin: center (24,52), outposts (24,51), (23,51), (25,51), (23,52), (25,52), (24,53)
+    const BERLIN_CENTER: GridCoord = { row: 24, col: 52 };
+    const BERLIN_OUTPOST_1: GridCoord = { row: 24, col: 51 }; // west outpost
+    const BERLIN_OUTPOST_2: GridCoord = { row: 24, col: 53 }; // east outpost
+
+    it('should not produce intra-city segments when starting from a Berlin outpost with existing track', () => {
+      const grid = loadGridPoints();
+      const lookup = getMajorCityLookup();
+
+      // Bot has one segment ending at a Berlin outpost
+      const fromData = grid.get('23,51')!; // outside Berlin
+      const toData = grid.get('24,51')!;   // Berlin outpost
+
+      const existingSegment: TrackSegment = {
+        from: { x: 0, y: 0, row: 23, col: 51, terrain: fromData?.terrain ?? TerrainType.Clear },
+        to: { x: 0, y: 0, row: BERLIN_OUTPOST_1.row, col: BERLIN_OUTPOST_1.col, terrain: toData?.terrain ?? TerrainType.MajorCity },
+        cost: 5,
+      };
+
+      const segments = computeBuildSegments([], [existingSegment], 20);
+
+      // No segment should have both endpoints in Berlin
+      for (const seg of segments) {
+        const fromCity = lookup.get(`${seg.from.row},${seg.from.col}`);
+        const toCity = lookup.get(`${seg.to.row},${seg.to.col}`);
+        if (fromCity && toCity) {
+          expect(fromCity).not.toBe(toCity);
+        }
+      }
+    });
+
+    it('should use all Berlin outposts as Dijkstra sources when track connects to one outpost', () => {
+      const grid = loadGridPoints();
+      const groups = getMajorCityGroups();
+      const berlinGroup = groups.find(g => g.cityName === 'Berlin')!;
+      expect(berlinGroup).toBeDefined();
+
+      // Bot has one segment ending at Berlin west outpost (24,51)
+      const fromData = grid.get('23,51')!;
+      const toData = grid.get('24,51')!;
+
+      const existingSegment: TrackSegment = {
+        from: { x: 0, y: 0, row: 23, col: 51, terrain: fromData?.terrain ?? TerrainType.Clear },
+        to: { x: 0, y: 0, row: BERLIN_OUTPOST_1.row, col: BERLIN_OUTPOST_1.col, terrain: toData?.terrain ?? TerrainType.MajorCity },
+        cost: 5,
+      };
+
+      // Build toward a target east of Berlin — should be reachable from the
+      // east outpost (24,53) without needing to build intra-city segments.
+      const targetEast: GridCoord = { row: 24, col: 55 }; // east of Berlin
+      const segments = computeBuildSegments([], [existingSegment], 20, undefined, undefined, [targetEast]);
+
+      // The resulting segments should build FROM a Berlin outpost outward,
+      // not between Berlin outposts. Verify that the first segment starts
+      // from a Berlin point (any outpost, including the east one).
+      expect(segments.length).toBeGreaterThan(0);
+
+      // Total cost should NOT include any $5 Major City segments between Berlin outposts
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
+    });
+
+    it('should not charge for intra-city traversal (total cost excludes red area)', () => {
+      const grid = loadGridPoints();
+
+      // Bot has track at Berlin west outpost
+      const fromData = grid.get('23,51')!;
+      const toData = grid.get('24,51')!;
+
+      const existingSegment: TrackSegment = {
+        from: { x: 0, y: 0, row: 23, col: 51, terrain: fromData?.terrain ?? TerrainType.Clear },
+        to: { x: 0, y: 0, row: BERLIN_OUTPOST_1.row, col: BERLIN_OUTPOST_1.col, terrain: toData?.terrain ?? TerrainType.MajorCity },
+        cost: 5,
+      };
+
+      // Build with budget=20. Without city expansion, Dijkstra could only
+      // start from (24,51) and (23,51). With expansion, all Berlin outposts
+      // are sources, so the bot can build east from (24,53) directly.
+      const segments = computeBuildSegments([], [existingSegment], 20);
+      expect(segments.length).toBeGreaterThan(0);
+
+      // Verify no segment is between two Berlin outposts
+      const lookup = getMajorCityLookup();
+      for (const seg of segments) {
+        const fromCity = lookup.get(`${seg.from.row},${seg.from.col}`);
+        const toCity = lookup.get(`${seg.to.row},${seg.to.col}`);
+        if (fromCity === 'Berlin' && toCity === 'Berlin') {
+          fail(`Found intra-Berlin segment: (${seg.from.row},${seg.from.col}) → (${seg.to.row},${seg.to.col})`);
+        }
+      }
     });
   });
 

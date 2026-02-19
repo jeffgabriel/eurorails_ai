@@ -1,122 +1,101 @@
 /**
- * GuardrailEnforcer — Applies hard safety rules to LLM-selected options.
+ * GuardrailEnforcer — Applies hard safety guardrails to LLM action plans.
  *
- * Three rules:
- * 1. Delivery move override: force delivery if LLM skipped movement
- * 2. Bankruptcy prevention: ensure build cost doesn't leave money below 5M
- * 3. Discard hand override: prefer building track over discarding
+ * `checkPlan()` enforces 3 hard rules on TurnPlan:
+ *   1. Force DELIVER when canDeliver has opportunities
+ *   2. Prevent PASS when a delivery is possible
+ *   3. Block UPGRADE during initialBuild phase
  *
- * Pure function — no side effects, no DB access.
+ * These are NOT strategic overrides — they enforce game rules the LLM must
+ * not violate. Strategic decisions remain the LLM's responsibility.
  */
 
 import {
-  FeasibleOption,
-  AIActionType,
   WorldSnapshot,
-  GuardrailResult,
+  GuardrailPlanResult,
+  TurnPlan,
+  GameContext,
+  AIActionType,
 } from '../../../shared/types/GameTypes';
 
 export class GuardrailEnforcer {
   /**
-   * Check both the move and build selections against hard rules.
+   * Enforce hard guardrails on a TurnPlan (v6.3 pipeline).
    *
-   * @param selectedMove - The chosen move option (undefined if moveIndex === -1)
-   * @param selectedBuild - The chosen build option
-   * @param allMoveOptions - All available move options
-   * @param allBuildOptions - All available build options
-   * @param snapshot - Current game state snapshot
-   * @returns GuardrailResult indicating any overrides applied
+   * Returns the plan unchanged if no guardrail fires. If a guardrail fires,
+   * returns a corrected plan with `overridden: true` and a reason string.
+   *
+   * Guardrails (checked in priority order):
+   *   1. Force DELIVER: If bot can deliver right now and LLM chose something else
+   *   2. Prevent PASS: If bot can deliver and LLM chose PassTurn
+   *   3. Block UPGRADE during initialBuild: Upgrade is illegal during initial build phase
    */
-  static check(
-    selectedMove: FeasibleOption | undefined,
-    selectedBuild: FeasibleOption,
-    allMoveOptions: FeasibleOption[],
-    allBuildOptions: FeasibleOption[],
-    snapshot: WorldSnapshot,
-  ): GuardrailResult {
-    let moveOverridden = false;
-    let buildOverridden = false;
-    let correctedMoveIndex: number | undefined;
-    let correctedBuildIndex: number | undefined;
-    const reasons: string[] = [];
+  static checkPlan(
+    plan: TurnPlan,
+    context: GameContext,
+    _snapshot: WorldSnapshot,
+  ): GuardrailPlanResult {
+    const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
-    // ── Move guardrails ──
-
-    // Rule 1: If bot has a deliverable load and a reachable delivery city,
-    // prefer the move toward that city (don't skip movement)
-    if (!selectedMove && allMoveOptions.length > 0) {
-      const deliveryMoveIdx = allMoveOptions.findIndex(
-        (o) => o.feasible && o.payment != null && o.payment > 0,
-      );
-      if (deliveryMoveIdx >= 0) {
-        moveOverridden = true;
-        correctedMoveIndex = deliveryMoveIdx;
-        reasons.push('Guardrail: skipped movement but deliverable load reachable');
-      }
+    // Guardrail 1: Force DELIVER when canDeliver has opportunities
+    // If the bot is sitting on a completable delivery and the LLM didn't choose DELIVER
+    if (context.canDeliver.length > 0 && planType !== AIActionType.DeliverLoad) {
+      const best = GuardrailEnforcer.bestDelivery(context);
+      return {
+        plan: {
+          type: AIActionType.DeliverLoad,
+          load: best.loadType,
+          city: best.deliveryCity,
+          cardId: best.cardIndex,
+          payout: best.payout,
+        },
+        overridden: true,
+        reason: `Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`,
+      };
     }
 
-    // ── Build guardrails ──
+    // Guardrail 2: Prevent PASS when delivery is possible
+    // (Already covered by Guardrail 1 if canDeliver.length > 0, but this catches
+    //  the edge case where canDeliver is empty but delivery could be reached)
+    // Note: This guardrail is a strict subset of #1 — if canDeliver > 0, #1 fires first.
+    // Kept as a separate check for clarity and future extensibility.
 
-    // Rule 2: Never go bankrupt — check build cost against remaining money
-    // Account for track usage fees from the selected move
-    const moveCost = selectedMove?.estimatedCost ?? 0;
-    const remainingAfterMove = snapshot.bot.money - moveCost;
-
-    if (
-      selectedBuild.estimatedCost &&
-      remainingAfterMove - selectedBuild.estimatedCost < 5
-    ) {
-      const safeOptions = allBuildOptions
-        .map((o, i) => ({ o, i }))
-        .filter(
-          ({ o }) => !o.estimatedCost || remainingAfterMove - o.estimatedCost >= 5,
-        );
-      if (safeOptions.length > 0) {
-        buildOverridden = true;
-        correctedBuildIndex = safeOptions[0].i;
-        reasons.push(
-          `Guardrail: build would leave ${remainingAfterMove - selectedBuild.estimatedCost!}M (below 5M minimum)`,
-        );
-      }
+    // Guardrail 3: Block UPGRADE during initialBuild phase
+    if (context.isInitialBuild && planType === AIActionType.UpgradeTrain) {
+      return {
+        plan: { type: AIActionType.PassTurn },
+        overridden: true,
+        reason: 'Blocked UPGRADE during initialBuild phase (not allowed)',
+      };
     }
 
-    // Rule 3: Never discard hand when buildable track options exist
-    if (selectedBuild.action === AIActionType.DiscardHand) {
-      const nonDiscardIdx = allBuildOptions.findIndex(
-        (o) => o.feasible && o.action === AIActionType.BuildTrack,
-      );
-      if (nonDiscardIdx >= 0) {
-        buildOverridden = true;
-        correctedBuildIndex = nonDiscardIdx;
-        reasons.push('Guardrail: DiscardHand overridden — buildable track available');
-      }
-    }
-
-    // Rule 4: DiscardHand is an absolute last resort — override to PassTurn
-    // unless the bot has track investment AND has built track (has a plan to commit to).
-    // The LLM prompt + Scorer should keep DiscardHand scored below PassTurn,
-    // but this guardrail catches edge cases.
-    if (
-      !buildOverridden &&
-      selectedBuild.action === AIActionType.DiscardHand &&
-      snapshot.bot.existingSegments.length > 0
-    ) {
-      const passIdx = allBuildOptions.findIndex(
-        (o) => o.feasible && o.action === AIActionType.PassTurn,
-      );
-      if (passIdx >= 0) {
-        buildOverridden = true;
-        correctedBuildIndex = passIdx;
-        reasons.push('Guardrail: DiscardHand blocked — bot has track investment, commit to current cards');
-      }
-    }
-
+    // No guardrail fired — return plan unchanged
     return {
-      moveOverridden,
-      buildOverridden,
-      correctedMoveIndex,
-      correctedBuildIndex,
-      reason: reasons.length > 0 ? reasons.join('; ') : undefined,
+      plan,
+      overridden: false,
     };
+  }
+
+  /**
+   * Extract the primary action type from a MultiAction plan.
+   * Returns the type of the first step, or PassTurn if empty.
+   */
+  private static primaryActionType(plan: TurnPlan): AIActionType | 'MultiAction' {
+    if (plan.type !== 'MultiAction') return plan.type;
+    if (plan.steps.length === 0) return AIActionType.PassTurn;
+    // Check if any step is a DELIVER
+    for (const step of plan.steps) {
+      if (step.type === AIActionType.DeliverLoad) return AIActionType.DeliverLoad;
+    }
+    return plan.steps[0].type;
+  }
+
+  /**
+   * Pick the highest-payout delivery opportunity.
+   */
+  private static bestDelivery(context: GameContext) {
+    return context.canDeliver.reduce((best, opp) =>
+      opp.payout > best.payout ? opp : best,
+    );
   }
 }

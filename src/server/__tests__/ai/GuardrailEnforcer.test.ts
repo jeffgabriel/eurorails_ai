@@ -1,9 +1,12 @@
 import { GuardrailEnforcer } from '../../services/ai/GuardrailEnforcer';
 import {
-  FeasibleOption,
   AIActionType,
   WorldSnapshot,
+  TurnPlan,
+  GameContext,
+  DeliveryOpportunity,
   TerrainType,
+  TrackSegment,
 } from '../../../shared/types/GameTypes';
 
 function makeSnapshot(money: number = 50): WorldSnapshot {
@@ -29,277 +32,251 @@ function makeSnapshot(money: number = 50): WorldSnapshot {
   };
 }
 
-function makeMoveOption(overrides?: Partial<FeasibleOption>): FeasibleOption {
+function makeContext(overrides?: Partial<GameContext>): GameContext {
   return {
-    action: AIActionType.MoveTrain,
-    feasible: true,
-    reason: 'Move toward city',
+    position: { city: 'Berlin', row: 10, col: 10 },
+    money: 50,
+    trainType: 'Freight',
+    speed: 9,
+    capacity: 2,
+    loads: [],
+    connectedMajorCities: ['Berlin'],
+    totalMajorCities: 8,
+    trackSummary: '5 segments',
+    turnBuildCost: 0,
+    demands: [],
+    canDeliver: [],
+    reachableCities: ['Berlin', 'Hamburg'],
+    canUpgrade: true,
+    canBuild: true,
+    isInitialBuild: false,
+    opponents: [],
+    phase: 'normal',
+    turnNumber: 5,
     ...overrides,
   };
 }
 
-function makeBuildOption(overrides?: Partial<FeasibleOption>): FeasibleOption {
+function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
   return {
-    action: AIActionType.BuildTrack,
-    feasible: true,
-    reason: 'Build track',
-    estimatedCost: 5,
-    ...overrides,
-  };
-}
-
-function makePassOption(): FeasibleOption {
-  return {
-    action: AIActionType.PassTurn,
-    feasible: true,
-    reason: 'Pass',
-    estimatedCost: 0,
+    from: { x: fromCol * 40, y: fromRow * 40, row: fromRow, col: fromCol, terrain: TerrainType.Clear },
+    to: { x: toCol * 40, y: toRow * 40, row: toRow, col: toCol, terrain: TerrainType.Clear },
+    cost: 1,
   };
 }
 
 describe('GuardrailEnforcer', () => {
-  describe('Rule 1: Delivery move override', () => {
-    it('should override when LLM skips movement but delivery move available', () => {
-      const deliveryMove = makeMoveOption({ payment: 12, feasible: true });
-      const regularMove = makeMoveOption({ payment: 0 });
-      const allMoves = [regularMove, deliveryMove];
-      const buildOption = makeBuildOption();
+  describe('checkPlan', () => {
+    describe('Guardrail 1: Force DELIVER', () => {
+      it('should force DELIVER when canDeliver has opportunities and LLM chose BUILD', () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ canDeliver: [delivery] });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+        };
 
-      const result = GuardrailEnforcer.check(
-        undefined, // selectedMove = none (LLM skipped)
-        buildOption,
-        allMoves,
-        [buildOption],
-        makeSnapshot(),
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.moveOverridden).toBe(true);
-      expect(result.correctedMoveIndex).toBe(1); // deliveryMove is at index 1
-      expect(result.reason).toContain('deliverable load');
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+        if (result.plan.type === AIActionType.DeliverLoad) {
+          expect(result.plan.load).toBe('Coal');
+          expect(result.plan.city).toBe('Berlin');
+          expect(result.plan.payout).toBe(25);
+          expect(result.plan.cardId).toBe(0);
+        }
+        expect(result.reason).toContain('Forced DELIVER');
+        expect(result.reason).toContain('Coal');
+      });
+
+      it('should force DELIVER when canDeliver has opportunities and LLM chose PASS', () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Wine',
+          deliveryCity: 'Paris',
+          payout: 30,
+          cardIndex: 1,
+        };
+        const ctx = makeContext({ canDeliver: [delivery] });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+      });
+
+      it('should pick the highest-payout delivery when multiple are available', () => {
+        const deliveries: DeliveryOpportunity[] = [
+          { loadType: 'Coal', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
+          { loadType: 'Wine', deliveryCity: 'Paris', payout: 40, cardIndex: 1 },
+          { loadType: 'Iron', deliveryCity: 'Hamburg', payout: 25, cardIndex: 2 },
+        ];
+        const ctx = makeContext({ canDeliver: deliveries });
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        if (result.plan.type === AIActionType.DeliverLoad) {
+          expect(result.plan.load).toBe('Wine');
+          expect(result.plan.payout).toBe(40);
+        }
+      });
+
+      it('should NOT override when LLM already chose DELIVER', () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ canDeliver: [delivery] });
+        const plan: TurnPlan = {
+          type: AIActionType.DeliverLoad,
+          load: 'Coal',
+          city: 'Berlin',
+          cardId: 0,
+          payout: 25,
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan); // Same reference
+      });
+
+      it('should NOT override MultiAction that includes a DELIVER step', () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ canDeliver: [delivery] });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 },
+            { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 0, payout: 25 },
+          ],
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
     });
 
-    it('should NOT override when LLM selected a move', () => {
-      const selectedMove = makeMoveOption({ payment: 0 });
-      const deliveryMove = makeMoveOption({ payment: 12 });
-      const allMoves = [selectedMove, deliveryMove];
-      const buildOption = makeBuildOption();
+    describe('Guardrail 3: Block UPGRADE during initialBuild', () => {
+      it('should block UPGRADE during initialBuild phase', () => {
+        const ctx = makeContext({ isInitialBuild: true });
+        const plan: TurnPlan = {
+          type: AIActionType.UpgradeTrain,
+          targetTrain: 'FastFreight',
+          cost: 20,
+        };
 
-      const result = GuardrailEnforcer.check(
-        selectedMove,
-        buildOption,
-        allMoves,
-        [buildOption],
-        makeSnapshot(),
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.moveOverridden).toBe(false);
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+        expect(result.reason).toContain('UPGRADE');
+        expect(result.reason).toContain('initialBuild');
+      });
+
+      it('should allow UPGRADE outside initialBuild phase', () => {
+        const ctx = makeContext({ isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.UpgradeTrain,
+          targetTrain: 'FastFreight',
+          cost: 20,
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
     });
 
-    it('should NOT override when no delivery moves exist', () => {
-      const regularMove = makeMoveOption({ payment: 0 });
-      const allMoves = [regularMove];
-      const buildOption = makeBuildOption();
+    describe('No guardrail fires', () => {
+      it('should pass through BUILD when no deliveries available', () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+        };
 
-      const result = GuardrailEnforcer.check(
-        undefined,
-        buildOption,
-        allMoves,
-        [buildOption],
-        makeSnapshot(),
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.moveOverridden).toBe(false);
-    });
-  });
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+        expect(result.reason).toBeUndefined();
+      });
 
-  describe('Rule 2: Bankruptcy prevention', () => {
-    it('should override build that would leave money below 5M', () => {
-      const snapshot = makeSnapshot(10); // 10M cash
-      const expensiveBuild = makeBuildOption({ estimatedCost: 8 }); // 10-8=2 < 5
-      const cheapBuild = makeBuildOption({ estimatedCost: 2 }); // 10-2=8 >= 5
-      const allBuilds = [expensiveBuild, cheapBuild];
+      it('should pass through PASS when no deliveries available', () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-      const result = GuardrailEnforcer.check(
-        undefined,
-        expensiveBuild,
-        [],
-        allBuilds,
-        snapshot,
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.buildOverridden).toBe(true);
-      expect(result.correctedBuildIndex).toBe(1); // cheapBuild at index 1
-      expect(result.reason).toContain('below 5M');
-    });
+        expect(result.overridden).toBe(false);
+      });
 
-    it('should NOT override build that leaves sufficient money', () => {
-      const snapshot = makeSnapshot(50);
-      const build = makeBuildOption({ estimatedCost: 10 }); // 50-10=40 >= 5
+      it('should pass through DISCARD_HAND without interference', () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-      const result = GuardrailEnforcer.check(
-        undefined,
-        build,
-        [],
-        [build],
-        snapshot,
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.buildOverridden).toBe(false);
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should pass through PICKUP when no deliveries available', () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const plan: TurnPlan = {
+          type: AIActionType.PickupLoad,
+          load: 'Coal',
+          city: 'Berlin',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
     });
 
-    it('should account for move cost when checking bankruptcy', () => {
-      const snapshot = makeSnapshot(15);
-      const selectedMove = makeMoveOption({ estimatedCost: 4 }); // usage fee
-      // After move: 15 - 4 = 11. Build cost 8: 11-8=3 < 5.
-      const build = makeBuildOption({ estimatedCost: 8 });
-      const cheapBuild = makeBuildOption({ estimatedCost: 2 });
+    describe('Guardrail priority', () => {
+      it('Force DELIVER takes priority over block UPGRADE during initialBuild', () => {
+        // Edge case: isInitialBuild=true, canDeliver has items, LLM chose UPGRADE
+        // Guardrail 1 (force DELIVER) should fire before Guardrail 3 (block UPGRADE)
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ isInitialBuild: true, canDeliver: [delivery] });
+        const plan: TurnPlan = {
+          type: AIActionType.UpgradeTrain,
+          targetTrain: 'FastFreight',
+          cost: 20,
+        };
 
-      const result = GuardrailEnforcer.check(
-        selectedMove,
-        build,
-        [selectedMove],
-        [build, cheapBuild],
-        snapshot,
-      );
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
-      expect(result.buildOverridden).toBe(true);
-      expect(result.correctedBuildIndex).toBe(1);
-    });
-  });
-
-  describe('Rule 3: Discard hand override', () => {
-    it('should override DiscardHand when BuildTrack options exist', () => {
-      const discardOption: FeasibleOption = {
-        action: AIActionType.DiscardHand,
-        feasible: true,
-        reason: 'Discard',
-      };
-      const buildOption = makeBuildOption();
-      const allBuilds = [discardOption, buildOption];
-
-      const result = GuardrailEnforcer.check(
-        undefined,
-        discardOption,
-        [],
-        allBuilds,
-        makeSnapshot(),
-      );
-
-      expect(result.buildOverridden).toBe(true);
-      expect(result.correctedBuildIndex).toBe(1); // buildOption at index 1
-      expect(result.reason).toContain('DiscardHand overridden');
-    });
-
-    it('should NOT override DiscardHand when no BuildTrack options exist', () => {
-      const discardOption: FeasibleOption = {
-        action: AIActionType.DiscardHand,
-        feasible: true,
-        reason: 'Discard',
-      };
-      const passOption = makePassOption();
-
-      const result = GuardrailEnforcer.check(
-        undefined,
-        discardOption,
-        [],
-        [discardOption, passOption],
-        makeSnapshot(),
-      );
-
-      expect(result.buildOverridden).toBe(false);
-    });
-  });
-
-  describe('Rule 4: Discard last resort — protect track investment', () => {
-    it('should override DiscardHand to PassTurn when bot has track', () => {
-      const discardOption: FeasibleOption = {
-        action: AIActionType.DiscardHand,
-        feasible: true,
-        reason: 'Discard',
-      };
-      const passOption = makePassOption();
-      const snapshotWithTrack = makeSnapshot(15);
-      snapshotWithTrack.bot.existingSegments = [
-        { from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear }, to: { x: 0, y: 0, row: 10, col: 11, terrain: TerrainType.Clear }, cost: 1 },
-      ];
-
-      const result = GuardrailEnforcer.check(
-        undefined,
-        discardOption,
-        [],
-        [discardOption, passOption],
-        snapshotWithTrack,
-      );
-
-      expect(result.buildOverridden).toBe(true);
-      expect(result.correctedBuildIndex).toBe(1); // passOption at index 1
-      expect(result.reason).toContain('track investment');
-    });
-
-    it('should NOT override DiscardHand when bot has no track', () => {
-      const discardOption: FeasibleOption = {
-        action: AIActionType.DiscardHand,
-        feasible: true,
-        reason: 'Discard',
-      };
-      const passOption = makePassOption();
-
-      const result = GuardrailEnforcer.check(
-        undefined,
-        discardOption,
-        [],
-        [discardOption, passOption],
-        makeSnapshot(50), // No track built
-      );
-
-      expect(result.buildOverridden).toBe(false);
-    });
-
-    it('should prefer Rule 3 (BuildTrack override) over Rule 4 (PassTurn)', () => {
-      const discardOption: FeasibleOption = {
-        action: AIActionType.DiscardHand,
-        feasible: true,
-        reason: 'Discard',
-      };
-      const buildOption = makeBuildOption();
-      const passOption = makePassOption();
-      const snapshotWithTrack = makeSnapshot(15);
-      snapshotWithTrack.bot.existingSegments = [
-        { from: { x: 0, y: 0, row: 10, col: 10, terrain: TerrainType.Clear }, to: { x: 0, y: 0, row: 10, col: 11, terrain: TerrainType.Clear }, cost: 1 },
-      ];
-
-      const result = GuardrailEnforcer.check(
-        undefined,
-        discardOption,
-        [],
-        [discardOption, buildOption, passOption],
-        snapshotWithTrack,
-      );
-
-      expect(result.buildOverridden).toBe(true);
-      expect(result.correctedBuildIndex).toBe(1); // buildOption (Rule 3 takes priority)
-      expect(result.reason).toContain('buildable track available');
-    });
-  });
-
-  describe('No override scenarios', () => {
-    it('should return all false when no guardrails trigger', () => {
-      const move = makeMoveOption();
-      const build = makeBuildOption({ estimatedCost: 5 });
-
-      const result = GuardrailEnforcer.check(
-        move,
-        build,
-        [move],
-        [build],
-        makeSnapshot(50),
-      );
-
-      expect(result.moveOverridden).toBe(false);
-      expect(result.buildOverridden).toBe(false);
-      expect(result.correctedMoveIndex).toBeUndefined();
-      expect(result.correctedBuildIndex).toBeUndefined();
-      expect(result.reason).toBeUndefined();
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+        expect(result.reason).toContain('Forced DELIVER');
+      });
     });
   });
 });

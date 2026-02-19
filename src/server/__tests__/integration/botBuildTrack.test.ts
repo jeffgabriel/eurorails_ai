@@ -12,20 +12,20 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 // Mock db before importing services
 jest.mock('../../db/index', () => ({
   db: {
-    query: jest.fn(),
-    connect: jest.fn(),
+    query: jest.fn<() => Promise<any>>(),
+    connect: jest.fn<() => Promise<any>>(),
   },
 }));
 
 // Mock socketService
 jest.mock('../../services/socketService', () => ({
-  emitTurnChange: jest.fn(),
-  emitStatePatch: jest.fn().mockResolvedValue(undefined),
-  emitToGame: jest.fn(),
-  getSocketIO: jest.fn().mockReturnValue(null),
+  emitTurnChange: jest.fn<() => void>(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  emitToGame: jest.fn<() => void>(),
+  getSocketIO: jest.fn<() => any>().mockReturnValue(null),
 }));
 
-// Mock MapTopology (loaded by OptionGenerator, Scorer, computeBuildSegments)
+// Mock MapTopology (loaded by ActionResolver, ContextBuilder, computeBuildSegments)
 jest.mock('../../services/ai/MapTopology', () => ({
   loadGridPoints: jest.fn(() => {
     const map = new Map();
@@ -33,6 +33,9 @@ jest.mock('../../services/ai/MapTopology', () => ({
     map.set('29,32', { row: 29, col: 32, terrain: 6, name: 'Paris' });
     map.set('29,31', { row: 29, col: 31, terrain: 1 });
     map.set('28,32', { row: 28, col: 32, terrain: 1 });
+    // Berlin major city (demand target)
+    map.set('20,50', { row: 20, col: 50, terrain: 6, name: 'Berlin' });
+    map.set('20,49', { row: 20, col: 49, terrain: 1 });
     return map;
   }),
   getHexNeighbors: jest.fn((row: number, col: number) => {
@@ -60,9 +63,24 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
     { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [{ row: 29, col: 31 }, { row: 28, col: 32 }] },
     { cityName: 'Berlin', center: { row: 20, col: 50 }, outposts: [{ row: 20, col: 49 }] },
   ]),
+  getMajorCityLookup: jest.fn(() => {
+    const m = new Map();
+    m.set('29,32', 'Paris');
+    m.set('29,31', 'Paris');
+    m.set('28,32', 'Paris');
+    m.set('20,50', 'Berlin');
+    m.set('20,49', 'Berlin');
+    return m;
+  }),
+  getFerryEdges: jest.fn(() => []),
 }));
 
-// Mock trackUsageFees (used by OptionGenerator for movement BFS)
+// Mock connectedMajorCities (used by WorldSnapshotService)
+jest.mock('../../services/ai/connectedMajorCities', () => ({
+  getConnectedMajorCityCount: jest.fn(() => 0),
+}));
+
+// Mock trackUsageFees (used by ActionResolver for movement validation)
 jest.mock('../../../shared/services/trackUsageFees', () => ({
   buildUnionTrackGraph: jest.fn(() => ({
     adjacency: new Map(),
@@ -75,15 +93,41 @@ jest.mock('../../../shared/services/trackUsageFees', () => ({
   })),
 }));
 
-// Mock DemandDeckService (used by OptionGenerator and Scorer for movement)
+// Mock TrackNetworkService (used by ContextBuilder for reachability)
+jest.mock('../../../shared/services/TrackNetworkService', () => ({
+  buildTrackNetwork: jest.fn(() => ({
+    nodes: new Set<string>(),
+    edges: new Map<string, Set<string>>(),
+  })),
+}));
+
+// Mock DemandDeckService (used by WorldSnapshotService for demand resolution)
 jest.mock('../../services/demandDeckService', () => ({
   DemandDeckService: {
     getInstance: jest.fn(() => ({
-      getCard: jest.fn(() => undefined),
+      getCard: jest.fn((cardId: number) => {
+        if (cardId === 1) {
+          return {
+            id: 1,
+            demands: [
+              { city: 'Berlin', resource: 'Steel', payment: 30 },
+            ],
+          };
+        }
+        return undefined;
+      }),
     })),
   },
-  demandDeckService: {
-    getCard: jest.fn(() => undefined),
+}));
+
+// Mock LoadService (used by WorldSnapshotService and ContextBuilder)
+jest.mock('../../services/loadService', () => ({
+  LoadService: {
+    getInstance: jest.fn(() => ({
+      getAvailableLoadsForCity: jest.fn(() => []),
+      getSourceCitiesForLoad: jest.fn(() => ['Berlin']),
+      isLoadAvailableAtCity: jest.fn(() => false),
+    })),
   },
 }));
 
@@ -101,8 +145,8 @@ import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { AIActionType, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
-const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
-const mockConnect = (db as any).connect as jest.MockedFunction<any>;
+const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
+const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<any>>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockComputeBuild = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
 
@@ -122,16 +166,27 @@ describe('Bot Build Track Flow (Integration)', () => {
   const gameId = 'game-build-1';
   const botId = 'bot-paris';
   let mockClient: any;
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  const originalGoogleKey = process.env.GOOGLE_AI_API_KEY;
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // Remove API keys so bot uses heuristic fallback path (no real LLM calls)
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.GOOGLE_AI_API_KEY;
 
     // Set up mock transaction client
     mockClient = {
-      query: jest.fn().mockResolvedValue(mockResult([])),
-      release: jest.fn(),
+      query: jest.fn<() => Promise<any>>().mockResolvedValue(mockResult([])),
+      release: jest.fn<() => void>(),
     };
     mockConnect.mockResolvedValue(mockClient);
+  });
+
+  afterAll(() => {
+    // Restore env vars
+    if (originalAnthropicKey) process.env.ANTHROPIC_API_KEY = originalAnthropicKey;
+    if (originalGoogleKey) process.env.GOOGLE_AI_API_KEY = originalGoogleKey;
   });
 
   function setupWorldSnapshotQuery(overrides?: any) {
@@ -144,8 +199,8 @@ describe('Bot Build Track Flow (Integration)', () => {
         money: 50,
         position_row: 29,
         position_col: 32,
-        train_type: 'Freight',
-        hand: [],
+        train_type: 'freight',
+        hand: [1],
         loads: [],
         is_bot: true,
         bot_config: JSON.stringify({ skillLevel: 'medium', archetype: 'balanced' }),
@@ -160,7 +215,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         money: 40,
         position_row: 20,
         position_col: 50,
-        train_type: 'Freight',
+        train_type: 'freight',
         hand: [],
         loads: [],
         is_bot: false,
@@ -175,7 +230,9 @@ describe('Bot Build Track Flow (Integration)', () => {
     it('should build track segments, deduct money, save audit, and emit events', async () => {
       const seg = makeSegment(29, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
-      setupWorldSnapshotQuery();
+      // v6.3 heuristic needs existing track to estimate costs for build targets
+      const existingSeg = makeSegment(29, 32, 28, 32, 1);
+      setupWorldSnapshotQuery({ segments: JSON.stringify([existingSeg]) });
 
       const result = await AIStrategyEngine.takeTurn(gameId, botId);
 
@@ -289,7 +346,10 @@ describe('Bot Build Track Flow (Integration)', () => {
   });
 
   describe('initial build phase', () => {
-    it('should build from major city when bot has no existing track', async () => {
+    it('should fall back to PassTurn on cold start without LLM (heuristic cannot estimate costs)', async () => {
+      // v6.3: Without an LLM, the heuristic fallback cannot determine build direction
+      // during cold start (no existing segments → estimateTrackCost returns 0 → no build candidates).
+      // The LLM normally directs cold-start builds via the full pipeline.
       const seg = makeSegment(29, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
       setupWorldSnapshotQuery({
@@ -299,16 +359,25 @@ describe('Bot Build Track Flow (Integration)', () => {
 
       const result = await AIStrategyEngine.takeTurn(gameId, botId);
 
-      // computeBuildSegments should have been called (OptionGenerator called it)
-      expect(mockComputeBuild).toHaveBeenCalled();
-      // First arg is start positions - should include major city outposts (entry points)
-      const [startPositions] = mockComputeBuild.mock.calls[0];
-      expect(startPositions.length).toBeGreaterThan(0);
-      // Verify outpost positions are used (not centers)
-      expect(startPositions).toEqual(
-        expect.arrayContaining([expect.objectContaining({ row: 29, col: 31 })]),
-      );
+      // Heuristic can't estimate costs without existing track, so it falls back to PassTurn
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.success).toBe(true);
+    });
 
+    it('should build track during initial phase when bot has existing segments', async () => {
+      // v6.3: With existing segments, the heuristic can estimate costs and build toward targets
+      const existingSeg = makeSegment(29, 32, 28, 32, 1);
+      const newSeg = makeSegment(28, 32, 29, 31, 1);
+      mockComputeBuild.mockReturnValue([newSeg]);
+      setupWorldSnapshotQuery({
+        game_status: 'initialBuild',
+        segments: JSON.stringify([existingSeg]),
+      });
+
+      const result = await AIStrategyEngine.takeTurn(gameId, botId);
+
+      expect(mockComputeBuild).toHaveBeenCalled();
+      expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.success).toBe(true);
     });
   });
@@ -330,7 +399,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE players SET position_row'),
       );
       expect(positionUpdate).toBeDefined();
-      expect(positionUpdate[1][4]).toBe(botId); // player_id
+      expect(positionUpdate![1][4]).toBe(botId); // player_id
     });
   });
 
@@ -348,9 +417,10 @@ describe('Bot Build Track Flow (Integration)', () => {
     });
 
     it('should emit track:updated with correct payload on BuildTrack', async () => {
-      const seg = makeSegment(29, 32, 29, 31, 1);
+      const existingSeg = makeSegment(29, 32, 28, 32, 1);
+      const seg = makeSegment(28, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
-      setupWorldSnapshotQuery();
+      setupWorldSnapshotQuery({ segments: JSON.stringify([existingSeg]) });
 
       await AIStrategyEngine.takeTurn(gameId, botId);
 

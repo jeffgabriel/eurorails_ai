@@ -160,6 +160,7 @@ describe("trackUsageFees.computeTrackUsageForMove", () => {
         name: "TestFerry",
         pointA: { row: 0, col: 1 },
         pointB: { row: 0, col: 5 },
+        cost: 4,
       },
     ];
 
@@ -365,6 +366,7 @@ describe("trackUsageFees.computeTrackUsageForMove", () => {
         name: "TestFerry",
         pointA: { row: 0, col: 1 },
         pointB: { row: 0, col: 5 },
+        cost: 4,
       },
     ];
 

@@ -317,6 +317,8 @@ export interface FeasibleOption {
     estimatedBuildCost?: number;
     targetTrainType?: TrainType;
     upgradeKind?: 'upgrade' | 'crossgrade';
+    /** If set, this move requires crossing a ferry first (teleport to otherSide, half speed). */
+    ferryCrossing?: { otherSide: { row: number; col: number }; ferryName: string };
 }
 
 /** Resolved demand card data for AI decision-making */
@@ -359,6 +361,21 @@ export interface WorldSnapshot {
     loadAvailability: Record<string, string[]>;  // city name → available load types
     /** Opponent player data for LLM serialization (populated for Medium/Hard skill) */
     opponents?: OpponentSnapshot[];
+    /** Full hex grid point data for pathfinding and context building (v6.3) */
+    hexGrid?: GridPoint[];
+    /** Major city geometry (center + outpost coordinates) for pathfinding (v6.3) */
+    majorCityGroups?: Array<{
+        cityName: string;
+        center: { row: number; col: number };
+        outposts: Array<{ row: number; col: number }>;
+    }>;
+    /** Ferry edge connections for route planning (v6.3) */
+    ferryEdges?: Array<{
+        name: string;
+        pointA: { row: number; col: number };
+        pointB: { row: number; col: number };
+        cost: number;
+    }>;
 }
 
 /** Actions a bot can take during its turn */
@@ -409,6 +426,8 @@ export interface BotMemoryState {
     turnsOnPlan: number;
     /** History of completed/abandoned plans */
     planHistory: Array<{ plan: DeliveryPlan; outcome: 'delivered' | 'abandoned'; turns: number }>;
+    /** Key of the most recently abandoned plan (loadType:pickupCity:deliveryCity) — prevents re-selecting same plan */
+    lastAbandonedPlanKey?: string | null;
 }
 
 /** Simplified option summary for decision logging */
@@ -507,6 +526,13 @@ export interface GuardrailResult {
     reason?: string;
 }
 
+/** Result from GuardrailEnforcer.checkPlan() — v6.3 intent-based guardrail */
+export interface GuardrailPlanResult {
+    plan: TurnPlan;
+    overridden: boolean;
+    reason?: string;
+}
+
 /** Normalized response from any LLM provider adapter */
 export interface ProviderResponse {
     text: string;
@@ -534,3 +560,159 @@ export const AI_ACTION_LABELS: Record<AIActionType, string> = {
     [AIActionType.UpgradeTrain]: 'Upgrade Train',
     [AIActionType.DiscardHand]: 'Discard Hand',
 };
+
+// ─── AI v6.3 Pipeline Types ─────────────────────────────────────────────────
+
+/** Pre-computed reachability and cost metadata for a single demand card */
+export interface DemandContext {
+    cardIndex: number;
+    loadType: string;
+    supplyCity: string;
+    deliveryCity: string;
+    payout: number;
+    isSupplyReachable: boolean;
+    isDeliveryReachable: boolean;
+    estimatedTrackCostToSupply: number;
+    estimatedTrackCostToDelivery: number;
+    isLoadAvailable: boolean;
+    isLoadOnTrain: boolean;
+    ferryRequired: boolean;
+}
+
+/** An immediately completable delivery at the bot's current position */
+export interface DeliveryOpportunity {
+    loadType: string;
+    deliveryCity: string;
+    payout: number;
+    cardIndex: number;
+}
+
+/** Filtered opponent info included in LLM context (skill-level dependent) */
+export interface OpponentContext {
+    name: string;
+    money: number;
+    trainType: string;
+    position: string;
+    loads: string[];
+    trackCoverage: string;
+    recentBuildDirection?: string;
+}
+
+/** Structured game state produced by ContextBuilder for LLM prompt serialization */
+export interface GameContext {
+    position: { city?: string; row: number; col: number } | null;
+    money: number;
+    trainType: string;
+    speed: number;
+    capacity: number;
+    loads: string[];
+    connectedMajorCities: string[];
+    totalMajorCities: number;
+    trackSummary: string;
+    turnBuildCost: number;
+    demands: DemandContext[];
+    canDeliver: DeliveryOpportunity[];
+    reachableCities: string[];
+    canUpgrade: boolean;
+    canBuild: boolean;
+    isInitialBuild: boolean;
+    opponents: OpponentContext[];
+    phase: string;
+    turnNumber: number;
+}
+
+/** A single action within an LLM multi-action response */
+export interface LLMAction {
+    action: string;
+    details: Record<string, string>;
+}
+
+/** Parsed LLM response expressing strategic intent (single or multi-action) */
+export interface LLMActionIntent {
+    action?: string;
+    actions?: LLMAction[];
+    details?: Record<string, string>;
+    reasoning: string;
+    planHorizon: string;
+}
+
+/**
+ * Discriminated union of executable action plans.
+ *
+ * DropLoad and FerryCrossing are intentionally excluded:
+ * - DropLoad: subsumed by PickupLoad/DeliverLoad; drops happen as side effects of MoveTrain.
+ * - FerryCrossing: transparent in pathfinding; ferry traversal is encoded in MoveTrain.path.
+ */
+export type TurnPlan =
+    | TurnPlanBuildTrack
+    | TurnPlanMoveTrain
+    | TurnPlanDeliverLoad
+    | TurnPlanPickupLoad
+    | TurnPlanUpgradeTrain
+    | TurnPlanDiscardHand
+    | TurnPlanPassTurn
+    | TurnPlanMultiAction;
+
+export interface TurnPlanBuildTrack {
+    type: AIActionType.BuildTrack;
+    segments: TrackSegment[];
+}
+
+export interface TurnPlanMoveTrain {
+    type: AIActionType.MoveTrain;
+    path: { row: number; col: number }[];
+    fees: Set<string>;
+    totalFee: number;
+}
+
+export interface TurnPlanDeliverLoad {
+    type: AIActionType.DeliverLoad;
+    load: string;
+    city: string;
+    cardId: number;
+    payout: number;
+}
+
+export interface TurnPlanPickupLoad {
+    type: AIActionType.PickupLoad;
+    load: string;
+    city: string;
+}
+
+export interface TurnPlanUpgradeTrain {
+    type: AIActionType.UpgradeTrain;
+    targetTrain: string;
+    cost: number;
+}
+
+export interface TurnPlanDiscardHand {
+    type: AIActionType.DiscardHand;
+}
+
+export interface TurnPlanPassTurn {
+    type: AIActionType.PassTurn;
+}
+
+export interface TurnPlanMultiAction {
+    type: 'MultiAction';
+    steps: TurnPlan[];
+}
+
+/** ActionResolver output — success/failure wrapper with error message for LLM retry */
+export interface ResolvedAction {
+    success: boolean;
+    plan?: TurnPlan;
+    error?: string;
+}
+
+/** Result from LLMStrategyBrain.decideAction() — includes resolved plan and LLM metadata */
+export interface LLMDecisionResult {
+    plan: TurnPlan;
+    reasoning: string;
+    planHorizon: string;
+    model: string;
+    latencyMs: number;
+    tokenUsage?: { input: number; output: number };
+    retried: boolean;
+    guardrailOverride?: boolean;
+}

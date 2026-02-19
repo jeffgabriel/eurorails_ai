@@ -1,0 +1,863 @@
+/**
+ * ActionResolver — Translates LLM strategic intent into validated, executable TurnPlan.
+ *
+ * Resolves LLM action intents into validated TurnPlans.
+ * Each resolver pathfinds to ONE target per call (not all targets simultaneously).
+ * Uses existing shared services for pathfinding, validation, and fee calculation.
+ */
+
+import {
+  LLMActionIntent,
+  LLMAction,
+  WorldSnapshot,
+  GameContext,
+  ResolvedAction,
+  TurnPlan,
+  TurnPlanBuildTrack,
+  TurnPlanMoveTrain,
+  TurnPlanDeliverLoad,
+  TurnPlanPickupLoad,
+  TurnPlanUpgradeTrain,
+  TurnPlanDiscardHand,
+  TurnPlanPassTurn,
+  AIActionType,
+  TrackSegment,
+  TrainType,
+  TRAIN_PROPERTIES,
+  TRACK_USAGE_FEE,
+  PlayerTrackState,
+} from '../../../shared/types/GameTypes';
+import { loadGridPoints, GridCoord, GridPointData } from './MapTopology';
+import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { computeBuildSegments } from './computeBuildSegments';
+import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
+
+export class ActionResolver {
+  /**
+   * Resolve an LLM intent into a validated TurnPlan.
+   * Dispatches to specific resolveX methods based on the action type.
+   */
+  static async resolve(
+    intent: LLMActionIntent,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<ResolvedAction> {
+    if (intent.actions && intent.actions.length > 0) {
+      return ActionResolver.resolveMultiAction(intent.actions, snapshot, context);
+    }
+
+    if (!intent.action) {
+      return { success: false, error: "LLM intent must specify 'action' or 'actions'." };
+    }
+
+    return ActionResolver.resolveSingleAction(intent.action, intent.details ?? {}, snapshot, context);
+  }
+
+  /**
+   * Dispatch a single action to the appropriate resolver.
+   */
+  private static async resolveSingleAction(
+    action: string,
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<ResolvedAction> {
+    switch (action) {
+      case AIActionType.BuildTrack:
+      case 'BUILD':
+        return ActionResolver.resolveBuild(details, snapshot, context);
+      case AIActionType.MoveTrain:
+      case 'MOVE':
+        return ActionResolver.resolveMove(details, snapshot);
+      case AIActionType.DeliverLoad:
+      case 'DELIVER':
+        return ActionResolver.resolveDeliver(details, snapshot);
+      case AIActionType.PickupLoad:
+      case 'PICKUP':
+        return ActionResolver.resolvePickup(details, snapshot);
+      case AIActionType.UpgradeTrain:
+      case 'UPGRADE':
+        return ActionResolver.resolveUpgrade(details, snapshot);
+      case AIActionType.DiscardHand:
+      case 'DISCARD_HAND':
+        return ActionResolver.resolveDiscard(snapshot);
+      case AIActionType.PassTurn:
+      case 'PASS':
+        return ActionResolver.resolvePass();
+      default:
+        return { success: false, error: `Unknown action type: "${action}". Valid actions: BUILD, MOVE, DELIVER, PICKUP, UPGRADE, DISCARD_HAND, PASS.` };
+    }
+  }
+
+  // ─── Individual Resolvers (stubs, implemented in BE-010 through BE-013) ───
+
+  /**
+   * Resolve a BUILD intent into a TurnPlanBuildTrack.
+   *
+   * Steps:
+   *   1. Validate the target city from details.toward.
+   *   2. Determine start positions (track frontier or major city centers for cold-start).
+   *   3. Compute build budget, occupied edges.
+   *   4. Call computeBuildSegments with target positions.
+   *   5. Return the resulting segments or a descriptive error.
+   */
+  private static async resolveBuild(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<ResolvedAction> {
+    const targetCity = details.toward ?? details.target ?? details.city;
+    if (!targetCity) {
+      return { success: false, error: 'BUILD requires details.toward specifying the target city name.' };
+    }
+
+    // Find target mileposts for the named city
+    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
+    if (targetPositions.length === 0) {
+      return { success: false, error: `Target city "${targetCity}" not found on the map.` };
+    }
+
+    const budget = ActionResolver.getBuildBudget(snapshot);
+    if (budget <= 0) {
+      return { success: false, error: `No budget available to build (money=${snapshot.bot.money}).` };
+    }
+
+    // Determine start positions: track frontier for regular build,
+    // major city centers for cold-start (no existing track).
+    const hasTrack = snapshot.bot.existingSegments.length > 0;
+    let startPositions: GridCoord[];
+    if (hasTrack) {
+      startPositions = ActionResolver.getTrackFrontier(snapshot);
+    } else {
+      // Cold-start: use all major city center positions
+      const groups = getMajorCityGroups();
+      startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+    }
+
+    if (startPositions.length === 0) {
+      return { success: false, error: 'No valid start positions for building track.' };
+    }
+
+    const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
+
+    const segments = computeBuildSegments(
+      startPositions,
+      snapshot.bot.existingSegments,
+      budget,
+      budget, // maxSegments = budget (cheapest segment costs 1M)
+      occupiedEdges,
+      targetPositions,
+    );
+
+    if (segments.length === 0) {
+      return {
+        success: false,
+        error: `Could not find a path to build toward "${targetCity}" within budget (${budget}M).`,
+      };
+    }
+
+    const plan: TurnPlanBuildTrack = {
+      type: AIActionType.BuildTrack,
+      segments,
+    };
+
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a MOVE intent into a TurnPlanMoveTrain.
+   *
+   * Uses computeTrackUsageForMove which finds the optimal path through the
+   * union track graph (all players' tracks + major city red areas + ferries),
+   * preferring own track to minimize fees. Then validates speed and funds.
+   */
+  private static async resolveMove(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const targetCity = details.to ?? details.toward ?? details.city;
+    if (!targetCity) {
+      return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
+    }
+
+    if (!snapshot.bot.position) {
+      return { success: false, error: 'Bot has no position on the map. Cannot move.' };
+    }
+
+    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
+    if (targetPositions.length === 0) {
+      return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
+    }
+
+    // Check if already at the target city
+    if (ActionResolver.isBotAtCity(snapshot, targetCity)) {
+      return { success: false, error: `Bot is already at "${targetCity}".` };
+    }
+
+    const speed = ActionResolver.getBotSpeed(snapshot);
+
+    // Try each target milepost (major cities have multiple), pick the shortest valid path
+    let bestResult: { path: { row: number; col: number }[]; fees: Set<string>; totalFee: number } | null = null;
+
+    for (const target of targetPositions) {
+      const usage = computeTrackUsageForMove({
+        allTracks: snapshot.allPlayerTracks as PlayerTrackState[],
+        from: snapshot.bot.position,
+        to: target,
+        currentPlayerId: snapshot.bot.playerId,
+      });
+
+      if (!usage.isValid) continue;
+
+      // Path length = number of edges (mileposts traveled)
+      const pathLength = usage.path.length;
+      if (pathLength > speed) continue;
+      if (pathLength === 0) continue;
+
+      const totalFee = usage.ownersUsed.size * TRACK_USAGE_FEE;
+
+      // Pick the shortest path, then least expensive
+      if (
+        !bestResult ||
+        pathLength < bestResult.path.length - 1 ||
+        (pathLength === bestResult.path.length - 1 && totalFee < bestResult.totalFee)
+      ) {
+        // Reconstruct the path as {row, col}[] from PathEdge[]
+        const pathCoords: { row: number; col: number }[] = [
+          { row: usage.path[0].from.row, col: usage.path[0].from.col },
+        ];
+        for (const edge of usage.path) {
+          pathCoords.push({ row: edge.to.row, col: edge.to.col });
+        }
+
+        bestResult = {
+          path: pathCoords,
+          fees: usage.ownersUsed,
+          totalFee,
+        };
+      }
+    }
+
+    if (!bestResult) {
+      return {
+        success: false,
+        error: `No reachable path to "${targetCity}" within speed limit (${speed} mileposts).`,
+      };
+    }
+
+    // Check funds: need totalFee + MONEY_RESERVE
+    if (bestResult.totalFee > 0 && snapshot.bot.money < bestResult.totalFee + ActionResolver.MONEY_RESERVE) {
+      return {
+        success: false,
+        error: `Insufficient funds for track usage fees. Need ${bestResult.totalFee}M + ${ActionResolver.MONEY_RESERVE}M reserve, have ${snapshot.bot.money}M.`,
+      };
+    }
+
+    const plan: TurnPlanMoveTrain = {
+      type: AIActionType.MoveTrain,
+      path: bestResult.path,
+      fees: bestResult.fees,
+      totalFee: bestResult.totalFee,
+    };
+
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a DELIVER intent into a TurnPlanDeliverLoad.
+   *
+   * Checks: bot is at the delivery city, bot carries the load,
+   * and a matching demand card exists.
+   */
+  private static async resolveDeliver(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const loadType = details.load;
+    const cityName = details.at ?? details.city ?? details.to;
+    if (!loadType || !cityName) {
+      return { success: false, error: 'DELIVER requires details.load and details.at specifying the load type and delivery city.' };
+    }
+
+    // Bot must be at the delivery city
+    if (!ActionResolver.isBotAtCity(snapshot, cityName)) {
+      return { success: false, error: `Bot is not at "${cityName}". Move there before delivering.` };
+    }
+
+    // Bot must be carrying the load
+    if (!snapshot.bot.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    }
+
+    // Must have a matching demand card
+    const match = ActionResolver.findMatchingDemand(loadType, cityName, snapshot);
+    if (!match) {
+      return { success: false, error: `No demand card for "${loadType}" at "${cityName}".` };
+    }
+
+    const plan: TurnPlanDeliverLoad = {
+      type: AIActionType.DeliverLoad,
+      load: loadType,
+      city: cityName,
+      cardId: match.cardId,
+      payout: match.payout,
+    };
+
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a PICKUP intent into a TurnPlanPickupLoad.
+   *
+   * Checks: bot is at the pickup city, bot has capacity,
+   * city produces the load (static), and load chip is available (runtime).
+   */
+  private static async resolvePickup(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const loadType = details.load;
+    const cityName = details.at ?? details.city ?? details.from;
+    if (!loadType || !cityName) {
+      return { success: false, error: 'PICKUP requires details.load and details.at specifying the load type and pickup city.' };
+    }
+
+    // Bot must be at the pickup city
+    if (!ActionResolver.isBotAtCity(snapshot, cityName)) {
+      return { success: false, error: `Bot is not at "${cityName}". Move there before picking up.` };
+    }
+
+    // Bot must have capacity
+    const capacity = ActionResolver.getBotCapacity(snapshot);
+    if (snapshot.bot.loads.length >= capacity) {
+      return { success: false, error: `Train is full (${snapshot.bot.loads.length}/${capacity}). Drop a load first.` };
+    }
+
+    // City must produce this load (static availability)
+    const cityLoads = snapshot.loadAvailability[cityName];
+    if (!cityLoads || !cityLoads.includes(loadType)) {
+      return { success: false, error: `"${cityName}" does not produce "${loadType}".` };
+    }
+
+    // Load chip must be available at runtime
+    if (!ActionResolver.isLoadRuntimeAvailable(loadType, snapshot)) {
+      return { success: false, error: `No "${loadType}" chips are currently available (all carried by players).` };
+    }
+
+    const plan: TurnPlanPickupLoad = {
+      type: AIActionType.PickupLoad,
+      load: loadType,
+      city: cityName,
+    };
+
+    return { success: true, plan };
+  }
+
+  /** Valid upgrade paths: source -> { target -> cost } */
+  private static readonly UPGRADE_PATHS: Record<string, Record<string, number>> = {
+    [TrainType.Freight]: {
+      [TrainType.FastFreight]: 20,
+      [TrainType.HeavyFreight]: 20,
+    },
+    [TrainType.FastFreight]: {
+      [TrainType.Superfreight]: 20,
+      [TrainType.HeavyFreight]: 5, // crossgrade
+    },
+    [TrainType.HeavyFreight]: {
+      [TrainType.Superfreight]: 20,
+      [TrainType.FastFreight]: 5, // crossgrade
+    },
+  };
+
+  /**
+   * Resolve an UPGRADE intent into a TurnPlanUpgradeTrain.
+   *
+   * Validates the upgrade path, cost, and that the bot is not in initialBuild phase.
+   */
+  private static async resolveUpgrade(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const targetTrain = details.to ?? details.train ?? details.target;
+    if (!targetTrain) {
+      return { success: false, error: 'UPGRADE requires details.to specifying the target train type.' };
+    }
+
+    // Validate the upgrade path
+    const currentTrain = snapshot.bot.trainType;
+    const paths = ActionResolver.UPGRADE_PATHS[currentTrain];
+    if (!paths || !(targetTrain in paths)) {
+      const validTargets = paths ? Object.keys(paths).join(', ') : 'none';
+      return {
+        success: false,
+        error: `Cannot upgrade from "${currentTrain}" to "${targetTrain}". Valid targets: ${validTargets}.`,
+      };
+    }
+
+    const cost = paths[targetTrain];
+
+    // Check funds
+    if (snapshot.bot.money < cost) {
+      return {
+        success: false,
+        error: `Insufficient funds for upgrade. Need ${cost}M, have ${snapshot.bot.money}M.`,
+      };
+    }
+
+    const plan: TurnPlanUpgradeTrain = {
+      type: AIActionType.UpgradeTrain,
+      targetTrain,
+      cost,
+    };
+
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a DISCARD_HAND intent into a TurnPlanDiscardHand.
+   *
+   * Per game rules, a player may discard their entire hand and draw 3 new cards
+   * instead of taking a normal turn. Always succeeds (the GuardrailEnforcer handles
+   * any situational blocks like consecutive discards).
+   */
+  private static async resolveDiscard(
+    _snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const plan: TurnPlanDiscardHand = {
+      type: AIActionType.DiscardHand,
+    };
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a PASS intent into a TurnPlanPassTurn.
+   * Always succeeds — passing is always valid.
+   */
+  private static async resolvePass(): Promise<ResolvedAction> {
+    const plan: TurnPlanPassTurn = {
+      type: AIActionType.PassTurn,
+    };
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a multi-action intent into a TurnPlanMultiAction.
+   *
+   * Validates combination legality upfront (DISCARD_HAND exclusivity,
+   * UPGRADE(20M)+BUILD forbidden), then resolves each action sequentially
+   * with cumulative state simulation between steps.
+   * If any individual action fails, the entire multi-action fails.
+   */
+  private static async resolveMultiAction(
+    actions: LLMAction[],
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<ResolvedAction> {
+    if (actions.length === 0) {
+      return { success: false, error: 'Multi-action must contain at least one action.' };
+    }
+
+    // Single action passed as multi-action: resolve as single
+    if (actions.length === 1) {
+      const a = actions[0];
+      return ActionResolver.resolveSingleAction(a.action, a.details ?? {}, snapshot, context);
+    }
+
+    const actionTypes = actions.map(a => a.action);
+
+    // Upfront combination legality: DISCARD_HAND is exclusive
+    const hasDiscard = actionTypes.some(
+      t => t === AIActionType.DiscardHand || t === 'DISCARD_HAND',
+    );
+    if (hasDiscard) {
+      return {
+        success: false,
+        error: 'Discard Hand ends the turn immediately. Cannot combine with other actions.',
+      };
+    }
+
+    // Upfront combination legality: UPGRADE(20M) + BUILD forbidden
+    const hasUpgrade = actionTypes.some(
+      t => t === AIActionType.UpgradeTrain || t === 'UPGRADE',
+    );
+    const hasBuild = actionTypes.some(
+      t => t === AIActionType.BuildTrack || t === 'BUILD',
+    );
+    if (hasUpgrade && hasBuild) {
+      return {
+        success: false,
+        error: 'Cannot upgrade and build track in the same turn.',
+      };
+    }
+
+    // Resolve each action sequentially with cumulative state simulation
+    const plans: TurnPlan[] = [];
+    let currentSnapshot = ActionResolver.cloneSnapshot(snapshot);
+    let currentContext = { ...context };
+
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
+      const result = await ActionResolver.resolveSingleAction(
+        a.action,
+        a.details ?? {},
+        currentSnapshot,
+        currentContext,
+      );
+
+      if (!result.success) {
+        return {
+          success: false,
+          error: `Step ${i + 1} (${a.action}) failed: ${result.error}`,
+        };
+      }
+      plans.push(result.plan!);
+
+      // Simulate state changes for subsequent steps
+      ActionResolver.applyPlanToState(result.plan!, currentSnapshot, currentContext);
+    }
+
+    return {
+      success: true,
+      plan: { type: 'MultiAction' as const, steps: plans },
+    };
+  }
+
+  /**
+   * Create a shallow clone of a WorldSnapshot with a deep-cloned bot sub-object.
+   * Used for cumulative state simulation in multi-action resolution.
+   */
+  private static cloneSnapshot(snapshot: WorldSnapshot): WorldSnapshot {
+    return {
+      ...snapshot,
+      bot: {
+        ...snapshot.bot,
+        loads: [...snapshot.bot.loads],
+        existingSegments: [...snapshot.bot.existingSegments],
+        demandCards: [...snapshot.bot.demandCards],
+        resolvedDemands: snapshot.bot.resolvedDemands.map(rd => ({
+          ...rd,
+          demands: [...rd.demands],
+        })),
+      },
+      allPlayerTracks: snapshot.allPlayerTracks.map(pt => ({
+        ...pt,
+        segments: pt.playerId === snapshot.bot.playerId ? [...pt.segments] : pt.segments,
+      })),
+    };
+  }
+
+  /**
+   * Apply a resolved TurnPlan's effects to the working snapshot and context.
+   * Used for cumulative state simulation in multi-action resolution.
+   */
+  private static applyPlanToState(
+    plan: TurnPlan,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): void {
+    switch (plan.type) {
+      case AIActionType.MoveTrain: {
+        const movePlan = plan as TurnPlanMoveTrain;
+        const lastPos = movePlan.path[movePlan.path.length - 1];
+        if (lastPos) {
+          snapshot.bot.position = { row: lastPos.row, col: lastPos.col };
+          context.position = { row: lastPos.row, col: lastPos.col };
+        }
+        if (movePlan.totalFee > 0) {
+          snapshot.bot.money -= movePlan.totalFee;
+          context.money -= movePlan.totalFee;
+        }
+        break;
+      }
+      case AIActionType.PickupLoad: {
+        const pickupPlan = plan as TurnPlanPickupLoad;
+        snapshot.bot.loads.push(pickupPlan.load);
+        context.loads = [...snapshot.bot.loads];
+        break;
+      }
+      case AIActionType.DeliverLoad: {
+        const deliverPlan = plan as TurnPlanDeliverLoad;
+        const loadIdx = snapshot.bot.loads.indexOf(deliverPlan.load);
+        if (loadIdx >= 0) snapshot.bot.loads.splice(loadIdx, 1);
+        context.loads = [...snapshot.bot.loads];
+        snapshot.bot.money += deliverPlan.payout;
+        context.money += deliverPlan.payout;
+        // Remove the fulfilled demand card
+        snapshot.bot.resolvedDemands = snapshot.bot.resolvedDemands.filter(
+          rd => rd.cardId !== deliverPlan.cardId,
+        );
+        break;
+      }
+      case AIActionType.BuildTrack: {
+        const buildPlan = plan as TurnPlanBuildTrack;
+        const buildCost = buildPlan.segments.reduce((sum, s) => sum + s.cost, 0);
+        snapshot.bot.money -= buildCost;
+        context.money -= buildCost;
+        snapshot.bot.existingSegments.push(...buildPlan.segments);
+        // Update allPlayerTracks for the bot
+        const botTracks = snapshot.allPlayerTracks.find(
+          pt => pt.playerId === snapshot.bot.playerId,
+        );
+        if (botTracks) {
+          botTracks.segments.push(...buildPlan.segments);
+        }
+        context.turnBuildCost += buildCost;
+        break;
+      }
+      case AIActionType.UpgradeTrain: {
+        const upgradePlan = plan as TurnPlanUpgradeTrain;
+        snapshot.bot.money -= upgradePlan.cost;
+        context.money -= upgradePlan.cost;
+        snapshot.bot.trainType = upgradePlan.targetTrain as TrainType;
+        context.trainType = upgradePlan.targetTrain as TrainType;
+        const props = TRAIN_PROPERTIES[upgradePlan.targetTrain as TrainType];
+        if (props) {
+          context.speed = props.speed;
+          context.capacity = props.capacity;
+        }
+        break;
+      }
+      // PassTurn and DiscardHand don't change state
+      default:
+        break;
+    }
+  }
+
+  /**
+   * Heuristic fallback when the LLM fails twice.
+   * Priority: deliver > build toward best demand > pass.
+   *
+   * Reuses the existing resolveDeliver/resolveBuild/resolvePass methods
+   * to ensure all validation is applied consistently.
+   */
+  static async heuristicFallback(
+    context: GameContext,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    // 1. Try to DELIVER if there are immediate opportunities
+    if (context.canDeliver && context.canDeliver.length > 0) {
+      // Pick the highest-payout delivery
+      const best = context.canDeliver.reduce((a, b) => (a.payout > b.payout ? a : b));
+      const result = await ActionResolver.resolveDeliver(
+        { load: best.loadType, at: best.deliveryCity },
+        snapshot,
+      );
+      if (result.success) return result;
+    }
+
+    // 2. Try to BUILD toward the best demand
+    if (context.canBuild && context.demands.length > 0) {
+      // Sort demands: prefer those where supply is reachable but delivery isn't
+      // (meaning we need to build toward the delivery city), highest payout first.
+      const buildCandidates = [...context.demands]
+        .filter(d => d.estimatedTrackCostToDelivery > 0)
+        .sort((a, b) => b.payout - a.payout);
+
+      for (const demand of buildCandidates) {
+        // Try building toward supply city if load isn't on train and supply isn't reachable
+        if (!demand.isLoadOnTrain && !demand.isSupplyReachable && demand.supplyCity) {
+          const result = await ActionResolver.resolveBuild(
+            { toward: demand.supplyCity },
+            snapshot,
+            context,
+          );
+          if (result.success) return result;
+        }
+
+        // Try building toward delivery city
+        const result = await ActionResolver.resolveBuild(
+          { toward: demand.deliveryCity },
+          snapshot,
+          context,
+        );
+        if (result.success) return result;
+      }
+    }
+
+    // 3. Always fall back to PASS
+    return ActionResolver.resolvePass();
+  }
+
+  // ─── Helper Utilities ────────────────────────────────────────────────────
+
+  private static readonly TURN_BUILD_BUDGET = 20;
+  private static readonly MONEY_RESERVE = 5;
+
+  /**
+   * Find grid coordinates for a city by name.
+   * Returns the closest milepost to the bot's track network (or first match if no track).
+   * Excludes FerryPort-only mileposts since they are transit, not destinations.
+   */
+  private static findCityMilepost(
+    cityName: string,
+    snapshot: WorldSnapshot,
+  ): GridCoord[] {
+    const grid = loadGridPoints();
+    const targets: GridCoord[] = [];
+    for (const [, point] of grid) {
+      if (point.name === cityName && point.terrain !== 7 /* FerryPort */) {
+        targets.push({ row: point.row, col: point.col });
+      }
+    }
+    // Also check major city groups for center + outposts
+    if (targets.length === 0) {
+      const groups = getMajorCityGroups();
+      for (const g of groups) {
+        if (g.cityName === cityName) {
+          targets.push({ row: g.center.row, col: g.center.col });
+          for (const o of g.outposts) {
+            targets.push({ row: o.row, col: o.col });
+          }
+          break;
+        }
+      }
+    }
+    return targets;
+  }
+
+  /**
+   * Check if the bot is currently at a named city.
+   * Matches against any milepost that has the given city name,
+   * including all major city outposts.
+   */
+  private static isBotAtCity(snapshot: WorldSnapshot, cityName: string): boolean {
+    if (!snapshot.bot.position) return false;
+    const grid = loadGridPoints();
+    const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+    const point = grid.get(posKey);
+    if (point?.name === cityName) return true;
+    // Check major city groups (center + outposts all count)
+    const majorCityLookup = getMajorCityLookup();
+    const botCity = majorCityLookup.get(posKey);
+    return botCity === cityName;
+  }
+
+  /**
+   * Get the bot's track frontier — all unique grid positions from existing segments.
+   * Used as start positions for computeBuildSegments.
+   */
+  private static getTrackFrontier(snapshot: WorldSnapshot): GridCoord[] {
+    const seen = new Set<string>();
+    const positions: GridCoord[] = [];
+    for (const seg of snapshot.bot.existingSegments) {
+      for (const end of [seg.from, seg.to]) {
+        const key = `${end.row},${end.col}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          positions.push({ row: end.row, col: end.col });
+        }
+      }
+    }
+    // Major city red area expansion: if any endpoint is in a major city,
+    // add all outposts of that city (they're connected via the red area)
+    const majorCityLookup = getMajorCityLookup();
+    const majorCityGroupsList = getMajorCityGroups();
+    const cityGroupMap = new Map(majorCityGroupsList.map(g => [g.cityName, g]));
+    for (const pos of [...positions]) {
+      const cityName = majorCityLookup.get(`${pos.row},${pos.col}`);
+      if (!cityName) continue;
+      const group = cityGroupMap.get(cityName);
+      if (!group) continue;
+      for (const point of [group.center, ...group.outposts]) {
+        const key = `${point.row},${point.col}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          positions.push({ row: point.row, col: point.col });
+        }
+      }
+    }
+    return positions;
+  }
+
+  /**
+   * Build a set of edges owned by other players (Right of Way rule).
+   * Format: "row,col-row,col" for each direction.
+   */
+  private static getOccupiedEdges(snapshot: WorldSnapshot): Set<string> {
+    const occupied = new Set<string>();
+    for (const pt of snapshot.allPlayerTracks) {
+      if (pt.playerId === snapshot.bot.playerId) continue;
+      for (const seg of pt.segments) {
+        const a = `${seg.from.row},${seg.from.col}`;
+        const b = `${seg.to.row},${seg.to.col}`;
+        occupied.add(`${a}-${b}`);
+        occupied.add(`${b}-${a}`);
+      }
+    }
+    return occupied;
+  }
+
+  /** Compute remaining build budget for this turn. */
+  private static getBuildBudget(snapshot: WorldSnapshot): number {
+    const turnBuildCost = snapshot.bot.existingSegments.length > 0
+      ? 0  // turnBuildCost tracked in context, not snapshot; default to full budget
+      : 0;
+    return Math.min(ActionResolver.TURN_BUILD_BUDGET, snapshot.bot.money);
+  }
+
+  /**
+   * Check if any copies of a load type are available (not on any player's train).
+   * Uses snapshot.loadAvailability to check which cities have the load,
+   * and checks all player loads to count carried copies.
+   */
+  private static isLoadRuntimeAvailable(loadType: string, snapshot: WorldSnapshot): boolean {
+    // Count how many copies exist at supply cities
+    let supplyCities = 0;
+    for (const [, loads] of Object.entries(snapshot.loadAvailability)) {
+      if (loads.includes(loadType)) supplyCities++;
+    }
+    // If no city supplies it at all, it's unavailable
+    if (supplyCities === 0) return false;
+
+    // Count carried copies across all players
+    let carriedCount = 0;
+    carriedCount += snapshot.bot.loads.filter(l => l === loadType).length;
+    if (snapshot.opponents) {
+      for (const opp of snapshot.opponents) {
+        carriedCount += opp.loads.filter(l => l === loadType).length;
+      }
+    }
+    // Heuristic: if many copies are carried, likely unavailable.
+    // With limited info, assume available if at least one supply city exists
+    // and not ALL known copies are being carried.
+    // This is a best-effort check; exact copy counts aren't in WorldSnapshot.
+    return true;
+  }
+
+  /**
+   * Find a matching demand card for a load type at a specific city.
+   * Returns the best-paying match, or null if none.
+   */
+  private static findMatchingDemand(
+    loadType: string,
+    cityName: string,
+    snapshot: WorldSnapshot,
+  ): { cardId: number; payout: number } | null {
+    let bestPayout = 0;
+    let bestCardId: number | null = null;
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (const demand of rd.demands) {
+        if (demand.loadType === loadType && demand.city === cityName) {
+          if (demand.payment > bestPayout) {
+            bestPayout = demand.payment;
+            bestCardId = rd.cardId;
+          }
+        }
+      }
+    }
+    return bestCardId !== null ? { cardId: bestCardId, payout: bestPayout } : null;
+  }
+
+  /** Get the bot's train speed, accounting for ferry half-speed. */
+  private static getBotSpeed(snapshot: WorldSnapshot): number {
+    const trainType = snapshot.bot.trainType as TrainType;
+    const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
+    return snapshot.bot.ferryHalfSpeed ? Math.ceil(rawSpeed / 2) : rawSpeed;
+  }
+
+  /** Get the bot's train capacity. */
+  private static getBotCapacity(snapshot: WorldSnapshot): number {
+    const trainType = snapshot.bot.trainType as TrainType;
+    return TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+  }
+}

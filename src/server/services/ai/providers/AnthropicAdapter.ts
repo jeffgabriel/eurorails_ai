@@ -33,7 +33,11 @@ export class AnthropicAdapter implements ProviderAdapter {
           model: request.model,
           max_tokens: request.maxTokens,
           temperature: request.temperature,
-          system: request.systemPrompt,
+          system: [{
+            type: 'text',
+            text: request.systemPrompt,
+            cache_control: { type: 'ephemeral' },
+          }],
           messages: [{ role: 'user', content: request.userPrompt }],
         }),
         signal: controller.signal,

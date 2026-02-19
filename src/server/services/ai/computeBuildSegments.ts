@@ -15,7 +15,7 @@ import {
   GridCoord,
   GridPointData,
 } from './MapTopology';
-import { getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { getMajorCityLookup, getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
 // Precompute water crossing costs for O(1) edge lookup.
@@ -236,8 +236,31 @@ export function computeBuildSegments(
 
   // Determine starting frontier
   const trackEndpoints = extractTrackEndpoints(existingSegments);
-  const sources = trackEndpoints.length > 0 ? trackEndpoints : startPositions;
-  console.log(`${tag} sources: ${sources.length} (endpoints=${trackEndpoints.length}, startPositions=${startPositions.length})`);
+  const rawSources = trackEndpoints.length > 0 ? trackEndpoints : startPositions;
+
+  // Major City red area: if any source is a Major City outpost, add ALL
+  // outposts of that city as sources. Game rule: all mileposts within a
+  // major city are connected via the red area, so building FROM any outpost
+  // is valid when the bot has track at any other outpost of that city.
+  const majorCityGroups = getMajorCityGroups();
+  const cityGroupMap = new Map(majorCityGroups.map(g => [g.cityName, g]));
+  const sources = [...rawSources];
+  const sourceKeys = new Set(rawSources.map(s => makeKey(s.row, s.col)));
+  for (const src of rawSources) {
+    const cityName = majorCityLookup.get(makeKey(src.row, src.col));
+    if (!cityName) continue;
+    const group = cityGroupMap.get(cityName);
+    if (!group) continue;
+    for (const point of [group.center, ...group.outposts]) {
+      const key = makeKey(point.row, point.col);
+      if (!sourceKeys.has(key)) {
+        sourceKeys.add(key);
+        sources.push({ row: point.row, col: point.col });
+      }
+    }
+  }
+
+  console.log(`${tag} sources: ${sources.length} (endpoints=${trackEndpoints.length}, startPositions=${startPositions.length}, cityExpanded=${sources.length - rawSources.length})`);
 
   if (sources.length === 0) {
     console.log(`${tag} no sources, returning empty`);

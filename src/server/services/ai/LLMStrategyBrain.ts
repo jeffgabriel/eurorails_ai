@@ -1,37 +1,34 @@
 /**
- * LLMStrategyBrain — Replaces Scorer.score() for Phase 1+2 decisions.
+ * LLMStrategyBrain — LLM-driven strategic decision-making for bot turns.
  *
- * Single LLM API call selects both movement and build options. Pipeline:
- *   GameStateSerializer.serialize() → ProviderAdapter.chat() →
- *   ResponseParser.parse() → GuardrailEnforcer.check()
+ * v6.3 pipeline:
+ *   ContextBuilder.serializePrompt() → ProviderAdapter.chat() →
+ *   ResponseParser.parseActionIntent() → ActionResolver.resolve()
  *
- * Retry chain: full prompt → minimal prompt → heuristic fallback.
+ * Retry chain: full prompt (with error feedback) → heuristic fallback.
  * Created per-turn in AIStrategyEngine (not singleton).
  */
 
 import {
   WorldSnapshot,
-  FeasibleOption,
   BotSkillLevel,
-  BotArchetype,
   LLMProvider,
   LLM_DEFAULT_MODELS,
   LLMStrategyConfig,
-  LLMSelectionResult,
-  BotMemoryState,
+  LLMDecisionResult,
+  LLMActionIntent,
+  GameContext,
+  TurnPlan,
+  AIActionType,
 } from '../../../shared/types/GameTypes';
-import { GameStateSerializer } from './GameStateSerializer';
 import { ResponseParser, ParseError } from './ResponseParser';
-import { GuardrailEnforcer } from './GuardrailEnforcer';
+import { ActionResolver } from './ActionResolver';
+import { ContextBuilder } from './ContextBuilder';
 import { getSystemPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
-import {
-  ProviderTimeoutError,
-  ProviderAPIError,
-  ProviderAuthError,
-} from './providers/errors';
+import { ProviderAuthError } from './providers/errors';
 
 /** Max tokens for LLM response — JSON with reasoning is ~100-150 tokens */
 const MAX_TOKENS_BY_SKILL: Record<BotSkillLevel, number> = {
@@ -66,195 +63,104 @@ export class LLMStrategyBrain {
     this.adapter = LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs);
   }
 
+  /** Max LLM retries for decideAction (initial attempt + retries = MAX_LLM_RETRIES+1 total) */
+  private static readonly MAX_LLM_RETRIES = 2;
+
   /**
-   * Select movement and build options via LLM.
+   * Decide a strategic action via LLM (v6.3 pipeline).
    *
-   * Pipeline: serialize → API call → parse → guardrail check.
-   * Falls back to minimal prompt retry, then heuristic fallback.
+   * Pipeline: serializePrompt → LLM call → parseActionIntent → ActionResolver.resolve
+   * Retry loop feeds error context back to the LLM. Falls back to heuristicFallback
+   * after MAX_LLM_RETRIES failures.
    */
-  async selectOptions(
+  async decideAction(
     snapshot: WorldSnapshot,
-    moveOptions: FeasibleOption[],
-    buildOptions: FeasibleOption[],
-    memory: BotMemoryState,
-  ): Promise<LLMSelectionResult> {
-    const feasibleMoves = moveOptions.filter((o) => o.feasible);
-    const feasibleBuilds = buildOptions.filter((o) => o.feasible);
+    context: GameContext,
+  ): Promise<LLMDecisionResult> {
+    let attempt = 0;
+    let lastError: string | undefined;
+    let finalPlan: TurnPlan | undefined;
+    let finalReasoning = '';
+    let finalPlanHorizon = '';
+    let totalLatencyMs = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
 
-    // Full prompt attempt
-    const startMs = Date.now();
-    try {
-      const userPrompt = GameStateSerializer.serialize(
-        snapshot, feasibleMoves, feasibleBuilds, memory, this.config.skillLevel,
-      );
+    while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
+      let userPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
 
-      const response = await this.adapter.chat({
-        model: this.model,
-        maxTokens: MAX_TOKENS_BY_SKILL[this.config.skillLevel],
-        temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
-        systemPrompt: this.systemPrompt,
-        userPrompt,
-      });
-
-      const parsed = ResponseParser.parse(
-        response.text, feasibleMoves.length, feasibleBuilds.length,
-      );
-
-      const selectedMove = parsed.moveOptionIndex >= 0 ? feasibleMoves[parsed.moveOptionIndex] : undefined;
-      const selectedBuild = feasibleBuilds[parsed.buildOptionIndex];
-
-      const guardrail = GuardrailEnforcer.check(
-        selectedMove, selectedBuild, feasibleMoves, feasibleBuilds, snapshot,
-      );
-
-      const finalMoveIndex = guardrail.moveOverridden ? (guardrail.correctedMoveIndex ?? -1) : parsed.moveOptionIndex;
-      const finalBuildIndex = guardrail.buildOverridden ? (guardrail.correctedBuildIndex ?? parsed.buildOptionIndex) : parsed.buildOptionIndex;
-
-      return {
-        moveOptionIndex: finalMoveIndex,
-        buildOptionIndex: finalBuildIndex,
-        reasoning: parsed.reasoning,
-        planHorizon: parsed.planHorizon,
-        model: this.model,
-        latencyMs: Date.now() - startMs,
-        tokenUsage: response.usage,
-        wasGuardrailOverride: guardrail.moveOverridden || guardrail.buildOverridden,
-        guardrailReason: guardrail.reason,
-      };
-    } catch (firstError) {
-      console.warn(
-        `[LLMStrategyBrain] Full prompt failed (${Date.now() - startMs}ms):`,
-        firstError instanceof Error ? firstError.message : firstError,
-      );
-
-      // Auth errors — don't retry, fall through to heuristic immediately
-      if (firstError instanceof ProviderAuthError) {
-        console.error('[LLMStrategyBrain] Auth error — using heuristic fallback');
-        return this.heuristicFallback(feasibleMoves, feasibleBuilds, startMs, 'Auth error');
+      // On retry, append error context so the LLM can correct itself
+      if (lastError) {
+        userPrompt += `\n\nYOUR PREVIOUS CHOICE FAILED VALIDATION:\n${lastError}\nPlease choose a different action.`;
       }
 
-      // Retry with minimal prompt
-      if (this.config.maxRetries > 0) {
-        try {
-          return await this.retryWithMinimalPrompt(
-            snapshot, feasibleMoves, feasibleBuilds, startMs,
-          );
-        } catch (retryError) {
+      const startTime = Date.now();
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: MAX_TOKENS_BY_SKILL[this.config.skillLevel],
+          temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
+          systemPrompt: this.systemPrompt,
+          userPrompt,
+        });
+        totalLatencyMs += (Date.now() - startTime);
+        totalInputTokens += response.usage?.input ?? 0;
+        totalOutputTokens += response.usage?.output ?? 0;
+
+        const intent: LLMActionIntent = ResponseParser.parseActionIntent(response.text);
+        const resolved = await ActionResolver.resolve(intent, snapshot, context);
+
+        if (resolved.success && resolved.plan) {
+          finalPlan = resolved.plan;
+          finalReasoning = intent.reasoning || '';
+          finalPlanHorizon = intent.planHorizon || '';
+          break;
+        } else {
+          lastError = resolved.error || 'Action resolution failed without specific error.';
           console.warn(
-            '[LLMStrategyBrain] Retry failed:',
-            retryError instanceof Error ? retryError.message : retryError,
+            `[LLMStrategyBrain] Action resolution failed (attempt ${attempt + 1}): ${lastError}`,
           );
         }
+      } catch (e: unknown) {
+        totalLatencyMs += (Date.now() - startTime);
+        if (e instanceof ProviderAuthError) {
+          console.error('[LLMStrategyBrain] Auth error — using heuristic fallback');
+          break; // Don't retry auth errors
+        }
+        lastError = e instanceof ParseError
+          ? `Parsing error: ${e.message}`
+          : `LLM call error: ${e instanceof Error ? e.message : String(e)}`;
+        console.warn(
+          `[LLMStrategyBrain] LLM/Parsing failed (attempt ${attempt + 1}): ${lastError}`,
+        );
       }
-
-      // Heuristic fallback
-      return this.heuristicFallback(
-        feasibleMoves, feasibleBuilds, startMs,
-        firstError instanceof Error ? firstError.message : 'Unknown error',
-      );
+      attempt++;
     }
-  }
 
-  /**
-   * Retry with a minimal prompt (fewer options, no opponents, no memory).
-   */
-  private async retryWithMinimalPrompt(
-    snapshot: WorldSnapshot,
-    feasibleMoves: FeasibleOption[],
-    feasibleBuilds: FeasibleOption[],
-    startMs: number,
-  ): Promise<LLMSelectionResult> {
-    const minimalPrompt = GameStateSerializer.serializeMinimal(
-      snapshot, feasibleMoves, feasibleBuilds,
-    );
-
-    const response = await this.adapter.chat({
-      model: this.model,
-      maxTokens: 200,
-      temperature: 0.3,
-      systemPrompt: this.systemPrompt,
-      userPrompt: minimalPrompt,
-    });
-
-    // For minimal prompt, cap option counts at 4 (what serializeMinimal shows)
-    const moveCount = Math.min(feasibleMoves.length, 4);
-    const buildCount = Math.min(feasibleBuilds.length, 4);
-
-    const parsed = ResponseParser.parse(response.text, moveCount, buildCount);
-
-    const selectedMove = parsed.moveOptionIndex >= 0 ? feasibleMoves[parsed.moveOptionIndex] : undefined;
-    const selectedBuild = feasibleBuilds[parsed.buildOptionIndex];
-
-    const guardrail = GuardrailEnforcer.check(
-      selectedMove, selectedBuild, feasibleMoves, feasibleBuilds, snapshot,
-    );
-
-    const finalMoveIndex = guardrail.moveOverridden ? (guardrail.correctedMoveIndex ?? -1) : parsed.moveOptionIndex;
-    const finalBuildIndex = guardrail.buildOverridden ? (guardrail.correctedBuildIndex ?? parsed.buildOptionIndex) : parsed.buildOptionIndex;
+    // If all retries fail, use heuristic fallback
+    if (!finalPlan) {
+      console.warn('[LLMStrategyBrain] All LLM attempts failed. Falling back to heuristic.');
+      const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+      if (fallback.success && fallback.plan) {
+        finalPlan = fallback.plan;
+        finalReasoning = `[heuristic fallback] ${lastError ?? 'LLM failed to provide a valid plan.'}`;
+        finalPlanHorizon = 'Immediate';
+      } else {
+        finalPlan = { type: AIActionType.PassTurn };
+        finalReasoning = '[heuristic fallback] Heuristic also failed. Defaulting to PassTurn.';
+        finalPlanHorizon = 'Immediate';
+      }
+    }
 
     return {
-      moveOptionIndex: finalMoveIndex,
-      buildOptionIndex: finalBuildIndex,
-      reasoning: `[retry] ${parsed.reasoning}`,
-      planHorizon: parsed.planHorizon,
+      plan: finalPlan,
+      reasoning: finalReasoning,
+      planHorizon: finalPlanHorizon,
       model: this.model,
-      latencyMs: Date.now() - startMs,
-      tokenUsage: response.usage,
-      wasGuardrailOverride: guardrail.moveOverridden || guardrail.buildOverridden,
-      guardrailReason: guardrail.reason,
-    };
-  }
-
-  /**
-   * Heuristic fallback: pick the highest-payment feasible move
-   * and highest-chainScore feasible build. Always produces valid indices.
-   */
-  private heuristicFallback(
-    feasibleMoves: FeasibleOption[],
-    feasibleBuilds: FeasibleOption[],
-    startMs: number,
-    reason: string,
-  ): LLMSelectionResult {
-    // Best move: prefer delivery moves (highest payment), else first feasible
-    let bestMoveIndex = -1;
-    let bestMovePayment = -1;
-    for (let i = 0; i < feasibleMoves.length; i++) {
-      const payment = feasibleMoves[i].payment ?? 0;
-      if (payment > bestMovePayment) {
-        bestMovePayment = payment;
-        bestMoveIndex = i;
-      }
-    }
-    // If no move has payment, pick first feasible move
-    if (bestMoveIndex === -1 && feasibleMoves.length > 0) {
-      bestMoveIndex = 0;
-    }
-
-    // Best build: prefer highest chainScore, else first non-PassTurn
-    let bestBuildIndex = 0;
-    let bestChainScore = -Infinity;
-    for (let i = 0; i < feasibleBuilds.length; i++) {
-      const cs = feasibleBuilds[i].chainScore ?? 0;
-      if (cs > bestChainScore) {
-        bestChainScore = cs;
-        bestBuildIndex = i;
-      }
-    }
-
-    console.log(
-      `[LLMStrategyBrain] Heuristic fallback: move=${bestMoveIndex}, build=${bestBuildIndex}, reason=${reason}`,
-    );
-
-    return {
-      moveOptionIndex: bestMoveIndex,
-      buildOptionIndex: bestBuildIndex,
-      reasoning: `[heuristic fallback] ${reason}`,
-      planHorizon: '',
-      model: this.model,
-      latencyMs: Date.now() - startMs,
-      tokenUsage: { input: 0, output: 0 },
-      wasGuardrailOverride: false,
-      guardrailReason: undefined,
+      latencyMs: totalLatencyMs,
+      tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
+      retried: attempt > 0,
     };
   }
 

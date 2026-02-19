@@ -3,7 +3,7 @@
  * connected by a player's track network.
  *
  * Ports the client-side VictoryService.getConnectedMajorCities() logic
- * for use in the AI pipeline (WorldSnapshot, Scorer, OptionGenerator).
+ * for use in the AI pipeline (WorldSnapshot, ContextBuilder).
  *
  * Algorithm:
  * 1. Build an adjacency graph from track segments

@@ -11,22 +11,22 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 // Mock db before importing services
 jest.mock('../../db/index', () => ({
   db: {
-    query: jest.fn(),
+    query: jest.fn<() => Promise<any>>(),
   },
 }));
 
 // Mock socketService
 jest.mock('../../services/socketService', () => ({
-  emitTurnChange: jest.fn(),
-  emitStatePatch: jest.fn().mockResolvedValue(undefined),
-  emitToGame: jest.fn(),
-  getSocketIO: jest.fn().mockReturnValue(null),
+  emitTurnChange: jest.fn<() => void>(),
+  emitStatePatch: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  emitToGame: jest.fn<() => void>(),
+  getSocketIO: jest.fn<() => any>().mockReturnValue(null),
 }));
 
 // Mock playerService
 jest.mock('../../services/playerService', () => ({
   PlayerService: {
-    updateCurrentPlayerIndex: jest.fn().mockResolvedValue(undefined),
+    updateCurrentPlayerIndex: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
   },
 }));
 
@@ -40,7 +40,7 @@ import {
   queuedBotTurns,
 } from '../../services/ai/BotTurnTrigger';
 
-const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
+const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockEmitTurnChange = emitTurnChange as jest.MockedFunction<typeof emitTurnChange>;
 const mockEmitStatePatch = emitStatePatch as jest.MockedFunction<typeof emitStatePatch>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
@@ -64,7 +64,7 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    (mockEmitStatePatch as jest.Mock).mockResolvedValue(undefined);
+    (mockEmitStatePatch as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
     process.env.ENABLE_AI_BOTS = 'true';
     pendingBotTurns.clear();
     queuedBotTurns.clear();
@@ -310,7 +310,7 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
       mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
 
       const { PlayerService } = await import('../../services/playerService');
-      (PlayerService.updateCurrentPlayerIndex as jest.Mock).mockResolvedValue(undefined);
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
 
       await advanceTurnAfterBot(gameId);
 

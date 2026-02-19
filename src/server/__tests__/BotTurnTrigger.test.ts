@@ -3,35 +3,35 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 // Mock db before importing BotTurnTrigger
 jest.mock('../db/index', () => ({
   db: {
-    query: jest.fn(),
+    query: jest.fn<() => Promise<any>>(),
   },
 }));
 
 // Mock socketService
 jest.mock('../services/socketService', () => ({
-  emitToGame: jest.fn(),
-  emitTurnChange: jest.fn(),
-  getSocketIO: jest.fn().mockReturnValue(null),
+  emitToGame: jest.fn<() => void>(),
+  emitTurnChange: jest.fn<() => void>(),
+  getSocketIO: jest.fn<() => any>().mockReturnValue(null),
 }));
 
 // Mock playerService
 jest.mock('../services/playerService', () => ({
   PlayerService: {
-    updateCurrentPlayerIndex: jest.fn().mockResolvedValue(undefined),
+    updateCurrentPlayerIndex: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
   },
 }));
 
 // Mock InitialBuildService
 jest.mock('../services/InitialBuildService', () => ({
   InitialBuildService: {
-    advanceTurn: jest.fn().mockResolvedValue(undefined),
+    advanceTurn: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
   },
 }));
 
 // Mock AIStrategyEngine
 jest.mock('../services/ai/AIStrategyEngine', () => ({
   AIStrategyEngine: {
-    takeTurn: jest.fn().mockResolvedValue({
+    takeTurn: jest.fn<() => Promise<any>>().mockResolvedValue({
       action: 'PassTurn',
       segmentsBuilt: 0,
       cost: 0,
@@ -45,10 +45,10 @@ import { db } from '../db/index';
 import { emitToGame, getSocketIO } from '../services/socketService';
 import { AIStrategyEngine } from '../services/ai/AIStrategyEngine';
 
-const mockQuery = db.query as jest.MockedFunction<typeof db.query>;
+const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockGetSocketIO = getSocketIO as jest.MockedFunction<typeof getSocketIO>;
-const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
+const mockTakeTurn = AIStrategyEngine.takeTurn as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 
 describe('BotTurnTrigger', () => {
   const originalEnv = process.env.ENABLE_AI_BOTS;
@@ -371,7 +371,7 @@ describe('BotTurnTrigger', () => {
 
       const { advanceTurnAfterBot } = await import('../services/ai/BotTurnTrigger');
       const { PlayerService } = await import('../services/playerService');
-      (PlayerService.updateCurrentPlayerIndex as jest.Mock).mockResolvedValue(undefined);
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
 
       await advanceTurnAfterBot('game-1');
 
@@ -384,7 +384,7 @@ describe('BotTurnTrigger', () => {
 
       const { advanceTurnAfterBot } = await import('../services/ai/BotTurnTrigger');
       const { PlayerService } = await import('../services/playerService');
-      (PlayerService.updateCurrentPlayerIndex as jest.Mock).mockResolvedValue(undefined);
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
 
       await advanceTurnAfterBot('game-1');
 

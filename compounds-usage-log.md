@@ -3,7 +3,11 @@
 Tracks when the compounds skill was used and what benefit it provided.
 
 | Date | Task/Context | Benefit |
+| 2026-02-19 | ai-v6.3 full project execution: create project, upload PRD, generate tech spec, plan_project breakdown, implement all 35 tasks via 2-worker team | Compounds orchestrated the entire workflow: spec_project (research + pattern detection + spec generation + validation), plan_project (auto-generated 35 tasks from tech spec), implement_task (delivered task prompts with full context for each). Team of 2 workers completed all 35 tasks: 24 BE, 8 TEST, 1 FE, 2 INF. New pipeline: ContextBuilder + LLM + ActionResolver replaces OptionGenerator + Scorer. 258+ tests passing. |
+| 2026-02-19 | prd-v6.3 gap analysis: verified TrackNetworkService, TrackBuildingService, LoadService, PlayerService, trackUsageFees, DemandDeckService, InitialBuildService APIs against spec | Found 7 gaps (see below). Compounds identified exact method signatures, parameter types, and missing methods — would have taken 10+ file reads with grep. |
 |------|-------------|---------|
+| 2026-02-18 | Extend plan system to initialBuild phase | 5 compounds queries validated the fix: (1) `search "plan system initialBuild game phase selectNewPlan PlanExecutor"` confirmed plan creation is gated to active-only, (2) `query "AIStrategyEngine" -r calls` traced call graph, (3) `search "executeLoadActions Phase 0 initialBuild gameStatus guard"` confirmed Phase 0 is already gated separately, (4) `search "PlanExecutor detectPhaseTransition build_to_pickup no position"` confirmed position checks only in travel/deliver phases (safe for no-position initialBuild), (5) `search "InitialBuildService advanceTurn bot turn trigger"` confirmed BotTurnTrigger→AIStrategyEngine→InitialBuildService flow is identical for both phases. Validated that extending two gameStatus guards is safe with no side effects. |
+| 2026-02-18 | Ferry port targeting + crossing heuristic removal | 5 compounds queries: (1) `search "ferry port cost handling in Dijkstra pathfinding"` mapped computeBuildSegments → ferryPortCosts → getTerrainCost pipeline, (2) `search "ferry crossing decision logic"` traced handleFerryCrossing → Euclidean distance heuristic → all demand cities, (3) `query "computeBuildSegments" -r calls` found 2 callers (OptionGenerator + test), (4) `search "major city groups and ferry port mileposts"` revealed MajorCityGroup/FerryEdge relationship, (5) `query "getFerryEdges" -r calls` mapped 13 callers across build/move/validate paths. Compounds confirmed low blast radius for both fixes and identified the exact data flow causing ferry port inclusion in build targets. |
 | 2026-02-18 | Post-v6.1 gameplay bug triage — 3 critical bugs | 3 compounds searches mapped: (1) pickup threshold gate in AIStrategyEngine (score < 15 blocks demand-matching pickups when delivery city unreachable), (2) build option index resolution path (LLMStrategyBrain.selectOptions → feasibleBuilds[index] uses original order not serializer's sorted order), (3) chainScore floor 0.01 in rankDemandChains (negative-profit chains all equal). Fixed all 3: removed alphabetical sort (index mismatch), lowered pickup threshold to 1 (was 15), replaced 0.01 floor with payment/turns*0.1 for meaningful differentiation. |
 | 2026-02-18 | ai-v6.1 full implementation — 13 tasks via Compounds workflow | Used `create_project`, `upload` PRD, `plan_project` (13 tasks generated), then `get_project_tasks`/`update_task` to track all 13 tasks (BE-001 through BE-012 + DOC-001) through implementation. Wave 1 (4 tasks) done by 2 parallel agents, Waves 2-3 (9 tasks) done sequentially. All 13/13 marked DONE via compounds. Changes: LLM enabled during initialBuild, geography section, chain analysis section, shared track computation, budget feasibility, reuse annotations, top-5 chains, neutral ordering, Scorer documented as fallback-only. |
 | 2026-02-18 | Hub selection favors peripheral cities (Madrid/Bilbao) over central Europe | 3 compounds searches mapped the full initial placement pipeline: evaluateHubScore → rankDemandChains → determineStartPositions → autoPlaceBot → generateBuildTrackOptions → calculateBuildTrackScore. Compounds revealed evaluateHubScore returns only the BEST single chain score, causing peripheral hubs with one good chain to beat central hubs with many viable chains. Fixed by summing top-3 chain scores, naturally rewarding central European hubs (Ruhr, Berlin, Paris) that enable multiple delivery chains. |
@@ -80,3 +84,30 @@ Bot picked up Tourists at London and committed all resources to building toward 
 
 ### Benefit
 Compounds confirmed two root causes: (1) hasLoad branch in rankDemandChains has NO budget penalty (comment says "must deliver them"), causing Tourists→Oslo to score 5.0 and dominate all chains; (2) Phase 0 picks up loads matching any demand card without checking if delivery is affordable.
+
+## 2026-02-19 — AI Pipeline Architecture Discovery (16 queries)
+
+**Task:** Comprehensive architectural discovery of the AI bot pipeline for tech spec to replace OptionGenerator + Scorer with ContextBuilder + LLM + ActionResolver pipeline.
+
+**Queries run:**
+1. `compounds summary` — project overview (4306 entities, 99% TypeScript)
+2. `compounds search "AIStrategyEngine takeTurn pipeline orchestration"` — discovered full pipeline: Phase 0 → Plan Resolution → Phase 1 (Movement) → Phase 2 (Build), with plan-then-execute architecture
+3. `compounds search "WorldSnapshot capture game state"` — discovered capture() function, WorldSnapshot interface, DB query joining games/players/player_tracks
+4. `compounds search "TurnExecutor execute action dispatch"` — discovered action switch dispatch (BuildTrack, MoveTrain, PickupLoad, DeliverLoad, DropLoad, UpgradeTrain, DiscardHand, PassTurn)
+5. `compounds search "GuardrailEnforcer check safety rules"` — discovered it's a no-op; returns unchanged selections; PlanValidator handles actual rule enforcement
+6. `compounds search "LLMStrategyBrain decide select action LLM"` — discovered full LLM pipeline: serialize → chat → parse → guardrail, with retry chain (full → minimal → heuristic)
+7. `compounds search "BotTurnTrigger turn scheduling lifecycle"` — discovered turn trigger with pendingBotTurns guard, human connectivity check, housekeeping queries
+8. `compounds search "computeBuildSegments Dijkstra pathfinding segments"` — discovered multi-source Dijkstra with budget constraints, target-aware path selection
+9. `compounds search "TrackNetworkService findPath buildTrackNetwork isConnected"` — discovered A* pathfinding, string-keyed graph, ferry edge support
+10. `compounds search "trackUsageFees computeTrackUsageForMove"` — discovered union track graph, preferOwnTrackPath, edge ownership tracking
+11. `compounds search "LoadService isLoadAvailableAtCity getAvailableLoads"` — discovered singleton LoadService with loadConfiguration map, getSourceCitiesForLoad
+12. `compounds search "TrackBuildingService addPlayerTrack isValidConnection"` — discovered Result<T,E> pattern, city connection limits, ferry port handling
+13. `compounds search "PlayerService moveTrainForUser deliverLoadForUser"` — discovered server-authoritative PlayerService with transactional DB ops
+14. `compounds search "DemandDeckService drawCard discardCard demand"` — discovered dual client/server implementations, draw/discard pile management
+15. `compounds search "GameStateSerializer serialize prompt context"` — discovered structured prompt generation with skill-level scaling, chain analysis
+16. `compounds search "ResponseParser parse LLM response intent"` — discovered JSON + regex fallback parsing, index validation, ParseError handling
+17. `compounds search "OptionGenerator generate FeasibleOption BuildTrack MoveTrain"` — discovered generate() orchestrating multiple option types
+18. `compounds search "PlanExecutor executePlan plan phase movement build"` — discovered stateless plan executor with phase flow
+19. `compounds search "Scorer score heuristic rank options"` — discovered score-and-sort with per-action-type heuristics
+
+**Benefit:** Compounds provided complete architectural understanding across 23 source files in the AI pipeline, including cross-module dependencies, method signatures, type definitions, and execution flow. This would have required reading ~5000 lines of code manually. The semantic search surfaced exactly the right components for each query, including files I wouldn't have found with grep (e.g., connectedMajorCities.ts for buildTrackGraph, MapTopology.ts for grid functions).

@@ -1,0 +1,81 @@
+{
+  "project_id": "63bb42a5-9730-4c62-a282-e39eaf7a59fb",
+  "detected_at": "2026-02-19T15:45:00Z",
+  "source_prd": "LLM-as-Strategy-Brain: Integration Specification v2",
+  "patterns": [
+    {
+      "pattern_id": "common-code-readability",
+      "path": "docs/design-patterns/common/code-readability.md",
+      "severity": "recommended",
+      "relevance": "supporting",
+      "reason": "New ContextBuilder and ActionResolver modules must be readable; the OptionGenerator they replace was notoriously hard to follow."
+    },
+    {
+      "pattern_id": "common-dry-principle",
+      "path": "docs/design-patterns/common/dry-principle.md",
+      "severity": "advisory",
+      "relevance": "supporting",
+      "reason": "ActionResolver's 7 action resolvers share validation patterns (position check, budget check) that should be extracted to helpers."
+    },
+    {
+      "pattern_id": "anti-patterns-god-service",
+      "path": "docs/design-patterns/anti-patterns/god-service.md",
+      "severity": "recommended",
+      "relevance": "direct",
+      "reason": "OptionGenerator (800+ lines, 10+ methods) was a god service — the entire v6.3 refactor exists to decompose it into focused modules."
+    },
+    {
+      "pattern_id": "anti-patterns-over-abstraction",
+      "path": "docs/design-patterns/anti-patterns/over-abstraction.md",
+      "severity": "advisory",
+      "relevance": "direct",
+      "reason": "OptionGenerator's failure came from trying to abstract enumeration + validation + pathfinding into one module. ActionResolver must stay focused on single-action resolution."
+    },
+    {
+      "pattern_id": "anti-patterns-error-swallowing",
+      "path": "docs/design-patterns/anti-patterns/error-swallowing.md",
+      "severity": "recommended",
+      "relevance": "supporting",
+      "reason": "ActionResolver retry loop and TurnExecutor best-effort audit writes both involve error handling that must not silently swallow failures."
+    },
+    {
+      "pattern_id": "anti-patterns-enterprise-patterns",
+      "path": "docs/design-patterns/anti-patterns/enterprise-patterns.md",
+      "severity": "advisory",
+      "relevance": "supporting",
+      "reason": "Codebase uses static methods with no DI. New modules should follow same pattern — avoid introducing unnecessary DI containers or abstract factories."
+    },
+    {
+      "pattern_id": "anti-patterns-premature-generalization",
+      "path": "docs/design-patterns/anti-patterns/premature-generalization.md",
+      "severity": "advisory",
+      "relevance": "supporting",
+      "reason": "ActionResolver handles 7 action types. Each resolver should be purpose-built, not generalized into a plugin system."
+    },
+    {
+      "pattern_id": "anti-patterns-stringly-typed",
+      "path": "docs/design-patterns/anti-patterns/stringly-typed.md",
+      "severity": "advisory",
+      "relevance": "supporting",
+      "reason": "LLM returns string action types that must be mapped to AIActionType enum. City names and load types from LLM response need validation against known values."
+    }
+  ],
+  "skipped": [
+    {
+      "pattern_id": "agents-sse-event-flow",
+      "reason": "Feature does not involve SSE streaming — bot turns are synchronous backend processes that emit socket events on completion."
+    },
+    {
+      "pattern_id": "anti-patterns-logging-noise",
+      "reason": "Logging is not a primary concern in this refactor; existing DecisionLogger patterns are retained unchanged."
+    },
+    {
+      "pattern_id": "anti-patterns-optimistic-state-timing",
+      "reason": "No frontend state management changes — StrategyInspector is display-only and receives data via socket events."
+    },
+    {
+      "pattern_id": "anti-patterns-boolean-blindness",
+      "reason": "Boolean fields in interfaces (isLoadAvailable, success) are return values, not function parameters — the anti-pattern targets call-site obscurity."
+    }
+  ]
+}

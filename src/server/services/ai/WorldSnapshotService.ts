@@ -6,10 +6,12 @@
  */
 
 import { db } from '../../db/index';
-import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand, OpponentSnapshot, BotSkillLevel } from '../../../shared/types/GameTypes';
+import { WorldSnapshot, TrackSegment, GameStatus, ResolvedDemand, OpponentSnapshot, BotSkillLevel, GridPoint, TerrainType, CityData } from '../../../shared/types/GameTypes';
 import { DemandDeckService } from '../demandDeckService';
 import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
+import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints, gridToPixel } from './MapTopology';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
@@ -142,6 +144,11 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     }
   }
 
+  // Build static map data for v6.3 pipeline
+  const hexGrid = buildHexGrid(loadSvc);
+  const majorCityGroupsData = getMajorCityGroups();
+  const ferryEdgesData = getFerryEdges();
+
   return {
     gameId,
     gameStatus,
@@ -165,6 +172,9 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
     allPlayerTracks,
     loadAvailability,
     opponents,
+    hexGrid,
+    majorCityGroups: majorCityGroupsData,
+    ferryEdges: ferryEdgesData,
   };
 }
 
@@ -180,4 +190,55 @@ function parseSegments(raw: unknown): TrackSegment[] {
   }
   if (Array.isArray(raw)) return raw as TrackSegment[];
   return [];
+}
+
+/** City terrain types that should have CityData attached */
+const CITY_TERRAINS = new Set([
+  TerrainType.SmallCity,
+  TerrainType.MediumCity,
+  TerrainType.MajorCity,
+]);
+
+/**
+ * Convert MapTopology grid data into GridPoint[] for the v6.3 pipeline.
+ * Enriches city points with CityData (name + availableLoads from LoadService).
+ * Result is cached — grid data is static for the lifetime of the server.
+ */
+let hexGridCache: GridPoint[] | null = null;
+
+function buildHexGrid(loadSvc: LoadService): GridPoint[] {
+  if (hexGridCache) return hexGridCache;
+
+  const gridMap = loadGridPoints();
+  const points: GridPoint[] = [];
+
+  for (const [key, data] of gridMap) {
+    const { x, y } = gridToPixel(data.row, data.col);
+    const isCityTerrain = CITY_TERRAINS.has(data.terrain);
+    const hasName = !!data.name;
+
+    let city: CityData | undefined;
+    if (isCityTerrain && hasName) {
+      city = {
+        type: data.terrain,
+        name: data.name!,
+        availableLoads: loadSvc.getAvailableLoadsForCity(data.name!),
+      };
+    }
+
+    points.push({
+      id: key,
+      x,
+      y,
+      row: data.row,
+      col: data.col,
+      terrain: data.terrain,
+      city,
+      ocean: data.ocean,
+      name: data.name,
+    });
+  }
+
+  hexGridCache = points;
+  return points;
 }

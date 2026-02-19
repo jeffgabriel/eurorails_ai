@@ -64,6 +64,19 @@ describe('AnthropicAdapter', () => {
     expect(callBody.temperature).toBe(0.4);
   });
 
+  it('should send system prompt with ephemeral cache_control for prompt caching', async () => {
+    mockFetchSuccess('{"action":"PASS"}');
+
+    await adapter.chat(mockRequest);
+
+    const callBody = JSON.parse((global.fetch as jest.Mock).mock.calls[0][1].body);
+    expect(callBody.system).toEqual([{
+      type: 'text',
+      text: 'You are a bot.',
+      cache_control: { type: 'ephemeral' },
+    }]);
+  });
+
   it('should normalize successful response to ProviderResponse', async () => {
     mockFetchSuccess('response text', 100, 50);
 
