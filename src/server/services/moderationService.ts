@@ -17,34 +17,45 @@ export class ModerationService {
   }
 
   /**
-   * Initialize the moderation service by verifying Ollama is reachable
-   * and the model is available
+   * Initialize the moderation service by polling Ollama until the model is available.
+   * Retries every 10s for up to maxWaitMs (default 5 minutes) to handle cases where
+   * the Ollama service is still pulling the model on first deploy.
    */
-  async initialize(): Promise<void> {
+  async initialize(maxWaitMs: number = 300_000): Promise<void> {
     if (this.isInitialized) {
       return;
     }
 
-    try {
-      console.log(`[Moderation] Verifying Ollama model ${this.modelName} at ${this.ollamaUrl}...`);
+    const intervalMs = 10_000;
+    const startTime = Date.now();
 
-      const response = await fetch(`${this.ollamaUrl}/api/show`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: this.modelName }),
-      });
+    console.log(`[Moderation] Waiting for Ollama model ${this.modelName} at ${this.ollamaUrl} (timeout: ${maxWaitMs / 1000}s)...`);
 
-      if (!response.ok) {
+    while (Date.now() - startTime < maxWaitMs) {
+      try {
+        const response = await fetch(`${this.ollamaUrl}/api/show`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: this.modelName }),
+        });
+
+        if (response.ok) {
+          this.isInitialized = true;
+          const elapsed = Math.round((Date.now() - startTime) / 1000);
+          console.log(`[Moderation] Ollama model ${this.modelName} is available (took ${elapsed}s)`);
+          return;
+        }
+
         const errorText = await response.text();
-        throw new Error(`Ollama returned ${response.status}: ${errorText}`);
+        console.log(`[Moderation] Model not ready (${response.status}), retrying...`);
+      } catch (error) {
+        console.log(`[Moderation] Ollama not reachable, retrying...`);
       }
 
-      this.isInitialized = true;
-      console.log(`[Moderation] Ollama model ${this.modelName} is available`);
-    } catch (error) {
-      console.error('[Moderation] Failed to initialize:', error);
-      throw new Error('MODERATION_INITIALIZATION_FAILED');
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
     }
+
+    throw new Error('MODERATION_INITIALIZATION_FAILED: Ollama model not available within timeout');
   }
 
   /**
