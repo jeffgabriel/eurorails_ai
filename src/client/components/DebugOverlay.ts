@@ -45,6 +45,15 @@ export class DebugOverlay {
     };
     loadsPickedUp?: Array<{ loadType: string; city: string }>;
     loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
+    reasoning?: string;
+    planHorizon?: string;
+    guardrailOverride?: boolean;
+    guardrailReason?: string;
+    activeRoute?: {
+      stops: Array<{ action: string; loadType: string; city: string }>;
+      currentStopIndex: number;
+      phase: string;
+    };
   } | null = null;
 
   private static readonly MAX_EVENTS = 50;
@@ -190,6 +199,19 @@ export class DebugOverlay {
       if (payload?.loadsDelivered?.length) {
         this.lastBotTurnInfo.loadsDelivered = payload.loadsDelivered;
       }
+      if (payload?.reasoning) {
+        this.lastBotTurnInfo.reasoning = payload.reasoning;
+      }
+      if (payload?.planHorizon) {
+        this.lastBotTurnInfo.planHorizon = payload.planHorizon;
+      }
+      if (payload?.guardrailOverride) {
+        this.lastBotTurnInfo.guardrailOverride = payload.guardrailOverride;
+        this.lastBotTurnInfo.guardrailReason = payload.guardrailReason;
+      }
+      if (payload?.activeRoute) {
+        this.lastBotTurnInfo.activeRoute = payload.activeRoute;
+      }
     }
 
     if (this.isOpen) this.render();
@@ -314,6 +336,27 @@ export class DebugOverlay {
       content = `<div style="color:#fbbf24;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn started at ${time}</div>`;
     } else {
       content = `<div style="color:#34d399;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn completed: ${this.lastBotTurnInfo.action} (${this.lastBotTurnInfo.durationMs}ms)</div>`;
+      // Show reasoning/strategy (most useful for debugging AI decisions)
+      if (this.lastBotTurnInfo.reasoning) {
+        content += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${this.lastBotTurnInfo.reasoning}</div>`;
+      }
+      if (this.lastBotTurnInfo.planHorizon) {
+        content += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${this.lastBotTurnInfo.planHorizon}</div>`;
+      }
+      if (this.lastBotTurnInfo.activeRoute) {
+        const route = this.lastBotTurnInfo.activeRoute;
+        const stopsHtml = route.stops.map((s, i) => {
+          const isCurrent = i === route.currentStopIndex;
+          const isDone = i < route.currentStopIndex;
+          const color = isDone ? '#6b7280' : isCurrent ? '#fbbf24' : '#9ca3af';
+          const prefix = isDone ? '\u2713' : isCurrent ? '\u25b6' : '\u2022';
+          return `<span style="color:${color};">${prefix} ${s.action.toUpperCase()} ${s.loadType} @ ${s.city}</span>`;
+        }).join(' &rarr; ');
+        content += `<div style="color:#a78bfa;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(167,139,250,0.1);border-radius:4px;border-left:3px solid #a78bfa;"><strong>Route:</strong> ${stopsHtml} <span style="color:#6b7280;margin-left:8px;">[phase: ${route.phase}]</span></div>`;
+      }
+      if (this.lastBotTurnInfo.guardrailOverride) {
+        content += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${this.lastBotTurnInfo.guardrailReason || 'unknown'}</div>`;
+      }
       // Show load actions first (most interesting to watch)
       if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
         content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);

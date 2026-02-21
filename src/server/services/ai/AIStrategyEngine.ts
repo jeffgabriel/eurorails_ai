@@ -18,6 +18,7 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { GuardrailEnforcer } from './GuardrailEnforcer';
 import { TurnExecutor } from './TurnExecutor';
 import { ActionResolver } from './ActionResolver';
+import { PlanExecutor } from './PlanExecutor';
 import {
   WorldSnapshot,
   AIActionType,
@@ -27,6 +28,7 @@ import {
   BotArchetype,
   LLMDecisionResult,
   TurnPlan,
+  StrategicRoute,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -93,13 +95,88 @@ export class AIStrategyEngine {
 
       // ── Stage 2: Build game context ──
       const context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
-      console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities`);
 
-      // ── Stage 3: LLM decides action ──
-      // LLMStrategyBrain handles: prompt serialization → LLM call → parse →
-      // ActionResolver.resolve → retry on failure → heuristic fallback
+      // Inject previous turn summary from memory for LLM context continuity
+      if (memory.lastReasoning || memory.lastPlanHorizon) {
+        const parts: string[] = [];
+        if (memory.lastAction) parts.push(`Action: ${memory.lastAction}`);
+        if (memory.lastReasoning) parts.push(`Reasoning: ${memory.lastReasoning}`);
+        if (memory.lastPlanHorizon) parts.push(`Plan: ${memory.lastPlanHorizon}`);
+        context.previousTurnSummary = parts.join('. ');
+      }
+
+      console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canPickup=${context.canPickup.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities, onNetwork=${context.citiesOnNetwork.length} cities`);
+
+      // ── Stage 3: Decision Gate — activeRoute check ──
+      // If the bot has an active route, auto-execute the next step.
+      // If not, consult LLM for a new strategic route.
       let decision: LLMDecisionResult;
-      if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
+      let activeRoute = memory.activeRoute;
+      let routeWasCompleted = false;
+      let routeWasAbandoned = false;
+
+      if (activeRoute && !context.isInitialBuild) {
+        // ── Auto-execute from active route (no LLM call) ──
+        console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
+        const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
+
+        decision = {
+          plan: execResult.plan,
+          reasoning: `[route-executor] ${execResult.description}`,
+          planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
+          model: 'route-executor',
+          latencyMs: 0,
+          retried: false,
+        };
+
+        if (execResult.routeComplete) {
+          routeWasCompleted = true;
+          console.log(`${tag} Route completed!`);
+        } else if (execResult.routeAbandoned) {
+          routeWasAbandoned = true;
+          console.log(`${tag} Route abandoned: ${execResult.description}`);
+        } else {
+          // Save updated route state (advanced stop/phase)
+          activeRoute = execResult.updatedRoute;
+        }
+      } else if (AIStrategyEngine.hasLLMApiKey(botConfig) && !context.isInitialBuild) {
+        // ── No active route — consult LLM for a new strategic route ──
+        const brain = AIStrategyEngine.createBrain(botConfig!);
+
+        // Try to plan a route first
+        const routeResult = await brain.planRoute(snapshot, context);
+
+        if (routeResult) {
+          activeRoute = routeResult.route;
+          console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
+
+          // Execute the first step of the new route
+          const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
+
+          decision = {
+            plan: execResult.plan,
+            reasoning: `[route-planned] ${activeRoute.reasoning}. ${execResult.description}`,
+            planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
+            model: routeResult.model,
+            latencyMs: routeResult.latencyMs,
+            tokenUsage: routeResult.tokenUsage,
+            retried: false,
+          };
+
+          if (execResult.routeComplete) {
+            routeWasCompleted = true;
+          } else if (execResult.routeAbandoned) {
+            routeWasAbandoned = true;
+          } else {
+            activeRoute = execResult.updatedRoute;
+          }
+        } else {
+          // Route planning failed — fall back to per-turn LLM decision
+          console.warn(`${tag} Route planning failed, falling back to per-turn LLM`);
+          decision = await brain.decideAction(snapshot, context);
+        }
+      } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
+        // During initialBuild, use per-turn LLM decision (no route planning)
         const brain = AIStrategyEngine.createBrain(botConfig!);
         decision = await brain.decideAction(snapshot, context);
       } else {
@@ -118,12 +195,34 @@ export class AIStrategyEngine {
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
 
       // ── Stage 4: Apply guardrails ──
-      const guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot);
-      const finalPlan: TurnPlan = guardrailResult.plan;
+      let guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot);
+      let finalPlan: TurnPlan = guardrailResult.plan;
 
       if (guardrailResult.overridden) {
         console.log(`${tag} Guardrail override: ${guardrailResult.reason}`);
         decision.guardrailOverride = true;
+      }
+
+      // Post-guardrail safety: never PassTurn while carrying loads
+      if (
+        finalPlan.type === AIActionType.PassTurn &&
+        snapshot.bot.loads.length > 0 &&
+        !context.isInitialBuild
+      ) {
+        console.log(`${tag} Post-guardrail: PassTurn while carrying [${snapshot.bot.loads.join(',')}], trying heuristic fallback`);
+        const loadsFallback = await ActionResolver.heuristicFallback(context, snapshot);
+        if (loadsFallback.success && loadsFallback.plan && loadsFallback.plan.type !== AIActionType.PassTurn) {
+          finalPlan = loadsFallback.plan;
+          guardrailResult = {
+            ...guardrailResult,
+            plan: finalPlan,
+            overridden: true,
+            reason: (guardrailResult.reason ? guardrailResult.reason + '; ' : '') +
+              `Forced ${finalPlan.type} instead of PassTurn while carrying loads [${snapshot.bot.loads.join(',')}]`,
+          };
+          decision.guardrailOverride = true;
+          console.log(`${tag} Loads safety: forced ${finalPlan.type}`);
+        }
       }
 
       // Log LLM decision phase
@@ -154,17 +253,55 @@ export class AIStrategyEngine {
       // Concise turn summary
       console.log(`${tag} Turn complete: ${finalPlan.type}${finalPlan.type === AIActionType.BuildTrack ? ` (${result.segmentsBuilt}seg/$${result.cost}M)` : ''} | success=${result.success} | money=${result.remainingMoney} | ${durationMs}ms`);
 
-      // Update bot memory
-      updateMemory(gameId, botPlayerId, {
+      // Update bot memory (including reasoning for next-turn context continuity)
+      const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
         consecutivePassTurns: executedAction === AIActionType.PassTurn
           ? memory.consecutivePassTurns + 1 : 0,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
         turnNumber: snapshot.turnNumber,
-      });
+        lastReasoning: decision.reasoning ?? null,
+        lastPlanHorizon: decision.planHorizon ?? null,
+      };
+
+      // Update route state in memory
+      if (routeWasCompleted || routeWasAbandoned) {
+        const outcome = routeWasCompleted ? 'completed' : 'abandoned';
+        const routeToLog = memory.activeRoute ?? activeRoute;
+        if (routeToLog) {
+          memoryPatch.routeHistory = [
+            ...(memory.routeHistory ?? []),
+            { route: routeToLog, outcome, turns: memory.turnsOnRoute + 1 },
+          ];
+          if (routeWasAbandoned) {
+            const firstStop = routeToLog.stops[0];
+            memoryPatch.lastAbandonedRouteKey = firstStop
+              ? `${firstStop.loadType}:${firstStop.city}`
+              : null;
+          }
+        }
+        memoryPatch.activeRoute = null;
+        memoryPatch.turnsOnRoute = 0;
+      } else if (activeRoute) {
+        memoryPatch.activeRoute = activeRoute;
+        memoryPatch.turnsOnRoute = (memory.turnsOnRoute ?? 0) + 1;
+      }
+
+      updateMemory(gameId, botPlayerId, memoryPatch);
 
       flushTurnLog();
+
+      // Extract buildTargetCity from the plan for debug overlay
+      let buildTargetCity: string | undefined;
+      if (finalPlan.type === AIActionType.BuildTrack && 'targetCity' in finalPlan) {
+        buildTargetCity = finalPlan.targetCity;
+      } else if (finalPlan.type === 'MultiAction') {
+        const buildStep = finalPlan.steps.find(s => s.type === AIActionType.BuildTrack);
+        if (buildStep && 'targetCity' in buildStep) {
+          buildTargetCity = (buildStep as { targetCity?: string }).targetCity;
+        }
+      }
 
       return {
         action: result.action,
@@ -173,6 +310,7 @@ export class AIStrategyEngine {
         durationMs,
         success: result.success,
         error: result.error,
+        buildTargetCity,
         reasoning: decision.reasoning,
         planHorizon: decision.planHorizon,
         guardrailOverride: guardrailResult.overridden || undefined,

@@ -5,7 +5,7 @@
  * malformed responses, and index validation against option counts.
  */
 
-import { ParsedSelection, LLMActionIntent, LLMAction, AIActionType } from '../../../shared/types/GameTypes';
+import { ParsedSelection, LLMActionIntent, LLMAction, AIActionType, StrategicRoute, RouteStop } from '../../../shared/types/GameTypes';
 
 /** Custom error for unparseable LLM responses */
 export class ParseError extends Error {
@@ -242,6 +242,88 @@ export class ResponseParser {
     throw new ParseError(
       `LLM response missing 'action' or 'actions' field: ${clean.substring(0, 200)}`,
     );
+  }
+
+  /**
+   * Parse an LLM response into a StrategicRoute.
+   *
+   * Expected format:
+   * {
+   *   "route": [
+   *     { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
+   *     { "action": "DELIVER", "load": "Potatoes", "city": "Paris" }
+   *   ],
+   *   "startingCity": "Berlin",
+   *   "reasoning": "...",
+   *   "planHorizon": "..."
+   * }
+   *
+   * @param responseText - Raw text from the LLM response
+   * @param turnNumber - Current turn number for createdAtTurn
+   * @returns Validated StrategicRoute
+   * @throws ParseError if the response cannot be parsed or route is invalid
+   */
+  static parseStrategicRoute(responseText: string, turnNumber: number): StrategicRoute {
+    const text = responseText.trim();
+    const clean = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(clean);
+    } catch {
+      throw new ParseError(`Unparseable route planning response: ${text.substring(0, 200)}`);
+    }
+
+    const routeArray = parsed.route;
+    if (!Array.isArray(routeArray) || routeArray.length === 0) {
+      throw new ParseError('Route planning response must contain a non-empty "route" array.');
+    }
+
+    const stops: RouteStop[] = [];
+    for (let i = 0; i < routeArray.length; i++) {
+      const item = routeArray[i];
+      if (typeof item !== 'object' || item === null) {
+        throw new ParseError(`Route stop ${i} is not an object.`);
+      }
+      const raw = item as Record<string, unknown>;
+      const action = String(raw.action ?? '').toUpperCase();
+      if (action !== 'PICKUP' && action !== 'DELIVER') {
+        throw new ParseError(
+          `Route stop ${i} has invalid action "${raw.action}". Must be PICKUP or DELIVER.`,
+        );
+      }
+      const loadType = String(raw.load ?? '');
+      const city = String(raw.city ?? '');
+      if (!loadType || !city) {
+        throw new ParseError(`Route stop ${i} is missing "load" or "city".`);
+      }
+
+      const stop: RouteStop = {
+        action: action.toLowerCase() as 'pickup' | 'deliver',
+        loadType,
+        city,
+      };
+
+      // Optional fields for deliver stops
+      if (action === 'DELIVER') {
+        if (raw.demandCardId != null) stop.demandCardId = Number(raw.demandCardId);
+        if (raw.payment != null) stop.payment = Number(raw.payment);
+      }
+
+      stops.push(stop);
+    }
+
+    const reasoning = String(parsed.reasoning ?? '');
+    const startingCity = parsed.startingCity ? String(parsed.startingCity) : undefined;
+
+    return {
+      stops,
+      currentStopIndex: 0,
+      phase: 'build',
+      startingCity,
+      createdAtTurn: turnNumber,
+      reasoning,
+    };
   }
 }
 

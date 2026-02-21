@@ -110,7 +110,7 @@ jest.mock('../../services/demandDeckService', () => ({
           return {
             id: 1,
             demands: [
-              { city: 'Berlin', resource: 'Steel', payment: 30 },
+              { city: 'Berlin', resource: 'Steel', payment: 50 },
             ],
           };
         }
@@ -346,10 +346,9 @@ describe('Bot Build Track Flow (Integration)', () => {
   });
 
   describe('initial build phase', () => {
-    it('should fall back to PassTurn on cold start without LLM (heuristic cannot estimate costs)', async () => {
-      // v6.3: Without an LLM, the heuristic fallback cannot determine build direction
-      // during cold start (no existing segments → estimateTrackCost returns 0 → no build candidates).
-      // The LLM normally directs cold-start builds via the full pipeline.
+    it('should build track on cold start without LLM (heuristic picks best demand city)', async () => {
+      // v6.3: The heuristic fallback can now build on cold start by iterating
+      // all demands and trying to build toward each delivery city.
       const seg = makeSegment(29, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
       setupWorldSnapshotQuery({
@@ -359,8 +358,7 @@ describe('Bot Build Track Flow (Integration)', () => {
 
       const result = await AIStrategyEngine.takeTurn(gameId, botId);
 
-      // Heuristic can't estimate costs without existing track, so it falls back to PassTurn
-      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.success).toBe(true);
     });
 

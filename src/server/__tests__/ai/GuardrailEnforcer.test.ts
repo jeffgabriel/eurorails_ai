@@ -4,7 +4,9 @@ import {
   WorldSnapshot,
   TurnPlan,
   GameContext,
+  DemandContext,
   DeliveryOpportunity,
+  PickupOpportunity,
   TerrainType,
   TrackSegment,
 } from '../../../shared/types/GameTypes';
@@ -46,7 +48,9 @@ function makeContext(overrides?: Partial<GameContext>): GameContext {
     turnBuildCost: 0,
     demands: [],
     canDeliver: [],
+    canPickup: [],
     reachableCities: ['Berlin', 'Hamburg'],
+    citiesOnNetwork: [],
     canUpgrade: true,
     canBuild: true,
     isInitialBuild: false,
@@ -174,6 +178,145 @@ describe('GuardrailEnforcer', () => {
       });
     });
 
+    describe('Guardrail 2: Force PICKUP', () => {
+      const pickup: PickupOpportunity = {
+        loadType: 'Cars',
+        supplyCity: 'Stuttgart',
+        bestPayout: 20,
+        bestDeliveryCity: 'Berlin',
+      };
+
+      it('should force PICKUP when canPickup has opportunities and LLM chose PASS', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+        if (result.plan.type === AIActionType.PickupLoad) {
+          expect(result.plan.load).toBe('Cars');
+          expect(result.plan.city).toBe('Stuttgart');
+        }
+        expect(result.reason).toContain('Forced PICKUP');
+      });
+
+      it('should inject PICKUP before BUILD when LLM chose BUILD', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe('MultiAction');
+        if (result.plan.type === 'MultiAction') {
+          expect(result.plan.steps).toHaveLength(2);
+          expect(result.plan.steps[0].type).toBe(AIActionType.PickupLoad);
+          expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
+        }
+        expect(result.reason).toContain('Injected PICKUP before BUILD');
+      });
+
+      it('should NOT override when LLM chose MOVE (bot may be moving to deliver)', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = {
+          type: AIActionType.MoveTrain,
+          path: [],
+          fees: new Set(),
+          totalFee: 0,
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should NOT override when LLM already chose PICKUP', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = {
+          type: AIActionType.PickupLoad,
+          load: 'Cars',
+          city: 'Stuttgart',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should NOT override when LLM chose DELIVER', () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ canPickup: [pickup], canDeliver: [delivery] });
+        // Guardrail 1 fires first for DELIVER, but if canDeliver is handled,
+        // test that DELIVER plan passes Guardrail 2
+        const plan: TurnPlan = {
+          type: AIActionType.DeliverLoad,
+          load: 'Coal',
+          city: 'Berlin',
+          cardId: 0,
+          payout: 25,
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        // Guardrail 1 fires (force DELIVER) but plan is already DELIVER, so no override
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT override when LLM chose DISCARD_HAND', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = { type: AIActionType.DiscardHand };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should pick the highest-payout pickup when multiple are available', () => {
+        const pickups: PickupOpportunity[] = [
+          { loadType: 'Cars', supplyCity: 'Stuttgart', bestPayout: 20, bestDeliveryCity: 'Berlin' },
+          { loadType: 'Wine', supplyCity: 'Stuttgart', bestPayout: 35, bestDeliveryCity: 'London' },
+          { loadType: 'Iron', supplyCity: 'Stuttgart', bestPayout: 15, bestDeliveryCity: 'Paris' },
+        ];
+        const ctx = makeContext({ canPickup: pickups });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        if (result.plan.type === AIActionType.PickupLoad) {
+          expect(result.plan.load).toBe('Wine');
+        }
+      });
+
+      it('should NOT override MultiAction that already includes PICKUP', () => {
+        const ctx = makeContext({ canPickup: [pickup] });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.PickupLoad, load: 'Cars', city: 'Stuttgart' },
+            { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+          ],
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+    });
+
     describe('Guardrail 3: Block UPGRADE during initialBuild', () => {
       it('should block UPGRADE during initialBuild phase', () => {
         const ctx = makeContext({ isInitialBuild: true });
@@ -251,6 +394,246 @@ describe('GuardrailEnforcer', () => {
         const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
+      });
+    });
+
+    describe('Guardrail 4: Block BUILD toward unaffordable targets', () => {
+      function makeDemand(overrides?: Partial<DemandContext>): DemandContext {
+        return {
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Bordeaux',
+          deliveryCity: 'Barcelona',
+          payout: 20,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 25,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          ...overrides,
+        };
+      }
+
+      it('should block standalone BUILD when track cost exceeds payout', () => {
+        const demand = makeDemand({ payout: 20, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 20 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+        expect(result.reason).toContain('Blocked BUILD toward Barcelona');
+        expect(result.reason).toContain('exceeds payout');
+      });
+
+      it('should strip BUILD from MultiAction when target is unaffordable', () => {
+        const demand = makeDemand({ payout: 15, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.PickupLoad, load: 'Wine', city: 'Bordeaux' },
+            { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Barcelona' },
+          ],
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+        expect(result.reason).toContain('Blocked BUILD toward Barcelona');
+        expect(result.reason).toContain('Keeping other actions');
+      });
+
+      it('should NOT block BUILD when track cost is less than payout', () => {
+        const demand = makeDemand({ payout: 30, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 10 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should NOT block BUILD during initialBuild phase', () => {
+        const demand = makeDemand({ payout: 15, estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 20 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: true });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should NOT block BUILD when targetCity is not set', () => {
+        const demand = makeDemand({ payout: 10, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 20 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          // No targetCity
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should NOT block BUILD when no demand matches the target city', () => {
+        const demand = makeDemand({ deliveryCity: 'Paris', supplyCity: 'Lyon', payout: 10, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 20 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona', // Doesn't match any demand
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should match targetCity against supplyCity too', () => {
+        const demand = makeDemand({ supplyCity: 'Barcelona', deliveryCity: 'Berlin', payout: 15, estimatedTrackCostToSupply: 20, estimatedTrackCostToDelivery: 0 });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+        expect(result.reason).toContain('Blocked BUILD toward Barcelona');
+      });
+
+      it('should NOT block BUILD when isLoadOnTrain=true and only delivery cost matters', () => {
+        // Bot HAS the cheese — supply cost is irrelevant, only delivery cost counts
+        // Supply cost (25M) + delivery cost (7M) = 32M > 22M payout → would block with old logic
+        // But effective cost = 7M (delivery only) < 22M payout → should NOT block
+        const demand = makeDemand({
+          payout: 22,
+          estimatedTrackCostToSupply: 25,
+          estimatedTrackCostToDelivery: 7,
+          isLoadOnTrain: true,
+          deliveryCity: 'Barcelona',
+        });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should block BUILD when isLoadOnTrain=true but delivery cost alone exceeds payout', () => {
+        const demand = makeDemand({
+          payout: 10,
+          estimatedTrackCostToSupply: 25,
+          estimatedTrackCostToDelivery: 15,
+          isLoadOnTrain: true,
+          deliveryCity: 'Barcelona',
+        });
+        const ctx = makeContext({ demands: [demand], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+        expect(result.reason).toContain('Blocked BUILD toward Barcelona');
+      });
+
+      it('should NOT block BUILD when at least one matching demand justifies it', () => {
+        // Two demands match the target city. First is unaffordable, second is affordable.
+        // Should NOT block because the second demand justifies the build.
+        const demandBad = makeDemand({
+          payout: 10,
+          estimatedTrackCostToSupply: 15,
+          estimatedTrackCostToDelivery: 10,
+          isLoadOnTrain: false,
+          deliveryCity: 'Barcelona',
+        });
+        const demandGood = makeDemand({
+          cardIndex: 1,
+          loadType: 'Oil',
+          payout: 30,
+          estimatedTrackCostToSupply: 5,
+          estimatedTrackCostToDelivery: 10,
+          isLoadOnTrain: false,
+          deliveryCity: 'Barcelona',
+        });
+        const ctx = makeContext({ demands: [demandBad, demandGood], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('should block BUILD only when ALL matching demands are unaffordable', () => {
+        const demand1 = makeDemand({
+          payout: 10,
+          estimatedTrackCostToSupply: 15,
+          estimatedTrackCostToDelivery: 5,
+          deliveryCity: 'Barcelona',
+        });
+        const demand2 = makeDemand({
+          cardIndex: 1,
+          loadType: 'Oil',
+          payout: 12,
+          estimatedTrackCostToSupply: 8,
+          estimatedTrackCostToDelivery: 10,
+          deliveryCity: 'Barcelona',
+        });
+        const ctx = makeContext({ demands: [demand1, demand2], isInitialBuild: false });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+          targetCity: 'Barcelona',
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
       });
     });
 

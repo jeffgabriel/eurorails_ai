@@ -21,9 +21,11 @@ describe('BotMemory', () => {
         deliveryCount: 0,
         totalEarnings: 0,
         turnNumber: 0,
-        activePlan: null,
-        turnsOnPlan: 0,
-        planHistory: [],
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        lastReasoning: null,
+        lastPlanHorizon: null,
       });
     });
 

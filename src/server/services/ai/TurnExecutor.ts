@@ -167,6 +167,7 @@ export class TurnExecutor {
   /**
    * Execute a MultiAction plan: run each step sequentially.
    * Returns aggregate cost/segments. Stops on first failure.
+   * Updates snapshot state between steps so subsequent steps see correct position/loads.
    */
   private static async executeMultiAction(
     steps: TurnPlan[],
@@ -180,7 +181,25 @@ export class TurnExecutor {
 
     for (const step of steps) {
       const option = TurnExecutor.planToOption(step);
-      const result = await TurnExecutor.execute(option, snapshot);
+
+      let result: ExecutionResult;
+      try {
+        result = await TurnExecutor.execute(option, snapshot);
+      } catch (stepError) {
+        // Catch thrown errors from individual steps (e.g., PlayerService.deliverLoadForUser
+        // throwing "Demand does not match delivery"). Return a failure result instead of
+        // letting the error propagate — earlier steps' DB changes are already committed.
+        console.error(`[TurnExecutor] MultiAction step ${step.type} threw:`, stepError instanceof Error ? stepError.message : stepError);
+        return {
+          success: false,
+          action: step.type as AIActionType,
+          cost: totalCost,
+          segmentsBuilt: totalSegments,
+          remainingMoney: snapshot.bot.money,
+          durationMs: Date.now() - startTime,
+          error: stepError instanceof Error ? stepError.message : String(stepError),
+        };
+      }
 
       if (!result.success) {
         return {
@@ -196,6 +215,18 @@ export class TurnExecutor {
       lastAction = result.action;
       snapshot.bot.money = result.remainingMoney;
       lastResult = result;
+
+      // Update snapshot state so subsequent steps see correct position/loads
+      if (step.type === AIActionType.MoveTrain && step.path.length > 0) {
+        const dest = step.path[step.path.length - 1];
+        snapshot.bot.position = { row: dest.row, col: dest.col };
+      }
+      if (step.type === AIActionType.PickupLoad) {
+        snapshot.bot.loads = [...snapshot.bot.loads, step.load];
+      }
+      if (step.type === AIActionType.DeliverLoad) {
+        snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== step.load);
+      }
     }
 
     return {

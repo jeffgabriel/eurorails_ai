@@ -431,10 +431,11 @@ export function computeBuildSegments(
         if (dist < minDist) minDist = dist;
       }
 
-      // Prefer closer to target; among equal distances, prefer more segments
+      // Prefer closer to target; among equal distances, prefer cheapest (fewest segments).
+      // This prevents inefficient detours through rivers/mountains when a direct route exists.
       if (
         minDist < bestTargetDist ||
-        (minDist === bestTargetDist && newSteps > (bestPath ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys) : 0))
+        (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity))
       ) {
         bestPath = node;
         bestTargetDist = minDist;
@@ -503,7 +504,12 @@ function countNewSegments(
 
 /**
  * Convert a grid-coord path into TrackSegment[], limited by maxSegments and budget.
- * Skips edges that already exist on the network.
+ * Skips edges that already exist on the network or are ferry crossings.
+ *
+ * Collects multiple contiguous runs of new segments (separated by built edges
+ * or ferry crossings) and returns the longest run that fits within budget.
+ * This prevents ferry crossings mid-path from truncating the build to only
+ * the segments before the ferry.
  */
 function extractSegments(
   path: GridCoord[],
@@ -515,36 +521,72 @@ function extractSegments(
   ferryPortCosts: Map<string, number>,
   ferryEdgeKeys: Set<string>,
 ): TrackSegment[] {
-  const segments: TrackSegment[] = [];
-  let spent = 0;
+  // Collect all contiguous runs of new (buildable) segments
+  const runs: { segments: TrackSegment[]; cost: number }[] = [];
+  let currentRun: TrackSegment[] = [];
+  let currentCost = 0;
 
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
 
-    // Skip already-built edges — but if we've already emitted segments,
-    // skipping creates a contiguity gap (seg[n].to ≠ seg[n+1].from),
-    // so break to keep the contiguous run we have.
-    if (builtEdges.has(`${fromKey}-${toKey}`)) {
-      if (segments.length > 0) break;
-      continue;
-    }
-
-    // Skip ferry crossings — same contiguity rule applies
-    if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) {
-      if (segments.length > 0) break;
+    // Skip already-built edges or ferry crossings — start a new run
+    if (builtEdges.has(`${fromKey}-${toKey}`) || ferryEdgeKeys.has(`${fromKey}-${toKey}`)) {
+      if (currentRun.length > 0) {
+        runs.push({ segments: currentRun, cost: currentCost });
+        currentRun = [];
+        currentCost = 0;
+      }
       continue;
     }
 
     const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
-    if (!seg) break;
+    if (!seg) {
+      // Can't build this segment — finalize current run
+      if (currentRun.length > 0) {
+        runs.push({ segments: currentRun, cost: currentCost });
+        currentRun = [];
+        currentCost = 0;
+      }
+      break;
+    }
 
-    if (spent + seg.cost > budget) break;
-    spent += seg.cost;
-    segments.push(seg);
+    if (currentCost + seg.cost > budget) {
+      // Over budget — finalize current run without this segment
+      if (currentRun.length > 0) {
+        runs.push({ segments: currentRun, cost: currentCost });
+        currentRun = [];
+        currentCost = 0;
+      }
+      break;
+    }
 
-    if (segments.length >= maxSegments) break;
+    currentCost += seg.cost;
+    currentRun.push(seg);
+
+    if (currentRun.length >= maxSegments) {
+      runs.push({ segments: currentRun, cost: currentCost });
+      currentRun = [];
+      currentCost = 0;
+      break;
+    }
   }
 
-  return segments;
+  // Don't forget the last run
+  if (currentRun.length > 0) {
+    runs.push({ segments: currentRun, cost: currentCost });
+  }
+
+  if (runs.length === 0) return [];
+
+  // Return the longest run that fits within budget
+  // (all runs already respect budget individually since we break on overflow)
+  let bestRun = runs[0];
+  for (let i = 1; i < runs.length; i++) {
+    if (runs[i].segments.length > bestRun.segments.length) {
+      bestRun = runs[i];
+    }
+  }
+
+  return bestRun.segments;
 }

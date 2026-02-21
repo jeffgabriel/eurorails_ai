@@ -102,8 +102,18 @@ jest.mock('../../services/ai/BotMemory', () => ({
     consecutivePassTurns: 0,
     consecutiveDiscards: 0,
     lastAction: null,
+    activeRoute: null,
+    turnsOnRoute: 0,
+    routeHistory: [],
   })),
   updateMemory: jest.fn(),
+}));
+
+// Mock PlanExecutor
+jest.mock('../../services/ai/PlanExecutor', () => ({
+  PlanExecutor: {
+    execute: jest.fn(),
+  },
 }));
 
 // Mock DecisionLogger
@@ -130,6 +140,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 jest.mock('../../services/ai/LLMStrategyBrain', () => ({
   LLMStrategyBrain: jest.fn().mockImplementation(() => ({
     decideAction: jest.fn(),
+    planRoute: jest.fn(),
   })),
 }));
 
@@ -139,8 +150,10 @@ import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
+import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
+import { getMemory } from '../../services/ai/BotMemory';
 import {
   AIActionType,
   WorldSnapshot,
@@ -150,6 +163,7 @@ import {
   TerrainType,
   TrackSegment,
   DeliveryOpportunity,
+  StrategicRoute,
 } from '../../../shared/types/GameTypes';
 
 const mockCapture = capture as jest.MockedFunction<typeof capture>;
@@ -157,6 +171,8 @@ const mockContextBuild = ContextBuilder.build as jest.MockedFunction<typeof Cont
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<any>>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
+const mockPlanExecutorExecute = PlanExecutor.execute as jest.MockedFunction<typeof PlanExecutor.execute>;
+const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
 
 // ── Factory helpers ───────────────────────────────────────────────────────
 
@@ -209,7 +225,9 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     turnBuildCost: 0,
     demands: [],
     canDeliver: [],
+    canPickup: [],
     reachableCities: [],
+    citiesOnNetwork: [],
     canUpgrade: false,
     canBuild: true,
     isInitialBuild: false,
@@ -229,6 +247,7 @@ function mockResult(rows: any[]) {
 describe('AIStrategyEngine.takeTurn (Integration)', () => {
   let mockClient: any;
   let mockDecideAction: jest.Mock<() => Promise<any>>;
+  let mockPlanRoute: jest.Mock<() => Promise<any>>;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -245,8 +264,9 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
     // Set up LLMStrategyBrain mock
     mockDecideAction = jest.fn<() => Promise<any>>();
+    mockPlanRoute = jest.fn<() => Promise<any>>().mockResolvedValue(null);
     (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-      (() => ({ decideAction: mockDecideAction })) as any,
+      (() => ({ decideAction: mockDecideAction, planRoute: mockPlanRoute })) as any,
     );
   });
 
@@ -425,6 +445,163 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
       expect(typeof result.durationMs).toBe('number');
+    });
+  });
+
+  describe('decision gate — active route auto-execution', () => {
+    it('should auto-execute from active route without calling LLM', async () => {
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 3,
+        reasoning: 'Test route',
+      };
+
+      // Set memory with active route
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      // PlanExecutor returns a build plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toContain('route-executor');
+      // LLM should NOT have been called
+      expect(LLMStrategyBrain).not.toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should consult LLM for new route when no active route', async () => {
+      // Reset memory to default (no active route)
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+      });
+
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 5,
+        reasoning: 'New route',
+      };
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // planRoute returns a new route
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 500,
+        tokenUsage: { input: 100, output: 50 },
+      });
+
+      // PlanExecutor executes first step
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.reasoning).toContain('route-planned');
+      expect(mockPlanRoute).toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should fall back to per-turn LLM when route planning fails', async () => {
+      // Reset memory to default (no active route)
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+      });
+
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // planRoute returns null (failed)
+      mockPlanRoute.mockResolvedValue(null);
+
+      // decideAction provides a fallback
+      mockDecideAction.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
+        reasoning: 'Per-turn fallback',
+        planHorizon: '1 turn',
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 300,
+        retried: false,
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toBe('Per-turn fallback');
+      expect(mockPlanRoute).toHaveBeenCalled();
+      expect(mockDecideAction).toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
     });
   });
 

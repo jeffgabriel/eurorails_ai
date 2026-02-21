@@ -106,7 +106,9 @@ function makeGameContext(overrides: Partial<GameContext> = {}): GameContext {
     turnBuildCost: 0,
     demands: [],
     canDeliver: [],
+    canPickup: [],
     reachableCities: [],
+    citiesOnNetwork: [],
     canUpgrade: false,
     canBuild: true,
     isInitialBuild: false,
@@ -599,9 +601,9 @@ describe('ActionResolver', () => {
       expect(result.error).toContain('already at');
     });
 
-    it('should fail when path exceeds speed limit', async () => {
+    it('should truncate path to speed limit for partial move', async () => {
       setupGridPoints([{ row: 20, col: 20, name: 'FarCity' }]);
-      // Freight has speed 9, path has 10 edges
+      // Freight has speed 9, path has 10 edges — should truncate to 9
       const path: PathEdge[] = [];
       for (let i = 0; i < 10; i++) {
         path.push(makePathEdge(5 + i, 5, 6 + i, 5));
@@ -615,8 +617,10 @@ describe('ActionResolver', () => {
         makeGameContext(),
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('speed limit');
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanMoveTrain;
+      // Path should be truncated: 9 edges + 1 start = 10 coords
+      expect(plan.path.length).toBe(10);
     });
 
     it('should respect ferry half-speed', async () => {
@@ -638,9 +642,9 @@ describe('ActionResolver', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should fail with ferry half-speed when path exceeds halved speed', async () => {
+    it('should truncate path to halved speed with ferry half-speed', async () => {
       setupGridPoints([{ row: 10, col: 10, name: 'Target' }]);
-      // Freight speed=9, halved=5. Path with 6 edges should fail.
+      // Freight speed=9, halved=5. Path with 6 edges should be truncated to 5.
       const path6 = Array.from({ length: 6 }, (_, i) =>
         makePathEdge(5 + i, 5, 6 + i, 5),
       );
@@ -653,8 +657,10 @@ describe('ActionResolver', () => {
         makeGameContext(),
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('speed limit');
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanMoveTrain;
+      // Path should be truncated: 5 edges + 1 start = 6 coords
+      expect(plan.path.length).toBe(6);
     });
 
     it('should fail when path is invalid (no route)', async () => {
@@ -668,7 +674,7 @@ describe('ActionResolver', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('No reachable path');
+      expect(result.error).toContain('No valid path');
     });
 
     it('should calculate track usage fees for opponent track', async () => {
@@ -1625,6 +1631,8 @@ describe('ActionResolver', () => {
             payout: 15,
             isSupplyReachable: false,
             isDeliveryReachable: false,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 10,
             estimatedTrackCostToDelivery: 20,
             isLoadAvailable: true,
@@ -1661,6 +1669,8 @@ describe('ActionResolver', () => {
             payout: 15,
             isSupplyReachable: true,
             isDeliveryReachable: false,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0,
             estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true,
@@ -1707,6 +1717,8 @@ describe('ActionResolver', () => {
             payout: 15,
             isSupplyReachable: true,
             isDeliveryReachable: false,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0,
             estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true,
@@ -1740,12 +1752,14 @@ describe('ActionResolver', () => {
           {
             cardIndex: 0, loadType: 'Coal', supplyCity: 'A', deliveryCity: 'CheapCity',
             payout: 5, isSupplyReachable: true, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'B', deliveryCity: 'ExpensiveCity',
             payout: 25, isSupplyReachable: true, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
           },

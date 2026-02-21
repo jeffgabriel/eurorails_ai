@@ -22,15 +22,17 @@ describe('BotMemory and DecisionLogger module imports', () => {
     expect(state).toEqual({
       currentBuildTarget: null,
       turnsOnTarget: 0,
-      turnsOnPlan: 0,
-      activePlan: null,
-      planHistory: [],
+      turnsOnRoute: 0,
+      activeRoute: null,
+      routeHistory: [],
       lastAction: null,
       consecutivePassTurns: 0,
       consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
       turnNumber: 0,
+      lastReasoning: null,
+      lastPlanHorizon: null,
     });
   });
 

@@ -3,6 +3,9 @@
 Tracks when the compounds skill was used and what benefit it provided.
 
 | Date | Task/Context | Benefit |
+| 2026-02-20 | Document AI LLM decision-making pipeline narrative | Compounds identified all 7 pipeline components (BotTurnTrigger, AIStrategyEngine, ContextBuilder, LLMStrategyBrain, ResponseParser, ActionResolver, GuardrailEnforcer, TurnExecutor) with call relationships, entry points, and retry logic. Faster than tracing imports manually. |
+| 2026-02-20 | Plan plan-then-execute architecture change | Compounds semantic search found existing DeliveryPlan type, BotMemoryState.activePlan (unused), and confirmed no PlanExecutor exists yet. Structural query on DeliveryPlan showed only test usage. Saved time vs. manual grep across 15+ files. |
+| 2026-02-20 | Bot behavior fixes: extractSegments ferry bug, buildTargetCity debug overlay, LLM prompt enrichment, cash reserve guardrail | 6 compounds searches: (1) `search "extractSegments ferry crossing handling"` mapped extractSegments → getFerryEdges → ferryConnections pipeline, (2) `search "buildTargetCity populated in bot turn result"` traced BotTurnResult → identifyTargetCity → AIStrategyEngine flow and confirmed field is never set, (3) `search "multi-action turn MOVE PICKUP DELIVER chaining"` revealed TurnExecutor.executeMultiAction pipeline, (4) `search "LLM strategy brain prompt system message"` mapped LLMStrategyBrain → getSystemPrompt → COMMON_SYSTEM_SUFFIX, (5) `search "getBuildBudget money reserve calculation"` identified budget doesn't subtract 5M reserve, (6) `search "GuardrailEnforcer checkPlan cash reserve"` confirmed no BUILD spending guardrail exists. |
 | 2026-02-19 | ai-v6.3 full project execution: create project, upload PRD, generate tech spec, plan_project breakdown, implement all 35 tasks via 2-worker team | Compounds orchestrated the entire workflow: spec_project (research + pattern detection + spec generation + validation), plan_project (auto-generated 35 tasks from tech spec), implement_task (delivered task prompts with full context for each). Team of 2 workers completed all 35 tasks: 24 BE, 8 TEST, 1 FE, 2 INF. New pipeline: ContextBuilder + LLM + ActionResolver replaces OptionGenerator + Scorer. 258+ tests passing. |
 | 2026-02-19 | prd-v6.3 gap analysis: verified TrackNetworkService, TrackBuildingService, LoadService, PlayerService, trackUsageFees, DemandDeckService, InitialBuildService APIs against spec | Found 7 gaps (see below). Compounds identified exact method signatures, parameter types, and missing methods — would have taken 10+ file reads with grep. |
 |------|-------------|---------|
@@ -111,3 +114,22 @@ Compounds confirmed two root causes: (1) hasLoad branch in rankDemandChains has 
 19. `compounds search "Scorer score heuristic rank options"` — discovered score-and-sort with per-action-type heuristics
 
 **Benefit:** Compounds provided complete architectural understanding across 23 source files in the AI pipeline, including cross-module dependencies, method signatures, type definitions, and execution flow. This would have required reading ~5000 lines of code manually. The semantic search surfaced exactly the right components for each query, including files I wouldn't have found with grep (e.g., connectedMajorCities.ts for buildTrackGraph, MapTopology.ts for grid functions).
+
+## 2026-02-20 — Session continuation: Guardrail 4 feasibility tests
+
+**Context:** Continued from previous session. Guardrail 4 code (block BUILD toward unaffordable targets) was already written. This continuation focused on writing tests and running the full test suite.
+
+**Compounds usage in this continuation:** N/A — code changes were scoped to test file only, using existing knowledge from prior session's compounds queries.
+
+**Result:** 7 new tests for Guardrail 4, all 27 GuardrailEnforcer tests pass, clean TypeScript build.
+
+## 2026-02-21 — Initial build strategic blindness investigation
+
+**Context:** User reported bot starting at Ruhr instead of Holland→Berlin corridor despite having Cheese+Flowers demands to Berlin. Compounds used to trace initial build context pipeline.
+
+**Commands run:**
+1. `compounds search "initial build phase cold start city selection strategy"` — found buildOrderedCandidates in AIStrategyEngine, identifyTargetCity in OptionGenerator, CitySelectionManager client-side
+2. `compounds search "system prompt initial build instructions strategy guidance"` — found CRITICAL RULE 10 ("prefer central Europe") and full system prompt structure
+3. `compounds search "initial build cold start estimateTrackCost zero segments empty"` — confirmed estimateTrackCost returns 0 when no segments exist
+
+**Benefit:** Compounds identified the root cause: during initialBuild with no track, estimateTrackCost returns 0 for ALL cities (the "can't estimate without frontier" early return). This means the LLM sees `~0M track needed` for every demand, giving no distance signal. Combined with the system prompt only saying "prefer central Europe" without showing which demands align, the LLM picks Ruhr for a 48M Tourist demand instead of the obvious Holland→Berlin corridor.

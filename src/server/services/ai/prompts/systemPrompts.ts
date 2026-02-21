@@ -153,7 +153,12 @@ AVAILABLE ACTIONS:
 - DISCARD_HAND: Discard all 3 demand cards, draw 3 new ones, end turn immediately
 - PASS: End turn without acting
 
-You can combine actions in a single turn (e.g., MOVE to a city, DELIVER a load, then BUILD).
+MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize efficiency:
+- MOVE to a supply city → PICKUP a load → MOVE toward delivery city (use remaining speed)
+- MOVE to a demand city → DELIVER for payout → BUILD track (up to 20M)
+- MOVE to a supply city → PICKUP → continue MOVE to delivery city → DELIVER (if within speed)
+- PICKUP at current city → MOVE to nearby delivery city → DELIVER
+The key insight: loading/unloading does NOT cost movement points. You can MOVE partway, PICKUP, then continue MOVE with remaining speed. Always use ALL your movement points — stopping early wastes your turn.
 You CANNOT combine UPGRADE (20M) with BUILD, or DISCARD_HAND with anything.
 
 CRITICAL RULES \u2014 ALWAYS FOLLOW:
@@ -195,6 +200,55 @@ For multiple actions in one turn:
   ],
   "reasoning": "...",
   "planHorizon": "..."
+}`;
+
+// ── Route Planning Suffix ────────────────────────────────────────────
+
+export const ROUTE_PLANNING_SYSTEM_SUFFIX = `
+GAME RULES REFERENCE:
+- Victory: 250M+ ECU cash AND track connecting 7 of 8 major cities
+- Turn actions (in order): Move train → Pick up/deliver loads → Build track → End turn
+- Demand cards: 3 cards, 3 demands each, only 1 per card can be fulfilled
+- Track building: up to 20M per turn. Terrain costs: Clear 1M, Mountain 2M, Alpine 5M
+- Track usage fee: 4M to use opponent's track per opponent per turn
+- Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
+- First track must start from a major city.
+
+ROUTE PLANNING:
+You are planning a MULTI-STOP delivery route. This route will be auto-executed across multiple turns.
+Think carefully about the optimal sequence of pickups and deliveries.
+
+ROUTE PLANNING CRITERIA:
+1. COMBINE LOADS: Look for 2+ demands that share pickup/delivery corridors. Two 20M deliveries on the same route beat one 40M delivery on a separate route.
+2. PICKUP BEFORE DELIVER: Always pick up a load before you can deliver it. Sequence matters.
+3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out.
+4. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
+5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
+6. STARTING CITY: For initial builds with no track, specify which major city to start building from (prefer central Europe).
+7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
+
+RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
+{
+  "route": [
+    { "action": "PICKUP", "load": "<load type>", "city": "<city name>" },
+    { "action": "DELIVER", "load": "<load type>", "city": "<city name>" }
+  ],
+  "startingCity": "<major city to start building from, if no track yet>",
+  "reasoning": "<1-2 sentences explaining why this route>",
+  "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>"
+}
+
+EXAMPLE — efficient double-delivery route:
+{
+  "route": [
+    { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
+    { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
+    { "action": "DELIVER", "load": "Potatoes", "city": "Paris" },
+    { "action": "DELIVER", "load": "Potatoes", "city": "Ruhr" }
+  ],
+  "startingCity": "Berlin",
+  "reasoning": "Two potato demands share a route through central Europe. Picking up 2x at Szczecin maximizes throughput.",
+  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
 }`;
 
 // ── Plan Selection Suffix ────────────────────────────────────────────
@@ -254,6 +308,23 @@ export function getSystemPrompt(archetype: BotArchetype, skillLevel: BotSkillLev
   const skillText = SKILL_LEVEL_TEXT[skillLevel];
 
   return `${archetypePrompt}\n${COMMON_SYSTEM_SUFFIX}\n\n${skillText}`;
+}
+
+/**
+ * Get the system prompt for route planning (plan-then-execute architecture).
+ *
+ * Combines: archetype personality + route planning suffix + skill-level modifier.
+ * Used when the bot needs to plan a new multi-stop delivery route via LLM.
+ */
+export function getRoutePlanningPrompt(archetype: BotArchetype, skillLevel: BotSkillLevel): string {
+  const archetypePrompt = ARCHETYPE_PROMPTS[archetype];
+  if (!archetypePrompt) {
+    throw new Error(`Unknown archetype: ${archetype}`);
+  }
+
+  const skillText = SKILL_LEVEL_TEXT[skillLevel];
+
+  return `${archetypePrompt}\n${ROUTE_PLANNING_SYSTEM_SUFFIX}\n\n${skillText}`;
 }
 
 /**

@@ -464,16 +464,70 @@ describe('ContextBuilder.computeReachableCities', () => {
   // ── Edge cases ────────────────────────────────────────────────────────
 
   describe('edge cases', () => {
-    it('should return empty when bot is not on the network', () => {
+    it('should return empty when bot is far from the network (> 3 hexes)', () => {
       const { network } = buildLinearNetwork([[0, 0], [0, 1]]);
       const gridPoints = [
         makeCityPoint(0, 0, 'CityA'),
         makeCityPoint(0, 1, 'CityB'),
-        makeCityPoint(5, 5, 'CityFar'),
+        makeCityPoint(10, 10, 'CityFar'),
       ];
 
       const result = ContextBuilder.computeReachableCities(
-        { row: 5, col: 5 }, 9, network, gridPoints,
+        { row: 10, col: 10 }, 9, network, gridPoints,
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('should snap to nearest network node when bot is close but off-network', () => {
+      // Network: CityA(0,0) - (0,1) - CityB(0,2)
+      // Bot at (0,3) — 1 hex from (0,2) but not on network
+      const { network } = buildLinearNetwork([[0, 0], [0, 1], [0, 2]]);
+      const gridPoints = [
+        makeCityPoint(0, 0, 'CityA'),
+        makeGridPoint(0, 1),
+        makeCityPoint(0, 2, 'CityB'),
+      ];
+
+      const result = ContextBuilder.computeReachableCities(
+        { row: 0, col: 3 }, 9, network, gridPoints,
+      );
+
+      // Should snap to (0,2) which is 1 hex away, then BFS with speed 9-1=8
+      expect(result).toContain('CityB');
+      expect(result).toContain('CityA');
+    });
+
+    it('should reduce speed by snap distance when off-network', () => {
+      // Network: CityA(0,0) - (0,1) - CityB(0,2)
+      // Bot at (0,3) — 1 hex from CityB(0,2)
+      // Speed=2 → adjusted speed=1 after snap → can reach CityB but not CityA (2 hops away)
+      const { network } = buildLinearNetwork([[0, 0], [0, 1], [0, 2]]);
+      const gridPoints = [
+        makeCityPoint(0, 0, 'CityA'),
+        makeGridPoint(0, 1),
+        makeCityPoint(0, 2, 'CityB'),
+      ];
+
+      const result = ContextBuilder.computeReachableCities(
+        { row: 0, col: 3 }, 2, network, gridPoints,
+      );
+
+      expect(result).toContain('CityB');
+      expect(result).not.toContain('CityA');
+    });
+
+    it('should return empty when speed is consumed by snap distance', () => {
+      // Network: CityA(0,0) - (0,1)
+      // Bot at (0,3) — 2 hexes from nearest node (0,1), speed=2 → adjusted=0
+      const { network } = buildLinearNetwork([[0, 0], [0, 1]]);
+      const gridPoints = [
+        makeCityPoint(0, 0, 'CityA'),
+        makeGridPoint(0, 1),
+      ];
+
+      const result = ContextBuilder.computeReachableCities(
+        { row: 0, col: 3 }, 2, network, gridPoints,
       );
 
       expect(result).toEqual([]);
@@ -1119,5 +1173,224 @@ describe('ContextBuilder.build — demand context computation', () => {
     expect(demand).toBeDefined();
     expect(demand!.supplyCity).toBe('Unknown');
     expect(demand!.isSupplyReachable).toBe(false);
+  });
+});
+
+// ── TEST: serializePrompt — previous turn summary and DELIVER clarity ────────
+
+describe('ContextBuilder.serializePrompt', () => {
+  function makeMinimalContext(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      totalMajorCities: 8,
+      trackSummary: '5 mileposts',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Berlin'],
+      citiesOnNetwork: ['Berlin'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Early Game',
+      turnNumber: 5,
+      ...overrides,
+    };
+  }
+
+  it('should include PREVIOUS TURN section when previousTurnSummary is set', () => {
+    const ctx = makeMinimalContext({
+      previousTurnSummary: 'Action: BuildTrack. Reasoning: Building toward Hamburg. Plan: Expand north',
+    });
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).toContain('PREVIOUS TURN:');
+    expect(prompt).toContain('Building toward Hamburg');
+    expect(prompt).toContain('PLAN PERSISTENCE: You MUST continue your existing plan');
+  });
+
+  it('should NOT include PREVIOUS TURN section when previousTurnSummary is absent', () => {
+    const ctx = makeMinimalContext();
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).not.toContain('PREVIOUS TURN:');
+  });
+
+  it('should include DELIVER clarity warning', () => {
+    const ctx = makeMinimalContext();
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).toContain('Only use DELIVER if a delivery is listed above');
+    expect(prompt).toContain('must be AT the delivery city');
+  });
+
+  it('should warn about carrying loads without delivery available', () => {
+    const ctx = makeMinimalContext({
+      loads: ['Coal', 'Wine'],
+      canDeliver: [],
+    });
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).toContain('carrying [Coal, Wine]');
+    expect(prompt).toContain('MOVE toward a delivery city');
+    expect(prompt).toContain('do NOT pass your turn');
+  });
+
+  it('should NOT warn about carrying loads when delivery IS available', () => {
+    const ctx = makeMinimalContext({
+      loads: ['Coal'],
+      canDeliver: [{ loadType: 'Coal', deliveryCity: 'Berlin', payout: 25, cardIndex: 0 }],
+    });
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).not.toContain('do NOT pass your turn');
+  });
+
+  it('should include initial build strategy hint during initialBuild phase', () => {
+    const ctx = makeMinimalContext({ isInitialBuild: true });
+
+    const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+
+    expect(prompt).toContain('INITIAL BUILD STRATEGY');
+    expect(prompt).toContain('Track cost estimates show distance from the nearest major city');
+    expect(prompt).toContain('BOTH supply and delivery are cheap');
+  });
+});
+
+// ── TEST: Cold-start estimateTrackCost via build() ───────────────────────────
+
+// Mock getMajorCityGroups to return controlled test data instead of real board config
+jest.mock('../../../shared/services/majorCityGroups', () => ({
+  getMajorCityGroups: () => [
+    { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [] },
+    { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [] },
+  ],
+}));
+
+describe('ContextBuilder cold-start estimateTrackCost', () => {
+  it('should return 0 for a city that IS a major city (distance ≤ 1)', async () => {
+    // Berlin is at (10,10) which matches the mocked major city center exactly
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Cheese']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],  // No track — cold-start
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Cheese', payment: 12 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Berlin');
+
+    expect(demand).toBeDefined();
+    // Berlin IS a major city center, so track cost should be 0
+    expect(demand!.estimatedTrackCostToDelivery).toBe(0);
+  });
+
+  it('should return positive estimate for a city far from all major cities', async () => {
+    // SmallTown at (50,50) is far from both Berlin (10,10) and Paris (20,20)
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+      makeCityPoint(50, 50, 'SmallTown', TerrainType.SmallCity, ['Coal']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],  // No track — cold-start
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'SmallTown', loadType: 'Steel', payment: 30 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'SmallTown');
+
+    expect(demand).toBeDefined();
+    // SmallTown is far from all major cities → positive cost estimate
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThan(0);
+  });
+
+  it('should return small positive estimate for a city near (but not at) a major city', async () => {
+    // NearbyTown at (12, 12) is close to Berlin at (10,10)
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+      makeCityPoint(12, 12, 'NearbyTown', TerrainType.SmallCity, []),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],  // No track — cold-start
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'NearbyTown', loadType: 'Steel', payment: 20 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'NearbyTown');
+
+    expect(demand).toBeDefined();
+    // NearbyTown is ~3 hexes from Berlin → small positive cost
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThan(0);
+    expect(demand!.estimatedTrackCostToDelivery).toBeLessThan(20);
+  });
+
+  it('should prefer supply city nearest to a major city during cold-start', async () => {
+    // Two supply cities for Wine: Lyon (near Berlin major) and FarVineyard (distant)
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, []),
+      makeCityPoint(11, 11, 'Lyon', TerrainType.SmallCity, ['Wine']),  // Near Berlin
+      makeCityPoint(50, 50, 'FarVineyard', TerrainType.SmallCity, ['Wine']),  // Far away
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],  // No track — cold-start
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Paris', loadType: 'Wine', payment: 25 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    // Should pick Lyon (near Berlin) over FarVineyard
+    expect(demand!.supplyCity).toBe('Lyon');
   });
 });

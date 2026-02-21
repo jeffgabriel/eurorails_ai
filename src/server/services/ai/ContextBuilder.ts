@@ -12,6 +12,7 @@ import {
   GameContext,
   DemandContext,
   DeliveryOpportunity,
+  PickupOpportunity,
   OpponentContext,
   BotSkillLevel,
   TrackSegment,
@@ -21,6 +22,7 @@ import {
   TerrainType,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
+import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
 
 export class ContextBuilder {
   /**
@@ -49,6 +51,11 @@ export class ContextBuilder {
       ? ContextBuilder.computeReachableCities(botPosition, speed, network, gridPoints)
       : [];
 
+    // Compute all cities on the track network (not speed-limited)
+    const citiesOnNetwork = network
+      ? ContextBuilder.computeCitiesOnNetwork(network, gridPoints)
+      : [];
+
     // Compute connected major cities
     const connectedMajorCities = ContextBuilder.computeConnectedMajorCities(
       snapshot.bot.existingSegments, gridPoints,
@@ -56,11 +63,14 @@ export class ContextBuilder {
 
     // Compute demand context for each demand card
     const demands = ContextBuilder.computeAllDemandContexts(
-      snapshot, network, gridPoints, reachableCities,
+      snapshot, network, gridPoints, reachableCities, citiesOnNetwork,
     );
 
     // Compute immediate delivery opportunities
     const canDeliver = ContextBuilder.computeCanDeliver(snapshot, gridPoints);
+
+    // Compute pickup opportunities at current position
+    const canPickup = ContextBuilder.computeCanPickup(snapshot, gridPoints);
 
     // Determine if the bot can upgrade
     const canUpgrade = ContextBuilder.checkCanUpgrade(snapshot);
@@ -105,7 +115,9 @@ export class ContextBuilder {
       turnBuildCost,
       demands,
       canDeliver,
+      canPickup,
       reachableCities,
+      citiesOnNetwork,
       canUpgrade,
       canBuild,
       isInitialBuild,
@@ -129,7 +141,28 @@ export class ContextBuilder {
     gridPoints: GridPoint[],
   ): string[] {
     const startKey = `${position.row},${position.col}`;
-    if (!network.nodes.has(startKey)) return [];
+    if (!network.nodes.has(startKey)) {
+      // Bot position is not on the track network (e.g., at a major city center
+      // adjacent to but not directly on own track). Snap to nearest network node.
+      let bestKey: string | null = null;
+      let bestDist = Infinity;
+      for (const nodeKey of Array.from(network.nodes)) {
+        const [r, c] = nodeKey.split(',').map(Number);
+        const dist = ContextBuilder.hexDistance(position.row, position.col, r, c);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestKey = nodeKey;
+        }
+      }
+      // Only snap if the nearest node is within 3 hexes (otherwise bot is truly disconnected)
+      if (!bestKey || bestDist > 3) return [];
+      const [snapRow, snapCol] = bestKey.split(',').map(Number);
+      const adjustedSpeed = Math.max(0, speed - bestDist);
+      if (adjustedSpeed <= 0) return [];
+      return ContextBuilder.computeReachableCities(
+        { row: snapRow, col: snapCol }, adjustedSpeed, network, gridPoints,
+      );
+    }
 
     // Build a lookup for grid points by "row,col" key
     const gridLookup = new Map<string, GridPoint>();
@@ -189,6 +222,27 @@ export class ContextBuilder {
 
     // Deduplicate (major cities may have multiple mileposts with the same name)
     return Array.from(new Set(reachableCities));
+  }
+
+  // ── Cities on network (not speed-limited) ──────────────────────────────
+
+  /**
+   * Compute all city names that have at least one milepost on the bot's track network.
+   * Unlike computeReachableCities, this is NOT limited by speed — it shows all cities
+   * the bot can eventually reach by moving along its track (multi-turn destinations).
+   */
+  static computeCitiesOnNetwork(
+    network: ReturnType<typeof buildTrackNetwork>,
+    gridPoints: GridPoint[],
+  ): string[] {
+    const cityNames = new Set<string>();
+    for (const nodeKey of Array.from(network.nodes)) {
+      const point = gridPoints.find(gp => `${gp.row},${gp.col}` === nodeKey);
+      if (point?.city?.name) {
+        cityNames.add(point.city.name);
+      }
+    }
+    return Array.from(cityNames);
   }
 
   // ── Load runtime availability (BE-004) ──────────────────────────────────
@@ -255,6 +309,7 @@ export class ContextBuilder {
     network: ReturnType<typeof buildTrackNetwork> | null,
     gridPoints: GridPoint[],
     reachableCities: string[],
+    citiesOnNetwork: string[],
   ): DemandContext {
     const deliveryCity = demand.city;
     const loadType = demand.loadType;
@@ -281,7 +336,7 @@ export class ContextBuilder {
     );
 
     // 5. Estimate track cost to reach cities not on the network
-    const estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity
+    const estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity || isLoadOnTrain
       ? 0
       : ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
     const estimatedTrackCostToDelivery = isDeliveryOnNetwork
@@ -304,6 +359,8 @@ export class ContextBuilder {
       payout: demand.payment,
       isSupplyReachable,
       isDeliveryReachable,
+      isSupplyOnNetwork: supplyCity ? citiesOnNetwork.includes(supplyCity) : false,
+      isDeliveryOnNetwork: citiesOnNetwork.includes(deliveryCity),
       estimatedTrackCostToSupply,
       estimatedTrackCostToDelivery,
       isLoadAvailable,
@@ -372,6 +429,18 @@ export class ContextBuilder {
     lines.push(`TURN ${context.turnNumber} \u2014 GAME PHASE: ${context.phase}`);
     lines.push('');
 
+    // ── PREVIOUS TURN (context continuity) ──
+    if (context.previousTurnSummary) {
+      lines.push('PREVIOUS TURN:');
+      lines.push(`- ${context.previousTurnSummary}`);
+      lines.push('⚠️ PLAN PERSISTENCE: You MUST continue your existing plan unless:');
+      lines.push('  (a) The delivery was completed, or');
+      lines.push('  (b) The load is no longer available (taken by opponent), or');
+      lines.push('  (c) A dramatically better opportunity appeared (2x+ payout with less track needed).');
+      lines.push('  Switching plans mid-execution wastes track already built. Stay the course.');
+      lines.push('');
+    }
+
     // ── YOUR STATUS ──
     lines.push('YOUR STATUS:');
     lines.push(`- Cash: ${context.money}M ECU (minimum reserve: 5M)`);
@@ -418,10 +487,39 @@ export class ContextBuilder {
     lines.push('IMMEDIATE OPPORTUNITIES:');
     if (context.canDeliver.length > 0) {
       for (const opp of context.canDeliver) {
-        lines.push(`- You can DELIVER ${opp.loadType} at ${opp.deliveryCity} for ${opp.payout}M!`);
+        lines.push(`- DELIVER ${opp.loadType} at ${opp.deliveryCity} for ${opp.payout}M! (DO THIS FIRST)`);
       }
-    } else {
-      lines.push('- No deliveries completable this turn.');
+    }
+    if (context.canPickup.length > 0) {
+      for (const opp of context.canPickup) {
+        lines.push(`- PICKUP ${opp.loadType} here at ${opp.supplyCity} → deliver to ${opp.bestDeliveryCity} for ${opp.bestPayout}M`);
+      }
+    }
+    if (context.canDeliver.length === 0 && context.canPickup.length === 0) {
+      lines.push('- No deliveries or pickups available at your position.');
+    }
+    // Multi-action turn hints
+    if (context.canPickup.length > 0) {
+      // Check if any pickup's delivery city is reachable this turn (PICKUP → MOVE → DELIVER in one turn!)
+      for (const opp of context.canPickup) {
+        if (context.reachableCities.includes(opp.bestDeliveryCity)) {
+          lines.push(`⚡ COMBO: PICKUP ${opp.loadType} here → MOVE to ${opp.bestDeliveryCity} → DELIVER for ${opp.bestPayout}M — all in ONE turn!`);
+        }
+      }
+      if (context.canBuild) {
+        lines.push('TIP: You can PICKUP then BUILD in the same turn using a multi-action sequence.');
+      }
+    }
+    if (context.canDeliver.length > 0 && context.canBuild) {
+      lines.push('TIP: After DELIVER, you can BUILD track in the same turn (up to 20M).');
+    }
+    lines.push('IMPORTANT: Only use DELIVER if a delivery is listed above. You must be AT the delivery city with the matching load to deliver.');
+    if (context.loads.length > 0 && context.canDeliver.length === 0) {
+      lines.push(`WARNING: You are carrying [${context.loads.join(', ')}] but cannot deliver here. MOVE toward a delivery city — do NOT pass your turn!`);
+    }
+    // Remind about using full movement
+    if (context.speed > 0 && !context.isInitialBuild) {
+      lines.push(`REMINDER: Use ALL ${context.speed} movement points each turn. Stopping early wastes your turn. Loading/unloading costs ZERO movement.`);
     }
     lines.push('');
 
@@ -434,6 +532,17 @@ export class ContextBuilder {
     }
     lines.push('');
 
+    // ── CITIES ON YOUR TRACK NETWORK (multi-turn destinations) ──
+    const networkOnlyCities = context.citiesOnNetwork.filter(
+      c => !context.reachableCities.includes(c),
+    );
+    if (networkOnlyCities.length > 0) {
+      lines.push('CITIES ON YOUR TRACK NETWORK (reachable by MOVE in multiple turns):');
+      lines.push(networkOnlyCities.join(', '));
+      lines.push('TIP: Use MOVE to travel along your track toward these cities for pickup/delivery.');
+      lines.push('');
+    }
+
     // ── UPGRADE OPTIONS ──
     if (context.canUpgrade) {
       lines.push('YOU CAN UPGRADE: Check available train types (20M for upgrade, 5M for crossgrade).');
@@ -442,6 +551,9 @@ export class ContextBuilder {
     // ── BUILD CONSTRAINTS ──
     if (context.isInitialBuild) {
       lines.push('PHASE: Initial Build \u2014 build track only, no train movement.');
+      lines.push('INITIAL BUILD STRATEGY: Start from the major city closest to your best demand chain.');
+      lines.push('  Track cost estimates show distance from the nearest major city \u2014 lower cost = easier to reach.');
+      lines.push('  Look for demands where BOTH supply and delivery are cheap (near major cities).');
     }
     if (!context.canBuild) {
       lines.push('BUILD: Not available this turn (budget exhausted or no funds).');
@@ -479,18 +591,32 @@ export class ContextBuilder {
 
     const ferry = d.ferryRequired ? ' Requires ferry crossing (movement penalty).' : '';
 
+    // Helper: flag costs that exceed what bot can spend per turn (20M) as multi-turn,
+    // and costs that far exceed payout as poor ROI
+    const affordabilityTag = (cost: number): string => {
+      if (cost <= 0) return '';
+      const turnsNeeded = Math.ceil(cost / 20);
+      if (cost > d.payout) {
+        return ` ⚠️ UNAFFORDABLE: ~${cost}M track needed (${turnsNeeded} build turns), exceeds ${d.payout}M payout. DO NOT pursue this chain.`;
+      }
+      if (turnsNeeded > 1) {
+        return ` (~${cost}M track needed, ${turnsNeeded} build turns)`;
+      }
+      return ` (~${cost}M track needed)`;
+    };
+
     // Load is on train
     if (d.isLoadOnTrain) {
       if (d.isDeliveryReachable) {
         return `DELIVERABLE NOW for ${d.payout}M${ferry}`;
       }
+      if (d.isDeliveryOnNetwork) {
+        return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} ON YOUR TRACK — MOVE toward it!${ferry}`;
+      }
       if (skillLevel === BotSkillLevel.Easy) {
         return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} not reachable.${ferry}`;
       }
-      const cost = d.estimatedTrackCostToDelivery > 0
-        ? ` (~${d.estimatedTrackCostToDelivery}M track needed)`
-        : '';
-      return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} not reachable${cost}.${ferry}`;
+      return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} needs track${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}`;
     }
 
     // Supply + delivery reachability
@@ -498,23 +624,29 @@ export class ContextBuilder {
       return `Supply at ${d.supplyCity} (reachable). Delivery reachable.${ferry}`;
     }
     if (d.isSupplyReachable && !d.isDeliveryReachable) {
+      if (d.isDeliveryOnNetwork) {
+        return `Supply at ${d.supplyCity} (reachable). Delivery at ${d.deliveryCity} ON YOUR TRACK (multi-turn MOVE).${ferry}`;
+      }
       if (skillLevel === BotSkillLevel.Easy) {
         return `Supply at ${d.supplyCity} (reachable). Delivery not reachable.${ferry}`;
       }
-      const cost = d.estimatedTrackCostToDelivery > 0
-        ? ` ~${d.estimatedTrackCostToDelivery}M track`
-        : '';
-      return `Supply at ${d.supplyCity} (reachable). Delivery needs${cost}.${ferry}`;
+      return `Supply at ${d.supplyCity} (reachable). Delivery needs${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}`;
+    }
+
+    // Supply on network but not reachable this turn
+    if (d.isSupplyOnNetwork) {
+      const deliveryNote = d.isDeliveryOnNetwork
+        ? `Delivery at ${d.deliveryCity} also on track.`
+        : `Delivery needs track.`;
+      return `Supply at ${d.supplyCity} ON YOUR TRACK — MOVE toward it! ${deliveryNote}${ferry}`;
     }
 
     // Supply not reachable
     if (skillLevel === BotSkillLevel.Easy) {
       return `Supply not reachable.${ferry}`;
     }
-    const supplyCost = d.estimatedTrackCostToSupply > 0
-      ? ` (~${d.estimatedTrackCostToSupply}M track needed)`
-      : '';
-    return `Supply not reachable${supplyCost}.${ferry}`;
+    const totalCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+    return `Supply not reachable${affordabilityTag(totalCost)}.${ferry}`;
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────
@@ -525,13 +657,14 @@ export class ContextBuilder {
     network: ReturnType<typeof buildTrackNetwork> | null,
     gridPoints: GridPoint[],
     reachableCities: string[],
+    citiesOnNetwork: string[],
   ): DemandContext[] {
     const contexts: DemandContext[] = [];
     for (const resolved of snapshot.bot.resolvedDemands) {
       for (const demand of resolved.demands) {
         contexts.push(
           ContextBuilder.computeDemandContext(
-            resolved.cardId, demand, snapshot, network, gridPoints, reachableCities,
+            resolved.cardId, demand, snapshot, network, gridPoints, reachableCities, citiesOnNetwork,
           ),
         );
       }
@@ -564,6 +697,61 @@ export class ContextBuilder {
         }
       }
     }
+    return opportunities;
+  }
+
+  /**
+   * Compute loads the bot can pick up at its current position.
+   * Matches available loads at the city against demand cards for strategic relevance.
+   * Only includes loads the bot has capacity for and that match a demand card.
+   */
+  private static computeCanPickup(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): PickupOpportunity[] {
+    if (!snapshot.bot.position) return [];
+    if (snapshot.gameStatus === 'initialBuild') return [];
+
+    const trainType = snapshot.bot.trainType as TrainType;
+    const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+    if (snapshot.bot.loads.length >= capacity) return [];
+
+    const cityName = ContextBuilder.getCityNameAtPosition(snapshot.bot.position, gridPoints);
+    if (!cityName) return [];
+
+    // Find what loads are available at this city using the snapshot's loadAvailability
+    // (populated by WorldSnapshotService from LoadService — canonical source of truth)
+    const availableLoads = snapshot.loadAvailability?.[cityName] ?? [];
+    if (availableLoads.length === 0) return [];
+
+    // Match against demand cards — only suggest pickups that help fulfill demands
+    const opportunities: PickupOpportunity[] = [];
+    for (const loadType of availableLoads) {
+      // Skip if bot is already carrying this load type
+      if (snapshot.bot.loads.includes(loadType)) continue;
+
+      // Find the best-paying demand card for this load
+      let bestPayout = 0;
+      let bestDeliveryCity = '';
+      for (const resolved of snapshot.bot.resolvedDemands) {
+        for (const demand of resolved.demands) {
+          if (demand.loadType === loadType && demand.payment > bestPayout) {
+            bestPayout = demand.payment;
+            bestDeliveryCity = demand.city;
+          }
+        }
+      }
+
+      if (bestPayout > 0) {
+        opportunities.push({
+          loadType,
+          supplyCity: cityName,
+          bestPayout,
+          bestDeliveryCity,
+        });
+      }
+    }
+
     return opportunities;
   }
 
@@ -723,8 +911,23 @@ export class ContextBuilder {
       return bestCity;
     }
 
-    // No track at all — just return the first supply city
-    return supplyCities[0].name;
+    // No track at all — pick supply city closest to any major city
+    // (bot can start building from any major city per game rules)
+    const majorCityGroups = getMajorCityGroups();
+    let bestCity = supplyCities[0].name;
+    let bestDist = Infinity;
+    for (const sc of supplyCities) {
+      for (const group of majorCityGroups) {
+        const dist = ContextBuilder.hexDistance(
+          sc.row, sc.col, group.center.row, group.center.col,
+        );
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestCity = sc.name;
+        }
+      }
+    }
+    return bestCity;
   }
 
   /** Check if a city name is on the track network (has at least one milepost in the network) */
@@ -747,34 +950,56 @@ export class ContextBuilder {
    * Estimate track building cost to reach a city from the existing track.
    * Uses hex distance with an average terrain cost multiplier (~1.5M per milepost).
    * Returns 0 if no track exists (can't estimate without a frontier).
+   *
+   * For cities with multiple mileposts (e.g. major cities with 5-7 gridpoints),
+   * checks ALL mileposts and uses the one closest to the bot's track.
    */
   private static estimateTrackCost(
     cityName: string,
     segments: TrackSegment[],
     gridPoints: GridPoint[],
   ): number {
-    if (segments.length === 0) return 0;
+    // Find ALL mileposts for this city (major cities have multiple)
+    const cityPoints = gridPoints.filter(gp => gp.city?.name === cityName);
+    if (cityPoints.length === 0) return 0;
 
-    // Find the city position
-    const cityPoint = gridPoints.find(gp => gp.city?.name === cityName);
-    if (!cityPoint) return 0;
+    // Average terrain cost is ~1.5M per milepost (mix of clear=1, mountain=2, city=3-5)
+    const AVG_COST_PER_MILEPOST = 1.5;
 
-    // Find the closest segment endpoint to the city
+    if (segments.length === 0) {
+      // Cold-start: estimate distance from nearest major city center
+      // (bot can start building from any major city per game rules)
+      const majorCityGroups = getMajorCityGroups();
+      let minDist = Infinity;
+      for (const cityPoint of cityPoints) {
+        for (const group of majorCityGroups) {
+          const dist = ContextBuilder.hexDistance(
+            cityPoint.row, cityPoint.col,
+            group.center.row, group.center.col,
+          );
+          minDist = Math.min(minDist, dist);
+        }
+      }
+      if (minDist === Infinity || minDist <= 1) return 0; // City IS a major city
+      return Math.round(minDist * AVG_COST_PER_MILEPOST);
+    }
+
+    // Find the closest segment endpoint to ANY city milepost
     let minDist = Infinity;
-    for (const seg of segments) {
-      const distFrom = ContextBuilder.hexDistance(
-        cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
-      );
-      const distTo = ContextBuilder.hexDistance(
-        cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
-      );
-      minDist = Math.min(minDist, distFrom, distTo);
+    for (const cityPoint of cityPoints) {
+      for (const seg of segments) {
+        const distFrom = ContextBuilder.hexDistance(
+          cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
+        );
+        const distTo = ContextBuilder.hexDistance(
+          cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
+        );
+        minDist = Math.min(minDist, distFrom, distTo);
+      }
     }
 
     if (minDist === Infinity) return 0;
 
-    // Average terrain cost is ~1.5M per milepost (mix of clear=1, mountain=2, city=3-5)
-    const AVG_COST_PER_MILEPOST = 1.5;
     return Math.round(minDist * AVG_COST_PER_MILEPOST);
   }
 

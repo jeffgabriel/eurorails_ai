@@ -122,7 +122,7 @@ export async function onTurnChange(
     const result = await AIStrategyEngine.takeTurn(gameId, currentPlayerId);
     console.log(`[BotTurnTrigger] Pipeline result: action=${result.action}, built=${result.segmentsBuilt}, cost=${result.cost}, success=${result.success}${result.error ? `, error=${result.error}` : ''}`);
 
-    // Emit bot:turn-complete with audit data
+    // Emit bot:turn-complete with audit data + strategy reasoning
     emitToGame(gameId, 'bot:turn-complete', {
       botPlayerId: currentPlayerId,
       turnNumber: turnNumber + 1,
@@ -139,6 +139,10 @@ export async function onTurnChange(
         mileposts: result.milepostsMoved,
         trackUsageFee: result.trackUsageFee,
       } : undefined,
+      reasoning: result.reasoning,
+      planHorizon: result.planHorizon,
+      guardrailOverride: result.guardrailOverride,
+      guardrailReason: result.guardrailReason,
     });
 
     // Advance to next player

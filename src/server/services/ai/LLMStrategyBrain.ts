@@ -20,11 +20,12 @@ import {
   GameContext,
   TurnPlan,
   AIActionType,
+  StrategicRoute,
 } from '../../../shared/types/GameTypes';
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt } from './prompts/systemPrompts';
+import { getSystemPrompt, getRoutePlanningPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
@@ -162,6 +163,79 @@ export class LLMStrategyBrain {
       tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
       retried: attempt > 0,
     };
+  }
+
+  /**
+   * Plan a multi-stop strategic route via LLM.
+   *
+   * Pipeline: serializePrompt (route planning) → LLM call → parseStrategicRoute
+   * Retry loop feeds error context back to the LLM. Returns null on total failure
+   * (caller should use heuristic fallback for this turn).
+   */
+  async planRoute(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
+    const routePrompt = getRoutePlanningPrompt(this.config.archetype, this.config.skillLevel);
+    let attempt = 0;
+    let lastError: string | undefined;
+    let totalLatencyMs = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
+    while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
+      let userPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
+
+      if (lastError) {
+        userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;
+      }
+
+      const startTime = Date.now();
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: MAX_TOKENS_BY_SKILL[this.config.skillLevel],
+          temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
+          systemPrompt: routePrompt,
+          userPrompt,
+        });
+        totalLatencyMs += (Date.now() - startTime);
+        totalInputTokens += response.usage?.input ?? 0;
+        totalOutputTokens += response.usage?.output ?? 0;
+
+        const route = ResponseParser.parseStrategicRoute(response.text, snapshot.turnNumber);
+
+        // Basic validation: at least one stop
+        if (route.stops.length === 0) {
+          lastError = 'Route must contain at least one stop.';
+          console.warn(`[LLMStrategyBrain] Empty route (attempt ${attempt + 1})`);
+          attempt++;
+          continue;
+        }
+
+        return {
+          route,
+          model: this.model,
+          latencyMs: totalLatencyMs,
+          tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
+        };
+      } catch (e: unknown) {
+        totalLatencyMs += (Date.now() - startTime);
+        if (e instanceof ProviderAuthError) {
+          console.error('[LLMStrategyBrain] Auth error during route planning — giving up');
+          return null;
+        }
+        lastError = e instanceof ParseError
+          ? `Parsing error: ${e.message}`
+          : `LLM call error: ${e instanceof Error ? e.message : String(e)}`;
+        console.warn(`[LLMStrategyBrain] Route planning failed (attempt ${attempt + 1}): ${lastError}`);
+      }
+      attempt++;
+    }
+
+    console.warn('[LLMStrategyBrain] All route planning attempts failed.');
+    return null;
   }
 
   /**

@@ -159,6 +159,7 @@ export class ActionResolver {
     const plan: TurnPlanBuildTrack = {
       type: AIActionType.BuildTrack,
       segments,
+      targetCity,
     };
 
     return { success: true, plan };
@@ -169,7 +170,10 @@ export class ActionResolver {
    *
    * Uses computeTrackUsageForMove which finds the optimal path through the
    * union track graph (all players' tracks + major city red areas + ferries),
-   * preferring own track to minimize fees. Then validates speed and funds.
+   * preferring own track to minimize fees.
+   *
+   * If the full path exceeds the speed limit, the path is truncated to the
+   * maximum distance the bot can travel this turn (partial move toward destination).
    */
   private static async resolveMove(
     details: Record<string, string>,
@@ -208,13 +212,32 @@ export class ActionResolver {
       });
 
       if (!usage.isValid) continue;
+      if (usage.path.length === 0) continue;
 
-      // Path length = number of edges (mileposts traveled)
-      const pathLength = usage.path.length;
-      if (pathLength > speed) continue;
-      if (pathLength === 0) continue;
+      // Reconstruct the full path as {row, col}[] from PathEdge[]
+      const fullPath: { row: number; col: number }[] = [
+        { row: usage.path[0].from.row, col: usage.path[0].from.col },
+      ];
+      for (const edge of usage.path) {
+        fullPath.push({ row: edge.to.row, col: edge.to.col });
+      }
 
-      const totalFee = usage.ownersUsed.size * TRACK_USAGE_FEE;
+      // Truncate to speed limit if the path is too long (partial move toward destination)
+      const pathLength = Math.min(usage.path.length, speed);
+      const truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
+
+      // Recalculate fees for the truncated path only
+      const truncatedEdges = usage.path.slice(0, pathLength);
+      const truncatedOwners = new Set<string>();
+      for (const edge of truncatedEdges) {
+        const owners = edge.ownerPlayerIds ?? [];
+        for (const ownerId of owners) {
+          if (ownerId !== snapshot.bot.playerId) {
+            truncatedOwners.add(ownerId);
+          }
+        }
+      }
+      const totalFee = truncatedOwners.size * TRACK_USAGE_FEE;
 
       // Pick the shortest path, then least expensive
       if (
@@ -222,17 +245,9 @@ export class ActionResolver {
         pathLength < bestResult.path.length - 1 ||
         (pathLength === bestResult.path.length - 1 && totalFee < bestResult.totalFee)
       ) {
-        // Reconstruct the path as {row, col}[] from PathEdge[]
-        const pathCoords: { row: number; col: number }[] = [
-          { row: usage.path[0].from.row, col: usage.path[0].from.col },
-        ];
-        for (const edge of usage.path) {
-          pathCoords.push({ row: edge.to.row, col: edge.to.col });
-        }
-
         bestResult = {
-          path: pathCoords,
-          fees: usage.ownersUsed,
+          path: truncatedPath,
+          fees: truncatedOwners,
           totalFee,
         };
       }
@@ -241,7 +256,7 @@ export class ActionResolver {
     if (!bestResult) {
       return {
         success: false,
-        error: `No reachable path to "${targetCity}" within speed limit (${speed} mileposts).`,
+        error: `No valid path to "${targetCity}" on existing track network.`,
       };
     }
 
@@ -625,7 +640,7 @@ export class ActionResolver {
 
   /**
    * Heuristic fallback when the LLM fails twice.
-   * Priority: deliver > build toward best demand > pass.
+   * Priority: deliver > pickup > move to pickup/delivery > build toward best demand > pass.
    *
    * Reuses the existing resolveDeliver/resolveBuild/resolvePass methods
    * to ensure all validation is applied consistently.
@@ -645,17 +660,61 @@ export class ActionResolver {
       if (result.success) return result;
     }
 
-    // 2. Try to BUILD toward the best demand
+    // 1b. Try to PICKUP if there are available loads at current position
+    if (context.canPickup && context.canPickup.length > 0) {
+      const best = context.canPickup.reduce((a, b) => (a.bestPayout > b.bestPayout ? a : b));
+      const result = await ActionResolver.resolvePickup(
+        { load: best.loadType, at: best.supplyCity },
+        snapshot,
+      );
+      if (result.success) return result;
+    }
+
+    // 2. Try to MOVE toward a pickup or delivery city on the network
+    if (snapshot.bot.position && !context.isInitialBuild) {
+      // 2a. If carrying a load, move toward the delivery city
+      for (const demand of context.demands) {
+        if (demand.isLoadOnTrain && demand.isDeliveryOnNetwork && !demand.isDeliveryReachable) {
+          const result = await ActionResolver.resolveMove(
+            { to: demand.deliveryCity },
+            snapshot,
+          );
+          if (result.success) return result;
+        }
+      }
+
+      // 2b. If not carrying a load, move toward supply city on network
+      for (const demand of [...context.demands].sort((a, b) => b.payout - a.payout)) {
+        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork && !demand.isSupplyReachable) {
+          const result = await ActionResolver.resolveMove(
+            { to: demand.supplyCity },
+            snapshot,
+          );
+          if (result.success) return result;
+        }
+      }
+    }
+
+    // 3. Try to BUILD toward the best demand
     if (context.canBuild && context.demands.length > 0) {
       // Sort demands: prefer those where supply is reachable but delivery isn't
       // (meaning we need to build toward the delivery city), highest payout first.
+      // ROI guard: skip demands where estimated remaining track cost exceeds the payout
+      // (building $20M+ of track toward a 7M demand is not worth it).
       const buildCandidates = [...context.demands]
-        .filter(d => d.estimatedTrackCostToDelivery > 0)
+        .filter(d => d.estimatedTrackCostToDelivery > 0 || d.estimatedTrackCostToSupply > 0)
+        .filter(d => {
+          // When load is on train, only delivery cost matters (supply cost is irrelevant)
+          const effectiveCost = d.isLoadOnTrain
+            ? d.estimatedTrackCostToDelivery
+            : d.estimatedTrackCostToDelivery + d.estimatedTrackCostToSupply;
+          return effectiveCost <= d.payout; // Align with Guardrail 4 threshold
+        })
         .sort((a, b) => b.payout - a.payout);
 
       for (const demand of buildCandidates) {
         // Try building toward supply city if load isn't on train and supply isn't reachable
-        if (!demand.isLoadOnTrain && !demand.isSupplyReachable && demand.supplyCity) {
+        if (!demand.isLoadOnTrain && !demand.isSupplyOnNetwork && demand.supplyCity) {
           const result = await ActionResolver.resolveBuild(
             { toward: demand.supplyCity },
             snapshot,
@@ -665,6 +724,18 @@ export class ActionResolver {
         }
 
         // Try building toward delivery city
+        if (!demand.isDeliveryOnNetwork) {
+          const result = await ActionResolver.resolveBuild(
+            { toward: demand.deliveryCity },
+            snapshot,
+            context,
+          );
+          if (result.success) return result;
+        }
+      }
+
+      // If all demands are on network, try building toward any demand with high payout
+      for (const demand of [...context.demands].sort((a, b) => b.payout - a.payout)) {
         const result = await ActionResolver.resolveBuild(
           { toward: demand.deliveryCity },
           snapshot,
@@ -674,7 +745,7 @@ export class ActionResolver {
       }
     }
 
-    // 3. Always fall back to PASS
+    // 4. Always fall back to PASS
     return ActionResolver.resolvePass();
   }
 
@@ -789,9 +860,6 @@ export class ActionResolver {
 
   /** Compute remaining build budget for this turn. */
   private static getBuildBudget(snapshot: WorldSnapshot): number {
-    const turnBuildCost = snapshot.bot.existingSegments.length > 0
-      ? 0  // turnBuildCost tracked in context, not snapshot; default to full budget
-      : 0;
     return Math.min(ActionResolver.TURN_BUILD_BUDGET, snapshot.bot.money);
   }
 

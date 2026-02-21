@@ -402,6 +402,27 @@ export interface DeliveryPlan {
   reasoning: string;          // LLM's reasoning for choosing this chain
 }
 
+// ─── Plan-then-Execute Architecture Types ───────────────────────────────────
+
+/** A single stop in a multi-stop delivery route */
+export interface RouteStop {
+  action: 'pickup' | 'deliver';
+  loadType: string;
+  city: string;
+  demandCardId?: number;   // for delivers — which demand card this fulfills
+  payment?: number;         // for delivers — ECU payout
+}
+
+/** Multi-stop strategic route planned by LLM, auto-executed over multiple turns */
+export interface StrategicRoute {
+  stops: RouteStop[];           // ordered goal sequence
+  currentStopIndex: number;     // which stop we're working toward
+  phase: 'build' | 'travel' | 'act';  // within current stop: build track → travel → pickup/deliver
+  startingCity?: string;        // for initial build: where to start building from
+  createdAtTurn: number;
+  reasoning: string;            // LLM's reasoning for choosing this route
+}
+
 /** Persistent bot state that spans across turns within a game */
 export interface BotMemoryState {
     /** City name the bot is building toward */
@@ -420,14 +441,18 @@ export interface BotMemoryState {
     totalEarnings: number;
     /** Last turn number processed */
     turnNumber: number;
-    /** Active delivery plan the bot is executing */
-    activePlan: DeliveryPlan | null;
-    /** How many turns the bot has been on the current plan */
-    turnsOnPlan: number;
-    /** History of completed/abandoned plans */
-    planHistory: Array<{ plan: DeliveryPlan; outcome: 'delivered' | 'abandoned'; turns: number }>;
-    /** Key of the most recently abandoned plan (loadType:pickupCity:deliveryCity) — prevents re-selecting same plan */
-    lastAbandonedPlanKey?: string | null;
+    /** Active strategic route the bot is auto-executing (plan-then-execute architecture) */
+    activeRoute: StrategicRoute | null;
+    /** How many turns the bot has been on the current route */
+    turnsOnRoute: number;
+    /** History of completed/abandoned routes */
+    routeHistory: Array<{ route: StrategicRoute; outcome: 'completed' | 'abandoned'; turns: number }>;
+    /** Key of the most recently abandoned route — prevents re-selecting same route */
+    lastAbandonedRouteKey?: string | null;
+    /** Previous turn's LLM reasoning — fed into next turn's prompt for continuity */
+    lastReasoning?: string | null;
+    /** Previous turn's plan horizon — fed into next turn's prompt for continuity */
+    lastPlanHorizon?: string | null;
 }
 
 /** Simplified option summary for decision logging */
@@ -572,6 +597,8 @@ export interface DemandContext {
     payout: number;
     isSupplyReachable: boolean;
     isDeliveryReachable: boolean;
+    isSupplyOnNetwork: boolean;
+    isDeliveryOnNetwork: boolean;
     estimatedTrackCostToSupply: number;
     estimatedTrackCostToDelivery: number;
     isLoadAvailable: boolean;
@@ -585,6 +612,15 @@ export interface DeliveryOpportunity {
     deliveryCity: string;
     payout: number;
     cardIndex: number;
+}
+
+/** A load that can be picked up at the bot's current position matching a demand card */
+export interface PickupOpportunity {
+    loadType: string;
+    supplyCity: string;
+    /** Highest-payout demand card this load could fulfill */
+    bestPayout: number;
+    bestDeliveryCity: string;
 }
 
 /** Filtered opponent info included in LLM context (skill-level dependent) */
@@ -612,13 +648,17 @@ export interface GameContext {
     turnBuildCost: number;
     demands: DemandContext[];
     canDeliver: DeliveryOpportunity[];
+    canPickup: PickupOpportunity[];
     reachableCities: string[];
+    citiesOnNetwork: string[];
     canUpgrade: boolean;
     canBuild: boolean;
     isInitialBuild: boolean;
     opponents: OpponentContext[];
     phase: string;
     turnNumber: number;
+    /** Summary of previous turn's action/reasoning for LLM context continuity */
+    previousTurnSummary?: string;
 }
 
 /** A single action within an LLM multi-action response */
@@ -656,6 +696,7 @@ export type TurnPlan =
 export interface TurnPlanBuildTrack {
     type: AIActionType.BuildTrack;
     segments: TrackSegment[];
+    targetCity?: string;
 }
 
 export interface TurnPlanMoveTrain {
