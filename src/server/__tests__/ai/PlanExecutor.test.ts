@@ -209,6 +209,93 @@ describe('PlanExecutor', () => {
       expect(result.routeAbandoned).toBe(false);
       expect(result.updatedRoute.phase).toBe('build');
     });
+
+    it('should skip starting city during initialBuild and build toward delivery city', async () => {
+      // Route: pickup Wine at Wien → deliver Wine at Birmingham, starting at Wien
+      const route = makeRoute({
+        phase: 'build',
+        currentStopIndex: 0,
+        startingCity: 'Wien',
+        stops: [
+          { action: 'pickup', loadType: 'Wine', city: 'Wien' },
+          { action: 'deliver', loadType: 'Wine', city: 'Birmingham', demandCardId: 14, payment: 11 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: true });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Should have skipped Wien (stop 0) and built toward Birmingham (stop 1)
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.updatedRoute.currentStopIndex).toBe(1);
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Birmingham',
+      );
+      expect(buildCall).toBeDefined();
+    });
+
+    it('should skip city already on network during initialBuild and build toward next stop', async () => {
+      // Turn 2: Wien is already on network from turn 1 building
+      const route = makeRoute({
+        phase: 'build',
+        currentStopIndex: 0,
+        startingCity: 'Wien',
+        stops: [
+          { action: 'pickup', loadType: 'Wine', city: 'Wien' },
+          { action: 'deliver', loadType: 'Wine', city: 'Birmingham', demandCardId: 14, payment: 11 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: ['Wien'], canBuild: true });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Should advance past Wien to build toward Birmingham
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.updatedRoute.currentStopIndex).toBe(1);
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Birmingham',
+      );
+      expect(buildCall).toBeDefined();
+    });
+
+    it('should NOT skip starting city outside of initialBuild', async () => {
+      // During normal play, build toward Berlin even if it is the starting city
+      const route = makeRoute({
+        phase: 'build',
+        currentStopIndex: 0,
+        startingCity: 'Berlin',
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: false, citiesOnNetwork: [], canBuild: true });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Should build toward Berlin (stop 0), NOT skip it
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.updatedRoute.currentStopIndex).toBe(0);
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Berlin',
+      );
+      expect(buildCall).toBeDefined();
+    });
   });
 
   describe('travel phase', () => {

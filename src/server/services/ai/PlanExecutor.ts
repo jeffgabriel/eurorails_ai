@@ -105,6 +105,30 @@ export class PlanExecutor {
   ): Promise<PlanExecutorResult> {
     const targetCity = stop.city;
 
+    // During initialBuild, if the current stop's city is the starting city or already
+    // connected, skip it — advance to the next stop and keep building toward that.
+    // This avoids wasting build turns building toward a city we're already at.
+    if (context.isInitialBuild) {
+      const isStartingCity = route.startingCity &&
+        targetCity.toLowerCase() === route.startingCity.toLowerCase();
+      if (isStartingCity || context.citiesOnNetwork.includes(targetCity)) {
+        const advancedRoute = PlanExecutor.advanceStop(route);
+        const nextStop = advancedRoute.stops[advancedRoute.currentStopIndex];
+        if (nextStop) {
+          console.log(`${tag} ${targetCity} is starting/connected during initialBuild, building toward ${nextStop.city} instead`);
+          return PlanExecutor.executeBuildPhase(advancedRoute, nextStop, snapshot, context, tag);
+        }
+        // All route stops reachable — nothing more to build
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: false,
+          updatedRoute: advancedRoute,
+          description: `${tag} All route stops reachable during initialBuild`,
+        };
+      }
+    }
+
     // Check if target city is already on our track network
     if (context.citiesOnNetwork.includes(targetCity)) {
       console.log(`${tag} ${targetCity} is on network, transitioning to 'travel' phase`);
