@@ -1265,8 +1265,8 @@ describe('ContextBuilder.serializePrompt', () => {
     const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
 
     expect(prompt).toContain('INITIAL BUILD STRATEGY');
-    expect(prompt).toContain('Track cost estimates show distance from the nearest major city');
-    expect(prompt).toContain('BOTH supply and delivery are cheap');
+    expect(prompt).toContain('Pick the demand with the CHEAPEST, SHORTEST route');
+    expect(prompt).toContain('Prefer supply at/near a major city');
   });
 });
 

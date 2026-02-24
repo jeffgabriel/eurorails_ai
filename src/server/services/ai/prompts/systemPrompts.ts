@@ -104,6 +104,19 @@ ROUTE PLANNING CRITERIA:
 6. STARTING CITY: For initial builds with no track, specify which major city to start building from (prefer central Europe).
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
 
+INITIAL BUILD STRATEGY (first 2 build-only turns, 40M total budget):
+The first delivery is NOT about maximizing payout — it is about getting the engine running. A quick, cheap delivery earns cash to fund bigger routes later. A 6M delivery completed on turn 4 is worth far more than a 73M delivery that takes until turn 15.
+
+Evaluate each of the 9 demands across these 6 criteria:
+1. SUPPLY NEAR MAJOR CITY: Best if the supply city IS a major city (zero track to reach goods). Next best: a small/medium city 1-2 mileposts from a major city. Worst: peripheral cities far from any major city.
+2. DELIVERY NEAR MAJOR CITY: Prefer delivering to a major city or nearby — short route, track useful for future.
+3. LOW BUILD COST: The route must fit within 40M. Prefer routes costing 10-20M, leaving budget for turn 2 expansion.
+4. NO FERRY REQUIRED: Ferries cost extra money AND burn a full turn crossing. Avoid any route involving Britain or Ireland for the opening.
+5. CENTRAL POSITION: Start in central Europe (Ruhr, Paris, Holland, Berlin, Wien, Milano). Starting in Madrid or London limits future expansion.
+6. SHARED DELIVERY AREAS: If 2+ demands deliver to the same city, that city is a high-value hub. Building toward it enables a quick second delivery after the first.
+
+Pick the demand scoring best across MULTIPLE criteria, even if its payout is the lowest.
+
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
   "route": [

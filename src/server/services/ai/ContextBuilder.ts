@@ -550,11 +550,13 @@ export class ContextBuilder {
 
     // ── BUILD CONSTRAINTS ──
     if (context.isInitialBuild) {
-      lines.push('PHASE: Initial Build \u2014 build track only, no train movement.');
-      lines.push('INITIAL BUILD STRATEGY: Target the DELIVERY city of your best demand chain \u2014 build as far toward it as possible.');
-      lines.push('  Do NOT target nearby intermediate cities. Your full 20M budget will be spent building toward your target.');
-      lines.push('  Track cost estimates show distance from the nearest major city \u2014 lower cost = easier to reach.');
-      lines.push('  Look for demands where BOTH supply and delivery are cheap (near major cities).');
+      lines.push('PHASE: Initial Build \u2014 build track only, no train movement. 20M budget this turn, 40M total over 2 turns.');
+      lines.push('INITIAL BUILD STRATEGY: Pick the demand with the CHEAPEST, SHORTEST route — not the highest payout.');
+      lines.push('  Prefer supply at/near a major city (zero or minimal track to reach goods).');
+      lines.push('  Prefer delivery at/near a major city (short route, useful track for future).');
+      lines.push('  Avoid ferry crossings (costly and burn a full turn).');
+      lines.push('  Start from central Europe (Ruhr, Paris, Holland, Berlin) for best expansion options.');
+      lines.push('  A 6M delivery on turn 4 beats a 73M delivery on turn 15.');
     }
     if (!context.canBuild) {
       lines.push('BUILD: Not available this turn (budget exhausted or no funds).');
