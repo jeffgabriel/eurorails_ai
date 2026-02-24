@@ -16,9 +16,8 @@
  *      - deliver → resolveDeliver → advance currentStopIndex, reset phase to 'build'
  *      - If this was the last stop → route is complete
  *
- * Multi-action combining (game rules allow move+act+build in one turn):
- *   - When a MoveTrain arrives at the target city, chain the act phase (pickup/deliver)
- *   - After any non-build operational action, append a BuildTrack toward future stops
+ * Multi-action combining is handled by TurnComposer (post-decision layer).
+ * PlanExecutor returns raw single-phase plans.
  */
 
 import {
@@ -31,7 +30,6 @@ import {
   ResolvedAction,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 export interface PlanExecutorResult {
   plan: TurnPlan;
@@ -81,15 +79,6 @@ export class PlanExecutor {
         return PlanExecutor.routeCompleted(route, `Unknown phase: ${route.phase}`);
     }
 
-    // Enhancement 1: Chain arrival action when move lands at target city
-    result = await PlanExecutor.chainArrivalAction(result, route, snapshot, context, tag);
-
-    // Enhancement 3: Chain move toward next stop after pickup/deliver
-    result = await PlanExecutor.chainMoveAfterAct(result, snapshot, context, tag);
-
-    // Enhancement 2: Append build step after non-build operational actions
-    result = await PlanExecutor.appendBuildStep(result, snapshot, context, tag);
-
     return result;
   }
 
@@ -106,24 +95,56 @@ export class PlanExecutor {
     const targetCity = stop.city;
 
     // During initialBuild, if the current stop's city is the starting city or already
-    // connected, skip it — advance to the next stop and keep building toward that.
-    // This avoids wasting build turns building toward a city we're already at.
+    // connected, find a different build target — but DON'T advance currentStopIndex.
+    // Stop actions (pickup/deliver) haven't been completed; we're just choosing where to build.
     if (context.isInitialBuild) {
       const isStartingCity = route.startingCity &&
         targetCity.toLowerCase() === route.startingCity.toLowerCase();
       if (isStartingCity || context.citiesOnNetwork.includes(targetCity)) {
-        const advancedRoute = PlanExecutor.advanceStop(route);
-        const nextStop = advancedRoute.stops[advancedRoute.currentStopIndex];
-        if (nextStop) {
-          console.log(`${tag} ${targetCity} is starting/connected during initialBuild, building toward ${nextStop.city} instead`);
-          return PlanExecutor.executeBuildPhase(advancedRoute, nextStop, snapshot, context, tag);
+        // Find a route stop that still needs track built to it
+        const buildTarget = PlanExecutor.findInitialBuildTarget(route, context);
+        if (buildTarget && context.canBuild) {
+          console.log(`${tag} ${targetCity} is starting/connected during initialBuild, building toward ${buildTarget} instead`);
+          const buildResult = await ActionResolver.resolve(
+            { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
+            snapshot, context, route.startingCity,
+          );
+          if (buildResult.success && buildResult.plan) {
+            return {
+              plan: buildResult.plan,
+              routeComplete: false,
+              routeAbandoned: false,
+              updatedRoute: route,
+              description: `${tag} Building toward ${buildTarget} (${targetCity} already reachable)`,
+            };
+          }
         }
-        // All route stops reachable — nothing more to build
+        // All route stops reachable — build toward demand card cities with remaining budget
+        if (context.canBuild) {
+          const demandTarget = PlanExecutor.findDemandBuildTarget(context);
+          if (demandTarget) {
+            console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);
+            const buildResult = await ActionResolver.resolve(
+              { action: 'BUILD', details: { toward: demandTarget }, reasoning: '', planHorizon: '' },
+              snapshot, context, route.startingCity,
+            );
+            if (buildResult.success && buildResult.plan) {
+              return {
+                plan: buildResult.plan,
+                routeComplete: false,
+                routeAbandoned: false,
+                updatedRoute: route,
+                description: `${tag} Building toward demand city ${demandTarget} (all route stops reachable)`,
+              };
+            }
+          }
+        }
+        // Nothing to build
         return {
           plan: { type: AIActionType.PassTurn },
           routeComplete: false,
           routeAbandoned: false,
-          updatedRoute: advancedRoute,
+          updatedRoute: route,
           description: `${tag} All route stops reachable during initialBuild`,
         };
       }
@@ -299,167 +320,6 @@ export class PlanExecutor {
     };
   }
 
-  // ── Multi-Action Combining ─────────────────────────────────────────────
-
-  /**
-   * Enhancement 1: When a MoveTrain plan arrives at the target city, chain the
-   * act phase (pickup/deliver) into the same turn as a MultiAction.
-   */
-  private static async chainArrivalAction(
-    result: PlanExecutorResult,
-    route: StrategicRoute,
-    snapshot: WorldSnapshot,
-    context: GameContext,
-    tag: string,
-  ): Promise<PlanExecutorResult> {
-    // Only chain when the primary action is a MoveTrain in the travel phase
-    if (result.plan.type !== AIActionType.MoveTrain) return result;
-    if (result.routeComplete || result.routeAbandoned) return result;
-
-    const currentStop = result.updatedRoute.stops[result.updatedRoute.currentStopIndex];
-    if (!currentStop) return result;
-
-    // Check if the move's final position lands at the target city
-    const path = result.plan.path;
-    if (path.length === 0) return result;
-    const finalPos = path[path.length - 1];
-    const majorCityLookup = getMajorCityLookup();
-    const arrivedCity = majorCityLookup.get(`${finalPos.row},${finalPos.col}`);
-    if (arrivedCity !== currentStop.city) return result;
-
-    console.log(`${tag} Move arrives at ${currentStop.city} — chaining ${currentStop.action} action`);
-
-    // Resolve the act phase for the stop we just arrived at
-    const advancedRoute = PlanExecutor.advancePhase(result.updatedRoute, 'act');
-    const actResult = await PlanExecutor.executeActPhase(advancedRoute, currentStop, snapshot, context, tag);
-
-    // If act failed, still return the move — don't lose it
-    if (actResult.plan.type === AIActionType.PassTurn || actResult.routeAbandoned) {
-      return result;
-    }
-
-    // Combine move + act into a MultiAction
-    return {
-      plan: { type: 'MultiAction' as const, steps: [result.plan, actResult.plan] },
-      routeComplete: actResult.routeComplete,
-      routeAbandoned: false,
-      updatedRoute: actResult.updatedRoute,
-      description: `${result.description} → ${actResult.description}`,
-    };
-  }
-
-  /**
-   * Enhancement 3: After a pickup or deliver action, chain a MOVE toward the next
-   * stop city if the route has more stops. Game rules allow pickup + move in one turn.
-   */
-  private static async chainMoveAfterAct(
-    result: PlanExecutorResult,
-    snapshot: WorldSnapshot,
-    context: GameContext,
-    tag: string,
-  ): Promise<PlanExecutorResult> {
-    // Only fire when primary plan is PickupLoad or DeliverLoad
-    const primaryType = PlanExecutor.getPrimaryActionType(result.plan);
-    if (primaryType !== AIActionType.PickupLoad && primaryType !== AIActionType.DeliverLoad) return result;
-
-    // Don't chain if route is complete/abandoned or during initialBuild
-    if (result.routeComplete || result.routeAbandoned) return result;
-    if (context.isInitialBuild) return result;
-
-    // Find the next stop city from the updated route
-    const nextStop = result.updatedRoute.stops[result.updatedRoute.currentStopIndex];
-    if (!nextStop) return result;
-
-    const nextCity = nextStop.city;
-
-    // Try to move toward the next stop's city
-    const moveResult = await ActionResolver.resolve(
-      { action: 'MOVE', details: { to: nextCity }, reasoning: '', planHorizon: '' },
-      snapshot,
-      context,
-    );
-
-    if (!moveResult.success || !moveResult.plan) return result;
-
-    console.log(`${tag} Chaining move toward ${nextCity} after ${primaryType}`);
-
-    // Combine into MultiAction
-    const existingSteps = result.plan.type === 'MultiAction' ? result.plan.steps : [result.plan];
-    return {
-      ...result,
-      plan: { type: 'MultiAction' as const, steps: [...existingSteps, moveResult.plan] },
-      description: `${result.description} + move toward ${nextCity}`,
-    };
-  }
-
-  /**
-   * Enhancement 2: After any non-BuildTrack operational action, append a BuildTrack
-   * step toward the next stop city not yet on the track network.
-   * Per game rules, building happens AFTER operating the train.
-   */
-  private static async appendBuildStep(
-    result: PlanExecutorResult,
-    snapshot: WorldSnapshot,
-    context: GameContext,
-    tag: string,
-  ): Promise<PlanExecutorResult> {
-    // Don't append build if:
-    // - Can't build this turn
-    // - During initial build phase (no operational actions happening)
-    // - The primary action is already a BuildTrack (it IS the build)
-    // - The result is a PassTurn (nothing useful to combine with)
-    if (!context.canBuild) return result;
-    if (context.isInitialBuild) return result;
-
-    const primaryType = PlanExecutor.getPrimaryActionType(result.plan);
-    if (primaryType === AIActionType.BuildTrack || primaryType === AIActionType.PassTurn) return result;
-
-    // Find build target: route stops first, then demand cards (including after route completion)
-    let buildTarget: string | null;
-    if (result.routeComplete || result.routeAbandoned) {
-      // Route done — look at demand cards for next build opportunity
-      buildTarget = PlanExecutor.findDemandBuildTarget(context);
-    } else {
-      buildTarget = PlanExecutor.findNextBuildTarget(result.updatedRoute, context);
-    }
-    if (!buildTarget) return result;
-
-    // Resolve a build toward the target
-    const buildResult = await ActionResolver.resolve(
-      { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
-      snapshot,
-      context,
-      result.updatedRoute.startingCity,
-    );
-
-    if (!buildResult.success || !buildResult.plan) return result;
-
-    console.log(`${tag} Appending build toward ${buildTarget}`);
-
-    // Combine into MultiAction
-    const existingSteps = result.plan.type === 'MultiAction' ? result.plan.steps : [result.plan];
-    return {
-      ...result,
-      plan: { type: 'MultiAction' as const, steps: [...existingSteps, buildResult.plan] },
-      description: `${result.description} + build toward ${buildTarget}`,
-    };
-  }
-
-  /**
-   * Find the next stop city in the route that is not already on the track network.
-   * Searches from the current stop index forward, falling back to demand cards.
-   */
-  private static findNextBuildTarget(route: StrategicRoute, context: GameContext): string | null {
-    for (let i = route.currentStopIndex; i < route.stops.length; i++) {
-      const city = route.stops[i].city;
-      if (!context.citiesOnNetwork.includes(city)) {
-        return city;
-      }
-    }
-    // All route stops are on network — fall back to demand card cities
-    return PlanExecutor.findDemandBuildTarget(context);
-  }
-
   /**
    * Find a build target from demand cards — the highest-payout demand whose
    * delivery or supply city is not yet on the track network.
@@ -474,13 +334,19 @@ export class PlanExecutor {
   }
 
   /**
-   * Get the primary action type from a plan (unwraps MultiAction to first step).
+   * Find a build target from route stops during initialBuild — the first stop
+   * city that isn't the starting city and isn't already on the track network.
+   * Does NOT modify currentStopIndex (stop actions haven't been completed).
    */
-  private static getPrimaryActionType(plan: TurnPlan): AIActionType | 'MultiAction' {
-    if (plan.type === 'MultiAction') {
-      return plan.steps.length > 0 ? plan.steps[0].type as AIActionType : AIActionType.PassTurn;
+  private static findInitialBuildTarget(route: StrategicRoute, context: GameContext): string | null {
+    for (const stop of route.stops) {
+      const isStartingCity = route.startingCity &&
+        stop.city.toLowerCase() === route.startingCity.toLowerCase();
+      if (!isStartingCity && !context.citiesOnNetwork.includes(stop.city)) {
+        return stop.city;
+      }
     }
-    return plan.type;
+    return null;
   }
 
   // ── Route State Management ────────────────────────────────────────────────

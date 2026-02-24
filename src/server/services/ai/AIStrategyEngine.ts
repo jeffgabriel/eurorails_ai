@@ -19,6 +19,7 @@ import { GuardrailEnforcer } from './GuardrailEnforcer';
 import { TurnExecutor } from './TurnExecutor';
 import { ActionResolver } from './ActionResolver';
 import { PlanExecutor } from './PlanExecutor';
+import { TurnComposer } from './TurnComposer';
 import {
   WorldSnapshot,
   AIActionType,
@@ -196,6 +197,9 @@ export class AIStrategyEngine {
       }
 
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
+
+      // ── Stage 3b: Compose full turn (fill missing phases) ──
+      decision.plan = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
 
       // ── Stage 4: Apply guardrails ──
       let guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot);
