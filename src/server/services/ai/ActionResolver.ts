@@ -561,7 +561,7 @@ export class ActionResolver {
    * Create a shallow clone of a WorldSnapshot with a deep-cloned bot sub-object.
    * Used for cumulative state simulation in multi-action resolution.
    */
-  private static cloneSnapshot(snapshot: WorldSnapshot): WorldSnapshot {
+  static cloneSnapshot(snapshot: WorldSnapshot): WorldSnapshot {
     return {
       ...snapshot,
       bot: {
@@ -585,7 +585,7 @@ export class ActionResolver {
    * Apply a resolved TurnPlan's effects to the working snapshot and context.
    * Used for cumulative state simulation in multi-action resolution.
    */
-  private static applyPlanToState(
+  static applyPlanToState(
     plan: TurnPlan,
     snapshot: WorldSnapshot,
     context: GameContext,
