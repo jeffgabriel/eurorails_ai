@@ -5,7 +5,6 @@
  *   1. Force DELIVER when canDeliver has opportunities
  *   2. Force PICKUP when canPickup has opportunities and LLM chose BUILD/PASS
  *   3. Block UPGRADE during initialBuild phase
- *   4. Block BUILD toward unaffordable targets (track cost > payout)
  *
  * These are NOT strategic overrides — they enforce game rules and mathematical
  * feasibility the LLM must not violate. Strategic decisions remain the LLM's.
@@ -15,7 +14,6 @@ import {
   WorldSnapshot,
   GuardrailPlanResult,
   TurnPlan,
-  TurnPlanBuildTrack,
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
@@ -104,63 +102,6 @@ export class GuardrailEnforcer {
         overridden: true,
         reason: 'Blocked UPGRADE during initialBuild phase (not allowed)',
       };
-    }
-
-    // Guardrail 4: Block BUILD toward unaffordable targets
-    // If the LLM chose to build toward a city where the estimated total track cost
-    // exceeds the payout of the demand it's trying to fulfill, it's mathematically
-    // a losing move. Only block if NO matching demand justifies the build.
-    // When isLoadOnTrain=true, supply cost is irrelevant (only count delivery cost).
-    const buildStep: TurnPlanBuildTrack | undefined =
-      plan.type === AIActionType.BuildTrack ? plan :
-      plan.type === 'MultiAction' ? plan.steps.find((s): s is TurnPlanBuildTrack => s.type === AIActionType.BuildTrack) :
-      undefined;
-    if (buildStep?.targetCity && context.demands.length > 0 && !context.isInitialBuild) {
-      const target = buildStep.targetCity;
-      // Find ALL demands this build could serve
-      const matchingDemands = context.demands.filter(
-        d => d.deliveryCity === target || d.supplyCity === target,
-      );
-      if (matchingDemands.length > 0) {
-        // Only block if EVERY matching demand's effective cost exceeds its payout
-        const allUnaffordable = matchingDemands.every(d => {
-          const effectiveCost = d.isLoadOnTrain
-            ? d.estimatedTrackCostToDelivery
-            : d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-          return effectiveCost > d.payout;
-        });
-        if (allUnaffordable) {
-          // Use the best (lowest cost-to-payout ratio) demand for the error message
-          const bestDemand = matchingDemands.reduce((best, d) => {
-            const bestCost = best.isLoadOnTrain
-              ? best.estimatedTrackCostToDelivery
-              : best.estimatedTrackCostToSupply + best.estimatedTrackCostToDelivery;
-            const dCost = d.isLoadOnTrain
-              ? d.estimatedTrackCostToDelivery
-              : d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-            return (dCost - d.payout) < (bestCost - best.payout) ? d : best;
-          });
-          const totalTrackCost = bestDemand.isLoadOnTrain
-            ? bestDemand.estimatedTrackCostToDelivery
-            : bestDemand.estimatedTrackCostToSupply + bestDemand.estimatedTrackCostToDelivery;
-          // Strip BUILD from MultiAction, or reject standalone BUILD
-          if (plan.type === 'MultiAction') {
-            const nonBuildSteps = plan.steps.filter(s => s.type !== AIActionType.BuildTrack);
-            if (nonBuildSteps.length > 0) {
-              return {
-                plan: nonBuildSteps.length === 1 ? nonBuildSteps[0] : { type: 'MultiAction', steps: nonBuildSteps },
-                overridden: true,
-                reason: `Blocked BUILD toward ${target}: estimated track cost (~${totalTrackCost}M) exceeds payout (${bestDemand.payout}M). Keeping other actions.`,
-              };
-            }
-          }
-          return {
-            plan: { type: AIActionType.PassTurn },
-            overridden: true,
-            reason: `Blocked BUILD toward ${target}: estimated track cost (~${totalTrackCost}M) exceeds payout (${bestDemand.payout}M). Choose a cheaper target.`,
-          };
-        }
-      }
     }
 
     // No guardrail fired — return plan unchanged

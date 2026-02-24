@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Bot, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { BotSkillLevel, BotArchetype, LLMProvider, LLM_DEFAULT_MODELS } from '../../../../shared/types/GameTypes';
-import { getArchetypeDisplay, getSkillLevelDisplay } from '../../shared/botDisplayUtils';
+import { BotSkillLevel, LLMProvider, LLM_DEFAULT_MODELS } from '../../../../shared/types/GameTypes';
+import { getSkillLevelDisplay } from '../../shared/botDisplayUtils';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Input } from '../../components/ui/input';
@@ -11,14 +11,13 @@ import { Label } from '../../components/ui/label';
 
 interface BotConfigPopoverProps {
   gameId: string;
-  onAddBot: (config: { skillLevel: string; archetype: string; name?: string; provider?: string; model?: string }) => Promise<void>;
+  onAddBot: (config: { skillLevel: string; name?: string; provider?: string; model?: string }) => Promise<void>;
   disabled?: boolean;
 }
 
 export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopoverProps) {
   const [open, setOpen] = useState(false);
   const [skillLevel, setSkillLevel] = useState<string>(BotSkillLevel.Medium);
-  const [archetype, setArchetype] = useState<string>('random');
   const [name, setName] = useState('');
   const [provider, setProvider] = useState<string>(LLMProvider.Anthropic);
   const [model, setModel] = useState('');
@@ -28,7 +27,6 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
 
   const resetForm = () => {
     setSkillLevel(BotSkillLevel.Medium);
-    setArchetype('random');
     setName('');
     setProvider(LLMProvider.Anthropic);
     setModel('');
@@ -42,7 +40,6 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
     setOpen(false);
     const config = {
       skillLevel,
-      archetype,
       name: name.trim() || undefined,
       provider: provider || undefined,
       model: model.trim() || undefined,
@@ -77,7 +74,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
         <div className="space-y-4">
           <div className="space-y-1">
             <h4 className="font-medium text-sm">Add AI Bot</h4>
-            <p className="text-xs text-muted-foreground">Configure the bot's difficulty and play style.</p>
+            <p className="text-xs text-muted-foreground">Configure the bot's difficulty.</p>
           </div>
 
           <div className="space-y-2">
@@ -91,26 +88,6 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
                   const display = getSkillLevelDisplay(level);
                   return (
                     <SelectItem key={level} value={level}>
-                      <span className={display.color}>{display.label}</span>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="bot-archetype">Play Style</Label>
-            <Select value={archetype} onValueChange={setArchetype} disabled={isSubmitting}>
-              <SelectTrigger id="bot-archetype" aria-label="Play style">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="random">Random</SelectItem>
-                {Object.values(BotArchetype).map((arch) => {
-                  const display = getArchetypeDisplay(arch);
-                  return (
-                    <SelectItem key={arch} value={arch}>
                       <span className={display.color}>{display.label}</span>
                     </SelectItem>
                   );

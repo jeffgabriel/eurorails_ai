@@ -20,7 +20,6 @@ import {
   TRAIN_PROPERTIES,
   BotConfig,
   BotSkillLevel,
-  BotArchetype,
 } from '../../shared/types/GameTypes';
 
 // ── Adjacent hex grid positions ────────────────────────────────────────
@@ -208,10 +207,8 @@ export function makeInfeasibleMoveOption(reason: string): FeasibleOption {
 
 // ── BotConfig builders ─────────────────────────────────────────────────
 
-export function makeBotConfig(
-  archetype: BotArchetype = BotArchetype.Balanced,
-): BotConfig {
-  return { skillLevel: BotSkillLevel.Medium, archetype };
+export function makeBotConfig(): BotConfig {
+  return { skillLevel: BotSkillLevel.Medium };
 }
 
 // ── Speed helpers ──────────────────────────────────────────────────────

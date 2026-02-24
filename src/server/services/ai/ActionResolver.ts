@@ -699,17 +699,8 @@ export class ActionResolver {
     if (context.canBuild && context.demands.length > 0) {
       // Sort demands: prefer those where supply is reachable but delivery isn't
       // (meaning we need to build toward the delivery city), highest payout first.
-      // ROI guard: skip demands where estimated remaining track cost exceeds the payout
-      // (building $20M+ of track toward a 7M demand is not worth it).
       const buildCandidates = [...context.demands]
         .filter(d => d.estimatedTrackCostToDelivery > 0 || d.estimatedTrackCostToSupply > 0)
-        .filter(d => {
-          // When load is on train, only delivery cost matters (supply cost is irrelevant)
-          const effectiveCost = d.isLoadOnTrain
-            ? d.estimatedTrackCostToDelivery
-            : d.estimatedTrackCostToDelivery + d.estimatedTrackCostToSupply;
-          return effectiveCost <= d.payout; // Align with Guardrail 4 threshold
-        })
         .sort((a, b) => b.payout - a.payout);
 
       for (const demand of buildCandidates) {

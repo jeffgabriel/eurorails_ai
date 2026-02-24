@@ -720,7 +720,7 @@ function makeWorldSnapshot(overrides?: {
       resolvedDemands: overrides?.resolvedDemands ?? [],
       trainType: overrides?.botTrainType ?? 'freight',
       loads: overrides?.botLoads ?? [],
-      botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+      botConfig: { skillLevel: 'medium' },
       connectedMajorCityCount: 0,
     },
     allPlayerTracks: [],

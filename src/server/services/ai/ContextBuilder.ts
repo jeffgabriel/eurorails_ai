@@ -551,7 +551,8 @@ export class ContextBuilder {
     // ── BUILD CONSTRAINTS ──
     if (context.isInitialBuild) {
       lines.push('PHASE: Initial Build \u2014 build track only, no train movement.');
-      lines.push('INITIAL BUILD STRATEGY: Start from the major city closest to your best demand chain.');
+      lines.push('INITIAL BUILD STRATEGY: Target the DELIVERY city of your best demand chain \u2014 build as far toward it as possible.');
+      lines.push('  Do NOT target nearby intermediate cities. Your full 20M budget will be spent building toward your target.');
       lines.push('  Track cost estimates show distance from the nearest major city \u2014 lower cost = easier to reach.');
       lines.push('  Look for demands where BOTH supply and delivery are cheap (near major cities).');
     }

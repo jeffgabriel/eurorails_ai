@@ -234,10 +234,13 @@ describe('PlanExecutor', () => {
       const context = makeContext({ position: { city: 'Berlin', row: 10, col: 10 }, canBuild: false });
 
       // resolvePickup called after transition to act phase
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
-      });
+      // Second call: chainMoveAfterAct tries MOVE toward next stop — fails
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
@@ -266,10 +269,13 @@ describe('PlanExecutor', () => {
       const route = makeRoute({ phase: 'act', currentStopIndex: 0 });
       const context = makeContext({ position: { city: 'Berlin', row: 10, col: 10 }, canBuild: false });
 
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
-      });
+      // chainMoveAfterAct will try MOVE toward Paris (next stop) — fail it
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
@@ -358,10 +364,13 @@ describe('PlanExecutor', () => {
       });
 
       // This should chain: build(city on network) → travel(at city) → act(pickup)
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
-      });
+      // chainMoveAfterAct will try MOVE toward Paris (next stop) — fail it
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
@@ -500,12 +509,14 @@ describe('PlanExecutor', () => {
       });
 
       // First call: resolve PICKUP → success
-      // Second call: resolve BUILD toward Paris → success
+      // Second call: chainMoveAfterAct tries MOVE toward Paris → fails (not on network)
+      // Third call: resolve BUILD toward Paris → success
       mockResolve
         .mockResolvedValueOnce({
           success: true,
           plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
         })
+        .mockResolvedValueOnce({ success: false, error: 'No path to Paris' })
         .mockResolvedValueOnce({
           success: true,
           plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)], targetCity: 'Paris' },
@@ -546,16 +557,19 @@ describe('PlanExecutor', () => {
         citiesOnNetwork: ['Berlin', 'Paris'], // Both stops' cities are on network
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
-      });
+      // chainMoveAfterAct will try MOVE toward Paris — fail it to isolate build test
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      // Just the pickup, no build appended
+      // Just the pickup, no build appended (move also failed)
       expect(result.plan.type).toBe(AIActionType.PickupLoad);
-      expect(mockResolve).toHaveBeenCalledTimes(1);
+      expect(mockResolve).toHaveBeenCalledTimes(2); // PICKUP + MOVE attempt
     });
 
     it('should NOT append build when canBuild is false', async () => {
@@ -566,18 +580,21 @@ describe('PlanExecutor', () => {
         citiesOnNetwork: ['Berlin'],
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
-      });
+      // chainMoveAfterAct will try MOVE toward Paris — fail it
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
       expect(result.plan.type).toBe(AIActionType.PickupLoad);
-      expect(mockResolve).toHaveBeenCalledTimes(1);
+      expect(mockResolve).toHaveBeenCalledTimes(2); // PICKUP + MOVE attempt
     });
 
-    it('should NOT append build when route is complete (final delivery)', async () => {
+    it('should append build from demand cards when route is complete (final delivery)', async () => {
       const route = makeRoute({
         phase: 'act',
         currentStopIndex: 1, // last stop
@@ -586,6 +603,59 @@ describe('PlanExecutor', () => {
         position: { city: 'Paris', row: 20, col: 20 },
         canBuild: true,
         citiesOnNetwork: ['Berlin'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'München',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 15,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          },
+        ],
+      });
+
+      // First call: DELIVER succeeds
+      // Second call: BUILD toward München (demand card city) succeeds
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Paris', cardId: 1, payout: 25 },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'München' },
+        });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Route complete BUT build appended from demand cards
+      expect(result.routeComplete).toBe(true);
+      expect(result.plan.type).toBe('MultiAction');
+      if (result.plan.type === 'MultiAction') {
+        expect(result.plan.steps).toHaveLength(2);
+        expect(result.plan.steps[0].type).toBe(AIActionType.DeliverLoad);
+        expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
+      }
+    });
+
+    it('should NOT append build when route is complete and all demand cities are on network', async () => {
+      const route = makeRoute({
+        phase: 'act',
+        currentStopIndex: 1, // last stop
+      });
+      const context = makeContext({
+        position: { city: 'Paris', row: 20, col: 20 },
+        canBuild: true,
+        citiesOnNetwork: ['Berlin', 'München', 'Bordeaux'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'München',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          },
+        ],
       });
 
       mockResolve.mockResolvedValueOnce({
@@ -595,7 +665,7 @@ describe('PlanExecutor', () => {
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      // Route complete — no build appended
+      // Route complete, all demand cities on network — no build appended
       expect(result.routeComplete).toBe(true);
       expect(result.plan.type).toBe(AIActionType.DeliverLoad);
       expect(mockResolve).toHaveBeenCalledTimes(1);
@@ -609,11 +679,13 @@ describe('PlanExecutor', () => {
         citiesOnNetwork: ['Berlin'],
       });
 
+      // chainMoveAfterAct tries MOVE → fails, then appendBuildStep tries BUILD → also fails
       mockResolve
         .mockResolvedValueOnce({
           success: true,
           plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
         })
+        .mockResolvedValueOnce({ success: false, error: 'No path to Paris' })
         .mockResolvedValueOnce({
           success: false,
           error: 'No build path found',
@@ -621,7 +693,7 @@ describe('PlanExecutor', () => {
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      // Should still return the pickup, just without the build
+      // Should still return the pickup, just without the build or move
       expect(result.plan.type).toBe(AIActionType.PickupLoad);
     });
 
@@ -654,6 +726,160 @@ describe('PlanExecutor', () => {
         expect(result.plan.steps[0].type).toBe(AIActionType.MoveTrain);
         expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
       }
+    });
+
+    it('should fall back to demand card build target when all route stops are on network', async () => {
+      const route = makeRoute({ phase: 'act', currentStopIndex: 0 });
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        canBuild: true,
+        citiesOnNetwork: ['Berlin', 'Paris'], // Both route stops on network
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'München',
+            payout: 30, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 15,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          },
+        ],
+      });
+
+      // Call 1: PICKUP succeeds
+      // Call 2: chainMoveAfterAct tries MOVE toward Paris → fails
+      // Call 3: BUILD toward München (from demand card fallback) → succeeds
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({ success: false, error: 'No path' })
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)], targetCity: 'München' },
+        });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe('MultiAction');
+      if (result.plan.type === 'MultiAction') {
+        expect(result.plan.steps).toHaveLength(2);
+        expect(result.plan.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
+      }
+      // Verify the build was toward München (demand card city)
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD', details: { toward: 'München' } }),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
+  describe('multi-action: chain move after act', () => {
+    it('should chain move toward next stop after pickup', async () => {
+      const route = makeRoute({ phase: 'act', currentStopIndex: 0 });
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        canBuild: false, // disable build appending
+        citiesOnNetwork: ['Berlin', 'Paris'], // both on network so no build needed
+      });
+
+      // First call: resolve PICKUP → success
+      // Second call: resolve MOVE toward Paris → success
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 15, col: 15 }], fees: new Set(), totalFee: 0 },
+        });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe('MultiAction');
+      if (result.plan.type === 'MultiAction') {
+        expect(result.plan.steps).toHaveLength(2);
+        expect(result.plan.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.plan.steps[1].type).toBe(AIActionType.MoveTrain);
+      }
+      // Route should advance past stop 0
+      expect(result.updatedRoute.currentStopIndex).toBe(1);
+    });
+
+    it('should NOT chain move when route is complete (last stop)', async () => {
+      const route = makeRoute({
+        phase: 'act',
+        currentStopIndex: 1, // last stop — deliver
+      });
+      const context = makeContext({
+        position: { city: 'Paris', row: 20, col: 20 },
+        canBuild: false,
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Paris', cardId: 1, payout: 25 },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Route complete — no move chained
+      expect(result.routeComplete).toBe(true);
+      expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+      expect(mockResolve).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT chain move during initialBuild phase', async () => {
+      const route = makeRoute({
+        phase: 'act',
+        currentStopIndex: 0,
+      });
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        canBuild: false,
+        isInitialBuild: true,
+        citiesOnNetwork: ['Berlin', 'Paris'],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // No move chained during initialBuild
+      expect(result.plan.type).toBe(AIActionType.PickupLoad);
+      expect(mockResolve).toHaveBeenCalledTimes(1);
+    });
+
+    it('should still return pickup when move resolve fails', async () => {
+      const route = makeRoute({ phase: 'act', currentStopIndex: 0 });
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        canBuild: false,
+        citiesOnNetwork: ['Berlin'],
+      });
+
+      // Pickup succeeds, move fails
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({
+          success: false,
+          error: 'No valid path to Paris',
+        });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Pickup still returned, move failure doesn't break it
+      expect(result.plan.type).toBe(AIActionType.PickupLoad);
+      expect(result.routeAbandoned).toBe(false);
     });
   });
 

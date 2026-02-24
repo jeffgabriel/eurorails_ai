@@ -4,7 +4,6 @@ import {
   WorldSnapshot,
   GameContext,
   BotSkillLevel,
-  BotArchetype,
   LLMProvider,
   LLM_DEFAULT_MODELS,
 } from '../../../shared/types/GameTypes';
@@ -146,7 +145,6 @@ describe('LLMStrategyBrain', () => {
 
   function createBrain(skillLevel: BotSkillLevel = BotSkillLevel.Medium): LLMStrategyBrain {
     return new LLMStrategyBrain({
-      archetype: BotArchetype.Balanced,
       skillLevel,
       provider: LLMProvider.Anthropic,
       apiKey: 'test-key',
@@ -276,7 +274,6 @@ describe('LLMStrategyBrain', () => {
       setupSuccessfulDecision(mockChat);
 
       const brain = new LLMStrategyBrain({
-        archetype: BotArchetype.Balanced,
         skillLevel: BotSkillLevel.Easy,
         provider: LLMProvider.Anthropic,
         model: 'custom-model-v1',

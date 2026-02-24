@@ -57,8 +57,8 @@ export class LLMStrategyBrain {
     // Resolve model from config or default lookup
     this.model = config.model ?? LLM_DEFAULT_MODELS[config.provider][config.skillLevel];
 
-    // Build system prompt from archetype + skill level
-    this.systemPrompt = getSystemPrompt(config.archetype, config.skillLevel);
+    // Build system prompt from skill level
+    this.systemPrompt = getSystemPrompt(config.skillLevel);
 
     // Create provider adapter
     this.adapter = LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs);
@@ -176,7 +176,7 @@ export class LLMStrategyBrain {
     snapshot: WorldSnapshot,
     context: GameContext,
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
-    const routePrompt = getRoutePlanningPrompt(this.config.archetype, this.config.skillLevel);
+    const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
     let lastError: string | undefined;
     let totalLatencyMs = 0;

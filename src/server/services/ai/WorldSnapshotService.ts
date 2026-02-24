@@ -70,7 +70,6 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
   const botConfig = rawConfig
     ? {
         skillLevel: rawConfig.skillLevel ?? 'medium',
-        archetype: rawConfig.archetype ?? 'balanced',
         name: rawConfig.name,
         provider: rawConfig.provider,
         model: rawConfig.model,

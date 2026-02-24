@@ -116,6 +116,14 @@ jest.mock('../../services/ai/PlanExecutor', () => ({
   },
 }));
 
+// Mock ActionResolver
+jest.mock('../../services/ai/ActionResolver', () => ({
+  ActionResolver: {
+    resolve: jest.fn(),
+    heuristicFallback: jest.fn(),
+  },
+}));
+
 // Mock DecisionLogger
 jest.mock('../../services/ai/DecisionLogger', () => ({
   initTurnLog: jest.fn(),
@@ -150,6 +158,7 @@ import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
+import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
@@ -173,6 +182,7 @@ const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<an
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockPlanExecutorExecute = PlanExecutor.execute as jest.MockedFunction<typeof PlanExecutor.execute>;
 const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
+const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.MockedFunction<typeof ActionResolver.heuristicFallback>;
 
 // ── Factory helpers ───────────────────────────────────────────────────────
 
@@ -292,9 +302,9 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Provide API key so LLM path is taken
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      // Need botConfig with skill/archetype for createBrain
+      // Need botConfig with skillLevel for createBrain
       const snapshotWithConfig = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
       } as any);
       mockCapture.mockResolvedValue(snapshotWithConfig);
 
@@ -324,6 +334,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
+      // heuristicFallback returns PassTurn (no canDeliver/canBuild in context)
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+        error: 'Heuristic fallback',
+      } as any);
+
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       // Without API key, should fall back to heuristic → PassTurn (no canDeliver, no canBuild context)
@@ -347,7 +364,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
         loads: ['Coal'],
         resolvedDemands: [
           { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
@@ -379,34 +396,30 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('guardrail override — block UPGRADE during initialBuild', () => {
-    it('should block UPGRADE and pass when in initialBuild phase', async () => {
+  describe('initial build uses heuristic, not LLM', () => {
+    it('should use heuristic fallback and skip LLM during initialBuild phase', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
       } as any);
-      const context = makeContext({ isInitialBuild: true });
+      const context = makeContext({ isInitialBuild: true, canBuild: true });
 
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // LLM chose UPGRADE, but guardrail should block it during initialBuild
-      mockDecideAction.mockResolvedValue({
-        plan: { type: AIActionType.UpgradeTrain, targetTrain: 'FastFreight', cost: 20 },
-        reasoning: 'Upgrade to fast freight',
-        planHorizon: '1 turn',
-        model: 'claude-sonnet-4-20250514',
-        latencyMs: 200,
-        retried: false,
-      });
+      // heuristicFallback returns PassTurn (no demands/canDeliver in context)
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      } as any);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.PassTurn);
-      expect(result.guardrailOverride).toBe(true);
-      expect(result.guardrailReason).toContain('UPGRADE');
-      expect(result.guardrailReason).toContain('initialBuild');
+      expect(result.reasoning).toContain('initial-build-heuristic');
+      // LLM should NOT have been called
+      expect(LLMStrategyBrain).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -477,7 +490,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -514,6 +527,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         activeRoute: null,
         turnsOnRoute: 0,
         routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
       });
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
@@ -529,7 +546,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -570,12 +587,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         activeRoute: null,
         turnsOnRoute: 0,
         routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
       });
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+        botConfig: { skillLevel: 'medium' },
       } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
@@ -626,6 +647,38 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         (call: any[]) => typeof call[0] === 'string' && call[0].includes('UPDATE players SET position_row'),
       );
       expect(positionUpdate).toBeDefined();
+    });
+  });
+
+  describe('initial build — heuristic instead of LLM', () => {
+    it('should use heuristic fallback during initialBuild, not LLM', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      snapshot.gameStatus = 'initialBuild';
+      const context = makeContext({ isInitialBuild: true, canBuild: true });
+
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // heuristicFallback returns a build plan
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
+      } as any);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toContain('initial-build-heuristic');
+      // LLM should NOT have been called
+      expect(LLMStrategyBrain).not.toHaveBeenCalled();
+      // heuristicFallback SHOULD have been called
+      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+
+      delete process.env.ANTHROPIC_API_KEY;
     });
   });
 });

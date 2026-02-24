@@ -203,7 +203,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         hand: [1],
         loads: [],
         is_bot: true,
-        bot_config: JSON.stringify({ skillLevel: 'medium', archetype: 'balanced' }),
+        bot_config: JSON.stringify({ skillLevel: 'medium' }),
         current_turn_number: 3,
         segments: JSON.stringify([]),
         ...overrides,

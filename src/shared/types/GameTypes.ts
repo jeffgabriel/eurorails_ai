@@ -22,14 +22,6 @@ export enum BotSkillLevel {
     Hard = 'hard'
 }
 
-export enum BotArchetype {
-    Aggressive = 'aggressive',
-    Defensive = 'defensive',
-    Balanced = 'balanced',
-    Opportunistic = 'opportunistic',
-    BuilderFirst = 'builder_first'
-}
-
 export enum LLMProvider {
     Anthropic = 'anthropic',
     Google = 'google',
@@ -51,7 +43,6 @@ export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, strin
 
 export interface BotConfig {
     skillLevel: BotSkillLevel;
-    archetype: BotArchetype;
     name?: string;
     /** LLM provider. Defaults to Anthropic if omitted. */
     provider?: LLMProvider;
@@ -344,7 +335,6 @@ export interface WorldSnapshot {
         loads: string[];
         botConfig: {
             skillLevel: string;
-            archetype: string;
             name?: string;
             provider?: string;
             model?: string;
@@ -509,7 +499,6 @@ export interface TurnDecisionLog {
 
 /** Configuration for constructing an LLMStrategyBrain instance */
 export interface LLMStrategyConfig {
-    archetype: BotArchetype;
     skillLevel: BotSkillLevel;
     provider: LLMProvider;
     /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */

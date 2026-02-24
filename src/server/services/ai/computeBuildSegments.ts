@@ -431,11 +431,15 @@ export function computeBuildSegments(
         if (dist < minDist) minDist = dist;
       }
 
-      // Prefer closer to target; among equal distances, prefer cheapest (fewest segments).
-      // This prevents inefficient detours through rivers/mountains when a direct route exists.
+      // Prefer closer to target; among equal distances, prefer most new segments (use full budget);
+      // final tiebreak: cheapest cost.
+      const bestNewSteps = bestPath
+        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)
+        : 0;
       if (
         minDist < bestTargetDist ||
-        (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity))
+        (minDist === bestTargetDist && newSteps > bestNewSteps) ||
+        (minDist === bestTargetDist && newSteps === bestNewSteps && node.cost < (bestPath?.cost ?? Infinity))
       ) {
         bestPath = node;
         bestTargetDist = minDist;

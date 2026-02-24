@@ -29,7 +29,7 @@ function makeGameState(overrides: Partial<GameState> = {}): GameState {
         id: 'p2', name: 'BotPlayer', color: '#0000ff', money: 30,
         trainType: 'FastFreight' as any, turnNumber: 2,
         trainState: { position: null, remainingMovement: 12, movementHistory: [], loads: ['Coal' as any] },
-        hand: [], isBot: true, botConfig: { skillLevel: 'medium' as any, archetype: 'balanced' as any },
+        hand: [], isBot: true, botConfig: { skillLevel: 'medium' as any },
       },
     ],
     ...overrides,

@@ -25,7 +25,7 @@ describe('WorldSnapshotService.capture', () => {
     hand: [1, 5, 12],
     loads: ['coal'],
     is_bot: true,
-    bot_config: { skillLevel: 'medium', archetype: 'balanced', name: 'TestBot' },
+    bot_config: { skillLevel: 'medium', name: 'TestBot' },
     current_turn_number: 3,
     segments: [
       {
@@ -77,7 +77,6 @@ describe('WorldSnapshotService.capture', () => {
 
     expect(snapshot.bot.botConfig).toEqual({
       skillLevel: 'medium',
-      archetype: 'balanced',
       name: 'TestBot',
     });
   });
@@ -115,7 +114,7 @@ describe('WorldSnapshotService.capture', () => {
   it('should parse string bot_config (JSONB as string)', async () => {
     const stringConfig = {
       ...baseBotRow,
-      bot_config: JSON.stringify({ skillLevel: 'hard', archetype: 'aggressive' }),
+      bot_config: JSON.stringify({ skillLevel: 'hard' }),
     };
     mockQuery.mockResolvedValueOnce({ rows: [stringConfig, baseHumanRow] });
 
@@ -123,7 +122,6 @@ describe('WorldSnapshotService.capture', () => {
 
     expect(snapshot.bot.botConfig).toEqual({
       skillLevel: 'hard',
-      archetype: 'aggressive',
       name: undefined,
     });
   });

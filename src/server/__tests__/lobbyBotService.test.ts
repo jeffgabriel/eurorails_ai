@@ -10,7 +10,7 @@ import {
   NotGameCreatorError,
   NotABotError
 } from '../services/lobbyService';
-import { BotSkillLevel, BotArchetype, BotConfig } from '../../shared/types/GameTypes';
+import { BotSkillLevel, BotConfig } from '../../shared/types/GameTypes';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -43,7 +43,6 @@ describe('LobbyService Bot Management', () => {
 
   const defaultBotConfig: BotConfig = {
     skillLevel: BotSkillLevel.Medium,
-    archetype: BotArchetype.Opportunistic
   };
 
   beforeAll(async () => {
@@ -191,19 +190,12 @@ describe('LobbyService Bot Management', () => {
 
       it('should throw for invalid skill level', async () => {
         const game = await createTestGame();
-        const badConfig = { skillLevel: 'invalid' as any, archetype: BotArchetype.Balanced };
+        const badConfig = { skillLevel: 'invalid' as any };
         await expect(
           LobbyService.addBot(game.id, creatorUserId, badConfig)
         ).rejects.toThrow('Invalid skill level');
       });
 
-      it('should throw for invalid archetype', async () => {
-        const game = await createTestGame();
-        const badConfig = { skillLevel: BotSkillLevel.Easy, archetype: 'invalid' as any };
-        await expect(
-          LobbyService.addBot(game.id, creatorUserId, badConfig)
-        ).rejects.toThrow('Invalid archetype');
-      });
     });
   });
 

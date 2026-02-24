@@ -7,7 +7,6 @@ import {
   DialogDescription,
 } from '../ui/dialog';
 import { cn } from '../ui/utils';
-import { ArchetypeBadge } from './ArchetypeBadge';
 import {
   AIActionType,
   TurnPlan,
@@ -27,14 +26,6 @@ const ACTION_TYPE_LABELS: Record<string, string> = {
   [AIActionType.PassTurn]: 'Pass Turn',
   [AIActionType.DiscardHand]: 'Discard Hand',
   MultiAction: 'Multi-Action',
-};
-
-const ARCHETYPE_PHILOSOPHY: Record<string, string> = {
-  backbone_builder: 'Build the highway first, then add the on-ramps.',
-  freight_optimizer: 'Never move empty; every milepost should earn money.',
-  trunk_sprinter: 'Speed kills \u2014 the fastest train on the shortest route wins.',
-  continental_connector: 'Victory is about the network, not the next delivery.',
-  opportunist: "Play the cards you're dealt, not the cards you wish you had.",
 };
 
 const SKILL_LABELS: Record<string, string> = {
@@ -62,11 +53,9 @@ interface BotStatus {
 /** Existing v5/v6.2 audit format from the database */
 interface StrategyAudit {
   turnNumber: number;
-  archetypeName: string;
   skillLevel: string;
   snapshotHash: string;
   currentPlan: string;
-  archetypeRationale: string;
   feasibleOptions: Array<{
     description: string;
     rationale: string;
@@ -348,8 +337,6 @@ export function StrategyInspectorModal({
     );
   }
 
-  const archetypeId = audit.archetypeName.toLowerCase().replace(/\s+/g, '_');
-  const philosophy = ARCHETYPE_PHILOSOPHY[archetypeId] || '';
   const skillLabel = SKILL_LABELS[audit.skillLevel] || audit.skillLevel;
 
   return (
@@ -357,13 +344,11 @@ export function StrategyInspectorModal({
       <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <ArchetypeBadge archetype={archetypeId} />
-            <DialogTitle>{botName || audit.archetypeName}</DialogTitle>
+            <DialogTitle>{botName || 'Bot'}</DialogTitle>
             <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
               {skillLabel}
             </span>
           </div>
-          <DialogDescription>{philosophy}</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -377,11 +362,6 @@ export function StrategyInspectorModal({
             <div className="rounded-md border p-4">
               <h3 className="text-sm font-semibold mb-2">Current Plan</h3>
               <p className="text-sm">{audit.currentPlan}</p>
-              {audit.archetypeRationale && (
-                <p className="text-muted-foreground text-xs mt-2 italic">
-                  [{audit.archetypeRationale}]
-                </p>
-              )}
             </div>
           )}
 

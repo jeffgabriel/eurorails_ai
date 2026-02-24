@@ -7,7 +7,7 @@ import lobbyRoutes from '../routes/lobbyRoutes';
 import { errorHandler } from '../middleware/errorHandler';
 import { AuthService } from '../services/authService';
 import { LobbyService } from '../services/lobbyService';
-import { BotSkillLevel, BotArchetype } from '../../shared/types/GameTypes';
+import { BotSkillLevel } from '../../shared/types/GameTypes';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -115,7 +115,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(201);
 
         expect(response.body.success).toBe(true);
@@ -123,7 +123,6 @@ describe('LobbyBotRoutes', () => {
         expect(response.body.data.isBot).toBe(true);
         expect(response.body.data.botConfig).toEqual({
           skillLevel: 'medium',
-          archetype: 'opportunistic'
         });
       });
 
@@ -134,7 +133,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'easy', archetype: 'balanced', name: 'RoboRail' })
+          .send({ skillLevel: 'easy', name: 'RoboRail' })
           .expect(201);
 
         expect(response.body.data.name).toBe('RoboRail');
@@ -148,7 +147,7 @@ describe('LobbyBotRoutes', () => {
 
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(401);
 
         expect(response.body.error).toBe('UNAUTHORIZED');
@@ -161,7 +160,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer invalid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(401);
 
         expect(response.body.error).toBe('UNAUTHORIZED');
@@ -175,7 +174,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post('/api/lobby/games/not-a-uuid/bots')
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');
@@ -189,25 +188,11 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ archetype: 'balanced' })
+          .send({})
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');
         expect(response.body.message).toContain('skillLevel');
-      });
-
-      it('should return 400 for missing archetype', async () => {
-        const game = await createTestGame();
-        mockAuthForUser(creatorUserId, 'botroute_creator');
-
-        const response = await request(app)
-          .post(`/api/lobby/games/${game.id}/bots`)
-          .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium' })
-          .expect(400);
-
-        expect(response.body.error).toBe('VALIDATION_ERROR');
-        expect(response.body.message).toContain('archetype');
       });
 
       it('should return 400 for invalid skillLevel value', async () => {
@@ -217,25 +202,11 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'godlike', archetype: 'balanced' })
+          .send({ skillLevel: 'godlike' })
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');
         expect(response.body.message).toContain('skill level');
-      });
-
-      it('should return 400 for invalid archetype value', async () => {
-        const game = await createTestGame();
-        mockAuthForUser(creatorUserId, 'botroute_creator');
-
-        const response = await request(app)
-          .post(`/api/lobby/games/${game.id}/bots`)
-          .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'chaotic' })
-          .expect(400);
-
-        expect(response.body.error).toBe('VALIDATION_ERROR');
-        expect(response.body.message).toContain('archetype');
       });
 
       it('should return 400 for name exceeding 20 characters', async () => {
@@ -245,7 +216,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'balanced', name: 'A'.repeat(21) })
+          .send({ skillLevel: 'medium', name: 'A'.repeat(21) })
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');
@@ -261,7 +232,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(403);
 
         expect(response.body.error).toBe('NOT_GAME_CREATOR');
@@ -273,7 +244,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${uuidv4()}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(404);
 
         expect(response.body.error).toBe('GAME_NOT_FOUND');
@@ -287,14 +258,14 @@ describe('LobbyBotRoutes', () => {
         await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'easy', archetype: 'balanced' })
+          .send({ skillLevel: 'easy' })
           .expect(201);
 
         // Second bot should fail
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(400);
 
         expect(response.body.error).toBe('GAME_FULL');
@@ -307,14 +278,13 @@ describe('LobbyBotRoutes', () => {
         // Add a bot so we have 2 players, then start the game
         await LobbyService.addBot(game.id, creatorUserId, {
           skillLevel: BotSkillLevel.Easy,
-          archetype: BotArchetype.Balanced
         });
         await LobbyService.startGame(game.id, creatorUserId);
 
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(400);
 
         expect(response.body.error).toBe('GAME_ALREADY_STARTED');
@@ -332,7 +302,7 @@ describe('LobbyBotRoutes', () => {
         const addResponse = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(201);
 
         const botPlayerId = addResponse.body.data.id;
@@ -355,7 +325,7 @@ describe('LobbyBotRoutes', () => {
         const addResponse = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'hard', archetype: 'aggressive' })
+          .send({ skillLevel: 'hard' })
           .expect(201);
 
         const botPlayerId = addResponse.body.data.id;
@@ -422,7 +392,7 @@ describe('LobbyBotRoutes', () => {
         const addResponse = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', archetype: 'opportunistic' })
+          .send({ skillLevel: 'medium' })
           .expect(201);
 
         const botPlayerId = addResponse.body.data.id;
@@ -472,7 +442,6 @@ describe('LobbyBotRoutes', () => {
         // Add a bot, then start the game
         const bot = await LobbyService.addBot(game.id, creatorUserId, {
           skillLevel: BotSkillLevel.Medium,
-          archetype: BotArchetype.Opportunistic
         });
         await LobbyService.startGame(game.id, creatorUserId);
 

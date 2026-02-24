@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData, NotABotError, GameNotFoundError, NotGameCreatorError, GameAlreadyStartedError, GameFullError } from '../services/lobbyService';
-import { BotSkillLevel, BotArchetype, BotConfig } from '../../shared/types/GameTypes';
+import { BotSkillLevel, BotConfig } from '../../shared/types/GameTypes';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
@@ -439,9 +439,9 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
 router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const { id: gameId } = req.params;
   const userId = req.user!.id;
-  const { skillLevel, archetype, name } = req.body;
+  const { skillLevel, name } = req.body;
 
-  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, archetype, name }, req);
+  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, name }, req);
 
   // Validate UUID format
   if (!validateUUID(gameId, 'gameId', res)) {
@@ -449,7 +449,7 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
   }
 
   // Validate required fields
-  if (!validateRequiredFields({ skillLevel, archetype }, res)) {
+  if (!validateRequiredFields({ skillLevel }, res)) {
     return;
   }
 
@@ -459,23 +459,6 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
       error: 'VALIDATION_ERROR',
       message: 'Invalid skill level',
       details: `skillLevel must be one of: ${Object.values(BotSkillLevel).join(', ')}`
-    });
-    return;
-  }
-
-  // Resolve 'random' archetype to a concrete value
-  let resolvedArchetype = archetype;
-  if (archetype === 'random') {
-    const archetypeValues = Object.values(BotArchetype);
-    resolvedArchetype = archetypeValues[Math.floor(Math.random() * archetypeValues.length)];
-  }
-
-  // Validate archetype enum
-  if (!Object.values(BotArchetype).includes(resolvedArchetype)) {
-    res.status(400).json({
-      error: 'VALIDATION_ERROR',
-      message: 'Invalid archetype',
-      details: `archetype must be one of: ${Object.values(BotArchetype).join(', ')}, random`
     });
     return;
   }
@@ -490,7 +473,7 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
     return;
   }
 
-  const botConfig: BotConfig = { skillLevel, archetype: resolvedArchetype, name };
+  const botConfig: BotConfig = { skillLevel, name };
   const bot = await LobbyService.addBot(gameId, userId, botConfig);
 
   logLobbyOperation('Bot added successfully', { gameId, botId: bot.id }, req);

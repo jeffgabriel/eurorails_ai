@@ -25,7 +25,6 @@ import {
   BotConfig,
   LLMProvider,
   BotSkillLevel,
-  BotArchetype,
   LLMDecisionResult,
   TurnPlan,
   StrategicRoute,
@@ -82,8 +81,8 @@ export class AIStrategyEngine {
       const snapshot = await capture(gameId, botPlayerId);
       console.log(`${tag} Snapshot: status=${snapshot.gameStatus}, money=${snapshot.bot.money}, segments=${snapshot.bot.existingSegments.length}, position=${snapshot.bot.position ? `${snapshot.bot.position.row},${snapshot.bot.position.col}` : 'none'}, loads=[${snapshot.bot.loads.join(',')}]`);
 
-      // Auto-place bot if no position and has track
-      if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0) {
+      // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
+      if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
         await AIStrategyEngine.autoPlaceBot(snapshot);
         const placed = snapshot.bot.position as { row: number; col: number } | null;
         console.log(`${tag} Auto-placed bot at ${placed ? `${placed.row},${placed.col}` : 'failed'}`);
@@ -175,10 +174,18 @@ export class AIStrategyEngine {
           console.warn(`${tag} Route planning failed, falling back to per-turn LLM`);
           decision = await brain.decideAction(snapshot, context);
         }
-      } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
-        // During initialBuild, use per-turn LLM decision (no route planning)
-        const brain = AIStrategyEngine.createBrain(botConfig!);
-        decision = await brain.decideAction(snapshot, context);
+      } else if (context.isInitialBuild) {
+        // During initialBuild, skip LLM — use heuristic which has good build-toward-best-demand logic
+        console.log(`${tag} Initial build: using heuristic fallback (no LLM)`);
+        const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+        decision = {
+          plan: fallback.plan ?? { type: AIActionType.PassTurn },
+          reasoning: '[initial-build-heuristic] ' + (fallback.error || 'Build toward best demand'),
+          planHorizon: 'Initial build phase',
+          model: 'heuristic',
+          latencyMs: 0,
+          retried: false,
+        };
       } else {
         // No LLM key — use heuristic fallback directly
         const fallback = await ActionResolver.heuristicFallback(context, snapshot);
@@ -416,12 +423,10 @@ export class AIStrategyEngine {
   private static createBrain(botConfig: BotConfig): LLMStrategyBrain {
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
     const skillLevel = (botConfig.skillLevel as BotSkillLevel) ?? BotSkillLevel.Medium;
-    const archetype = (botConfig.archetype as BotArchetype) ?? BotArchetype.Balanced;
     const envKey = provider === LLMProvider.Google ? 'GOOGLE_AI_API_KEY' : 'ANTHROPIC_API_KEY';
     const apiKey = process.env[envKey] ?? '';
 
     return new LLMStrategyBrain({
-      archetype,
       skillLevel,
       provider,
       model: botConfig.model,

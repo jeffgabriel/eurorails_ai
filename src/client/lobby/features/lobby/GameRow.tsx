@@ -4,8 +4,6 @@ import { Avatar, AvatarFallback } from '../../components/ui/avatar';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import type { Player } from '../../shared/types';
-import { BotArchetype } from '../../../../shared/types/GameTypes';
-import { getArchetypeDisplay } from '../../shared/botDisplayUtils';
 import { useAuthStore } from '../../store/auth.store';
 import { useLobbyStore } from '../../store/lobby.store';
 
@@ -21,10 +19,6 @@ export function GameRow({ player, onRemoveBot }: GameRowProps) {
   const isCurrentUser = currentUser?.id === player.userId;
   const isCreator = currentGame?.createdBy === player.userId;
   const isGameCreator = currentUser?.id === currentGame?.createdBy;
-
-  const archetypeDisplay = player.isBot && player.botConfig
-    ? getArchetypeDisplay(player.botConfig.archetype as BotArchetype)
-    : null;
 
   return (
     <div className="flex items-center gap-3 p-3 rounded-lg border bg-card hover:bg-accent/5 transition-colors">
@@ -60,16 +54,9 @@ export function GameRow({ player, onRemoveBot }: GameRowProps) {
 
         <div className="flex items-center gap-2">
           {player.isBot ? (
-            <>
-              <Badge variant="outline" className="text-xs">
-                AI Bot
-              </Badge>
-              {archetypeDisplay && (
-                <Badge variant="secondary" className={`text-xs ${archetypeDisplay.color}`}>
-                  {archetypeDisplay.label}
-                </Badge>
-              )}
-            </>
+            <Badge variant="outline" className="text-xs">
+              AI Bot
+            </Badge>
           ) : (
             <>
               <Badge

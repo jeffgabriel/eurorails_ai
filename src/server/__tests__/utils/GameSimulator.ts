@@ -75,7 +75,6 @@ export function createMockSnapshot(config: SimulatorConfig = {}): WorldSnapshot 
       loads: config.initialLoads ?? [],
       botConfig: config.botConfig ?? {
         skillLevel: 'medium',
-        archetype: 'balanced',
         name: 'TestBot',
       },
       connectedMajorCityCount: 0,

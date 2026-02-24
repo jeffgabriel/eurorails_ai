@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { emitLobbyUpdated, emitToLobby } from './socketService';
 import { PlayerService } from './playerService';
 import { InitialBuildService } from './InitialBuildService';
-import { TrainType, BotSkillLevel, BotArchetype } from '../../shared/types/GameTypes';
+import { TrainType, BotSkillLevel } from '../../shared/types/GameTypes';
 import type { Player as GamePlayer, BotConfig } from '../../shared/types/GameTypes';
 
 export interface CreateGameData {
@@ -932,12 +932,8 @@ export class LobbyService {
 
     // Validate botConfig
     const validSkillLevels = Object.values(BotSkillLevel);
-    const validArchetypes = Object.values(BotArchetype);
     if (!validSkillLevels.includes(botConfig.skillLevel)) {
       throw new LobbyError('Invalid skill level', 'INVALID_BOT_CONFIG', 400);
-    }
-    if (!validArchetypes.includes(botConfig.archetype)) {
-      throw new LobbyError('Invalid archetype', 'INVALID_BOT_CONFIG', 400);
     }
 
     const client = await db.connect();

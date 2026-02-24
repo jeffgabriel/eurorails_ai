@@ -79,7 +79,7 @@ function makeWorldSnapshot(overrides: Partial<WorldSnapshot> = {}): WorldSnapsho
       resolvedDemands: [],
       trainType: TrainType.Freight,
       loads: [],
-      botConfig: { skillLevel: 'medium', archetype: 'balanced' },
+      botConfig: { skillLevel: 'medium' },
       ferryHalfSpeed: false,
       connectedMajorCityCount: 0,
       ...(overrides.bot ?? {}),
@@ -2421,4 +2421,5 @@ describe('ActionResolver', () => {
       });
     });
   });
+
 });
