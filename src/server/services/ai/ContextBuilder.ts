@@ -22,7 +22,7 @@ import {
   TerrainType,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
-import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 export class ContextBuilder {
   /**
@@ -339,9 +339,14 @@ export class ContextBuilder {
     const estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity || isLoadOnTrain
       ? 0
       : ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
+    // For cold-start (no track), estimate delivery cost from supply city to delivery city
+    // (not from "nearest major city" to delivery, which can be misleading).
     const estimatedTrackCostToDelivery = isDeliveryOnNetwork
       ? 0
-      : ContextBuilder.estimateTrackCost(deliveryCity, snapshot.bot.existingSegments, gridPoints);
+      : ContextBuilder.estimateTrackCost(
+          deliveryCity, snapshot.bot.existingSegments, gridPoints,
+          snapshot.bot.existingSegments.length === 0 ? supplyCity ?? undefined : undefined,
+        );
 
     // 6. Check runtime load availability
     const isLoadAvailable = ContextBuilder.isLoadRuntimeAvailable(loadType, snapshot);
@@ -961,6 +966,7 @@ export class ContextBuilder {
     cityName: string,
     segments: TrackSegment[],
     gridPoints: GridPoint[],
+    fromCity?: string,
   ): number {
     // Find ALL mileposts for this city (major cities have multiple)
     const cityPoints = gridPoints.filter(gp => gp.city?.name === cityName);
@@ -970,7 +976,26 @@ export class ContextBuilder {
     const AVG_COST_PER_MILEPOST = 1.5;
 
     if (segments.length === 0) {
-      // Cold-start: estimate distance from nearest major city center
+      // Cold-start: if fromCity specified, estimate distance from that city
+      // (used for delivery cost estimation from the supply city)
+      if (fromCity) {
+        const fromPoints = gridPoints.filter(gp => gp.city?.name === fromCity);
+        if (fromPoints.length > 0) {
+          let minDist = Infinity;
+          for (const cityPoint of cityPoints) {
+            for (const fp of fromPoints) {
+              const dist = ContextBuilder.hexDistance(
+                cityPoint.row, cityPoint.col, fp.row, fp.col,
+              );
+              minDist = Math.min(minDist, dist);
+            }
+          }
+          if (minDist === Infinity || minDist <= 1) return 0;
+          return Math.round(minDist * AVG_COST_PER_MILEPOST);
+        }
+      }
+
+      // Default cold-start: estimate distance from nearest major city center
       // (bot can start building from any major city per game rules)
       const majorCityGroups = getMajorCityGroups();
       let minDist = Infinity;
@@ -1015,6 +1040,7 @@ export class ContextBuilder {
     deliveryCity: string,
     gridPoints: GridPoint[],
   ): boolean {
+    // Check 1: supply or delivery IS a ferry port city
     for (const gp of gridPoints) {
       if (gp.terrain === TerrainType.FerryPort || gp.isFerryCity) {
         const cityName = gp.city?.name;
@@ -1023,6 +1049,42 @@ export class ContextBuilder {
         }
       }
     }
+
+    // Check 2: route crosses a water barrier (Channel or Irish Sea)
+    // These ferries have NO land alternative — you MUST cross them to reach the other side.
+    // Scandinavian ferries (Newcastle_Esbjerg, Kristiansand_Hirtshals, Malmo_Sassnitz)
+    // are shortcuts with land alternatives, so we exclude them.
+    if (!supplyCity) return false;
+    const BARRIER_FERRIES = new Set([
+      'Plymouth_Cherbourg', 'Portsmouth_LeHavre', 'Dover_Calais', 'Harwich_Ijmuiden',
+      'Belfast_Stranraer', 'Dublin_Liverpool',
+    ]);
+
+    const ferryEdges = getFerryEdges();
+    const barrierFerries = ferryEdges.filter(f => BARRIER_FERRIES.has(f.name));
+    if (barrierFerries.length === 0) return false;
+
+    // Find positions for supply and delivery cities
+    const supplyPos = gridPoints.find(gp => gp.city?.name === supplyCity);
+    const deliveryPos = gridPoints.find(gp => gp.city?.name === deliveryCity);
+    if (!supplyPos || !deliveryPos) return false;
+
+    // For each barrier ferry, check if supply and delivery are on opposite sides.
+    // If supply is closer to port A and delivery closer to port B (or vice versa),
+    // the route must cross this ferry.
+    for (const ferry of barrierFerries) {
+      const supplyToA = ContextBuilder.hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
+      const supplyToB = ContextBuilder.hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
+      const deliveryToA = ContextBuilder.hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
+      const deliveryToB = ContextBuilder.hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
+
+      const supplyCloserToA = supplyToA < supplyToB;
+      const deliveryCloserToA = deliveryToA < deliveryToB;
+      if (supplyCloserToA !== deliveryCloserToA) {
+        return true;
+      }
+    }
+
     return false;
   }
 

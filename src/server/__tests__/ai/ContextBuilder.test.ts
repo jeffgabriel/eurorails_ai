@@ -1278,11 +1278,13 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
     { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [] },
     { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [] },
   ],
+  getFerryEdges: () => [],
 }));
 
 describe('ContextBuilder cold-start estimateTrackCost', () => {
-  it('should return 0 for a city that IS a major city (distance ≤ 1)', async () => {
-    // Berlin is at (10,10) which matches the mocked major city center exactly
+  it('should return 0 for supply cost when supply IS a major city', async () => {
+    // Paris is at (20,20) which matches the mocked major city center — supply cost = 0.
+    // Delivery cost to Berlin (10,10) is computed FROM Paris (supply), not from nearest major city.
     const gridPoints: GridPoint[] = [
       makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
       makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Cheese']),
@@ -1304,7 +1306,35 @@ describe('ContextBuilder cold-start estimateTrackCost', () => {
     const demand = context.demands.find(d => d.deliveryCity === 'Berlin');
 
     expect(demand).toBeDefined();
-    // Berlin IS a major city center, so track cost should be 0
+    // Supply IS a major city → supply cost = 0
+    expect(demand!.estimatedTrackCostToSupply).toBe(0);
+    // Delivery cost is computed from supply (Paris) to delivery (Berlin) — NOT 0
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThan(0);
+  });
+
+  it('should return 0 delivery cost when supply and delivery are at the same city', async () => {
+    // Steel at Berlin delivered to Berlin — cost should be 0
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Steel', payment: 8 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Berlin' && d.loadType === 'Steel');
+
+    expect(demand).toBeDefined();
     expect(demand!.estimatedTrackCostToDelivery).toBe(0);
   });
 
