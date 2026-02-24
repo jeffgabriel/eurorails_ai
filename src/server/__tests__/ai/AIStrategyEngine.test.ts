@@ -162,7 +162,7 @@ import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
-import { getMemory } from '../../services/ai/BotMemory';
+import { getMemory, updateMemory } from '../../services/ai/BotMemory';
 import {
   AIActionType,
   WorldSnapshot,
@@ -183,6 +183,7 @@ const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockPlanExecutorExecute = PlanExecutor.execute as jest.MockedFunction<typeof PlanExecutor.execute>;
 const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
 const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.MockedFunction<typeof ActionResolver.heuristicFallback>;
+const mockUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
 
 // ── Factory helpers ───────────────────────────────────────────────────────
 
@@ -478,6 +479,109 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockHeuristicFallback).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
+
+  describe('route persistence in BotMemory', () => {
+    it('should store activeRoute in memory after successful planRoute', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext({ isInitialBuild: true, canBuild: true });
+
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'DELIVER', loadType: 'Steel', city: 'Paris', demandCardId: 22, payment: 6 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Ruhr',
+        reasoning: 'Quick first delivery',
+        planHorizon: '4 turns',
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 300,
+      });
+
+      const updatedRoute = { ...route, currentStopIndex: 0, phase: 'build' };
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute,
+        description: 'Building toward Ruhr',
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify updateMemory was called with activeRoute
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const memoryCall = mockUpdateMemory.mock.calls[0];
+      expect(memoryCall[0]).toBe('game-1');
+      expect(memoryCall[1]).toBe('bot-1');
+      const patch = memoryCall[2] as any;
+      expect(patch.activeRoute).toBeDefined();
+      expect(patch.activeRoute.startingCity).toBe('Ruhr');
+      expect(patch.activeRoute.stops).toHaveLength(2);
+      expect(patch.turnsOnRoute).toBe(1);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should clear activeRoute when route is completed', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'DELIVER', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'move',
+        reasoning: 'Deliver coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor reports route complete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, deliveries: [{ loadType: 'Coal', city: 'Berlin', cardIndex: 0 }] },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.turnsOnRoute).toBe(0);
+      expect(patch.routeHistory).toBeDefined();
+      expect(patch.routeHistory.length).toBeGreaterThan(0);
     });
   });
 
