@@ -83,7 +83,7 @@ export class AIStrategyEngine {
 
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
       if (!snapshot.bot.position && snapshot.bot.existingSegments.length > 0 && snapshot.gameStatus !== 'initialBuild') {
-        await AIStrategyEngine.autoPlaceBot(snapshot);
+        await AIStrategyEngine.autoPlaceBot(snapshot, memory.activeRoute);
         const placed = snapshot.bot.position as { row: number; col: number } | null;
         console.log(`${tag} Auto-placed bot at ${placed ? `${placed.row},${placed.col}` : 'failed'}`);
       }
@@ -346,14 +346,37 @@ export class AIStrategyEngine {
 
   /**
    * Auto-place bot at a track endpoint that's at a major city milepost.
-   * Prefers positions that are both on the track network AND at a city,
-   * so the bot sprite doesn't appear at a disconnected city center.
-   * Falls back to closest major city outpost if no track endpoint is at a city.
+   * Prioritizes the LLM-chosen startingCity if available and track exists there.
+   * Falls back to any major city milepost on track, then closest major city outpost.
    */
-  static async autoPlaceBot(snapshot: WorldSnapshot): Promise<void> {
+  static async autoPlaceBot(snapshot: WorldSnapshot, activeRoute?: StrategicRoute | null): Promise<void> {
     const majorCityLookup = getMajorCityLookup();
 
-    // Prefer a track endpoint that's at a major city milepost (on the network)
+    // Priority 1: Place at LLM-chosen startingCity if track exists there
+    if (activeRoute?.startingCity) {
+      const groups = getMajorCityGroups();
+      const cityGroup = groups.find(
+        g => g.cityName.toLowerCase() === activeRoute.startingCity!.toLowerCase(),
+      );
+      if (cityGroup) {
+        const cityMileposts = [cityGroup.center, ...cityGroup.outposts];
+        for (const seg of snapshot.bot.existingSegments) {
+          for (const end of [seg.from, seg.to]) {
+            if (cityMileposts.some(mp => mp.row === end.row && mp.col === end.col)) {
+              const pixel = gridToPixel(end.row, end.col);
+              await db.query(
+                'UPDATE players SET position_row = $1, position_col = $2, position_x = $3, position_y = $4 WHERE id = $5',
+                [end.row, end.col, pixel.x, pixel.y, snapshot.bot.playerId],
+              );
+              snapshot.bot.position = { row: end.row, col: end.col };
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    // Priority 2: Any track endpoint at a major city milepost
     for (const seg of snapshot.bot.existingSegments) {
       for (const end of [seg.from, seg.to]) {
         const key = `${end.row},${end.col}`;
