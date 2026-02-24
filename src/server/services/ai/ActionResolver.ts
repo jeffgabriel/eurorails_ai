@@ -41,16 +41,17 @@ export class ActionResolver {
     intent: LLMActionIntent,
     snapshot: WorldSnapshot,
     context: GameContext,
+    startingCity?: string,
   ): Promise<ResolvedAction> {
     if (intent.actions && intent.actions.length > 0) {
-      return ActionResolver.resolveMultiAction(intent.actions, snapshot, context);
+      return ActionResolver.resolveMultiAction(intent.actions, snapshot, context, startingCity);
     }
 
     if (!intent.action) {
       return { success: false, error: "LLM intent must specify 'action' or 'actions'." };
     }
 
-    return ActionResolver.resolveSingleAction(intent.action, intent.details ?? {}, snapshot, context);
+    return ActionResolver.resolveSingleAction(intent.action, intent.details ?? {}, snapshot, context, startingCity);
   }
 
   /**
@@ -61,11 +62,12 @@ export class ActionResolver {
     details: Record<string, string>,
     snapshot: WorldSnapshot,
     context: GameContext,
+    startingCity?: string,
   ): Promise<ResolvedAction> {
     switch (action) {
       case AIActionType.BuildTrack:
       case 'BUILD':
-        return ActionResolver.resolveBuild(details, snapshot, context);
+        return ActionResolver.resolveBuild(details, snapshot, context, startingCity);
       case AIActionType.MoveTrain:
       case 'MOVE':
         return ActionResolver.resolveMove(details, snapshot);
@@ -105,6 +107,7 @@ export class ActionResolver {
     details: Record<string, string>,
     snapshot: WorldSnapshot,
     context: GameContext,
+    startingCity?: string,
   ): Promise<ResolvedAction> {
     const targetCity = details.toward ?? details.target ?? details.city;
     if (!targetCity) {
@@ -129,9 +132,24 @@ export class ActionResolver {
     if (hasTrack) {
       startPositions = ActionResolver.getTrackFrontier(snapshot);
     } else {
-      // Cold-start: use all major city center positions
+      // Cold-start: constrain to startingCity if provided and valid
       const groups = getMajorCityGroups();
-      startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+      if (startingCity) {
+        const match = groups.find(
+          g => g.cityName.toLowerCase() === startingCity.toLowerCase(),
+        );
+        if (match) {
+          startPositions = [
+            { row: match.center.row, col: match.center.col },
+            ...match.outposts.map(o => ({ row: o.row, col: o.col })),
+          ];
+        } else {
+          console.warn(`[ActionResolver] Invalid startingCity "${startingCity}" — falling back to all major cities.`);
+          startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+        }
+      } else {
+        startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+      }
     }
 
     if (startPositions.length === 0) {
@@ -467,6 +485,7 @@ export class ActionResolver {
     actions: LLMAction[],
     snapshot: WorldSnapshot,
     context: GameContext,
+    startingCity?: string,
   ): Promise<ResolvedAction> {
     if (actions.length === 0) {
       return { success: false, error: 'Multi-action must contain at least one action.' };
@@ -475,7 +494,7 @@ export class ActionResolver {
     // Single action passed as multi-action: resolve as single
     if (actions.length === 1) {
       const a = actions[0];
-      return ActionResolver.resolveSingleAction(a.action, a.details ?? {}, snapshot, context);
+      return ActionResolver.resolveSingleAction(a.action, a.details ?? {}, snapshot, context, startingCity);
     }
 
     const actionTypes = actions.map(a => a.action);
@@ -517,6 +536,7 @@ export class ActionResolver {
         a.details ?? {},
         currentSnapshot,
         currentContext,
+        startingCity,
       );
 
       if (!result.success) {

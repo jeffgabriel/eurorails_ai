@@ -306,6 +306,120 @@ describe('ActionResolver', () => {
       );
     });
 
+    it('should constrain cold-start to single city when valid startingCity is provided', async () => {
+      setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [{ row: 10, col: 11 }] },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(10, 10, 10, 11)]);
+
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext(), 'Berlin');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should include Berlin center + outpost, but NOT Paris
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+          expect.objectContaining({ row: 10, col: 11 }),
+        ]),
+      );
+      expect(startPositions).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 20, col: 5 }),
+        ]),
+      );
+    });
+
+    it('should fall back to all major cities when startingCity is invalid', async () => {
+      setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 } },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(10, 10, 10, 11)]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext(), 'Atlantis');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should include all major cities (fallback)
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+          expect.objectContaining({ row: 20, col: 5 }),
+        ]),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Invalid startingCity "Atlantis"'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('should use all major cities for cold-start when no startingCity is provided', async () => {
+      setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 } },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(10, 10, 10, 11)]);
+
+      // No startingCity parameter
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext());
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+          expect.objectContaining({ row: 20, col: 5 }),
+        ]),
+      );
+    });
+
+    it('should ignore startingCity when bot already has track', async () => {
+      setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 } },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const segments = [makeSegment(5, 5, 5, 6)];
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: segments } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 6, 6, 6)]);
+
+      // startingCity provided but bot has track — should use frontier, not city
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext(), 'Berlin');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should be track frontier endpoints, not major city centers
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 5, col: 5 }),
+          expect.objectContaining({ row: 5, col: 6 }),
+        ]),
+      );
+      // Should NOT include major city centers
+      expect(startPositions).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+        ]),
+      );
+    });
+
     it('should pass budget as min(20, money) to computeBuildSegments', async () => {
       setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
       mockComputeBuildSegments.mockReturnValue([makeSegment(5, 6, 6, 6)]);
