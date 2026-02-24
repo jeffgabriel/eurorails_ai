@@ -159,11 +159,10 @@ describe('PlanExecutor', () => {
       expect(result.plan.type).toBe(AIActionType.BuildTrack);
       expect(result.routeComplete).toBe(false);
       expect(result.routeAbandoned).toBe(false);
-      expect(mockResolve).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'BUILD', details: { toward: 'Berlin' } }),
-        expect.anything(),
-        expect.anything(),
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Berlin',
       );
+      expect(buildCall).toBeDefined();
     });
 
     it('should transition to travel phase when target city is on network', async () => {
@@ -768,11 +767,10 @@ describe('PlanExecutor', () => {
         expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
       }
       // Verify the build was toward München (demand card city)
-      expect(mockResolve).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'BUILD', details: { toward: 'München' } }),
-        expect.anything(),
-        expect.anything(),
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'München',
       );
+      expect(buildCall).toBeDefined();
     });
   });
 

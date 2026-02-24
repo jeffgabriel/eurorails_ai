@@ -129,6 +129,7 @@ export class PlanExecutor {
       { action: 'BUILD', details: { toward: targetCity }, reasoning: '', planHorizon: '' },
       snapshot,
       context,
+      route.startingCity,
     );
 
     if (buildResult.success && buildResult.plan) {
@@ -404,6 +405,7 @@ export class PlanExecutor {
       { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
       snapshot,
       context,
+      result.updatedRoute.startingCity,
     );
 
     if (!buildResult.success || !buildResult.plan) return result;

@@ -114,7 +114,7 @@ export class AIStrategyEngine {
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
 
-      if (activeRoute && !context.isInitialBuild) {
+      if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
         console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
         const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
@@ -138,7 +138,7 @@ export class AIStrategyEngine {
           // Save updated route state (advanced stop/phase)
           activeRoute = execResult.updatedRoute;
         }
-      } else if (AIStrategyEngine.hasLLMApiKey(botConfig) && !context.isInitialBuild) {
+      } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── No active route — consult LLM for a new strategic route ──
         const brain = AIStrategyEngine.createBrain(botConfig!);
 
@@ -170,22 +170,18 @@ export class AIStrategyEngine {
             activeRoute = execResult.updatedRoute;
           }
         } else {
-          // Route planning failed — fall back to per-turn LLM decision
-          console.warn(`${tag} Route planning failed, falling back to per-turn LLM`);
-          decision = await brain.decideAction(snapshot, context);
+          // Route planning failed — fall back to heuristic
+          console.warn(`${tag} Route planning failed, falling back to heuristic`);
+          const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+          decision = {
+            plan: fallback.plan ?? { type: AIActionType.PassTurn },
+            reasoning: '[llm-failed-heuristic] ' + (fallback.error || 'Heuristic fallback after LLM failure'),
+            planHorizon: 'Immediate',
+            model: 'heuristic',
+            latencyMs: 0,
+            retried: false,
+          };
         }
-      } else if (context.isInitialBuild) {
-        // During initialBuild, skip LLM — use heuristic which has good build-toward-best-demand logic
-        console.log(`${tag} Initial build: using heuristic fallback (no LLM)`);
-        const fallback = await ActionResolver.heuristicFallback(context, snapshot);
-        decision = {
-          plan: fallback.plan ?? { type: AIActionType.PassTurn },
-          reasoning: '[initial-build-heuristic] ' + (fallback.error || 'Build toward best demand'),
-          planHorizon: 'Initial build phase',
-          model: 'heuristic',
-          latencyMs: 0,
-          retried: false,
-        };
       } else {
         // No LLM key — use heuristic fallback directly
         const fallback = await ActionResolver.heuristicFallback(context, snapshot);

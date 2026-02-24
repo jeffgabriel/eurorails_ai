@@ -282,22 +282,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
   describe('successful turn — BuildTrack', () => {
     it('should execute full pipeline: capture → context → decide → guardrail → execute', async () => {
-      const snapshot = makeSnapshot();
-      const context = makeContext();
       const seg = makeSegment(10, 11, 10, 12, 1);
-
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
-
-      // Simulate LLM deciding to build track
-      mockDecideAction.mockResolvedValue({
-        plan: { type: AIActionType.BuildTrack, segments: [seg] },
-        reasoning: 'Build toward Berlin',
-        planHorizon: '2 turns',
-        model: 'claude-sonnet-4-20250514',
-        latencyMs: 500,
-        retried: false,
-      });
 
       // Provide API key so LLM path is taken
       process.env.ANTHROPIC_API_KEY = 'test-key';
@@ -306,19 +291,44 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const snapshotWithConfig = makeSnapshot({
         botConfig: { skillLevel: 'medium' },
       } as any);
+      const context = makeContext();
       mockCapture.mockResolvedValue(snapshotWithConfig);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Simulate LLM planning a route
+      const route: StrategicRoute = {
+        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        reasoning: 'Build toward Berlin',
+        planHorizon: '2 turns',
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 500,
+      });
+
+      // PlanExecutor returns a build plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [seg] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.success).toBe(true);
-      expect(result.reasoning).toBe('Build toward Berlin');
-      expect(result.planHorizon).toBe('2 turns');
+      expect(result.reasoning).toContain('Build toward Berlin');
       expect(result.durationMs).toBeGreaterThanOrEqual(0);
 
       // Pipeline stages were invoked
       expect(mockCapture).toHaveBeenCalledWith('game-1', 'bot-1');
       expect(mockContextBuild).toHaveBeenCalled();
+      expect(mockPlanRoute).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -396,8 +406,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('initial build uses heuristic, not LLM', () => {
-    it('should use heuristic fallback and skip LLM during initialBuild phase', async () => {
+  describe('initial build uses LLM route planning', () => {
+    it('should call planRoute during initialBuild when LLM key is present', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -408,18 +418,64 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // heuristicFallback returns PassTurn (no demands/canDeliver in context)
+      const route: StrategicRoute = {
+        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Ruhr',
+        reasoning: 'Build from Ruhr for quick first delivery',
+        planHorizon: '4 turns',
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 200,
+      });
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Ruhr',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toContain('route-planned');
+      // LLM SHOULD have been called
+      expect(LLMStrategyBrain).toHaveBeenCalled();
+      expect(mockPlanRoute).toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should fall back to heuristic during initialBuild when planRoute returns null', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext({ isInitialBuild: true, canBuild: true });
+
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // planRoute fails
+      mockPlanRoute.mockResolvedValue(null);
+
       mockHeuristicFallback.mockResolvedValue({
         success: true,
-        plan: { type: AIActionType.PassTurn },
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
       } as any);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      expect(result.action).toBe(AIActionType.PassTurn);
-      expect(result.reasoning).toContain('initial-build-heuristic');
-      // LLM should NOT have been called
-      expect(LLMStrategyBrain).not.toHaveBeenCalled();
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toContain('llm-failed-heuristic');
+      expect(mockPlanRoute).toHaveBeenCalled();
+      expect(mockHeuristicFallback).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -577,7 +633,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should fall back to per-turn LLM when route planning fails', async () => {
+    it('should fall back to heuristic when route planning fails', async () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
@@ -605,22 +661,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // planRoute returns null (failed)
       mockPlanRoute.mockResolvedValue(null);
 
-      // decideAction provides a fallback
-      mockDecideAction.mockResolvedValue({
+      // heuristicFallback provides a fallback
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
-        reasoning: 'Per-turn fallback',
-        planHorizon: '1 turn',
-        model: 'claude-sonnet-4-20250514',
-        latencyMs: 300,
-        retried: false,
-      });
+      } as any);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toBe('Per-turn fallback');
+      expect(result.reasoning).toContain('llm-failed-heuristic');
       expect(mockPlanRoute).toHaveBeenCalled();
-      expect(mockDecideAction).toHaveBeenCalled();
+      expect(mockHeuristicFallback).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -650,8 +702,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('initial build — heuristic instead of LLM', () => {
-    it('should use heuristic fallback during initialBuild, not LLM', async () => {
+  describe('initial build — LLM route planning', () => {
+    it('should call planRoute during initialBuild with LLM key', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -663,20 +715,35 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // heuristicFallback returns a build plan
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
+      const route: StrategicRoute = {
+        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Ruhr',
+        reasoning: 'Quick first delivery from Ruhr',
+        planHorizon: '4 turns',
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 200,
+      });
+
+      mockPlanExecutorExecute.mockResolvedValue({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
-      } as any);
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Ruhr',
+      });
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toContain('initial-build-heuristic');
-      // LLM should NOT have been called
-      expect(LLMStrategyBrain).not.toHaveBeenCalled();
-      // heuristicFallback SHOULD have been called
-      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+      expect(result.reasoning).toContain('route-planned');
+      // LLM SHOULD have been called during initialBuild
+      expect(LLMStrategyBrain).toHaveBeenCalled();
+      expect(mockPlanRoute).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
