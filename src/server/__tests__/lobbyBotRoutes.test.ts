@@ -7,7 +7,7 @@ import lobbyRoutes from '../routes/lobbyRoutes';
 import { errorHandler } from '../middleware/errorHandler';
 import { AuthService } from '../services/authService';
 import { LobbyService } from '../services/lobbyService';
-import { BotSkillLevel } from '../../shared/types/GameTypes';
+import { BotSkillLevel, LLMProvider } from '../../shared/types/GameTypes';
 import { db } from '../db';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -221,6 +221,79 @@ describe('LobbyBotRoutes', () => {
 
         expect(response.body.error).toBe('VALIDATION_ERROR');
         expect(response.body.message).toContain('name');
+      });
+
+      it('should return 400 for invalid provider value', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', provider: 'openai' })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.message).toContain('provider');
+      });
+
+      it('should return 400 for non-string model value', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', model: 123 })
+          .expect(400);
+
+        expect(response.body.error).toBe('VALIDATION_ERROR');
+        expect(response.body.message).toContain('model');
+      });
+    });
+
+    describe('provider and model passthrough', () => {
+      it('should accept valid provider and store it in botConfig', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'hard', provider: 'google' })
+          .expect(201);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.botConfig.provider).toBe('google');
+      });
+
+      it('should accept valid provider and model override', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'medium', provider: 'anthropic', model: 'claude-sonnet-4-20250514' })
+          .expect(201);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.botConfig.provider).toBe('anthropic');
+        expect(response.body.data.botConfig.model).toBe('claude-sonnet-4-20250514');
+      });
+
+      it('should default to no provider/model when omitted (backward compatible)', async () => {
+        const game = await createTestGame();
+        mockAuthForUser(creatorUserId, 'botroute_creator');
+
+        const response = await request(app)
+          .post(`/api/lobby/games/${game.id}/bots`)
+          .set('Authorization', 'Bearer valid.token')
+          .send({ skillLevel: 'easy' })
+          .expect(201);
+
+        expect(response.body.success).toBe(true);
+        expect(response.body.data.botConfig).toEqual({ skillLevel: 'easy' });
       });
     });
 

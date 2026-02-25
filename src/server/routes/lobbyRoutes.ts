@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { LobbyService, CreateGameData, NotABotError, GameNotFoundError, NotGameCreatorError, GameAlreadyStartedError, GameFullError } from '../services/lobbyService';
-import { BotSkillLevel, BotConfig } from '../../shared/types/GameTypes';
+import { BotSkillLevel, BotConfig, LLMProvider } from '../../shared/types/GameTypes';
 import { asyncHandler } from '../middleware/errorHandler';
 import { requestLogger } from '../middleware/requestLogger';
 import { optionalAuth, authenticateToken, requireAuth } from '../middleware/authMiddleware';
@@ -439,9 +439,9 @@ router.post('/players/presence', asyncHandler(async (req: Request, res: Response
 router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(async (req: Request, res: Response) => {
   const { id: gameId } = req.params;
   const userId = req.user!.id;
-  const { skillLevel, name } = req.body;
+  const { skillLevel, name, provider, model } = req.body;
 
-  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, name }, req);
+  logLobbyOperation('Add bot request', { gameId, userId, skillLevel, name, provider, model }, req);
 
   // Validate UUID format
   if (!validateUUID(gameId, 'gameId', res)) {
@@ -473,7 +473,32 @@ router.post('/games/:id/bots', authenticateToken, requireAuth, asyncHandler(asyn
     return;
   }
 
-  const botConfig: BotConfig = { skillLevel, name };
+  // Validate provider enum if provided
+  if (provider !== undefined && !Object.values(LLMProvider).includes(provider)) {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid provider',
+      details: `provider must be one of: ${Object.values(LLMProvider).join(', ')}`
+    });
+    return;
+  }
+
+  // Validate model is a string if provided
+  if (model !== undefined && typeof model !== 'string') {
+    res.status(400).json({
+      error: 'VALIDATION_ERROR',
+      message: 'Invalid model',
+      details: 'model must be a string'
+    });
+    return;
+  }
+
+  const botConfig: BotConfig = {
+    skillLevel,
+    name,
+    ...(provider && { provider }),
+    ...(model && { model }),
+  };
   const bot = await LobbyService.addBot(gameId, userId, botConfig);
 
   logLobbyOperation('Bot added successfully', { gameId, botId: bot.id }, req);

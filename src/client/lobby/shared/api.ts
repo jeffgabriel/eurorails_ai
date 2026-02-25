@@ -219,7 +219,7 @@ class ApiClient {
     });
   }
 
-  async addBot(gameId: ID, config: { skillLevel: string; name?: string }): Promise<{ player: Player }> {
+  async addBot(gameId: ID, config: { skillLevel: string; name?: string; provider?: string; model?: string }): Promise<{ player: Player }> {
     const response = await this.request<{ success: boolean; data: Player }>(`/api/lobby/games/${gameId}/bots`, {
       method: 'POST',
       body: JSON.stringify(config),

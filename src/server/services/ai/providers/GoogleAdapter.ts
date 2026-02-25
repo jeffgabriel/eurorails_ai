@@ -59,11 +59,20 @@ export class GoogleAdapter implements ProviderAdapter {
 
       const data = await response.json();
 
+      const candidate = data.candidates?.[0];
+      if (!candidate?.content?.parts?.[0]?.text) {
+        const reason = candidate?.finishReason ?? 'UNKNOWN';
+        throw new ProviderAPIError(
+          200,
+          `No content in response (finishReason: ${reason})`
+        );
+      }
+
       return {
-        text: data.candidates[0].content.parts[0].text,
+        text: candidate.content.parts[0].text,
         usage: {
-          input: data.usageMetadata.promptTokenCount,
-          output: data.usageMetadata.candidatesTokenCount,
+          input: data.usageMetadata?.promptTokenCount ?? 0,
+          output: data.usageMetadata?.candidatesTokenCount ?? 0,
         },
       };
     } catch (error) {

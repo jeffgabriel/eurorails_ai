@@ -32,11 +32,11 @@ export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, strin
     [LLMProvider.Anthropic]: {
         [BotSkillLevel.Easy]: 'claude-haiku-4-5-20251001',
         [BotSkillLevel.Medium]: 'claude-sonnet-4-20250514',
-        [BotSkillLevel.Hard]: 'claude-sonnet-4-20250514',
+        [BotSkillLevel.Hard]: 'claude-opus-4-20250514',
     },
     [LLMProvider.Google]: {
         [BotSkillLevel.Easy]: 'gemini-2.0-flash',
-        [BotSkillLevel.Medium]: 'gemini-2.5-pro',
+        [BotSkillLevel.Medium]: 'gemini-2.5-flash',
         [BotSkillLevel.Hard]: 'gemini-2.5-pro',
     },
 };
@@ -593,6 +593,12 @@ export interface DemandContext {
     isLoadAvailable: boolean;
     isLoadOnTrain: boolean;
     ferryRequired: boolean;
+    /** Total copies of this load type in the game (3 or 4) */
+    loadChipTotal: number;
+    /** Number of copies currently carried by any player */
+    loadChipCarried: number;
+    /** Estimated total turns to complete this demand (build + travel + deliver) */
+    estimatedTurns: number;
 }
 
 /** An immediately completable delivery at the bot's current position */
@@ -632,6 +638,8 @@ export interface GameContext {
     capacity: number;
     loads: string[];
     connectedMajorCities: string[];
+    /** Unconnected major cities with estimated track cost from current network */
+    unconnectedMajorCities: Array<{ cityName: string; estimatedCost: number }>;
     totalMajorCities: number;
     trackSummary: string;
     turnBuildCost: number;

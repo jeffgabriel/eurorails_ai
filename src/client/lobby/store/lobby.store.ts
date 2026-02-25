@@ -573,7 +573,7 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   // Bot management — callers handle their own loading/error UI,
   // so we don't touch global isLoading or error here.
-  addBot: async (_gameId: ID, config: { skillLevel: string; name?: string }) => {
+  addBot: async (_gameId: ID, config: { skillLevel: string; name?: string; provider?: string; model?: string }) => {
     await api.addBot(_gameId, config);
     // Player list update handled by lobby-updated socket event
   },
