@@ -24,7 +24,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { PlanExecutor } from './PlanExecutor';
-import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints } from './MapTopology';
 
 export class TurnComposer {
   /**
@@ -72,40 +72,103 @@ export class TurnComposer {
 
     // ── Phase A: Operational enrichment ──
     try {
-      // A1: If primary contains a MOVE, scan path for pickup/deliver opportunities
-      const movePlan = steps.find(s => s.type === AIActionType.MoveTrain) as TurnPlanMoveTrain | undefined;
+      // A1: If primary contains a MOVE, split it for mid-movement pickup/deliver
+      // Per game rules, a player can pick up and deliver at ANY city passed through
+      // during movement, then continue moving with remaining movement allowance.
+      const moveIdx = steps.findIndex(s => s.type === AIActionType.MoveTrain);
+      const movePlan = moveIdx >= 0 ? steps[moveIdx] as TurnPlanMoveTrain : undefined;
       if (movePlan && movePlan.path.length > 0) {
-        const pathPlans = await TurnComposer.scanPathOpportunities(
-          movePlan.path, simSnapshot, simContext,
+        const splitPlans = await TurnComposer.splitMoveForOpportunities(
+          movePlan, simSnapshot, simContext,
         );
-        for (const plan of pathPlans) {
-          steps.push(plan);
-          ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
+        // Replace the original MOVE with the interleaved sequence
+        if (splitPlans.length > 1) {
+          steps.splice(moveIdx, 1, ...splitPlans);
+          // Re-simulate from scratch since we restructured the steps
+          const reSim = ActionResolver.cloneSnapshot(snapshot);
+          const reCtx = { ...context };
+          for (const step of steps) {
+            ActionResolver.applyPlanToState(step, reSim, reCtx);
+          }
+          // Update sim state for Phase B
+          Object.assign(simSnapshot, reSim);
+          Object.assign(simContext, reCtx);
         }
       }
 
-      // A2: If primary is PICKUP or DELIVER (no MOVE yet), try to chain a MOVE
+      // A2: If the last step is PICKUP or DELIVER, try to chain a continuation MOVE.
+      // This handles both:
+      //   - Primary was PICKUP/DELIVER (no MOVE yet) — chain a full MOVE
+      //   - A1 split a MOVE and found a pickup/deliver at the destination — continue moving
+      const lastStepType = steps[steps.length - 1]?.type;
+      if (lastStepType === AIActionType.PickupLoad || lastStepType === AIActionType.DeliverLoad) {
+        // Cap continuation MOVE at remaining movement allowance
+        const movementUsed = TurnComposer.countMovementUsed(steps);
+        const remainingMovement = simContext.speed - movementUsed;
+
+        if (remainingMovement > 0) {
+          const moveTarget = TurnComposer.findMoveTarget(simContext, activeRoute);
+          if (moveTarget) {
+            const moveResult = await ActionResolver.resolve(
+              { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
+              simSnapshot, simContext,
+            );
+            if (moveResult.success && moveResult.plan) {
+              let chainedMove = moveResult.plan as TurnPlanMoveTrain;
+              // Truncate path to remaining movement allowance
+              if (chainedMove.path.length - 1 > remainingMovement) {
+                chainedMove = {
+                  ...chainedMove,
+                  path: chainedMove.path.slice(0, remainingMovement + 1),
+                };
+              }
+              if (chainedMove.path.length > 1) {
+                const splitPlans = await TurnComposer.splitMoveForOpportunities(
+                  chainedMove, simSnapshot, simContext,
+                );
+                for (const plan of splitPlans) {
+                  steps.push(plan);
+                  ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // A3: If primary is BUILD and no MOVE exists, prepend a MOVE before the build.
+      // Movement happens BEFORE building per game rules, so resolve against original
+      // (pre-build) snapshot to avoid pathfinding on not-yet-built segments.
       const primaryType = steps[0]?.type;
       const hasMove = steps.some(s => s.type === AIActionType.MoveTrain);
-      if (!hasMove && (primaryType === AIActionType.PickupLoad || primaryType === AIActionType.DeliverLoad)) {
-        const moveTarget = TurnComposer.findMoveTarget(simContext, activeRoute);
-        if (moveTarget) {
-          const moveResult = await ActionResolver.resolve(
-            { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
-            simSnapshot, simContext,
-          );
-          if (moveResult.success && moveResult.plan) {
-            steps.push(moveResult.plan);
-            ActionResolver.applyPlanToState(moveResult.plan, simSnapshot, simContext);
-            // Scan the new move path for opportunities
-            const newMovePlan = moveResult.plan as TurnPlanMoveTrain;
-            if (newMovePlan.path.length > 0) {
-              const pathPlans = await TurnComposer.scanPathOpportunities(
-                newMovePlan.path, simSnapshot, simContext,
-              );
-              for (const plan of pathPlans) {
-                steps.push(plan);
-                ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
+      if (!hasMove && primaryType === AIActionType.BuildTrack) {
+        const movementUsed = TurnComposer.countMovementUsed(steps);
+        const remainingMovement = context.speed - movementUsed;
+        if (remainingMovement > 0) {
+          const moveTarget = TurnComposer.findMoveTarget(context, activeRoute);
+          if (moveTarget) {
+            const moveResult = await ActionResolver.resolve(
+              { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
+              snapshot, context,
+            );
+            if (moveResult.success && moveResult.plan) {
+              let chainedMove = moveResult.plan as TurnPlanMoveTrain;
+              // Cap movement at remaining allowance
+              if (chainedMove.path && chainedMove.path.length - 1 > remainingMovement) {
+                chainedMove = {
+                  ...chainedMove,
+                  path: chainedMove.path.slice(0, remainingMovement + 1),
+                };
+              }
+              if (chainedMove.path && chainedMove.path.length > 0) {
+                const moveSim = ActionResolver.cloneSnapshot(snapshot);
+                const moveCtx = { ...context };
+                const splitPlans = await TurnComposer.splitMoveForOpportunities(
+                  chainedMove, moveSim, moveCtx,
+                );
+                // Insert move steps before the build step
+                const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
+                steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitPlans);
               }
             }
           }
@@ -113,7 +176,7 @@ export class TurnComposer {
       }
     } catch (err) {
       // Phase A errors are non-fatal — keep the primary plan
-      console.warn('[TurnComposer] Phase A error (skipped):', err instanceof Error ? err.message : err);
+      console.error('[TurnComposer] Phase A error:', err instanceof Error ? err.message : err);
     }
 
     // ── Phase B: Build/Upgrade ──
@@ -127,7 +190,7 @@ export class TurnComposer {
         }
       } catch (err) {
         // Phase B errors are non-fatal
-        console.warn('[TurnComposer] Phase B error (skipped):', err instanceof Error ? err.message : err);
+        console.error('[TurnComposer] Phase B error:', err instanceof Error ? err.message : err);
       }
     }
 
@@ -139,25 +202,33 @@ export class TurnComposer {
   }
 
   /**
-   * Scan a move path for pickup/deliver opportunities at intermediate
-   * and destination cities.
+   * Split a MOVE into interleaved [MOVE_SEGMENT, ACTION, MOVE_SEGMENT, ...]
+   * when intermediate cities along the path have pickup/deliver opportunities.
+   *
+   * Per EuroRails rules: "Picking up or unloading a load does not reduce
+   * movement — the player may continue moving at full allowance."
+   *
+   * If no intermediate opportunities exist, returns the original move unchanged.
    */
-  private static async scanPathOpportunities(
-    path: { row: number; col: number }[],
+  private static async splitMoveForOpportunities(
+    movePlan: TurnPlanMoveTrain,
     snapshot: WorldSnapshot,
     context: GameContext,
   ): Promise<TurnPlan[]> {
     const plans: TurnPlan[] = [];
-    const majorCityLookup = getMajorCityLookup();
+    const gridPoints = loadGridPoints();
+    const path = movePlan.path;
+    let lastSplitIndex = 0;
 
     // Walk path positions (skip index 0 — that's where the bot started)
     for (let i = 1; i < path.length; i++) {
       const pos = path[i];
-      const cityName = majorCityLookup.get(`${pos.row},${pos.col}`);
+      const cityName = gridPoints.get(`${pos.row},${pos.col}`)?.name;
       if (!cityName) continue;
 
       // Simulate bot at this position
       snapshot.bot.position = { row: pos.row, col: pos.col };
+      const actionPlans: TurnPlan[] = [];
 
       // Check for DELIVER: bot carries a load AND demand card exists for load+city
       for (const rd of snapshot.bot.resolvedDemands) {
@@ -171,7 +242,7 @@ export class TurnComposer {
               snapshot, context,
             );
             if (result.success && result.plan) {
-              plans.push(result.plan);
+              actionPlans.push(result.plan);
               ActionResolver.applyPlanToState(result.plan, snapshot, context);
             }
           }
@@ -183,26 +254,53 @@ export class TurnComposer {
       if (snapshot.bot.loads.length < trainCapacity) {
         const availableLoads = snapshot.loadAvailability[cityName] ?? [];
         for (const loadType of availableLoads) {
-          // Skip if already carrying this load type
           if (snapshot.bot.loads.includes(loadType)) continue;
-
-          // Check if any demand card wants this load
           const hasDemand = snapshot.bot.resolvedDemands.some(rd =>
             rd.demands.some(d => d.loadType === loadType),
           );
           if (!hasDemand) continue;
-
           const result = await ActionResolver.resolve(
             { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
             snapshot, context,
           );
           if (result.success && result.plan) {
-            plans.push(result.plan);
+            actionPlans.push(result.plan);
             ActionResolver.applyPlanToState(result.plan, snapshot, context);
             break; // One pickup per city to avoid over-filling
           }
         }
       }
+
+      // If actions were found at this intermediate city, split the move here
+      if (actionPlans.length > 0) {
+        // Emit MOVE segment from lastSplitIndex to this city
+        const moveSegment = path.slice(lastSplitIndex, i + 1);
+        if (moveSegment.length > 1) {
+          plans.push({
+            type: AIActionType.MoveTrain,
+            path: moveSegment,
+          } as TurnPlanMoveTrain);
+        }
+        // Emit the actions at this city
+        plans.push(...actionPlans);
+        lastSplitIndex = i;
+      }
+    }
+
+    // Emit remaining move segment (from last action city to final destination)
+    if (lastSplitIndex < path.length - 1) {
+      const remainingPath = path.slice(lastSplitIndex);
+      if (remainingPath.length > 1) {
+        plans.push({
+          type: AIActionType.MoveTrain,
+          path: remainingPath,
+        } as TurnPlanMoveTrain);
+      }
+    }
+
+    // If no actions were found, return the original move unchanged
+    if (plans.length === 0) {
+      return [movePlan];
     }
 
     return plans;
@@ -232,9 +330,28 @@ export class TurnComposer {
       }
     }
 
-    // Fallback to demand cards
-    if (!buildTarget) {
-      buildTarget = PlanExecutor.findDemandBuildTarget(context);
+    // Fallback when no route-specific build target exists.
+    // Prefer victory progress (unconnected major cities) over speculative demand builds.
+    // BUT: skip speculative builds when mid-route (travel/act phase) — the bot should
+    // finish its delivery first to earn money, then build toward victory cities.
+    const routeNeedsBuild = activeRoute &&
+      activeRoute.stops.slice(activeRoute.currentStopIndex).some(
+        stop => !context.citiesOnNetwork.includes(stop.city),
+      );
+    const isMidRoute = activeRoute &&
+      (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
+    if (!buildTarget && !routeNeedsBuild && !isMidRoute) {
+      // Priority 1: Build toward cheapest unconnected major city (victory progress)
+      // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
+      const unconnected = context.unconnectedMajorCities ?? [];
+      if (unconnected.length > 0 && snapshot.bot.money > 230) {
+        // Already sorted by estimatedCost in ContextBuilder
+        buildTarget = unconnected[0].cityName;
+      }
+      // Priority 2: Build toward demand cities only if all major cities are connected
+      if (!buildTarget) {
+        buildTarget = PlanExecutor.findDemandBuildTarget(context);
+      }
     }
 
     if (!buildTarget) return null;
@@ -260,10 +377,20 @@ export class TurnComposer {
     context: GameContext,
     activeRoute?: StrategicRoute | null,
   ): string | null {
-    // If there's an active route, move toward the next stop city
+    // If there's an active route, move toward the next uncompleted stop
     if (activeRoute) {
-      const nextStop = activeRoute.stops[activeRoute.currentStopIndex];
-      if (nextStop) return nextStop.city;
+      for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+        const stop = activeRoute.stops[i];
+        // Skip pickup stops if bot already has the load (pickup was completed during composition)
+        if (stop.action === 'pickup' && context.loads.includes(stop.loadType)) {
+          continue;
+        }
+        // Skip deliver stops if bot does NOT have the load (delivery was already completed)
+        if (stop.action === 'deliver' && !context.loads.includes(stop.loadType)) {
+          continue;
+        }
+        return stop.city;
+      }
     }
 
     // Fallback: move toward the highest-payout demand delivery city on network
@@ -279,6 +406,20 @@ export class TurnComposer {
       }
     }
     return null;
+  }
+
+  /**
+   * Count total mileposts used across all MOVE steps.
+   * Path includes the start position, so milepost count = path.length - 1.
+   */
+  private static countMovementUsed(steps: TurnPlan[]): number {
+    let used = 0;
+    for (const step of steps) {
+      if (step.type === AIActionType.MoveTrain) {
+        used += Math.max(0, (step as TurnPlanMoveTrain).path.length - 1);
+      }
+    }
+    return used;
   }
 
   /**

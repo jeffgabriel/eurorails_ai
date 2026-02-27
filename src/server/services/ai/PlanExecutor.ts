@@ -1,23 +1,20 @@
 /**
- * PlanExecutor — State machine that auto-executes a StrategicRoute over multiple turns.
+ * PlanExecutor — 2-question model that auto-executes a StrategicRoute over multiple turns.
  *
- * Given the current route, stop index, phase, and game state, determines which TurnPlan
- * to produce this turn. Advances the route's phase/stop index after execution.
+ * Given the current route, stop index, and game state, determines which TurnPlan
+ * to produce this turn. Advances the route's stop index after execution.
  *
- * Phase logic for each stop:
- *   1. 'build': Is the target city on our track network?
- *      - NO  → resolveBuild({ toward: stop.city }) → stay in 'build' phase
- *      - YES → transition to 'travel' phase
- *   2. 'travel': Are we at the target city?
- *      - NO  → resolveMove({ to: stop.city }) → stay in 'travel'
- *      - YES → transition to 'act' phase
- *   3. 'act': Execute the stop action
- *      - pickup  → resolvePickup  → advance currentStopIndex, reset phase to 'build'
- *      - deliver → resolveDeliver → advance currentStopIndex, reset phase to 'build'
- *      - If this was the last stop → route is complete
+ * For each stop, two questions determine behavior:
+ *   1. Am I there? Is the bot at the stop city?
+ *      - YES → execute the action (pickup/deliver), advance currentStopIndex
+ *   2. Can I get there? Is the stop city reachable on the track network?
+ *      - YES → resolve MOVE toward the stop city
+ *      - NO  → resolve BUILD toward the stop city
+ *
+ * During initialBuild (first two turns), only building is allowed — no movement.
  *
  * Multi-action combining is handled by TurnComposer (post-decision layer).
- * PlanExecutor returns raw single-phase plans.
+ * PlanExecutor returns raw single-action plans.
  */
 
 import {
@@ -48,7 +45,7 @@ export class PlanExecutor {
    * Determine the TurnPlan for this turn based on the active route.
    *
    * Returns a result containing the plan to execute, whether the route is complete,
-   * and the updated route state (advanced stop/phase).
+   * and the updated route state (advanced stop index).
    */
   static async execute(
     route: StrategicRoute,
@@ -61,31 +58,39 @@ export class PlanExecutor {
       return PlanExecutor.routeCompleted(route, 'All route stops completed.');
     }
 
-    const tag = `[PlanExecutor stop=${route.currentStopIndex}/${route.stops.length} phase=${route.phase}]`;
+    const tag = `[PlanExecutor stop=${route.currentStopIndex}/${route.stops.length}]`;
+    const targetCity = currentStop.city;
 
-    let result: PlanExecutorResult;
-
-    switch (route.phase) {
-      case 'build':
-        result = await PlanExecutor.executeBuildPhase(route, currentStop, snapshot, context, tag);
-        break;
-      case 'travel':
-        result = await PlanExecutor.executeTravelPhase(route, currentStop, snapshot, context, tag);
-        break;
-      case 'act':
-        result = await PlanExecutor.executeActPhase(route, currentStop, snapshot, context, tag);
-        break;
-      default:
-        return PlanExecutor.routeCompleted(route, `Unknown phase: ${route.phase}`);
+    // ── InitialBuild: only building, no movement ──────────────────────────
+    if (context.isInitialBuild) {
+      return PlanExecutor.executeInitialBuild(route, currentStop, snapshot, context, tag);
     }
 
-    return result;
+    // ── Question 1: Am I there? ───────────────────────────────────────────
+    if (PlanExecutor.isBotAtCity(context, targetCity)) {
+      console.log(`${tag} Bot is at ${targetCity}, executing action`);
+      return PlanExecutor.executeAction(route, currentStop, snapshot, context, tag);
+    }
+
+    // ── Question 2: Can I get there? ──────────────────────────────────────
+    if (context.citiesOnNetwork.includes(targetCity)) {
+      // City is reachable on network → move toward it
+      console.log(`${tag} ${targetCity} is on network, moving toward it`);
+      return PlanExecutor.resolveMove(route, currentStop, snapshot, context, tag);
+    } else {
+      // City is NOT on network → build toward it
+      console.log(`${tag} ${targetCity} is not on network, building toward it`);
+      return PlanExecutor.resolveBuild(route, currentStop, snapshot, context, tag);
+    }
   }
 
+  // ── InitialBuild handling ───────────────────────────────────────────────
+
   /**
-   * Build phase: check if target city is on network, if not → build toward it.
+   * During initialBuild (first two turns), only building is allowed.
+   * Find the best build target from route stops or demand cards.
    */
-  private static async executeBuildPhase(
+  private static async executeInitialBuild(
     route: StrategicRoute,
     stop: RouteStop,
     snapshot: WorldSnapshot,
@@ -94,19 +99,38 @@ export class PlanExecutor {
   ): Promise<PlanExecutorResult> {
     const targetCity = stop.city;
 
-    // During initialBuild, if the current stop's city is the starting city or already
-    // connected, find a different build target — but DON'T advance currentStopIndex.
+    // If the current stop's city is the starting city or already on network,
+    // find a different build target — but DON'T advance currentStopIndex.
     // Stop actions (pickup/deliver) haven't been completed; we're just choosing where to build.
-    if (context.isInitialBuild) {
-      const isStartingCity = route.startingCity &&
-        targetCity.toLowerCase() === route.startingCity.toLowerCase();
-      if (isStartingCity || context.citiesOnNetwork.includes(targetCity)) {
-        // Find a route stop that still needs track built to it
-        const buildTarget = PlanExecutor.findInitialBuildTarget(route, context);
-        if (buildTarget && context.canBuild) {
-          console.log(`${tag} ${targetCity} is starting/connected during initialBuild, building toward ${buildTarget} instead`);
+    const isStartingCity = route.startingCity &&
+      targetCity.toLowerCase() === route.startingCity.toLowerCase();
+
+    if (isStartingCity || context.citiesOnNetwork.includes(targetCity)) {
+      // Find a route stop that still needs track built to it
+      const buildTarget = PlanExecutor.findInitialBuildTarget(route, context);
+      if (buildTarget && context.canBuild) {
+        console.log(`${tag} ${targetCity} is starting/connected during initialBuild, building toward ${buildTarget} instead`);
+        const buildResult = await ActionResolver.resolve(
+          { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
+          snapshot, context, route.startingCity,
+        );
+        if (buildResult.success && buildResult.plan) {
+          return {
+            plan: buildResult.plan,
+            routeComplete: false,
+            routeAbandoned: false,
+            updatedRoute: { ...route, phase: 'build' },
+            description: `${tag} Building toward ${buildTarget} (${targetCity} already reachable)`,
+          };
+        }
+      }
+      // All route stops reachable — build toward demand card cities with remaining budget
+      if (context.canBuild) {
+        const demandTarget = PlanExecutor.findDemandBuildTarget(context);
+        if (demandTarget) {
+          console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);
           const buildResult = await ActionResolver.resolve(
-            { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
+            { action: 'BUILD', details: { toward: demandTarget }, reasoning: '', planHorizon: '' },
             snapshot, context, route.startingCity,
           );
           if (buildResult.success && buildResult.plan) {
@@ -114,67 +138,36 @@ export class PlanExecutor {
               plan: buildResult.plan,
               routeComplete: false,
               routeAbandoned: false,
-              updatedRoute: route,
-              description: `${tag} Building toward ${buildTarget} (${targetCity} already reachable)`,
+              updatedRoute: { ...route, phase: 'build' },
+              description: `${tag} Building toward demand city ${demandTarget} (all route stops reachable)`,
             };
           }
         }
-        // All route stops reachable — build toward demand card cities with remaining budget
-        if (context.canBuild) {
-          const demandTarget = PlanExecutor.findDemandBuildTarget(context);
-          if (demandTarget) {
-            console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);
-            const buildResult = await ActionResolver.resolve(
-              { action: 'BUILD', details: { toward: demandTarget }, reasoning: '', planHorizon: '' },
-              snapshot, context, route.startingCity,
-            );
-            if (buildResult.success && buildResult.plan) {
-              return {
-                plan: buildResult.plan,
-                routeComplete: false,
-                routeAbandoned: false,
-                updatedRoute: route,
-                description: `${tag} Building toward demand city ${demandTarget} (all route stops reachable)`,
-              };
-            }
-          }
-        }
-        // Nothing to build
-        return {
-          plan: { type: AIActionType.PassTurn },
-          routeComplete: false,
-          routeAbandoned: false,
-          updatedRoute: route,
-          description: `${tag} All route stops reachable during initialBuild`,
-        };
       }
-    }
-
-    // Check if target city is already on our track network
-    if (context.citiesOnNetwork.includes(targetCity)) {
-      console.log(`${tag} ${targetCity} is on network, transitioning to 'travel' phase`);
-      const updatedRoute = PlanExecutor.advancePhase(route, 'travel');
-      // Recurse into travel phase immediately (same turn)
-      return PlanExecutor.executeTravelPhase(updatedRoute, stop, snapshot, context, tag);
-    }
-
-    // Need to build toward the target city
-    if (!context.canBuild) {
-      // Can't build this turn (budget exhausted or no money) — pass and retry next turn
+      // Nothing to build
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
         routeAbandoned: false,
-        updatedRoute: route,
+        updatedRoute: { ...route, phase: 'build' },
+        description: `${tag} All route stops reachable during initialBuild`,
+      };
+    }
+
+    // Current stop city needs track — build toward it
+    if (!context.canBuild) {
+      return {
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: { ...route, phase: 'build' },
         description: `${tag} Cannot build this turn (budget exhausted). Waiting.`,
       };
     }
 
     const buildResult = await ActionResolver.resolve(
       { action: 'BUILD', details: { toward: targetCity }, reasoning: '', planHorizon: '' },
-      snapshot,
-      context,
-      route.startingCity,
+      snapshot, context, route.startingCity,
     );
 
     if (buildResult.success && buildResult.plan) {
@@ -182,88 +175,27 @@ export class PlanExecutor {
         plan: buildResult.plan,
         routeComplete: false,
         routeAbandoned: false,
-        updatedRoute: route,
+        updatedRoute: { ...route, phase: 'build' },
         description: `${tag} Building toward ${targetCity}`,
       };
     }
 
-    // Build failed — still stay in build phase, don't abandon route yet
-    // (might succeed next turn with more budget)
     console.warn(`${tag} Build toward ${targetCity} failed: ${buildResult.error}`);
     return {
       plan: { type: AIActionType.PassTurn },
       routeComplete: false,
       routeAbandoned: false,
-      updatedRoute: route,
+      updatedRoute: { ...route, phase: 'build' },
       description: `${tag} Build failed (${buildResult.error}), will retry next turn`,
     };
   }
 
-  /**
-   * Travel phase: check if bot is at target city, if not → move toward it.
-   */
-  private static async executeTravelPhase(
-    route: StrategicRoute,
-    stop: RouteStop,
-    snapshot: WorldSnapshot,
-    context: GameContext,
-    tag: string,
-  ): Promise<PlanExecutorResult> {
-    const targetCity = stop.city;
-
-    // Check if bot is already at the target city
-    const atCity = PlanExecutor.isBotAtCity(context, targetCity);
-    if (atCity) {
-      console.log(`${tag} Bot is at ${targetCity}, transitioning to 'act' phase`);
-      const updatedRoute = PlanExecutor.advancePhase(route, 'act');
-      // Recurse into act phase immediately (same turn)
-      return PlanExecutor.executeActPhase(updatedRoute, stop, snapshot, context, tag);
-    }
-
-    // During initialBuild phase, bot can't move — stay in travel phase
-    if (context.isInitialBuild) {
-      return {
-        plan: { type: AIActionType.PassTurn },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: route,
-        description: `${tag} Initial build phase — cannot move yet`,
-      };
-    }
-
-    // Try to move toward the target city
-    const moveResult = await ActionResolver.resolve(
-      { action: 'MOVE', details: { to: targetCity }, reasoning: '', planHorizon: '' },
-      snapshot,
-      context,
-    );
-
-    if (moveResult.success && moveResult.plan) {
-      return {
-        plan: moveResult.plan,
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: route,
-        description: `${tag} Moving toward ${targetCity}`,
-      };
-    }
-
-    // Move failed — city might not be reachable via our track. Try building instead.
-    console.warn(`${tag} Move to ${targetCity} failed: ${moveResult.error}. Trying BUILD fallback.`);
-    const updatedRoute = PlanExecutor.advancePhase(route, 'build');
-    return {
-      plan: { type: AIActionType.PassTurn },
-      routeComplete: false,
-      routeAbandoned: false,
-      updatedRoute,
-      description: `${tag} Move failed, reverting to build phase`,
-    };
-  }
+  // ── Core actions ────────────────────────────────────────────────────────
 
   /**
-   * Act phase: execute the stop action (pickup or deliver).
+   * Execute the stop action (pickup or deliver) when bot is at the stop city.
    */
-  private static async executeActPhase(
+  private static async executeAction(
     route: StrategicRoute,
     stop: RouteStop,
     snapshot: WorldSnapshot,
@@ -275,27 +207,25 @@ export class PlanExecutor {
     if (stop.action === 'pickup') {
       actionResult = await ActionResolver.resolve(
         { action: 'PICKUP', details: { load: stop.loadType, at: stop.city }, reasoning: '', planHorizon: '' },
-        snapshot,
-        context,
+        snapshot, context,
       );
     } else {
-      // deliver
       actionResult = await ActionResolver.resolve(
         { action: 'DELIVER', details: { load: stop.loadType, at: stop.city }, reasoning: '', planHorizon: '' },
-        snapshot,
-        context,
+        snapshot, context,
       );
     }
 
     if (actionResult.success && actionResult.plan) {
-      // Advance to next stop
       const isLastStop = route.currentStopIndex >= route.stops.length - 1;
+      const updatedRoute = PlanExecutor.advanceStop(route);
+
       if (isLastStop) {
         return {
           plan: actionResult.plan,
           routeComplete: true,
           routeAbandoned: false,
-          updatedRoute: PlanExecutor.advanceStop(route),
+          updatedRoute,
           description: `${tag} Completed final stop: ${stop.action} ${stop.loadType} at ${stop.city}. Route complete!`,
         };
       }
@@ -304,7 +234,7 @@ export class PlanExecutor {
         plan: actionResult.plan,
         routeComplete: false,
         routeAbandoned: false,
-        updatedRoute: PlanExecutor.advanceStop(route),
+        updatedRoute,
         description: `${tag} ${stop.action} ${stop.loadType} at ${stop.city}. Advancing to next stop.`,
       };
     }
@@ -315,17 +245,103 @@ export class PlanExecutor {
       plan: { type: AIActionType.PassTurn },
       routeComplete: false,
       routeAbandoned: true,
-      updatedRoute: route,
+      updatedRoute: { ...route, phase: 'act' },
       description: `${tag} ${stop.action} failed (${actionResult.error}). Route abandoned.`,
     };
   }
 
   /**
-   * Find a build target from demand cards — the highest-payout demand whose
+   * Move toward the stop city (city is on network, bot is not there yet).
+   */
+  private static async resolveMove(
+    route: StrategicRoute,
+    stop: RouteStop,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    tag: string,
+  ): Promise<PlanExecutorResult> {
+    const moveResult = await ActionResolver.resolve(
+      { action: 'MOVE', details: { to: stop.city }, reasoning: '', planHorizon: '' },
+      snapshot, context,
+    );
+
+    if (moveResult.success && moveResult.plan) {
+      return {
+        plan: moveResult.plan,
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: { ...route, phase: 'travel' },
+        description: `${tag} Moving toward ${stop.city}`,
+      };
+    }
+
+    // Move failed — city might not actually be reachable via our track. Fall back to build.
+    console.warn(`${tag} Move to ${stop.city} failed: ${moveResult.error}. Falling back to build.`);
+    return {
+      plan: { type: AIActionType.PassTurn },
+      routeComplete: false,
+      routeAbandoned: false,
+      updatedRoute: { ...route, phase: 'build' },
+      description: `${tag} Move failed, falling back to build`,
+    };
+  }
+
+  /**
+   * Build toward the stop city (city is not on network).
+   */
+  private static async resolveBuild(
+    route: StrategicRoute,
+    stop: RouteStop,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    tag: string,
+  ): Promise<PlanExecutorResult> {
+    if (!context.canBuild) {
+      return {
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: { ...route, phase: 'build' },
+        description: `${tag} Cannot build this turn (budget exhausted). Waiting.`,
+      };
+    }
+
+    const buildResult = await ActionResolver.resolve(
+      { action: 'BUILD', details: { toward: stop.city }, reasoning: '', planHorizon: '' },
+      snapshot, context, route.startingCity,
+    );
+
+    if (buildResult.success && buildResult.plan) {
+      return {
+        plan: buildResult.plan,
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: { ...route, phase: 'build' },
+        description: `${tag} Building toward ${stop.city}`,
+      };
+    }
+
+    // Build failed — stay in build phase, retry next turn
+    console.warn(`${tag} Build toward ${stop.city} failed: ${buildResult.error}`);
+    return {
+      plan: { type: AIActionType.PassTurn },
+      routeComplete: false,
+      routeAbandoned: false,
+      updatedRoute: { ...route, phase: 'build' },
+      description: `${tag} Build failed (${buildResult.error}), will retry next turn`,
+    };
+  }
+
+  /**
+   * Find a build target from demand cards — the cheapest track cost demand whose
    * delivery or supply city is not yet on the track network.
    */
   static findDemandBuildTarget(context: GameContext): string | null {
-    const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
+    const sorted = [...context.demands].sort((a, b) => {
+      const aCost = Math.min(a.estimatedTrackCostToSupply || Infinity, a.estimatedTrackCostToDelivery || Infinity);
+      const bCost = Math.min(b.estimatedTrackCostToSupply || Infinity, b.estimatedTrackCostToDelivery || Infinity);
+      return aCost - bCost;
+    });
     for (const demand of sorted) {
       if (!demand.isDeliveryOnNetwork) return demand.deliveryCity;
       if (!demand.isSupplyOnNetwork) return demand.supplyCity;
@@ -350,11 +366,6 @@ export class PlanExecutor {
   }
 
   // ── Route State Management ────────────────────────────────────────────────
-
-  /** Advance to a new phase within the same stop */
-  private static advancePhase(route: StrategicRoute, newPhase: 'build' | 'travel' | 'act'): StrategicRoute {
-    return { ...route, phase: newPhase };
-  }
 
   /** Advance to the next stop, reset phase to 'build' */
   private static advanceStop(route: StrategicRoute): StrategicRoute {
@@ -381,10 +392,7 @@ export class PlanExecutor {
   /** Check if the bot is currently at the named city */
   private static isBotAtCity(context: GameContext, cityName: string): boolean {
     if (!context.position) return false;
-    // Check direct city name match from context
     if (context.position.city === cityName) return true;
-    // Check if city is in reachable cities with 0 distance (we're AT it)
-    // This is a heuristic — the definitive check is in ActionResolver.isBotAtCity
     return false;
   }
 }

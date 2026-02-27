@@ -4,6 +4,7 @@ import {
   WorldSnapshot,
   TurnPlan,
   GameContext,
+  DemandContext,
   DeliveryOpportunity,
   PickupOpportunity,
   TerrainType,
@@ -42,6 +43,7 @@ function makeContext(overrides?: Partial<GameContext>): GameContext {
     capacity: 2,
     loads: [],
     connectedMajorCities: ['Berlin'],
+    unconnectedMajorCities: [],
     totalMajorCities: 8,
     trackSummary: '5 segments',
     turnBuildCost: 0,
@@ -389,6 +391,124 @@ describe('GuardrailEnforcer', () => {
           load: 'Coal',
           city: 'Berlin',
         };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+    });
+
+    describe('Guardrail 4: No passing while carrying loads', () => {
+      function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
+        return {
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Bordeaux',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          isSupplyReachable: false,
+          isDeliveryReachable: false,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 10,
+          estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
+          estimatedTurns: 5,
+          ...overrides,
+        };
+      }
+
+      it('should override PassTurn to MoveTrain when bot has loads and delivery is on network', () => {
+        const ctx = makeContext({
+          loads: ['Wine'],
+          demands: [
+            makeDemand({ isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Berlin', payout: 20 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.MoveTrain);
+        expect(result.reason).toContain('Blocked PASS with loads');
+        expect(result.reason).toContain('Berlin');
+      });
+
+      it('should pick highest-payout delivery when multiple demands match', () => {
+        const ctx = makeContext({
+          loads: ['Wine', 'Coal'],
+          demands: [
+            makeDemand({ loadType: 'Coal', isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Hamburg', payout: 10 }),
+            makeDemand({ loadType: 'Wine', isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Paris', payout: 30 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.MoveTrain);
+        expect(result.reason).toContain('Paris'); // highest payout demand
+      });
+
+      it('should fall back to supply city movement when no delivery is on network', () => {
+        const ctx = makeContext({
+          loads: ['Coal'],
+          demands: [
+            makeDemand({ loadType: 'Wine', isLoadOnTrain: false, isSupplyOnNetwork: true, supplyCity: 'Bordeaux', payout: 25 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.MoveTrain);
+        expect(result.reason).toContain('Bordeaux');
+        expect(result.reason).toContain('pick up');
+      });
+
+      it('should NOT override when bot has no loads', () => {
+        const ctx = makeContext({
+          loads: [],
+          demands: [makeDemand({ isLoadOnTrain: false, isDeliveryOnNetwork: true })],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT override when plan is not PassTurn', () => {
+        const ctx = makeContext({
+          loads: ['Wine'],
+          demands: [makeDemand({ isLoadOnTrain: true, isDeliveryOnNetwork: true })],
+        });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT override when no demands have delivery or supply on network', () => {
+        const ctx = makeContext({
+          loads: ['Wine'],
+          demands: [
+            makeDemand({ isLoadOnTrain: true, isDeliveryOnNetwork: false }),
+            makeDemand({ isLoadOnTrain: false, isSupplyOnNetwork: false }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
 
         const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 

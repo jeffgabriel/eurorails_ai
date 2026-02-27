@@ -49,6 +49,9 @@ jest.mock('../../services/ai/MapTopology', () => ({
     return 1; // Clear
   }),
   gridToPixel: jest.fn(() => ({ x: 100, y: 200 })),
+  hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number) => {
+    return Math.abs(r1 - r2) + Math.abs(c1 - c2);
+  }),
   _resetCache: jest.fn(),
 }));
 
@@ -78,6 +81,14 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 // Mock connectedMajorCities (used by WorldSnapshotService)
 jest.mock('../../services/ai/connectedMajorCities', () => ({
   getConnectedMajorCityCount: jest.fn(() => 0),
+}));
+
+// Mock BotMemory to inject active routes so PlanExecutor drives decisions
+// (heuristic fallback was removed in BE-002; without an LLM key or active route, bot passes)
+jest.mock('../../services/ai/BotMemory', () => ({
+  getMemory: jest.fn(),
+  updateMemory: jest.fn(),
+  clearMemory: jest.fn(),
 }));
 
 // Mock trackUsageFees (used by ActionResolver for movement validation)
@@ -143,12 +154,28 @@ import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
-import { AIActionType, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
+import { getMemory, updateMemory } from '../../services/ai/BotMemory';
+import { AIActionType, TerrainType, TrackSegment, StrategicRoute } from '../../../shared/types/GameTypes';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<any>>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 const mockComputeBuild = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
+const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
+
+/** Default route targeting Berlin (not on network) — drives PlanExecutor to BUILD */
+function makeBuildRoute(): StrategicRoute {
+  return {
+    stops: [
+      { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+      { action: 'deliver', loadType: 'Steel', city: 'Paris', demandCardId: 1, payment: 50 },
+    ],
+    currentStopIndex: 0,
+    phase: 'build',
+    createdAtTurn: 1,
+    reasoning: 'Test route for integration',
+  };
+}
 
 function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
@@ -171,7 +198,7 @@ describe('Bot Build Track Flow (Integration)', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Remove API keys so bot uses heuristic fallback path (no real LLM calls)
+    // Remove API keys so bot won't attempt real LLM calls
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GOOGLE_AI_API_KEY;
 
@@ -181,6 +208,23 @@ describe('Bot Build Track Flow (Integration)', () => {
       release: jest.fn<() => void>(),
     };
     mockConnect.mockResolvedValue(mockClient);
+
+    // Default memory: active route targeting Berlin (drives PlanExecutor BUILD decisions)
+    mockGetMemory.mockReturnValue({
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      consecutivePassTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: 0,
+      totalEarnings: 0,
+      turnNumber: 2,
+      activeRoute: makeBuildRoute(),
+      turnsOnRoute: 1,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+    });
   });
 
   afterAll(() => {
@@ -230,7 +274,7 @@ describe('Bot Build Track Flow (Integration)', () => {
     it('should build track segments, deduct money, save audit, and emit events', async () => {
       const seg = makeSegment(29, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
-      // v6.3 heuristic needs existing track to estimate costs for build targets
+      // PlanExecutor needs existing track to build toward route target
       const existingSeg = makeSegment(29, 32, 28, 32, 1);
       setupWorldSnapshotQuery({ segments: JSON.stringify([existingSeg]) });
 
@@ -305,8 +349,15 @@ describe('Bot Build Track Flow (Integration)', () => {
   });
 
   describe('fallback to PassTurn', () => {
-    it('should fall back to PassTurn when no segments can be built', async () => {
-      mockComputeBuild.mockReturnValue([]); // No buildable segments
+    it('should fall back to PassTurn when no active route and no LLM key', async () => {
+      // No active route → no LLM key → PassTurn
+      mockGetMemory.mockReturnValue({
+        currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
+        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+      });
+      mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();
 
       const result = await AIStrategyEngine.takeTurn(gameId, botId);
@@ -316,7 +367,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       expect(result.segmentsBuilt).toBe(0);
     });
 
-    it('should fall back to PassTurn when bot has no money', async () => {
+    it('should fall back to PassTurn when bot has no money and build fails', async () => {
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery({ money: 0 });
 
@@ -346,9 +397,8 @@ describe('Bot Build Track Flow (Integration)', () => {
   });
 
   describe('initial build phase', () => {
-    it('should build track on cold start without LLM (heuristic picks best demand city)', async () => {
-      // v6.3: The heuristic fallback can now build on cold start by iterating
-      // all demands and trying to build toward each delivery city.
+    it('should build track during initialBuild using active route', async () => {
+      // PlanExecutor: isInitialBuild + Berlin not on network → BUILD toward Berlin
       const seg = makeSegment(29, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
       setupWorldSnapshotQuery({
@@ -363,7 +413,6 @@ describe('Bot Build Track Flow (Integration)', () => {
     });
 
     it('should build track during initial phase when bot has existing segments', async () => {
-      // v6.3: With existing segments, the heuristic can estimate costs and build toward targets
       const existingSeg = makeSegment(29, 32, 28, 32, 1);
       const newSeg = makeSegment(28, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([newSeg]);
@@ -403,6 +452,13 @@ describe('Bot Build Track Flow (Integration)', () => {
 
   describe('socket events', () => {
     it('should NOT emit track:updated on PassTurn', async () => {
+      // No active route → PassTurn
+      mockGetMemory.mockReturnValue({
+        currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
+        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+      });
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();
 
@@ -415,6 +471,7 @@ describe('Bot Build Track Flow (Integration)', () => {
     });
 
     it('should emit track:updated with correct payload on BuildTrack', async () => {
+      // Active route drives BUILD toward Berlin → track:updated emitted
       const existingSeg = makeSegment(29, 32, 28, 32, 1);
       const seg = makeSegment(28, 32, 29, 31, 1);
       mockComputeBuild.mockReturnValue([seg]);
@@ -435,6 +492,13 @@ describe('Bot Build Track Flow (Integration)', () => {
 
   describe('duration tracking', () => {
     it('should include durationMs in result', async () => {
+      // No active route → PassTurn (simplest path for timing test)
+      mockGetMemory.mockReturnValue({
+        currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
+        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+      });
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();
 

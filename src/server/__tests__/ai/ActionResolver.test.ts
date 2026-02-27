@@ -41,7 +41,7 @@ jest.mock('../../../shared/services/majorCityGroups');
 
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints, hexDistance } from '../../services/ai/MapTopology';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 const mockComputeBuildSegments = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
@@ -49,6 +49,7 @@ const mockComputeTrackUsageForMove = computeTrackUsageForMove as jest.MockedFunc
 const mockLoadGridPoints = loadGridPoints as jest.MockedFunction<typeof loadGridPoints>;
 const mockGetMajorCityGroups = getMajorCityGroups as jest.MockedFunction<typeof getMajorCityGroups>;
 const mockGetMajorCityLookup = getMajorCityLookup as jest.MockedFunction<typeof getMajorCityLookup>;
+const mockHexDistance = hexDistance as jest.MockedFunction<typeof hexDistance>;
 
 // ─── Factory helpers ─────────────────────────────────────────────────────────
 
@@ -101,6 +102,7 @@ function makeGameContext(overrides: Partial<GameContext> = {}): GameContext {
     capacity: 2,
     loads: [],
     connectedMajorCities: [],
+    unconnectedMajorCities: [],
     totalMajorCities: 20,
     trackSummary: '1 segment',
     turnBuildCost: 0,
@@ -508,7 +510,40 @@ describe('ActionResolver', () => {
 
       expect(result.success).toBe(true);
       const targetPositions = mockComputeBuildSegments.mock.calls[0][5] as GridCoord[];
-      expect(targetPositions.length).toBe(3); // center + 2 outposts
+      expect(targetPositions.length).toBe(2); // outposts only (center excluded for BUILD)
+    });
+
+    it('should sort build targets by proximity to track frontier', async () => {
+      // Two outposts: one close to frontier (row 6), one far (row 20)
+      setupGridPoints([]);
+      setupMajorCityGroups([
+        {
+          cityName: 'Berlin',
+          center: { row: 13, col: 13 },
+          outposts: [
+            { row: 20, col: 20 }, // far outpost
+            { row: 6, col: 6 },   // near outpost (close to bot track at 5,5→5,6)
+          ],
+        },
+      ]);
+      // Mock hexDistance to return realistic distances
+      mockHexDistance.mockImplementation((r1, c1, r2, c2) => {
+        // Simple Manhattan-like distance for testing
+        return Math.abs(r1 - r2) + Math.abs(c1 - c2);
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 6, 6, 6)]);
+
+      await ActionResolver.resolve(
+        makeBuildIntent('Berlin'),
+        makeWorldSnapshot(),
+        makeGameContext(),
+      );
+
+      const targetPositions = mockComputeBuildSegments.mock.calls[0][5] as GridCoord[];
+      expect(targetPositions.length).toBe(2);
+      // Near outpost (6,6) should come before far outpost (20,20) after sorting
+      expect(targetPositions[0]).toEqual({ row: 6, col: 6 });
+      expect(targetPositions[1]).toEqual({ row: 20, col: 20 });
     });
 
     it('should accept "BUILD" string as action alias', async () => {
@@ -1752,6 +1787,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true,
             isLoadOnTrain: false,
             ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           },
         ],
       });
@@ -1790,6 +1826,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true,
             isLoadOnTrain: true,
             ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           },
         ],
       });
@@ -1838,6 +1875,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true,
             isLoadOnTrain: true,
             ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           },
         ],
       });
@@ -1849,12 +1887,12 @@ describe('ActionResolver', () => {
       expect(plan.type).toBe(AIActionType.PassTurn);
     });
 
-    it('should sort demands by highest payout first for build', async () => {
+    it('should sort demands by cheapest track cost first for build', async () => {
       setupGridPoints([
         { row: 20, col: 20, name: 'CheapCity' },
         { row: 30, col: 30, name: 'ExpensiveCity' },
       ]);
-      // Only succeed for the first call (highest payout should be tried first)
+      // Only succeed for the first call (cheapest track cost should be tried first)
       mockComputeBuildSegments
         .mockReturnValueOnce([makeSegment(5, 5, 6, 6)])
         .mockReturnValue([]);
@@ -1869,6 +1907,7 @@ describe('ActionResolver', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'B', deliveryCity: 'ExpensiveCity',
@@ -1876,6 +1915,7 @@ describe('ActionResolver', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           },
         ],
       });
@@ -1883,11 +1923,169 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.heuristicFallback(context, makeWorldSnapshot());
 
       expect(result.success).toBe(true);
-      // The build should have targeted ExpensiveCity first (highest payout=25)
+      // The build should have targeted CheapCity first (cheapest track cost=10)
       const callTargets = mockComputeBuildSegments.mock.calls.map(
         call => (call[5] as GridCoord[])?.[0],
       );
-      expect(callTargets[0]).toEqual(expect.objectContaining({ row: 30, col: 30 }));
+      expect(callTargets[0]).toEqual(expect.objectContaining({ row: 20, col: 20 }));
+    });
+
+    it('should discard hand when all demands are unachievable within budget', async () => {
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: true,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'FarA', deliveryCity: 'FarB',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 40,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+          {
+            cardIndex: 1, loadType: 'Gold', supplyCity: 'FarC', deliveryCity: 'FarD',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 50, estimatedTrackCostToDelivery: 60,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+
+      const snapshot = makeWorldSnapshot({ bot: { money: 10 } as any });
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDiscardHand;
+      expect(plan.type).toBe(AIActionType.DiscardHand);
+    });
+
+    it('should NOT discard hand when at least one demand is achievable', async () => {
+      setupGridPoints([
+        { row: 5, col: 5, name: 'HomeCity' },
+        { row: 8, col: 8, name: 'NearCity' },
+      ]);
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 5, 6, 6)]);
+
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: true,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'NearCity', deliveryCity: 'HomeCity',
+            payout: 15, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+
+      const snapshot = makeWorldSnapshot({ bot: { money: 10 } as any });
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Should BUILD, not discard (supply cost 5 <= budget 10)
+      expect(result.plan!.type).toBe(AIActionType.BuildTrack);
+    });
+
+    it('should NOT discard hand during initialBuild even if demands unachievable', async () => {
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: true,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'FarA', deliveryCity: 'FarB',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 100, estimatedTrackCostToDelivery: 100,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+
+      const snapshot = makeWorldSnapshot({ bot: { money: 5 } as any });
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Should PASS, not discard (initialBuild blocks discard)
+      expect(result.plan!.type).toBe(AIActionType.PassTurn);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // applyPlanToState — BE-003
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('applyPlanToState', () => {
+    it('should add delivery payout to bot money and remove load and demand', () => {
+      const resolvedDemands: ResolvedDemand[] = [
+        { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Wine', payment: 12 }] },
+      ];
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          money: 5,
+          loads: ['Wine'],
+          resolvedDemands,
+        } as any,
+      });
+      const context = makeGameContext({ money: 5, loads: ['Wine'] });
+
+      const plan: TurnPlanDeliverLoad = {
+        type: AIActionType.DeliverLoad,
+        load: 'Wine',
+        city: 'Berlin',
+        cardId: 42,
+        payout: 12,
+      };
+
+      ActionResolver.applyPlanToState(plan, snapshot, context);
+
+      expect(snapshot.bot.money).toBe(17); // 5 + 12
+      expect(context.money).toBe(17);
+      expect(snapshot.bot.loads).toEqual([]);
+      expect(context.loads).toEqual([]);
+      expect(snapshot.bot.resolvedDemands).toEqual([]);
+    });
+
+    it('should only remove the delivered load when carrying multiple loads', () => {
+      const resolvedDemands: ResolvedDemand[] = [
+        { cardId: 10, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 8 }] },
+        { cardId: 20, demands: [{ city: 'Paris', loadType: 'Wine', payment: 15 }] },
+      ];
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          money: 30,
+          loads: ['Coal', 'Wine'],
+          resolvedDemands,
+        } as any,
+      });
+      const context = makeGameContext({ money: 30, loads: ['Coal', 'Wine'] });
+
+      const plan: TurnPlanDeliverLoad = {
+        type: AIActionType.DeliverLoad,
+        load: 'Coal',
+        city: 'Berlin',
+        cardId: 10,
+        payout: 8,
+      };
+
+      ActionResolver.applyPlanToState(plan, snapshot, context);
+
+      expect(snapshot.bot.money).toBe(38); // 30 + 8
+      expect(snapshot.bot.loads).toEqual(['Wine']); // Coal removed, Wine remains
+      expect(snapshot.bot.resolvedDemands).toHaveLength(1);
+      expect(snapshot.bot.resolvedDemands[0].cardId).toBe(20); // card 10 removed
     });
   });
 

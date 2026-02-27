@@ -8,7 +8,7 @@
  *   4. GuardrailEnforcer.checkPlan()   — hard safety rules
  *   5. TurnExecutor.executePlan()      — execute against DB
  *
- * LLMStrategyBrain handles retry loop + heuristic fallback internally.
+ * LLMStrategyBrain handles retry loop internally.
  * AIStrategyEngine just orchestrates the stages and manages memory/logging.
  */
 
@@ -61,7 +61,7 @@ export class AIStrategyEngine {
    * Execute a complete bot turn via the 6-stage pipeline:
    *   1. WorldSnapshot.capture()
    *   2. ContextBuilder.build()
-   *   3. LLMStrategyBrain.decideAction() (includes retry + heuristic fallback)
+   *   3. LLMStrategyBrain.decideAction() (includes retry loop)
    *   4. GuardrailEnforcer.checkPlan()
    *   5. TurnExecutor.executePlan()
    *
@@ -106,6 +106,11 @@ export class AIStrategyEngine {
       }
 
       console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canPickup=${context.canPickup.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities, onNetwork=${context.citiesOnNetwork.length} cities`);
+      if (context.phase) {
+        const uc = context.unconnectedMajorCities ?? [];
+        const ucStr = uc.length > 0 ? uc.map(u => `${u.cityName}~${u.estimatedCost}M`).join(', ') : 'none';
+        console.log(`${tag} Victory: phase=${context.phase}, unconnected=${ucStr}`);
+      }
 
       // ── Stage 3: Decision Gate — activeRoute check ──
       // If the bot has an active route, auto-execute the next step.
@@ -144,7 +149,7 @@ export class AIStrategyEngine {
         const brain = AIStrategyEngine.createBrain(botConfig!);
 
         // Try to plan a route first
-        const routeResult = await brain.planRoute(snapshot, context);
+        const routeResult = await brain.planRoute(snapshot, context, gridPoints);
 
         if (routeResult) {
           activeRoute = routeResult.route;
@@ -171,26 +176,25 @@ export class AIStrategyEngine {
             activeRoute = execResult.updatedRoute;
           }
         } else {
-          // Route planning failed — fall back to heuristic
-          console.warn(`${tag} Route planning failed, falling back to heuristic`);
-          const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+          // Route planning failed — pass turn with debug logging
+          console.error(`${tag} [LLM] Route planning failed — passing turn`);
           decision = {
-            plan: fallback.plan ?? { type: AIActionType.PassTurn },
-            reasoning: '[llm-failed-heuristic] ' + (fallback.error || 'Heuristic fallback after LLM failure'),
+            plan: { type: AIActionType.PassTurn },
+            reasoning: '[llm-failed] LLM planning failed — passing turn',
             planHorizon: 'Immediate',
-            model: 'heuristic',
+            model: 'llm-failed',
             latencyMs: 0,
             retried: false,
           };
         }
       } else {
-        // No LLM key — use heuristic fallback directly
-        const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+        // No LLM key — pass turn with debug logging
+        console.error(`${tag} [LLM] No API key configured — passing turn`);
         decision = {
-          plan: fallback.plan ?? { type: AIActionType.PassTurn },
-          reasoning: '[no API key] ' + (fallback.error || 'Heuristic fallback'),
+          plan: { type: AIActionType.PassTurn },
+          reasoning: '[no-api-key] No LLM API key configured — passing turn',
           planHorizon: 'Immediate',
-          model: 'heuristic',
+          model: 'no-api-key',
           latencyMs: 0,
           retried: false,
         };
@@ -200,6 +204,43 @@ export class AIStrategyEngine {
 
       // ── Stage 3b: Compose full turn (fill missing phases) ──
       decision.plan = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
+
+      // ── Stage 3c: Sync route after TurnComposer delivery ──
+      // TurnComposer.scanPathOpportunities may deliver loads along a MOVE path.
+      // Detect deliveries inside composed MultiAction steps to advance the route.
+      const composedSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+      const hasDelivery = composedSteps.some(s => s.type === AIActionType.DeliverLoad);
+
+      if (activeRoute && !routeWasCompleted && !routeWasAbandoned) {
+        const currentStop = activeRoute.stops[activeRoute.currentStopIndex];
+        if (currentStop?.action === 'deliver') {
+          const matchesRouteStop = composedSteps.some(
+            s => s.type === AIActionType.DeliverLoad &&
+              'load' in s && s.load === currentStop.loadType,
+          );
+          if (matchesRouteStop) {
+            const isLastStop = activeRoute.currentStopIndex >= activeRoute.stops.length - 1;
+            if (isLastStop) {
+              routeWasCompleted = true;
+              console.log(`${tag} Route completed via TurnComposer delivery of ${currentStop.loadType}`);
+            } else {
+              activeRoute = {
+                ...activeRoute,
+                currentStopIndex: activeRoute.currentStopIndex + 1,
+                phase: 'build',
+              };
+              console.log(`${tag} Route advanced via TurnComposer delivery of ${currentStop.loadType}`);
+            }
+          }
+        }
+      }
+
+      // Clear active route after any delivery — new demand card drawn means
+      // LLM should re-evaluate the route on the next turn.
+      if (hasDelivery && activeRoute && !routeWasCompleted && !routeWasAbandoned) {
+        console.log(`${tag} Delivery detected in composed plan — clearing active route for re-planning`);
+        activeRoute = null;
+      }
 
       // ── Stage 4: Apply guardrails ──
       let guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot);
@@ -293,6 +334,10 @@ export class AIStrategyEngine {
       } else if (activeRoute) {
         memoryPatch.activeRoute = activeRoute;
         memoryPatch.turnsOnRoute = (memory.turnsOnRoute ?? 0) + 1;
+      } else if (memory.activeRoute && !activeRoute) {
+        // Route was cleared mid-turn (e.g., delivery triggered re-planning)
+        memoryPatch.activeRoute = null;
+        memoryPatch.turnsOnRoute = 0;
       }
 
       updateMemory(gameId, botPlayerId, memoryPatch);

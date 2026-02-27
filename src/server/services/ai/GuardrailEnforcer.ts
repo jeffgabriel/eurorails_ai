@@ -104,6 +104,42 @@ export class GuardrailEnforcer {
       };
     }
 
+    // Guardrail 4: No passing while carrying loads
+    // If bot has loads, it should do something productive instead of passing.
+    if (planType === AIActionType.PassTurn && context.loads.length > 0) {
+      // Try to move toward highest-payout delivery city on network
+      const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
+      for (const demand of sorted) {
+        if (demand.isLoadOnTrain && demand.isDeliveryOnNetwork) {
+          return {
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [],
+              fees: new Set<string>(),
+              totalFee: 0,
+            },
+            overridden: true,
+            reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.deliveryCity} for ${demand.payout}M delivery`,
+          };
+        }
+      }
+      // Fallback: move toward any supply city on network
+      for (const demand of sorted) {
+        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork) {
+          return {
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [],
+              fees: new Set<string>(),
+              totalFee: 0,
+            },
+            overridden: true,
+            reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.supplyCity} to pick up ${demand.loadType}`,
+          };
+        }
+      }
+    }
+
     // No guardrail fired — return plan unchanged
     return {
       plan,

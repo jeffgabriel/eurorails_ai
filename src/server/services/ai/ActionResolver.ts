@@ -27,7 +27,7 @@ import {
   TRACK_USAGE_FEE,
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, GridCoord, GridPointData } from './MapTopology';
+import { loadGridPoints, GridCoord, GridPointData, hexDistance } from './MapTopology';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
@@ -114,8 +114,8 @@ export class ActionResolver {
       return { success: false, error: 'BUILD requires details.toward specifying the target city name.' };
     }
 
-    // Find target mileposts for the named city
-    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
+    // Find target mileposts for the named city (exclude unbuildable major city centers)
+    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot, true);
     if (targetPositions.length === 0) {
       return { success: false, error: `Target city "${targetCity}" not found on the map.` };
     }
@@ -155,6 +155,17 @@ export class ActionResolver {
     if (startPositions.length === 0) {
       return { success: false, error: 'No valid start positions for building track.' };
     }
+
+    // Sort target positions by proximity to track frontier (or start positions for cold-start).
+    // This biases Dijkstra path selection toward the closest connection point.
+    const referencePoints = hasTrack
+      ? ActionResolver.getTrackFrontier(snapshot)
+      : startPositions;
+    targetPositions.sort((a, b) => {
+      const distA = Math.min(...referencePoints.map(rp => hexDistance(a.row, a.col, rp.row, rp.col)));
+      const distB = Math.min(...referencePoints.map(rp => hexDistance(b.row, b.col, rp.row, rp.col)));
+      return distA - distB;
+    });
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
 
@@ -659,6 +670,9 @@ export class ActionResolver {
   }
 
   /**
+   * @deprecated Use PassTurn with debug overlay logging instead.
+   * All call sites removed in favor of visible LLM failure handling.
+   *
    * Heuristic fallback when the LLM fails twice.
    * Priority: deliver > pickup > move to pickup/delivery > build toward best demand > pass.
    *
@@ -715,13 +729,33 @@ export class ActionResolver {
       }
     }
 
+    // 2c. DISCARD HAND if all demands are unachievable within current budget.
+    // Better to draw fresh cards that might match existing track than to
+    // spend remaining money building aimlessly toward unreachable cities.
+    if (!context.isInitialBuild && context.demands.length > 0) {
+      const budget = snapshot.bot.money;
+      const allUnachievable = context.demands.every(d => {
+        const supplyCost = d.isSupplyOnNetwork ? 0 : (d.estimatedTrackCostToSupply || 0);
+        const deliveryCost = d.isDeliveryOnNetwork ? 0 : (d.estimatedTrackCostToDelivery || 0);
+        return (supplyCost + deliveryCost) > budget;
+      });
+      if (allUnachievable) {
+        return ActionResolver.resolveDiscard(snapshot);
+      }
+    }
+
     // 3. Try to BUILD toward the best demand
     if (context.canBuild && context.demands.length > 0) {
-      // Sort demands: prefer those where supply is reachable but delivery isn't
-      // (meaning we need to build toward the delivery city), highest payout first.
+      // Sort demands: prefer cheapest track cost (most achievable with limited budget).
+      // The heuristic fires when the LLM is unavailable, so pick safe, short builds
+      // rather than chasing expensive distant demands.
       const buildCandidates = [...context.demands]
         .filter(d => d.estimatedTrackCostToDelivery > 0 || d.estimatedTrackCostToSupply > 0)
-        .sort((a, b) => b.payout - a.payout);
+        .sort((a, b) => {
+          const aCost = Math.min(a.estimatedTrackCostToSupply || Infinity, a.estimatedTrackCostToDelivery || Infinity);
+          const bCost = Math.min(b.estimatedTrackCostToSupply || Infinity, b.estimatedTrackCostToDelivery || Infinity);
+          return aCost - bCost;
+        });
 
       for (const demand of buildCandidates) {
         // Try building toward supply city if load isn't on train and supply isn't reachable
@@ -745,8 +779,12 @@ export class ActionResolver {
         }
       }
 
-      // If all demands are on network, try building toward any demand with high payout
-      for (const demand of [...context.demands].sort((a, b) => b.payout - a.payout)) {
+      // If all demands are on network, try building toward any demand with cheapest track cost
+      for (const demand of [...context.demands].sort((a, b) => {
+        const aCost = Math.min(a.estimatedTrackCostToSupply || Infinity, a.estimatedTrackCostToDelivery || Infinity);
+        const bCost = Math.min(b.estimatedTrackCostToSupply || Infinity, b.estimatedTrackCostToDelivery || Infinity);
+        return aCost - bCost;
+      })) {
         const result = await ActionResolver.resolveBuild(
           { toward: demand.deliveryCity },
           snapshot,
@@ -773,6 +811,7 @@ export class ActionResolver {
   private static findCityMilepost(
     cityName: string,
     snapshot: WorldSnapshot,
+    forBuild = false,
   ): GridCoord[] {
     const grid = loadGridPoints();
     const targets: GridCoord[] = [];
@@ -794,6 +833,16 @@ export class ActionResolver {
         }
       }
     }
+
+    // For BUILD actions, exclude major city centers (they are inside the
+    // unbuildable red area and can never be reached by Dijkstra)
+    if (forBuild && targets.length > 1) {
+      const groups = getMajorCityGroups();
+      const centerSet = new Set(groups.map(g => `${g.center.row},${g.center.col}`));
+      const filtered = targets.filter(t => !centerSet.has(`${t.row},${t.col}`));
+      if (filtered.length > 0) return filtered;
+    }
+
     return targets;
   }
 

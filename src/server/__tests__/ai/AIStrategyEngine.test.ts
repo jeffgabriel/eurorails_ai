@@ -124,6 +124,13 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   },
 }));
 
+// Mock TurnComposer — passthrough (TurnComposer has its own test suite)
+jest.mock('../../services/ai/TurnComposer', () => ({
+  TurnComposer: {
+    compose: jest.fn((plan: any) => Promise.resolve(plan)),
+  },
+}));
+
 // Mock DecisionLogger
 jest.mock('../../services/ai/DecisionLogger', () => ({
   initTurnLog: jest.fn(),
@@ -160,6 +167,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
+import { TurnComposer } from '../../services/ai/TurnComposer';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
@@ -184,6 +192,7 @@ const mockPlanExecutorExecute = PlanExecutor.execute as jest.MockedFunction<type
 const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
 const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.MockedFunction<typeof ActionResolver.heuristicFallback>;
 const mockUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
+const mockTurnComposerCompose = TurnComposer.compose as jest.MockedFunction<typeof TurnComposer.compose>;
 
 // ── Factory helpers ───────────────────────────────────────────────────────
 
@@ -231,6 +240,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     capacity: 2,
     loads: [],
     connectedMajorCities: [],
+    unconnectedMajorCities: [],
     totalMajorCities: 7,
     trackSummary: '1 segment',
     turnBuildCost: 0,
@@ -298,11 +308,11 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // Simulate LLM planning a route
       const route: StrategicRoute = {
-        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Berlin' }],
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Berlin' }],
         currentStopIndex: 0,
-        phase: 'build',
+        phase: 'build' as const,
         reasoning: 'Build toward Berlin',
-        planHorizon: '2 turns',
+        createdAtTurn: 3,
       };
       mockPlanRoute.mockResolvedValue({
         route,
@@ -335,8 +345,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('successful turn — PassTurn (no API key, heuristic fallback)', () => {
-    it('should use heuristic fallback when no LLM API key is available', async () => {
+  describe('successful turn — PassTurn (no API key)', () => {
+    it('should pass turn directly when no LLM API key is available', async () => {
       delete process.env.ANTHROPIC_API_KEY;
 
       const snapshot = makeSnapshot({ botConfig: null } as any);
@@ -345,21 +355,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // heuristicFallback returns PassTurn (no canDeliver/canBuild in context)
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-        error: 'Heuristic fallback',
-      } as any);
-
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Without API key, should fall back to heuristic → PassTurn (no canDeliver, no canBuild context)
+      // Without API key, should PassTurn directly (no heuristic fallback)
       expect(result.action).toBe(AIActionType.PassTurn);
-      expect(result.reasoning).toContain('no API key');
+      expect(result.reasoning).toContain('no-api-key');
 
       // LLMStrategyBrain should NOT have been created
       expect(LLMStrategyBrain).not.toHaveBeenCalled();
+      // heuristicFallback should NOT have been called
+      expect(mockHeuristicFallback).not.toHaveBeenCalled();
     });
   });
 
@@ -420,12 +425,12 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       const route: StrategicRoute = {
-        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' }],
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
         currentStopIndex: 0,
-        phase: 'build',
+        phase: 'build' as const,
         startingCity: 'Ruhr',
         reasoning: 'Build from Ruhr for quick first delivery',
-        planHorizon: '4 turns',
+        createdAtTurn: 3,
       };
       mockPlanRoute.mockResolvedValue({
         route,
@@ -452,7 +457,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should fall back to heuristic during initialBuild when planRoute returns null', async () => {
+    it('should PassTurn during initialBuild when planRoute returns null', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -466,17 +471,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // planRoute fails
       mockPlanRoute.mockResolvedValue(null);
 
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      } as any);
-
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toContain('llm-failed-heuristic');
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
-      expect(mockHeuristicFallback).toHaveBeenCalled();
+      // heuristicFallback should NOT have been called
+      expect(mockHeuristicFallback).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -496,14 +497,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       const route: StrategicRoute = {
         stops: [
-          { action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' },
-          { action: 'DELIVER', loadType: 'Steel', city: 'Paris', demandCardId: 22, payment: 6 },
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', demandCardId: 22, payment: 6 },
         ],
         currentStopIndex: 0,
         phase: 'build',
         startingCity: 'Ruhr',
         reasoning: 'Quick first delivery',
-        planHorizon: '4 turns',
+        createdAtTurn: 3,
       };
       mockPlanRoute.mockResolvedValue({
         route,
@@ -511,7 +512,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         latencyMs: 300,
       });
 
-      const updatedRoute = { ...route, currentStopIndex: 0, phase: 'build' };
+      const updatedRoute: StrategicRoute = { ...route, currentStopIndex: 0, phase: 'build' };
       mockPlanExecutorExecute.mockResolvedValue({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
@@ -538,9 +539,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
     it('should clear activeRoute when route is completed', async () => {
       const route: StrategicRoute = {
-        stops: [{ action: 'DELIVER', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
         currentStopIndex: 0,
-        phase: 'move',
+        phase: 'travel' as const,
+        createdAtTurn: 3,
         reasoning: 'Deliver coal',
       };
 
@@ -567,7 +569,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // PlanExecutor reports route complete
       mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, deliveries: [{ loadType: 'Coal', city: 'Berlin', cardIndex: 0 }] },
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
@@ -737,7 +739,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should fall back to heuristic when route planning fails', async () => {
+    it('should PassTurn when route planning fails (no heuristic fallback)', async () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
@@ -765,18 +767,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // planRoute returns null (failed)
       mockPlanRoute.mockResolvedValue(null);
 
-      // heuristicFallback provides a fallback
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
-      } as any);
-
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toContain('llm-failed-heuristic');
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
-      expect(mockHeuristicFallback).toHaveBeenCalled();
+      // heuristicFallback should NOT have been called
+      expect(mockHeuristicFallback).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -820,12 +817,12 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       const route: StrategicRoute = {
-        stops: [{ action: 'PICKUP', loadType: 'Steel', city: 'Ruhr' }],
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
         currentStopIndex: 0,
-        phase: 'build',
+        phase: 'build' as const,
         startingCity: 'Ruhr',
         reasoning: 'Quick first delivery from Ruhr',
-        planHorizon: '4 turns',
+        createdAtTurn: 3,
       };
       mockPlanRoute.mockResolvedValue({
         route,
@@ -848,6 +845,181 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // LLM SHOULD have been called during initialBuild
       expect(LLMStrategyBrain).toHaveBeenCalled();
       expect(mockPlanRoute).toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
+
+  describe('LLM failure → PassTurn (BE-002)', () => {
+    it('should PassTurn when LLM planRoute returns null — not heuristic fallback', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // LLM planRoute returns null (failure)
+      mockPlanRoute.mockResolvedValue(null);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Should be PassTurn, not a heuristic fallback action
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.reasoning).toContain('llm-failed');
+      expect(result.reasoning).not.toContain('heuristic');
+
+      // heuristicFallback should NOT have been called
+      expect(mockHeuristicFallback).not.toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
+
+  describe('delivery clears active route (BE-004/BE-006)', () => {
+    it('should clear activeRoute when TurnComposer produces a MultiAction with DeliverLoad', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', demandCardId: 10, payment: 15 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel' as const,
+        reasoning: 'Deliver Steel to Paris',
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 7,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 3,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Steel'],
+      } as any);
+      const context = makeContext({ loads: ['Steel'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns a move plan (not yet delivering)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving toward Paris',
+      });
+
+      // TurnComposer enriches with a delivery step (scanPathOpportunities detected opportunity)
+      mockTurnComposerCompose.mockResolvedValue({
+        type: 'MultiAction' as const,
+        steps: [
+          { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
+          { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Paris', cardId: 10, payout: 15 },
+        ],
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify activeRoute was cleared (set to null) in memory update
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      // Route should be completed because the delivery matches the last stop
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.turnsOnRoute).toBe(0);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should clear activeRoute for non-route deliveries too (force re-planning)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 5, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Deliver Coal to Berlin',
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 6,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Wine'],
+      } as any);
+      const context = makeContext({ loads: ['Wine'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns a build plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Essen',
+      });
+
+      // TurnComposer enriches with a delivery for a DIFFERENT load (not on route)
+      mockTurnComposerCompose.mockResolvedValue({
+        type: 'MultiAction' as const,
+        steps: [
+          { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+          { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
+        ],
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Even though the delivery doesn't match the route stop, the route should
+      // be cleared because a delivery means a new demand card was drawn
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
