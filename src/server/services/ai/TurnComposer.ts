@@ -331,7 +331,7 @@ export class TurnComposer {
     }
 
     // Fallback when no route-specific build target exists.
-    // Prefer victory progress (unconnected major cities) over speculative demand builds.
+    // Prefer secondary build target > victory progress > speculative demand builds.
     // BUT: skip speculative builds when mid-route (travel/act phase) — the bot should
     // finish its delivery first to earn money, then build toward victory cities.
     const routeNeedsBuild = activeRoute &&
@@ -341,14 +341,21 @@ export class TurnComposer {
     const isMidRoute = activeRoute &&
       (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
     if (!buildTarget && !routeNeedsBuild && !isMidRoute) {
-      // Priority 1: Build toward cheapest unconnected major city (victory progress)
-      // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
-      const unconnected = context.unconnectedMajorCities ?? [];
-      if (unconnected.length > 0 && snapshot.bot.money > 230) {
-        // Already sorted by estimatedCost in ContextBuilder
-        buildTarget = unconnected[0].cityName;
+      // Priority 1: Secondary build target from active route (LLM-chosen)
+      if (activeRoute?.secondaryBuildTarget?.city &&
+          !context.citiesOnNetwork.includes(activeRoute.secondaryBuildTarget.city)) {
+        buildTarget = activeRoute.secondaryBuildTarget.city;
       }
-      // Priority 2: Build toward demand cities only if all major cities are connected
+      // Priority 2: Build toward cheapest unconnected major city (victory progress)
+      // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
+      if (!buildTarget) {
+        const unconnected = context.unconnectedMajorCities ?? [];
+        if (unconnected.length > 0 && snapshot.bot.money > 230) {
+          // Already sorted by estimatedCost in ContextBuilder
+          buildTarget = unconnected[0].cityName;
+        }
+      }
+      // Priority 3: Build toward demand cities (last resort greedy heuristic)
       if (!buildTarget) {
         buildTarget = PlanExecutor.findDemandBuildTarget(context);
       }
