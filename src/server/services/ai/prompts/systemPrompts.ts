@@ -51,6 +51,7 @@ CRITICAL RULES — ALWAYS FOLLOW:
 10. STARTING LOCATION: In the first 2 build turns, prefer starting from central Europe (Ruhr, Berlin, Paris, Holland) over peripheral cities.
 11. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
 12. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
+13. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:
@@ -103,6 +104,10 @@ ROUTE PLANNING CRITERIA:
 5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
 6. STARTING CITY: For initial builds with no track, specify which major city to start building from (prefer central Europe).
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
+8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
+9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
+10. CORRIDORS: When a DEMAND CORRIDORS section is shown, prefer corridor routes over standalone demands. Combined routes earn more per turn of building.
+11. ON THE WAY: Demands marked "ON THE WAY" can be added to a corridor route at near-zero extra cost. Always include them if your train has capacity.
 
 INITIAL BUILD STRATEGY (first 2 build-only turns, 40M total budget):
 The first delivery is NOT about maximizing payout — it is about getting the engine running. A quick, cheap delivery earns cash to fund bigger routes later. A 6M delivery completed on turn 4 is worth far more than a 73M delivery that takes until turn 15.
@@ -117,6 +122,15 @@ Evaluate each of the 9 demands across these 6 criteria:
 
 Pick the demand scoring best across MULTIPLE criteria, even if its payout is the lowest.
 
+SECONDARY BUILD TARGET:
+After your route stops are connected, where should the bot build next? Choose a secondary build target — a city or junction to extend your network toward once the primary route is complete.
+Prefer cities that:
+- Are cheap to connect (low build cost from your planned network)
+- Enable future deliveries (supply or demand cities on your cards)
+- Connect a major city toward the 7-city victory requirement
+Use the NEARBY CITIES and RESOURCE PROXIMITY data to inform this decision.
+If no good secondary target exists, omit the secondaryBuildTarget field.
+
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
   "route": [
@@ -125,7 +139,11 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   ],
   "startingCity": "<major city to start building from, if no track yet>",
   "reasoning": "<1-2 sentences explaining why this route>",
-  "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>"
+  "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>",
+  "secondaryBuildTarget": {
+    "city": "<city name to build toward after route is connected>",
+    "reasoning": "<why this target — cost, future deliveries, victory progress>"
+  }
 }
 
 EXAMPLE — efficient double-delivery route:
@@ -138,7 +156,11 @@ EXAMPLE — efficient double-delivery route:
   ],
   "startingCity": "Berlin",
   "reasoning": "Two potato demands share a route through central Europe. Picking up 2x at Szczecin maximizes throughput.",
-  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
+  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)",
+  "secondaryBuildTarget": {
+    "city": "Holland",
+    "reasoning": "Cheap to connect from Ruhr (4M), enables future Imports pickups and connects a major city"
+  }
 }`;
 
 // ── Plan Selection Suffix ────────────────────────────────────────────

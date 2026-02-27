@@ -316,7 +316,23 @@ export class ResponseParser {
     const reasoning = String(parsed.reasoning ?? '');
     const startingCity = parsed.startingCity ? String(parsed.startingCity) : undefined;
 
-    return {
+    // Parse optional secondaryBuildTarget
+    let secondaryBuildTarget: { city: string; reasoning: string } | undefined;
+    const rawTarget = parsed.secondaryBuildTarget;
+    if (rawTarget != null && typeof rawTarget === 'object' && !Array.isArray(rawTarget)) {
+      const targetObj = rawTarget as Record<string, unknown>;
+      const targetCity = targetObj.city;
+      if (typeof targetCity === 'string' && targetCity.trim().length > 0) {
+        secondaryBuildTarget = {
+          city: targetCity.trim(),
+          reasoning: String(targetObj.reasoning ?? ''),
+        };
+      } else {
+        console.warn('secondaryBuildTarget present but missing valid "city" field — ignoring.');
+      }
+    }
+
+    const route: StrategicRoute = {
       stops,
       currentStopIndex: 0,
       phase: 'build',
@@ -324,6 +340,12 @@ export class ResponseParser {
       createdAtTurn: turnNumber,
       reasoning,
     };
+
+    if (secondaryBuildTarget) {
+      route.secondaryBuildTarget = secondaryBuildTarget;
+    }
+
+    return route;
   }
 }
 
