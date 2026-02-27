@@ -23,8 +23,23 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { hexDistance } from './MapTopology';
+
+/** Corridor of demands sharing pickup/delivery routes */
+interface Corridor {
+  demandIndices: number[];
+  sharedDeliveryArea: string;
+  combinedPayout: number;
+  combinedTrackCost: number;
+  onTheWayDemands: number[];
+}
 
 export class ContextBuilder {
+  // Corridor detection thresholds (hex distance)
+  private static readonly CORRIDOR_DELIVERY_THRESHOLD = 8;
+  private static readonly CORRIDOR_SUPPLY_THRESHOLD = 12;
+  private static readonly ON_THE_WAY_THRESHOLD = 5;
+
   /**
    * Build a GameContext from the WorldSnapshot for LLM prompt generation.
    * Orchestrates all sub-computations using existing shared services.
@@ -96,6 +111,13 @@ export class ContextBuilder {
       snapshot.bot.existingSegments, gridPoints,
     );
 
+    // Compute unconnected major cities with estimated track costs
+    const unconnectedMajorCities = ContextBuilder.computeUnconnectedMajorCities(
+      connectedMajorCities,
+      snapshot.bot.existingSegments,
+      gridPoints,
+    );
+
     return {
       position: botPosition
         ? {
@@ -110,6 +132,7 @@ export class ContextBuilder {
       capacity: trainProps.capacity,
       loads: snapshot.bot.loads,
       connectedMajorCities,
+      unconnectedMajorCities,
       totalMajorCities: 8,
       trackSummary,
       turnBuildCost,
@@ -148,7 +171,7 @@ export class ContextBuilder {
       let bestDist = Infinity;
       for (const nodeKey of Array.from(network.nodes)) {
         const [r, c] = nodeKey.split(',').map(Number);
-        const dist = ContextBuilder.hexDistance(position.row, position.col, r, c);
+        const dist = hexDistance(position.row, position.col, r, c);
         if (dist < bestDist) {
           bestDist = dist;
           bestKey = nodeKey;
@@ -248,14 +271,13 @@ export class ContextBuilder {
   // ── Load runtime availability (BE-004) ──────────────────────────────────
 
   /**
-   * Check if any copies of loadType are available (not currently carried by any player).
-   * Supplements LoadService.isLoadAvailableAtCity which only checks static config.
+   * Count how many copies of a load type are currently carried by any player.
+   * Used by both isLoadRuntimeAvailable() and computeDemandContext() for scarcity data.
    */
-  static isLoadRuntimeAvailable(
+  private static countCarriedLoads(
     loadType: string,
     snapshot: WorldSnapshot,
-  ): boolean {
-    // Count how many copies of this load are currently on trains
+  ): number {
     let carriedCount = 0;
 
     // Count bot's loads
@@ -271,6 +293,19 @@ export class ContextBuilder {
         }
       }
     }
+
+    return carriedCount;
+  }
+
+  /**
+   * Check if any copies of loadType are available (not currently carried by any player).
+   * Supplements LoadService.isLoadAvailableAtCity which only checks static config.
+   */
+  static isLoadRuntimeAvailable(
+    loadType: string,
+    snapshot: WorldSnapshot,
+  ): boolean {
+    const carriedCount = ContextBuilder.countCarriedLoads(loadType, snapshot);
 
     // If no opponent data available (Easy), we can only check the bot's own loads.
     // Optimistically assume at least one copy is available if bot isn't carrying all of them.
@@ -356,6 +391,35 @@ export class ContextBuilder {
       supplyCity, deliveryCity, gridPoints,
     );
 
+    // 8. Load chip scarcity data
+    const totalCopies = ContextBuilder.getLoadTotalCopies(loadType);
+    const carriedCount = ContextBuilder.countCarriedLoads(loadType, snapshot);
+
+    // 9. Turn estimate: build turns + travel turns + 1 (for pickup/deliver)
+    const totalTrackCost = estimatedTrackCostToSupply + estimatedTrackCostToDelivery;
+    const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType].speed;
+    const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
+
+    // Travel distance: hex distance from supply city to delivery city
+    let travelTurns = 0;
+    if (supplyCity) {
+      const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+      const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
+      if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
+        let minDist = Infinity;
+        for (const sp of supplyPoints) {
+          for (const dp of deliveryPoints) {
+            const dist = hexDistance(sp.row, sp.col, dp.row, dp.col);
+            minDist = Math.min(minDist, dist);
+          }
+        }
+        if (minDist < Infinity) {
+          travelTurns = Math.ceil(minDist / speed);
+        }
+      }
+    }
+    const estimatedTurns = buildTurns + travelTurns + 1;
+
     return {
       cardIndex,
       loadType,
@@ -371,6 +435,9 @@ export class ContextBuilder {
       isLoadAvailable,
       isLoadOnTrain,
       ferryRequired,
+      loadChipTotal: totalCopies,
+      loadChipCarried: carriedCount,
+      estimatedTurns,
     };
   }
 
@@ -462,6 +529,47 @@ export class ContextBuilder {
     lines.push(`- Build budget remaining this turn: ${20 - context.turnBuildCost}M`);
     lines.push('');
 
+    // ── VICTORY PROGRESS ──
+    const cashRemaining = Math.max(0, 250 - context.money);
+    lines.push('VICTORY PROGRESS:');
+    lines.push(`- Cash: ${context.money}M / 250M needed (${cashRemaining}M remaining)`);
+    lines.push(`- Cities connected: ${context.connectedMajorCities.length}/7 needed (${context.connectedMajorCities.join(', ') || 'none'})`);
+
+    if (context.unconnectedMajorCities.length === 0) {
+      lines.push('- All cities connected! Earn more cash to win.');
+    } else {
+      const unconnectedStr = context.unconnectedMajorCities
+        .map(u => `${u.cityName} (~${u.estimatedCost}M to connect)`)
+        .join(', ');
+      lines.push(`- Cities NOT connected: ${unconnectedStr}`);
+      const nearest = context.unconnectedMajorCities[0];
+      lines.push(`- Nearest unconnected city: ${nearest.cityName} (~${nearest.estimatedCost}M from your network)`);
+
+      const cheapestCost = nearest.estimatedCost;
+      if (context.money >= 250 && context.connectedMajorCities.length < 7) {
+        lines.push(`- STRATEGIC PRIORITY: You have enough cash — focus ALL building budget on connecting [${context.unconnectedMajorCities.map(u => u.cityName).join(', ')}].`);
+      } else if (cheapestCost > context.money) {
+        lines.push(`- STRATEGIC PRIORITY: Earn more before connecting — cheapest unconnected city costs ~${cheapestCost}M, you have ${context.money}M.`);
+      } else {
+        lines.push(`- STRATEGIC PRIORITY: Connect ${nearest.cityName} (cheapest) while pursuing deliveries through that corridor.`);
+      }
+    }
+
+    // Phase-appropriate victory directive
+    if (context.phase === 'Victory Imminent' && context.unconnectedMajorCities.length > 0) {
+      const last = context.unconnectedMajorCities[0];
+      const cashNeeded = Math.max(0, 250 - context.money);
+      lines.push(`- LATE-GAME DIRECTIVE: VICTORY IS IMMINENT: Connect ${last.cityName} (~${last.estimatedCost}M) and earn ${cashNeeded}M more. Do NOT discard hand or take unnecessary risks.`);
+    } else if (context.phase === 'Late Game' && context.unconnectedMajorCities.length > 0) {
+      const citiesNeeded = 7 - context.connectedMajorCities.length;
+      const cashNeeded = Math.max(0, 250 - context.money);
+      const cheapest = context.unconnectedMajorCities[0];
+      lines.push(`- LATE-GAME DIRECTIVE: You need ${citiesNeeded} more cities and ${cashNeeded}M more cash. Connect ${cheapest.cityName} (~${cheapest.estimatedCost}M) before chasing deliveries. Victory is within reach.`);
+    } else if (context.phase === 'Mid Game' && context.unconnectedMajorCities.length > 0) {
+      lines.push('- MID-GAME DIRECTIVE: Start routing deliveries through unconnected major cities when possible. Every major city you pass through counts toward victory.');
+    }
+    lines.push('');
+
     // ── YOUR DEMAND CARDS ──
     lines.push('YOUR DEMAND CARDS:');
     if (context.demands.length === 0) {
@@ -482,7 +590,9 @@ export class ContextBuilder {
           const d = demands[i];
           const label = labels[i] ?? `${i + 1}`;
           const note = ContextBuilder.formatReachabilityNote(d, skillLevel);
-          lines.push(`  ${label}) ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M) \u2014 ${note}`);
+          const victoryBonus = ContextBuilder.formatVictoryBonus(d, context.unconnectedMajorCities);
+          const suffix = victoryBonus ? ` \u2014 ${note} \u2014 ${victoryBonus}` : ` \u2014 ${note}`;
+          lines.push(`  ${label}) ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M)${suffix}`);
         }
       }
     }
@@ -585,6 +695,187 @@ export class ContextBuilder {
   }
 
   /**
+   * Render a route-planning-specific prompt with corridor data and turn estimates.
+   * Used by planRoute() — excludes per-turn noise (immediate opportunities, reachable cities)
+   * and adds demand corridors + on-the-way signals.
+   */
+  static serializeRoutePlanningPrompt(
+    context: GameContext,
+    skillLevel: BotSkillLevel,
+    gridPoints: GridPoint[],
+    segments: TrackSegment[] = [],
+  ): string {
+    const lines: string[] = [];
+
+    // ── TURN/PHASE header ──
+    lines.push(`TURN ${context.turnNumber} \u2014 GAME PHASE: ${context.phase}`);
+    lines.push('');
+
+    // ── YOUR STATUS (same as serializePrompt) ──
+    lines.push('YOUR STATUS:');
+    lines.push(`- Cash: ${context.money}M ECU (minimum reserve: 5M)`);
+    const loadsStr = context.loads.length > 0 ? context.loads.join(', ') : 'nothing';
+    lines.push(`- Train: ${context.trainType} (speed ${context.speed}, capacity ${context.capacity}, carrying ${loadsStr})`);
+    const posStr = context.position
+      ? (context.position.city
+        ? `${context.position.city} (${context.position.row},${context.position.col})`
+        : `(${context.position.row},${context.position.col})`)
+      : 'Not placed';
+    lines.push(`- Position: ${posStr}`);
+    lines.push(`- Major cities connected: ${context.connectedMajorCities.length}/${context.totalMajorCities} (${context.connectedMajorCities.join(', ') || 'none'})`);
+    lines.push(`- Track network: ${context.trackSummary}`);
+    lines.push('');
+
+    // ── VICTORY PROGRESS (same as serializePrompt) ──
+    const cashRemaining = Math.max(0, 250 - context.money);
+    lines.push('VICTORY PROGRESS:');
+    lines.push(`- Cash: ${context.money}M / 250M needed (${cashRemaining}M remaining)`);
+    lines.push(`- Cities connected: ${context.connectedMajorCities.length}/7 needed (${context.connectedMajorCities.join(', ') || 'none'})`);
+
+    if (context.unconnectedMajorCities.length === 0) {
+      lines.push('- All cities connected! Earn more cash to win.');
+    } else {
+      const unconnectedStr = context.unconnectedMajorCities
+        .map(u => `${u.cityName} (~${u.estimatedCost}M to connect)`)
+        .join(', ');
+      lines.push(`- Cities NOT connected: ${unconnectedStr}`);
+    }
+    lines.push('');
+
+    // ── YOUR DEMAND CARDS (with turn estimates and scarcity) ──
+    lines.push('YOUR DEMAND CARDS:');
+    if (context.demands.length === 0) {
+      lines.push('  No demand cards.');
+    } else {
+      const cardGroups = new Map<number, typeof context.demands>();
+      for (const d of context.demands) {
+        if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
+        cardGroups.get(d.cardIndex)!.push(d);
+      }
+      let cardNum = 0;
+      for (const [, demands] of Array.from(cardGroups.entries())) {
+        cardNum++;
+        lines.push(`Card ${cardNum} (pick at most one):`);
+        const labels = ['a', 'b', 'c', 'd', 'e'];
+        for (let i = 0; i < demands.length; i++) {
+          const d = demands[i];
+          const label = labels[i] ?? `${i + 1}`;
+          const note = ContextBuilder.formatReachabilityNote(d, skillLevel);
+          const turnEst = `~${d.estimatedTurns} turns`;
+          const victoryBonus = ContextBuilder.formatVictoryBonus(d, context.unconnectedMajorCities);
+          let suffix = ` \u2014 ${note}, ${turnEst}`;
+          if (victoryBonus) suffix += ` \u2014 ${victoryBonus}`;
+          lines.push(`  ${label}) ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M)${suffix}`);
+        }
+      }
+    }
+    lines.push('');
+
+    // ── DEMAND CORRIDORS ──
+    const corridors = ContextBuilder.computeCorridors(context.demands, gridPoints);
+    ContextBuilder.detectOnTheWay(corridors, context.demands, gridPoints);
+
+    if (corridors.length > 0) {
+      lines.push('DEMAND CORRIDORS (demands sharing routes \u2014 combine for efficiency):');
+      for (let ci = 0; ci < corridors.length; ci++) {
+        const c = corridors[ci];
+        const corridorLabel = String.fromCharCode(65 + ci); // A, B, C...
+        lines.push(`  Corridor ${corridorLabel} (${c.sharedDeliveryArea}):`);
+        for (const idx of c.demandIndices) {
+          const d = context.demands[idx];
+          lines.push(`    - ${d.loadType} ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M)`);
+        }
+        lines.push(`    Combined payout: ${c.combinedPayout}M, shared track: ~${c.combinedTrackCost}M`);
+        if (c.onTheWayDemands.length > 0) {
+          for (const otwIdx of c.onTheWayDemands) {
+            const d = context.demands[otwIdx];
+            lines.push(`    ON THE WAY: ${d.loadType} ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M, near-zero extra cost)`);
+          }
+        }
+      }
+      lines.push('');
+    }
+
+    // ── PROXIMITY CONTEXT (JIRA-10) ──
+    // Only include proximity sections when the bot has track segments
+    if (segments.length > 0) {
+      // Collect route stop cities from demands (supply + delivery)
+      const routeStopCities = new Set<string>();
+      for (const d of context.demands) {
+        routeStopCities.add(d.supplyCity);
+        routeStopCities.add(d.deliveryCity);
+      }
+
+      const nearbyCities = ContextBuilder.computeNearbyCities(
+        Array.from(routeStopCities), gridPoints, segments,
+      );
+      if (nearbyCities.length > 0) {
+        lines.push('NEARBY CITIES (per route stop):');
+        for (const entry of nearbyCities) {
+          const citiesStr = entry.nearbyCities
+            .map(c => `${c.city} (${c.estimatedCost}M, ${c.distance} hexes)`)
+            .join(', ');
+          lines.push(`  ${entry.routeStop}: ${citiesStr}`);
+        }
+        lines.push('');
+      }
+
+      const unconnected = ContextBuilder.computeUnconnectedDemandCosts(
+        context.demands, segments, gridPoints,
+      );
+      if (unconnected.length > 0) {
+        lines.push('UNCONNECTED DEMAND CITIES (build costs):');
+        for (const u of unconnected) {
+          const d = context.demands[u.demandIndex];
+          lines.push(`  ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M payout): ${u.city} needs ~${u.estimatedCost}M track to connect`);
+        }
+        lines.push('');
+      }
+
+      const resourceProx = ContextBuilder.computeResourceProximity(
+        context.demands, segments, gridPoints,
+      );
+      if (resourceProx.length > 0) {
+        lines.push('RESOURCE PROXIMITY (cheap pickups near your track):');
+        for (const r of resourceProx) {
+          lines.push(`  ${r.loadType} available at ${r.supplyCity}, ~${r.estimatedCost}M from your network (${r.distanceFromNetwork} hexes)`);
+        }
+        lines.push('');
+      }
+    }
+
+    // ── BUILD CONSTRAINTS ──
+    if (context.isInitialBuild) {
+      lines.push('PHASE: Initial Build \u2014 build track only, no train movement. 20M budget this turn, 40M total over 2 turns.');
+      lines.push('INITIAL BUILD STRATEGY: Pick the demand with the CHEAPEST, SHORTEST route \u2014 not the highest payout.');
+      lines.push('  Prefer supply at/near a major city (zero or minimal track to reach goods).');
+      lines.push('  Prefer delivery at/near a major city (short route, useful track for future).');
+      lines.push('  Avoid ferry crossings (costly and burn a full turn).');
+      lines.push('  Start from central Europe (Ruhr, Paris, Holland, Berlin) for best expansion options.');
+      lines.push('  A 6M delivery on turn 4 beats a 73M delivery on turn 15.');
+    }
+    if (!context.canBuild) {
+      lines.push('BUILD: Not available this turn (budget exhausted or no funds).');
+    }
+
+    // ── OPPONENTS ──
+    if (context.opponents.length > 0) {
+      lines.push('');
+      lines.push('OPPONENTS:');
+      for (const opp of context.opponents) {
+        const parts = [`${opp.name}: ${opp.money}M, ${opp.trainType}`];
+        if (opp.position) parts.push(`at ${opp.position}`);
+        if (opp.loads.length > 0) parts.push(`carrying ${opp.loads.join(', ')}`);
+        if (opp.trackCoverage) parts.push(`Track covers ${opp.trackCoverage}`);
+        if (opp.recentBuildDirection) parts.push(`building toward ${opp.recentBuildDirection}`);
+        lines.push(`- ${parts.join('. ')}.`);
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
    * Format a reachability note for a demand, following PRD Section 4.4.
    * Detail level varies by skill level (Easy = simple, Medium/Hard = with costs).
    */
@@ -596,6 +887,11 @@ export class ContextBuilder {
     if (!d.isLoadAvailable) {
       return `UNAVAILABLE \u2014 all ${d.loadType} copies on other trains.`;
     }
+
+    // Compute scarcity suffix (appended to all return values below)
+    const scarcitySuffix = (d.loadChipCarried >= d.loadChipTotal - 1 && d.isLoadAvailable)
+      ? `. SCARCE: ${d.loadChipCarried}/${d.loadChipTotal} carried`
+      : '';
 
     const ferry = d.ferryRequired ? ' Requires ferry crossing (movement penalty).' : '';
 
@@ -616,29 +912,29 @@ export class ContextBuilder {
     // Load is on train
     if (d.isLoadOnTrain) {
       if (d.isDeliveryReachable) {
-        return `DELIVERABLE NOW for ${d.payout}M${ferry}`;
+        return `DELIVERABLE NOW for ${d.payout}M${ferry}${scarcitySuffix}`;
       }
       if (d.isDeliveryOnNetwork) {
-        return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} ON YOUR TRACK — MOVE toward it!${ferry}`;
+        return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} ON YOUR TRACK — MOVE toward it!${ferry}${scarcitySuffix}`;
       }
       if (skillLevel === BotSkillLevel.Easy) {
-        return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} not reachable.${ferry}`;
+        return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} not reachable.${ferry}${scarcitySuffix}`;
       }
-      return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} needs track${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}`;
+      return `${d.loadType} ON YOUR TRAIN. ${d.deliveryCity} needs track${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}${scarcitySuffix}`;
     }
 
     // Supply + delivery reachability
     if (d.isSupplyReachable && d.isDeliveryReachable) {
-      return `Supply at ${d.supplyCity} (reachable). Delivery reachable.${ferry}`;
+      return `Supply at ${d.supplyCity} (reachable). Delivery reachable.${ferry}${scarcitySuffix}`;
     }
     if (d.isSupplyReachable && !d.isDeliveryReachable) {
       if (d.isDeliveryOnNetwork) {
-        return `Supply at ${d.supplyCity} (reachable). Delivery at ${d.deliveryCity} ON YOUR TRACK (multi-turn MOVE).${ferry}`;
+        return `Supply at ${d.supplyCity} (reachable). Delivery at ${d.deliveryCity} ON YOUR TRACK (multi-turn MOVE).${ferry}${scarcitySuffix}`;
       }
       if (skillLevel === BotSkillLevel.Easy) {
-        return `Supply at ${d.supplyCity} (reachable). Delivery not reachable.${ferry}`;
+        return `Supply at ${d.supplyCity} (reachable). Delivery not reachable.${ferry}${scarcitySuffix}`;
       }
-      return `Supply at ${d.supplyCity} (reachable). Delivery needs${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}`;
+      return `Supply at ${d.supplyCity} (reachable). Delivery needs${affordabilityTag(d.estimatedTrackCostToDelivery)}.${ferry}${scarcitySuffix}`;
     }
 
     // Supply on network but not reachable this turn
@@ -646,15 +942,33 @@ export class ContextBuilder {
       const deliveryNote = d.isDeliveryOnNetwork
         ? `Delivery at ${d.deliveryCity} also on track.`
         : `Delivery needs track.`;
-      return `Supply at ${d.supplyCity} ON YOUR TRACK — MOVE toward it! ${deliveryNote}${ferry}`;
+      return `Supply at ${d.supplyCity} ON YOUR TRACK — MOVE toward it! ${deliveryNote}${ferry}${scarcitySuffix}`;
     }
 
     // Supply not reachable
     if (skillLevel === BotSkillLevel.Easy) {
-      return `Supply not reachable.${ferry}`;
+      return `Supply not reachable.${ferry}${scarcitySuffix}`;
     }
     const totalCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-    return `Supply not reachable${affordabilityTag(totalCost)}.${ferry}`;
+    return `Supply not reachable${affordabilityTag(totalCost)}.${ferry}${scarcitySuffix}`;
+  }
+
+  /**
+   * Format VICTORY BONUS note when a demand's supply or delivery city is unconnected.
+   * Encourages routing through unconnected major cities for victory progress.
+   */
+  private static formatVictoryBonus(
+    d: DemandContext,
+    unconnectedMajorCities: Array<{ cityName: string; estimatedCost: number }>,
+  ): string {
+    const unconnected = unconnectedMajorCities.filter(
+      (u) => u.cityName === d.supplyCity || u.cityName === d.deliveryCity,
+    );
+    if (unconnected.length === 0) return '';
+    const parts = unconnected.map(
+      (u) => `route passes near ${u.cityName} (unconnected, ~${u.estimatedCost}M to connect)`,
+    );
+    return `VICTORY BONUS: ${parts.join('; ')}`;
   }
 
   // ── Private helpers ─────────────────────────────────────────────────────
@@ -789,9 +1103,30 @@ export class ContextBuilder {
     connectedMajorCities: string[],
   ): string {
     if (snapshot.gameStatus === 'initialBuild') return 'Initial Build';
+    if (connectedMajorCities.length >= 6 && snapshot.bot.money >= 230) return 'Victory Imminent';
     if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 150) return 'Late Game';
     if (connectedMajorCities.length >= 3 || snapshot.bot.money >= 80) return 'Mid Game';
     return 'Early Game';
+  }
+
+  /** Compute unconnected major cities with estimated track cost from current network */
+  private static computeUnconnectedMajorCities(
+    connectedMajorCities: string[],
+    segments: TrackSegment[],
+    gridPoints: GridPoint[],
+  ): Array<{ cityName: string; estimatedCost: number }> {
+    const allMajorCityNames = getMajorCityGroups().map(g => g.cityName);
+    const connectedSet = new Set(connectedMajorCities);
+    const unconnected = allMajorCityNames.filter(name => !connectedSet.has(name));
+
+    if (unconnected.length === 0) return [];
+
+    return unconnected
+      .map(cityName => ({
+        cityName,
+        estimatedCost: ContextBuilder.estimateTrackCost(cityName, segments, gridPoints),
+      }))
+      .sort((a, b) => a.estimatedCost - b.estimatedCost);
   }
 
   /** Get city name at a grid position, or undefined if not a city */
@@ -907,7 +1242,7 @@ export class ContextBuilder {
       let bestDist = Infinity;
       for (const sc of supplyCities) {
         for (const seg of segments) {
-          const dist = ContextBuilder.hexDistance(
+          const dist = hexDistance(
             sc.row, sc.col, seg.to.row, seg.to.col,
           );
           if (dist < bestDist) {
@@ -926,7 +1261,7 @@ export class ContextBuilder {
     let bestDist = Infinity;
     for (const sc of supplyCities) {
       for (const group of majorCityGroups) {
-        const dist = ContextBuilder.hexDistance(
+        const dist = hexDistance(
           sc.row, sc.col, group.center.row, group.center.col,
         );
         if (dist < bestDist) {
@@ -984,7 +1319,7 @@ export class ContextBuilder {
           let minDist = Infinity;
           for (const cityPoint of cityPoints) {
             for (const fp of fromPoints) {
-              const dist = ContextBuilder.hexDistance(
+              const dist = hexDistance(
                 cityPoint.row, cityPoint.col, fp.row, fp.col,
               );
               minDist = Math.min(minDist, dist);
@@ -1001,7 +1336,7 @@ export class ContextBuilder {
       let minDist = Infinity;
       for (const cityPoint of cityPoints) {
         for (const group of majorCityGroups) {
-          const dist = ContextBuilder.hexDistance(
+          const dist = hexDistance(
             cityPoint.row, cityPoint.col,
             group.center.row, group.center.col,
           );
@@ -1016,10 +1351,10 @@ export class ContextBuilder {
     let minDist = Infinity;
     for (const cityPoint of cityPoints) {
       for (const seg of segments) {
-        const distFrom = ContextBuilder.hexDistance(
+        const distFrom = hexDistance(
           cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
         );
-        const distTo = ContextBuilder.hexDistance(
+        const distTo = hexDistance(
           cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
         );
         minDist = Math.min(minDist, distFrom, distTo);
@@ -1073,10 +1408,10 @@ export class ContextBuilder {
     // If supply is closer to port A and delivery closer to port B (or vice versa),
     // the route must cross this ferry.
     for (const ferry of barrierFerries) {
-      const supplyToA = ContextBuilder.hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
-      const supplyToB = ContextBuilder.hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
-      const deliveryToA = ContextBuilder.hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
-      const deliveryToB = ContextBuilder.hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
+      const supplyToA = hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
+      const supplyToB = hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
+      const deliveryToA = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
+      const deliveryToB = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
 
       const supplyCloserToA = supplyToA < supplyToB;
       const deliveryCloserToA = deliveryToA < deliveryToB;
@@ -1088,17 +1423,317 @@ export class ContextBuilder {
     return false;
   }
 
-  /** Approximate hex grid distance between two positions */
-  private static hexDistance(
-    r1: number, c1: number, r2: number, c2: number,
-  ): number {
-    // Offset hex coordinates: convert to cube coordinates for distance
-    const x1 = c1 - Math.floor(r1 / 2);
-    const z1 = r1;
-    const y1 = -x1 - z1;
-    const x2 = c2 - Math.floor(r2 / 2);
-    const z2 = r2;
-    const y2 = -x2 - z2;
-    return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+  // ── Corridor detection (BE-002, BE-003) ─────────────────────────────────
+
+  private static computeCorridors(
+    demands: DemandContext[],
+    gridPoints: GridPoint[],
+  ): Corridor[] {
+    if (demands.length < 2) return [];
+
+    // Find grid positions for each demand's supply and delivery cities
+    const cityPos = (cityName: string): { row: number; col: number } | null => {
+      const gp = gridPoints.find(g => g.city?.name === cityName);
+      return gp ? { row: gp.row, col: gp.col } : null;
+    };
+
+    // Union-find for merging corridor groups
+    const parent = demands.map((_, i) => i);
+    const find = (x: number): number => {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    };
+    const union = (a: number, b: number): void => { parent[find(a)] = find(b); };
+
+    // Check all pairs
+    for (let i = 0; i < demands.length; i++) {
+      for (let j = i + 1; j < demands.length; j++) {
+        const di = demands[i];
+        const dj = demands[j];
+
+        const delPosI = cityPos(di.deliveryCity);
+        const delPosJ = cityPos(dj.deliveryCity);
+        const supPosI = cityPos(di.supplyCity);
+        const supPosJ = cityPos(dj.supplyCity);
+
+        if (!delPosI || !delPosJ || !supPosI || !supPosJ) continue;
+
+        const deliveryDist = di.deliveryCity === dj.deliveryCity ? 0 :
+          hexDistance(delPosI.row, delPosI.col, delPosJ.row, delPosJ.col);
+        const supplyDist = hexDistance(supPosI.row, supPosI.col, supPosJ.row, supPosJ.col);
+
+        if (deliveryDist <= ContextBuilder.CORRIDOR_DELIVERY_THRESHOLD &&
+            supplyDist <= ContextBuilder.CORRIDOR_SUPPLY_THRESHOLD) {
+          union(i, j);
+        }
+      }
+    }
+
+    // Group demands by their root
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < demands.length; i++) {
+      const root = find(i);
+      if (!groups.has(root)) groups.set(root, []);
+      groups.get(root)!.push(i);
+    }
+
+    // Build corridors (only for groups with 2+ demands)
+    const corridors: Corridor[] = [];
+    for (const [, indices] of groups) {
+      if (indices.length < 2) continue;
+
+      const corridorDemands = indices.map(i => demands[i]);
+      const combinedPayout = corridorDemands.reduce((sum, d) => sum + d.payout, 0);
+
+      // Estimate combined track cost (roughly: max of individual costs, not sum,
+      // because they share track)
+      const maxSupplyCost = Math.max(...corridorDemands.map(d => d.estimatedTrackCostToSupply));
+      const maxDeliveryCost = Math.max(...corridorDemands.map(d => d.estimatedTrackCostToDelivery));
+      const combinedTrackCost = maxSupplyCost + maxDeliveryCost;
+
+      // Label the corridor
+      const deliveryCities = [...new Set(corridorDemands.map(d => d.deliveryCity))];
+      const supplyCities = [...new Set(corridorDemands.map(d => d.supplyCity))];
+      const deliveryLabel = deliveryCities.length === 1 ? deliveryCities[0] : deliveryCities.join('/');
+      const supplyLabel = supplyCities.join('/');
+      const sharedDeliveryArea = `${supplyLabel} \u2192 ${deliveryLabel}`;
+
+      corridors.push({
+        demandIndices: indices,
+        sharedDeliveryArea,
+        combinedPayout,
+        combinedTrackCost,
+        onTheWayDemands: [], // filled by detectOnTheWay
+      });
+    }
+
+    return corridors;
   }
+
+  // ── Proximity computation (BE-002, JIRA-10) ──────────────────────────────
+
+  /** Proximity threshold: max hex distance for "nearby" cities */
+  private static readonly PROXIMITY_THRESHOLD = 5;
+  /** Max nearby cities to return per route stop */
+  private static readonly MAX_NEARBY_PER_STOP = 5;
+
+  /**
+   * For each route stop city, find all cities within hexDistance <= 5
+   * that are NOT already on the bot's track network.
+   */
+  private static computeNearbyCities(
+    routeStopCities: string[],
+    gridPoints: GridPoint[],
+    segments: TrackSegment[],
+  ): Array<{ routeStop: string; nearbyCities: Array<{ city: string; distance: number; estimatedCost: number }> }> {
+    if (routeStopCities.length === 0 || segments.length === 0) return [];
+
+    const network = buildTrackNetwork(segments);
+
+    // Build a set of city names already on the network
+    const networkCities = new Set<string>();
+    for (const gp of gridPoints) {
+      if (gp.city?.name) {
+        const key = `${gp.row},${gp.col}`;
+        if (network.nodes.has(key)) networkCities.add(gp.city.name);
+      }
+    }
+
+    // All city grid points (small, medium, major)
+    const allCityPoints = gridPoints.filter(
+      gp => gp.city && (
+        gp.terrain === TerrainType.SmallCity ||
+        gp.terrain === TerrainType.MediumCity ||
+        gp.terrain === TerrainType.MajorCity
+      ),
+    );
+
+    const result: Array<{ routeStop: string; nearbyCities: Array<{ city: string; distance: number; estimatedCost: number }> }> = [];
+
+    for (const stopCity of routeStopCities) {
+      // Find the grid position(s) for this route stop
+      const stopPoints = gridPoints.filter(gp => gp.city?.name === stopCity);
+      if (stopPoints.length === 0) continue;
+
+      const nearbyMap = new Map<string, { distance: number; estimatedCost: number }>();
+
+      for (const stopPt of stopPoints) {
+        for (const cityPt of allCityPoints) {
+          const cityName = cityPt.city!.name;
+          // Skip cities already on the network or the stop city itself
+          if (networkCities.has(cityName) || cityName === stopCity) continue;
+
+          const dist = hexDistance(stopPt.row, stopPt.col, cityPt.row, cityPt.col);
+          if (dist <= ContextBuilder.PROXIMITY_THRESHOLD && dist > 0) {
+            const existing = nearbyMap.get(cityName);
+            if (!existing || dist < existing.distance) {
+              nearbyMap.set(cityName, {
+                distance: dist,
+                estimatedCost: ContextBuilder.estimateTrackCost(cityName, segments, gridPoints),
+              });
+            }
+          }
+        }
+      }
+
+      if (nearbyMap.size > 0) {
+        const nearbyCities = Array.from(nearbyMap.entries())
+          .map(([city, data]) => ({ city, distance: data.distance, estimatedCost: data.estimatedCost }))
+          .sort((a, b) => a.estimatedCost - b.estimatedCost)
+          .slice(0, ContextBuilder.MAX_NEARBY_PER_STOP);
+
+        result.push({ routeStop: stopCity, nearbyCities });
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * For each demand where supply OR delivery city is not on the network,
+   * compute estimated build cost to connect it.
+   */
+  private static computeUnconnectedDemandCosts(
+    demands: DemandContext[],
+    segments: TrackSegment[],
+    gridPoints: GridPoint[],
+  ): Array<{ demandIndex: number; city: string; estimatedCost: number; payout: number; isSupply: boolean }> {
+    if (segments.length === 0) return [];
+
+    const results: Array<{ demandIndex: number; city: string; estimatedCost: number; payout: number; isSupply: boolean }> = [];
+
+    for (let i = 0; i < demands.length; i++) {
+      const d = demands[i];
+      // Skip if both cities already on network
+      if (d.isSupplyOnNetwork && d.isDeliveryOnNetwork) continue;
+
+      if (!d.isSupplyOnNetwork) {
+        results.push({
+          demandIndex: i,
+          city: d.supplyCity,
+          estimatedCost: ContextBuilder.estimateTrackCost(d.supplyCity, segments, gridPoints),
+          payout: d.payout,
+          isSupply: true,
+        });
+      }
+      if (!d.isDeliveryOnNetwork) {
+        results.push({
+          demandIndex: i,
+          city: d.deliveryCity,
+          estimatedCost: ContextBuilder.estimateTrackCost(d.deliveryCity, segments, gridPoints),
+          payout: d.payout,
+          isSupply: false,
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * For each demand, check if the supply city is near (hexDistance <= 5)
+   * any milepost on the bot's network. Excludes supplies already on network.
+   */
+  private static computeResourceProximity(
+    demands: DemandContext[],
+    segments: TrackSegment[],
+    gridPoints: GridPoint[],
+  ): Array<{ loadType: string; supplyCity: string; distanceFromNetwork: number; estimatedCost: number }> {
+    if (segments.length === 0) return [];
+
+    const network = buildTrackNetwork(segments);
+    const results: Array<{ loadType: string; supplyCity: string; distanceFromNetwork: number; estimatedCost: number }> = [];
+    const seen = new Set<string>(); // deduplicate by supplyCity
+
+    for (const d of demands) {
+      if (d.isSupplyOnNetwork) continue;
+      if (seen.has(d.supplyCity)) continue;
+
+      // Find the supply city's grid position(s)
+      const supplyPoints = gridPoints.filter(gp => gp.city?.name === d.supplyCity);
+      if (supplyPoints.length === 0) continue;
+
+      // Find minimum hex distance from any supply point to any network node
+      let minDist = Infinity;
+      for (const sp of supplyPoints) {
+        for (const nodeKey of network.nodes) {
+          const [nRow, nCol] = nodeKey.split(',').map(Number);
+          const dist = hexDistance(sp.row, sp.col, nRow, nCol);
+          if (dist < minDist) minDist = dist;
+        }
+      }
+
+      if (minDist <= ContextBuilder.PROXIMITY_THRESHOLD && minDist > 0) {
+        seen.add(d.supplyCity);
+        results.push({
+          loadType: d.loadType,
+          supplyCity: d.supplyCity,
+          distanceFromNetwork: minDist,
+          estimatedCost: ContextBuilder.estimateTrackCost(d.supplyCity, segments, gridPoints),
+        });
+      }
+    }
+
+    return results;
+  }
+
+  private static detectOnTheWay(
+    corridors: Corridor[],
+    demands: DemandContext[],
+    gridPoints: GridPoint[],
+  ): void {
+    // Collect all demand indices already in corridors
+    const corridorIndices = new Set<number>();
+    for (const c of corridors) {
+      for (const idx of c.demandIndices) {
+        corridorIndices.add(idx);
+      }
+    }
+
+    const cityPos = (cityName: string): { row: number; col: number } | null => {
+      const gp = gridPoints.find(g => g.city?.name === cityName);
+      return gp ? { row: gp.row, col: gp.col } : null;
+    };
+
+    for (const corridor of corridors) {
+      const corridorCityPositions: Array<{ row: number; col: number }> = [];
+      for (const idx of corridor.demandIndices) {
+        const d = demands[idx];
+        const sp = cityPos(d.supplyCity);
+        const dp = cityPos(d.deliveryCity);
+        if (sp) corridorCityPositions.push(sp);
+        if (dp) corridorCityPositions.push(dp);
+      }
+
+      for (let i = 0; i < demands.length; i++) {
+        if (corridorIndices.has(i)) continue;
+        if (corridor.onTheWayDemands.includes(i)) continue;
+
+        const d = demands[i];
+        const sp = cityPos(d.supplyCity);
+        const dp = cityPos(d.deliveryCity);
+
+        for (const cPos of corridorCityPositions) {
+          let matched = false;
+          if (sp) {
+            const dist = hexDistance(sp.row, sp.col, cPos.row, cPos.col);
+            if (dist <= ContextBuilder.ON_THE_WAY_THRESHOLD) {
+              corridor.onTheWayDemands.push(i);
+              matched = true;
+            }
+          }
+          if (!matched && dp) {
+            const dist = hexDistance(dp.row, dp.col, cPos.row, cPos.col);
+            if (dist <= ContextBuilder.ON_THE_WAY_THRESHOLD) {
+              corridor.onTheWayDemands.push(i);
+              matched = true;
+            }
+          }
+          if (matched) break;
+        }
+      }
+    }
+  }
+
+
 }

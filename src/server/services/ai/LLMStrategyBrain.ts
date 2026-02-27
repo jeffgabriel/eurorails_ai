@@ -21,6 +21,7 @@ import {
   TurnPlan,
   AIActionType,
   StrategicRoute,
+  GridPoint,
 } from '../../../shared/types/GameTypes';
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
@@ -30,6 +31,7 @@ import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
+import { RouteValidator } from './RouteValidator';
 
 /** Max tokens for LLM response — JSON with reasoning is ~100-150 tokens */
 const MAX_TOKENS_BY_SKILL: Record<BotSkillLevel, number> = {
@@ -175,6 +177,7 @@ export class LLMStrategyBrain {
   async planRoute(
     snapshot: WorldSnapshot,
     context: GameContext,
+    gridPoints: GridPoint[],
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
@@ -184,7 +187,7 @@ export class LLMStrategyBrain {
     let totalOutputTokens = 0;
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
+      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments);
 
       if (lastError) {
         userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;
@@ -214,8 +217,21 @@ export class LLMStrategyBrain {
           continue;
         }
 
+        // Feasibility validation: check each stop against game state
+        const validation = RouteValidator.validate(route, context, snapshot);
+
+        if (!validation.valid) {
+          lastError = `Route infeasible: ${validation.errors.join('; ')}`;
+          console.warn(`[LLMStrategyBrain] Route rejected (attempt ${attempt + 1}): ${lastError}`);
+          attempt++;
+          continue;
+        }
+
+        // Use pruned route if some stops were removed, otherwise original
+        const validatedRoute = validation.prunedRoute ?? route;
+
         return {
-          route,
+          route: validatedRoute,
           model: this.model,
           latencyMs: totalLatencyMs,
           tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
