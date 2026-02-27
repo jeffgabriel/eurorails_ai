@@ -8209,8 +8209,8 @@
   },
   {
     "Id": "5864bdb1-39aa-44e2-8331-d57b9d32d251",
-    "Type": "Major City Outpost",
-    "Name": "Ruhr",
+    "Type": "Milepost",
+    "Name": null,
     "GridX": 43,
     "GridY": 25,
     "Ocean": null
