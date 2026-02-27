@@ -453,4 +453,150 @@ describe('ResponseParser', () => {
       });
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // parseStrategicRoute — secondaryBuildTarget parsing
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('parseStrategicRoute', () => {
+    /** Minimal valid route JSON — all tests extend this base */
+    function makeRouteJson(overrides: Record<string, unknown> = {}): string {
+      return JSON.stringify({
+        route: [
+          { action: 'PICKUP', load: 'Steel', city: 'Szczecin' },
+          { action: 'DELIVER', load: 'Steel', city: 'Berlin', demandCardId: 42, payment: 15 },
+        ],
+        startingCity: 'Berlin',
+        reasoning: 'Deliver steel for quick profit',
+        ...overrides,
+      });
+    }
+
+    describe('secondaryBuildTarget parsing', () => {
+      let warnSpy: jest.SpyInstance;
+
+      beforeEach(() => {
+        warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      });
+
+      afterEach(() => {
+        warnSpy.mockRestore();
+      });
+
+      it('should parse valid secondaryBuildTarget with both city and reasoning', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { city: 'Holland', reasoning: 'Cheap to connect' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeDefined();
+        expect(result.secondaryBuildTarget!.city).toBe('Holland');
+        expect(result.secondaryBuildTarget!.reasoning).toBe('Cheap to connect');
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+
+      it('should parse valid secondaryBuildTarget with city only (reasoning missing)', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { city: 'Berlin' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeDefined();
+        expect(result.secondaryBuildTarget!.city).toBe('Berlin');
+        expect(result.secondaryBuildTarget!.reasoning).toBe('');
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+
+      it('should return undefined when secondaryBuildTarget is absent from JSON', () => {
+        const json = makeRouteJson();
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+        expect(warnSpy).not.toHaveBeenCalled();
+      });
+
+      it('should return undefined and warn when city is missing from secondaryBuildTarget', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { reasoning: 'some reason' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('missing valid "city"'),
+        );
+      });
+
+      it('should return undefined and warn when city is empty string', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { city: '' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('missing valid "city"'),
+        );
+      });
+
+      it('should return undefined when secondaryBuildTarget is not an object', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: 'just a string',
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+      });
+
+      it('should return undefined when secondaryBuildTarget is an array', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: ['Berlin'],
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+      });
+
+      it('should return undefined when secondaryBuildTarget is null', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: null,
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+      });
+
+      it('should trim whitespace from city name', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { city: '  Hamburg  ', reasoning: 'port access' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeDefined();
+        expect(result.secondaryBuildTarget!.city).toBe('Hamburg');
+      });
+
+      it('should warn when city is whitespace-only string', () => {
+        const json = makeRouteJson({
+          secondaryBuildTarget: { city: '   ' },
+        });
+
+        const result = ResponseParser.parseStrategicRoute(json, 5);
+
+        expect(result.secondaryBuildTarget).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('missing valid "city"'),
+        );
+      });
+    });
+  });
 });
