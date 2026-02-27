@@ -148,6 +148,18 @@ export function isWater(terrain: TerrainType): boolean {
   return terrain === TerrainType.Water;
 }
 
+/** Compute the distance between two hex grid positions using cube coordinates. */
+export function hexDistance(r1: number, c1: number, r2: number, c2: number): number {
+  // Offset hex → cube coordinate conversion
+  const x1 = c1 - Math.floor(r1 / 2);
+  const z1 = r1;
+  const y1 = -x1 - z1;
+  const x2 = c2 - Math.floor(r2 / 2);
+  const z2 = r2;
+  const y2 = -x2 - z2;
+  return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+}
+
 /** Reset the cache (for testing). */
 export function _resetCache(): void {
   gridPointsCache = null;

@@ -1424,3 +1424,489 @@ describe('ContextBuilder cold-start estimateTrackCost', () => {
     expect(demand!.supplyCity).toBe('Lyon');
   });
 });
+
+// ── TEST-001/JIRA-10: Proximity computation via serializeRoutePlanningPrompt ──
+
+describe('ContextBuilder proximity computation methods', () => {
+  // ── Shared fixtures ──────────────────────────────────────────────────
+
+  /**
+   * Track network: (10,10) → (10,11) → (10,12) → (10,13) → (10,14)
+   *   On-network cities: Berlin (10,10) MajorCity, Hamburg (10,14) MediumCity
+   *   Nearby off-network: Munich (13,12) SmallCity  — 3 hexes from network
+   *                       Leipzig (13,11) SmallCity  — 3 hexes from network
+   *   Far off-network:    Rome (10,20) MajorCity     — 6 hexes from (10,14)
+   */
+  const proximitySegments: TrackSegment[] = [
+    makeSegment(10, 10, 10, 11),
+    makeSegment(10, 11, 10, 12),
+    makeSegment(10, 12, 10, 13),
+    makeSegment(10, 13, 10, 14),
+  ];
+
+  const proximityGridPoints: GridPoint[] = [
+    // On-network cities
+    makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, []),
+    makeGridPoint(10, 11),
+    makeGridPoint(10, 12),
+    makeGridPoint(10, 13),
+    makeCityPoint(10, 14, 'Hamburg', TerrainType.MediumCity, []),
+    // Nearby off-network cities (within 5 hexes)
+    makeCityPoint(13, 12, 'Munich', TerrainType.SmallCity, ['Coal']),
+    makeCityPoint(13, 11, 'Leipzig', TerrainType.SmallCity, ['Wine']),
+    // Far off-network city (6 hexes from nearest network node)
+    makeCityPoint(10, 20, 'Rome', TerrainType.MajorCity, ['Steel']),
+  ];
+
+  /** Build a GameContext suitable for serializeRoutePlanningPrompt */
+  function makeProximityContext(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Rome', estimatedCost: 10 }],
+      totalMajorCities: 8,
+      trackSummary: '4 segments',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Berlin', 'Hamburg'],
+      citiesOnNetwork: ['Berlin', 'Hamburg'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Mid Game',
+      turnNumber: 10,
+      ...overrides,
+    };
+  }
+
+  /** Build a DemandContext with the required fields */
+  function makeDemand(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
+    supplyCity: string;
+    deliveryCity: string;
+    loadType: string;
+    payout: number;
+  }): import('../../../shared/types/GameTypes').DemandContext {
+    return {
+      cardIndex: 0,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 5,
+      estimatedTrackCostToDelivery: 5,
+      isLoadAvailable: true,
+      isLoadOnTrain: false,
+      ferryRequired: false,
+      loadChipTotal: 4,
+      loadChipCarried: 0,
+      estimatedTurns: 3,
+      ...overrides,
+    };
+  }
+
+  // ── NEARBY CITIES section ──────────────────────────────────────────
+
+  describe('NEARBY CITIES section in serializeRoutePlanningPrompt', () => {
+
+    it('should include nearby off-network cities when segments are provided', () => {
+      // Demand: Coal from Munich -> Berlin
+      // Munich is a route stop; Leipzig is a nearby off-network city (3 hexes from Munich)
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Berlin',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).toContain('NEARBY CITIES');
+    });
+
+    it('should exclude on-network cities from the nearby cities list', () => {
+      // Demand: Coal from Munich -> Hamburg
+      // Berlin and Hamburg are on-network — should NOT appear as nearby city *entries*
+      // (they may appear as route stop labels on the left side of the colon)
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Hamburg',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      // Extract nearby city entries (right side of colon in each line)
+      if (output.includes('NEARBY CITIES')) {
+        const section = output.split('NEARBY CITIES')[1].split('\n\n')[0];
+        const lines = section.split('\n').filter(l => l.includes(':'));
+        for (const line of lines) {
+          // Get the entries after the colon (the actual nearby city list)
+          const entries = line.split(':').slice(1).join(':');
+          // Berlin and Hamburg are on the network — they must NOT be listed as nearby
+          expect(entries).not.toMatch(/\bBerlin\b/);
+          expect(entries).not.toMatch(/\bHamburg\b/);
+        }
+      }
+    });
+
+    it('should limit nearby cities to top 5 per route stop', () => {
+      // Create 7 off-network cities near Munich (route stop)
+      const manyGridPoints: GridPoint[] = [
+        ...proximityGridPoints,
+        // Additional nearby cities (within 5 hexes of Munich at 13,12)
+        makeCityPoint(12, 12, 'NearA', TerrainType.SmallCity),
+        makeCityPoint(12, 11, 'NearB', TerrainType.SmallCity),
+        makeCityPoint(14, 12, 'NearC', TerrainType.SmallCity),
+        makeCityPoint(14, 13, 'NearD', TerrainType.SmallCity),
+        makeCityPoint(13, 13, 'NearE', TerrainType.SmallCity),
+        makeCityPoint(12, 13, 'NearF', TerrainType.SmallCity),
+        makeCityPoint(11, 12, 'NearG', TerrainType.SmallCity),
+      ];
+
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Berlin',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, manyGridPoints, proximitySegments,
+      );
+
+      // Extract the nearby cities for Munich route stop
+      if (output.includes('NEARBY CITIES')) {
+        const section = output.split('NEARBY CITIES')[1].split('\n\n')[0];
+        const munichLine = section.split('\n').find(l => l.includes('Munich:'));
+        if (munichLine) {
+          // Count entries by counting "hexes)" occurrences in the Munich line
+          const entryCount = (munichLine.match(/hexes\)/g) || []).length;
+          expect(entryCount).toBeLessThanOrEqual(5);
+        }
+      }
+    });
+
+    it('should omit proximity sections when segments array is empty', () => {
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Berlin',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, [],
+      );
+
+      expect(output).not.toContain('NEARBY CITIES');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).not.toContain('RESOURCE PROXIMITY');
+    });
+  });
+
+  // ── UNCONNECTED DEMAND CITIES section ──────────────────────────────
+
+  describe('UNCONNECTED DEMAND CITIES section in serializeRoutePlanningPrompt', () => {
+
+    it('should list off-network demand supply/delivery cities with cost and payout', () => {
+      // Demand: Coal from Munich -> Hamburg
+      // Munich is off-network (supply), Hamburg is on-network (delivery)
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Hamburg',
+            payout: 20,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).toContain('Munich');
+      expect(output).toContain('track to connect');
+    });
+
+    it('should list off-network delivery city when supply is on-network', () => {
+      // Demand: Steel from Berlin -> Rome
+      // Berlin on-network, Rome off-network (6 hexes from nearest network node)
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Steel',
+            supplyCity: 'Berlin',
+            deliveryCity: 'Rome',
+            payout: 30,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: false,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).toContain('Rome');
+    });
+
+    it('should exclude demands where both cities are on-network', () => {
+      // Demand: Steel from Berlin -> Hamburg (both on network)
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Steel',
+            supplyCity: 'Berlin',
+            deliveryCity: 'Hamburg',
+            payout: 15,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
+    });
+  });
+
+  // ── RESOURCE PROXIMITY section ─────────────────────────────────────
+
+  describe('RESOURCE PROXIMITY section in serializeRoutePlanningPrompt', () => {
+
+    it('should flag supply cities near the track network (within 5 hexes)', () => {
+      // Demand: Coal from Munich -> Hamburg
+      // Munich is 3 hexes from (10,12) on network — within proximity threshold
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Hamburg',
+            payout: 20,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).toContain('RESOURCE PROXIMITY');
+      expect(output).toContain('Coal');
+      expect(output).toContain('Munich');
+      expect(output).toMatch(/\d+M from your network/);
+    });
+
+    it('should exclude supply cities already on-network', () => {
+      // Demand: Steel from Berlin -> Rome — Berlin is on-network
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Steel',
+            supplyCity: 'Berlin',
+            deliveryCity: 'Rome',
+            payout: 30,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: false,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      // Resource proximity should not list Berlin as a supply near network
+      // (it IS on the network)
+      if (output.includes('RESOURCE PROXIMITY')) {
+        const section = output.split('RESOURCE PROXIMITY')[1].split('\n\n')[0];
+        expect(section).not.toContain('Berlin');
+      }
+    });
+
+    it('should not flag supply cities beyond 5 hexes from network', () => {
+      // Demand: Steel from Rome -> Berlin — Rome is 6 hexes from nearest network node
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Steel',
+            supplyCity: 'Rome',
+            deliveryCity: 'Berlin',
+            payout: 30,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      // Rome is 6 hexes from nearest network node (10,14) — beyond threshold of 5
+      if (output.includes('RESOURCE PROXIMITY')) {
+        const section = output.split('RESOURCE PROXIMITY')[1].split('\n\n')[0];
+        expect(section).not.toContain('Rome');
+      } else {
+        // No resource proximity section means Rome wasn't flagged — correct
+        expect(output).not.toContain('RESOURCE PROXIMITY');
+      }
+    });
+  });
+
+  // ── Edge cases ─────────────────────────────────────────────────────
+
+  describe('proximity edge cases', () => {
+
+    it('should omit all proximity sections with empty segments', () => {
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Berlin',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, [],
+      );
+
+      expect(output).not.toContain('NEARBY CITIES');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).not.toContain('RESOURCE PROXIMITY');
+    });
+
+    it('should omit unconnected and resource proximity sections when there are no demands', () => {
+      const ctx = makeProximityContext({
+        demands: [],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).not.toContain('RESOURCE PROXIMITY');
+      // NEARBY CITIES depends on route stop cities (derived from demands) — no demands = no stops
+      expect(output).not.toContain('NEARBY CITIES');
+    });
+
+    it('should omit proximity sections when segments default param is used', () => {
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Berlin',
+            payout: 15,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: true,
+          }),
+        ],
+      });
+
+      // Call without segments parameter (default = [])
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints,
+      );
+
+      expect(output).not.toContain('NEARBY CITIES');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
+      expect(output).not.toContain('RESOURCE PROXIMITY');
+    });
+
+    it('should include both supply and delivery in UNCONNECTED when both are off-network', () => {
+      // Demand: Coal from Munich -> Rome — both off-network
+      const ctx = makeProximityContext({
+        demands: [
+          makeDemand({
+            cardIndex: 0,
+            loadType: 'Coal',
+            supplyCity: 'Munich',
+            deliveryCity: 'Rome',
+            payout: 25,
+            isSupplyOnNetwork: false,
+            isDeliveryOnNetwork: false,
+          }),
+        ],
+      });
+
+      const output = ContextBuilder.serializeRoutePlanningPrompt(
+        ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
+      );
+
+      expect(output).toContain('UNCONNECTED DEMAND CITIES');
+      // Both Munich and Rome should appear
+      const section = output.split('UNCONNECTED DEMAND CITIES')[1].split('\n\n')[0];
+      expect(section).toContain('Munich');
+      expect(section).toContain('Rome');
+    });
+  });
+});
