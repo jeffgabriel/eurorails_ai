@@ -411,6 +411,11 @@ export interface StrategicRoute {
   startingCity?: string;        // for initial build: where to start building from
   createdAtTurn: number;
   reasoning: string;            // LLM's reasoning for choosing this route
+  /** LLM-chosen secondary build target — where to build after route stops are connected */
+  secondaryBuildTarget?: {
+    city: string;
+    reasoning: string;
+  };
 }
 
 /** Persistent bot state that spans across turns within a game */
