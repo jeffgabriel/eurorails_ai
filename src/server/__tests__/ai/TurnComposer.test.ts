@@ -593,6 +593,13 @@ describe('TurnComposer', () => {
         currentStopIndex: 1, // next stop is deliver at Paris
       });
 
+      // applyPlanToState must simulate the pickup so findMoveTarget sees the load
+      mockApplyPlanToState.mockImplementation((plan: any, _snap: any, ctx: any) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          ctx.loads = [...(ctx.loads || []), plan.load];
+        }
+      });
+
       const pickupPlan: TurnPlan = {
         type: AIActionType.PickupLoad,
         load: 'Coal',
