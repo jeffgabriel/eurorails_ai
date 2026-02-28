@@ -606,4 +606,144 @@ describe('PlanExecutor', () => {
       expect(buildCall).toBeDefined();
     });
   });
+
+  describe('deliver-before-build (FR-8)', () => {
+    it('should override BUILD with MOVE when carrying a deliverable load', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        loads: ['Coal'],
+        demands: [
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+          },
+        ],
+      });
+
+      // MOVE resolve succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 20, col: 20 }], fees: new Set(), totalFee: 0 },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.MoveTrain);
+      expect(result.routeComplete).toBe(false);
+      expect(result.updatedRoute.phase).toBe('build');
+      // Verify the MOVE was toward the delivery city
+      const moveCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'MOVE' && args[0]?.details?.to === 'Paris',
+      );
+      expect(moveCall).toBeDefined();
+    });
+
+    it('should fall back to BUILD when deliver-before-build MOVE fails', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        loads: ['Coal'],
+        demands: [
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+          },
+        ],
+      });
+
+      // First call: deliver-before-build MOVE fails
+      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path found' });
+      // Second call: normal BUILD succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+    });
+
+    it('should NOT override BUILD when no load is on train', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        loads: [],
+        demands: [
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          },
+        ],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+    });
+
+    it('should NOT override BUILD when delivery is not reachable', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        loads: ['Coal'],
+        demands: [
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 50,
+            isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+          },
+        ],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+    });
+
+    it('should NOT override when no demands exist', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        loads: ['Coal'],
+        demands: [],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+    });
+  });
 });
