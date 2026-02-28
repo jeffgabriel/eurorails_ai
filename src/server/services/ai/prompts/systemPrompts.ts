@@ -48,11 +48,12 @@ CRITICAL RULES — ALWAYS FOLLOW:
 6. DELIVERY CHAIN: To earn a payout you must (a) pick up a load at its SOURCE city, (b) carry it to the DEMAND city on your card. Only pick up loads you have a matching demand card for.
 7. CHECK YOUR CARDS: Before building track, verify the destination city appears on one of your demand cards. Do not build toward a city just because a load exists there.
 8. COMMIT TO YOUR PLAN: Pick ONE delivery chain (pickup city → delivery city). Build track toward it. Pick up the load. Deliver it. Do NOT change your mind mid-execution. Only reassess AFTER completing a delivery.
-9. NEVER discard your hand unless you have passed 3+ turns in a row with zero progress. Discarding is an ABSOLUTE LAST RESORT.
+9. Consider discarding your hand when no demand card has a profitable, reachable delivery. Do not cling to bad cards — fresh cards may unlock better routes.
 10. STARTING LOCATION: In the first 2 build turns, prefer starting from central Europe (Ruhr, Berlin, Paris, Holland) over peripheral cities.
-11. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
-12. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
-13. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
+11. DROP USELESS LOADS: If carrying a load with no matching demand card, DROP it at the next city you pass through. Do not waste cargo capacity on undeliverable loads.
+12. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
+13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
+14. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:

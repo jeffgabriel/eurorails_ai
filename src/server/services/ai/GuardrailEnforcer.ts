@@ -32,6 +32,7 @@ export class GuardrailEnforcer {
    *   3. Block UPGRADE during initialBuild: Upgrade is illegal during initial build phase
    *   5. Drop undeliverable loads: If carrying loads with no demand match or unreachable delivery
    *   4. No passing with loads: If bot has loads, do something productive (re-evaluates after G5)
+   *   7. Strategic hand discard: Force DiscardHand after 3 consecutive stuck turns
    *   6. Stuck turn escape hatch: Force PassTurn after 5 consecutive stuck turns
    */
   static checkPlan(
@@ -51,6 +52,18 @@ export class GuardrailEnforcer {
         plan: { type: AIActionType.PassTurn },
         overridden: true,
         reason: `Escape hatch: ${consecutivePassTurns} consecutive stuck turns — forcing PassTurn to break deadlock`,
+      };
+    }
+
+    // Guardrail 7: Strategic hand discard — force DiscardHand after 3+ consecutive stuck turns
+    // If the bot has made zero progress for 3 turns and hasn't already chosen to discard,
+    // override to DiscardHand to get fresh demand cards.
+    if (consecutivePassTurns >= 3 && planType !== AIActionType.DiscardHand) {
+      console.warn(`[Guardrail 7] Strategic discard: ${consecutivePassTurns} consecutive stuck turns — forcing DiscardHand`);
+      return {
+        plan: { type: AIActionType.DiscardHand },
+        overridden: true,
+        reason: `Strategic hand discard: ${consecutivePassTurns} consecutive stuck turns — discarding hand for fresh demand cards`,
       };
     }
 
