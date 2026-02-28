@@ -71,6 +71,7 @@ export class GuardrailEnforcer {
     // If the bot is sitting on a completable delivery and the LLM didn't choose DELIVER
     if (context.canDeliver.length > 0 && planType !== AIActionType.DeliverLoad) {
       const best = GuardrailEnforcer.bestDelivery(context);
+      console.warn(`[Guardrail 1] Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`);
       return {
         plan: {
           type: AIActionType.DeliverLoad,
@@ -104,6 +105,7 @@ export class GuardrailEnforcer {
           city: p.supplyCity,
         }));
         const pickupDesc = pickups.map(p => `${p.loadType} at ${p.supplyCity}`).join(', ');
+        console.warn(`[Guardrail 2] Forcing PICKUP(s): ${pickupDesc} (LLM chose ${planType})`);
         // If the LLM chose BUILD, convert to PICKUP(s) + BUILD multi-action
         if (planType === AIActionType.BuildTrack) {
           return {
@@ -139,6 +141,7 @@ export class GuardrailEnforcer {
 
     // Guardrail 3: Block UPGRADE during initialBuild phase
     if (context.isInitialBuild && planType === AIActionType.UpgradeTrain) {
+      console.warn(`[Guardrail 3] Blocked UPGRADE during initialBuild phase`);
       return {
         plan: { type: AIActionType.PassTurn },
         overridden: true,
@@ -175,6 +178,7 @@ export class GuardrailEnforcer {
     // Re-evaluates after Guardrail 5: if G5 dropped all loads, this won't fire.
     // If bot still has deliverable loads, it should do something productive.
     if (planType === AIActionType.PassTurn && context.loads.length > 0) {
+      console.warn(`[Guardrail 4] Blocked PASS with ${context.loads.length} load(s): [${context.loads.join(', ')}]`);
       // Try to move toward highest-payout delivery city on network
       const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
       for (const demand of sorted) {

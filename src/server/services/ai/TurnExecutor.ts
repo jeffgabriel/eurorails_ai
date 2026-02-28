@@ -688,6 +688,8 @@ export class TurnExecutor {
     const currentPoint = posKey ? grid.get(posKey) : undefined;
     const cityName = currentPoint?.name ?? '';
 
+    console.warn(`[TurnExecutor] DropLoad: dropping "${loadType}" at "${cityName || 'unknown'}" (turn ${snapshot.turnNumber})`);
+
     if (!cityName) {
       return {
         success: false,
@@ -849,6 +851,8 @@ export class TurnExecutor {
     startTime: number,
   ): Promise<ExecutionResult> {
     const demandDeck = DemandDeckService.getInstance();
+
+    console.warn(`[TurnExecutor] DiscardHand: discarding ${snapshot.bot.demandCards.length} demand cards (turn ${snapshot.turnNumber})`);
 
     // Discard current hand
     for (const cardId of snapshot.bot.demandCards) {
