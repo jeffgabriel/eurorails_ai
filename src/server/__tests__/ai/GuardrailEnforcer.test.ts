@@ -517,6 +517,261 @@ describe('GuardrailEnforcer', () => {
       });
     });
 
+    describe('Guardrail 5: Drop undeliverable loads', () => {
+      it('should drop a load with no matching demand card', () => {
+        const ctx = makeContext({
+          loads: ['Iron'],
+          demands: [], // No demands at all
+        });
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DropLoad);
+        if (result.plan.type === AIActionType.DropLoad) {
+          expect(result.plan.load).toBe('Iron');
+        }
+        expect(result.reason).toContain('undeliverable');
+      });
+
+      it('should drop a load when delivery city is unreachable and too expensive', () => {
+        const ctx = makeContext({
+          loads: ['Coal'],
+          demands: [{
+            cardIndex: 1,
+            loadType: 'Coal',
+            supplyCity: 'Berlin',
+            deliveryCity: 'London',
+            payout: 20,
+            isDeliveryOnNetwork: false,
+            isDeliveryReachable: false,
+            isSupplyOnNetwork: true,
+            isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 100,
+            bestPayout: 20,
+          }] as DemandContext[],
+        });
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        // Bot has 50M, delivery costs 100M → infeasible
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DropLoad);
+      });
+
+      it('should NOT drop a load when delivery city is on network', () => {
+        const ctx = makeContext({
+          loads: ['Coal'],
+          demands: [{
+            cardIndex: 1,
+            loadType: 'Coal',
+            supplyCity: 'Berlin',
+            deliveryCity: 'Hamburg',
+            payout: 20,
+            isDeliveryOnNetwork: true,
+            isDeliveryReachable: true,
+            isSupplyOnNetwork: true,
+            isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 0,
+            bestPayout: 20,
+          }] as DemandContext[],
+        });
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT drop a load when build cost is within budget', () => {
+        const ctx = makeContext({
+          loads: ['Coal'],
+          demands: [{
+            cardIndex: 1,
+            loadType: 'Coal',
+            supplyCity: 'Berlin',
+            deliveryCity: 'Hamburg',
+            payout: 20,
+            isDeliveryOnNetwork: false,
+            isDeliveryReachable: false,
+            isSupplyOnNetwork: true,
+            isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 10,
+            bestPayout: 20,
+          }] as DemandContext[],
+        });
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        // Bot has 50M, delivery costs 10M → feasible
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should drop multiple undeliverable loads as MultiAction', () => {
+        const ctx = makeContext({
+          loads: ['Iron', 'Bauxite'],
+          demands: [], // No demands for either load
+        });
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe('MultiAction');
+        if (result.plan.type === 'MultiAction') {
+          expect(result.plan.steps).toHaveLength(2);
+          expect(result.plan.steps[0].type).toBe(AIActionType.DropLoad);
+          expect(result.plan.steps[1].type).toBe(AIActionType.DropLoad);
+        }
+      });
+    });
+
+    describe('Guardrail 7: Strategic hand discard after 3 stuck turns', () => {
+      it('should force DiscardHand after 3 consecutive stuck turns', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toContain('Strategic hand discard');
+      });
+
+      it('should force DiscardHand after 4 consecutive stuck turns', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 4);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+      });
+
+      it('should NOT override if plan is already DiscardHand', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.DiscardHand };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT force DiscardHand with fewer than 3 stuck turns', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 2);
+
+        expect(result.overridden).toBe(false);
+      });
+    });
+
+    describe('Guardrail 6: Escape hatch after 5 stuck turns', () => {
+      it('should force PassTurn after 5 consecutive stuck turns', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+        expect(result.reason).toContain('Escape hatch');
+      });
+
+      it('should force PassTurn after 6+ consecutive stuck turns', () => {
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.DiscardHand };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 6);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PassTurn);
+      });
+
+      it('should take priority over Guardrail 7 (G6 fires at 5, G7 at 3)', () => {
+        // At 5 turns, G6 escape should fire, NOT G7 discard
+        const ctx = makeContext();
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+
+        expect(result.plan.type).toBe(AIActionType.PassTurn); // G6, not DiscardHand
+      });
+    });
+
+    describe('bestPickups multi-load scenarios', () => {
+      it('should return multiple pickups sorted by payout up to capacity', () => {
+        const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
+        const pickup2: PickupOpportunity = { loadType: 'Steel', supplyCity: 'Berlin', bestPayout: 25 };
+        const pickup3: PickupOpportunity = { loadType: 'Wine', supplyCity: 'Berlin', bestPayout: 20 };
+        const ctx = makeContext({
+          canPickup: [pickup1, pickup2, pickup3],
+          capacity: 2,
+          loads: [],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe('MultiAction');
+        if (result.plan.type === 'MultiAction') {
+          expect(result.plan.steps).toHaveLength(2); // limited by capacity=2
+          // Should be sorted: Steel (25) first, then Wine (20)
+          expect(result.plan.steps[0].type).toBe(AIActionType.PickupLoad);
+          if (result.plan.steps[0].type === AIActionType.PickupLoad) {
+            expect(result.plan.steps[0].load).toBe('Steel');
+          }
+          if (result.plan.steps[1].type === AIActionType.PickupLoad) {
+            expect(result.plan.steps[1].load).toBe('Wine');
+          }
+        }
+      });
+
+      it('should respect remaining capacity when bot already carries loads', () => {
+        const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
+        const pickup2: PickupOpportunity = { loadType: 'Steel', supplyCity: 'Berlin', bestPayout: 25 };
+        const ctx = makeContext({
+          canPickup: [pickup1, pickup2],
+          capacity: 2,
+          loads: ['Wine'], // Already carrying 1 of 2
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        // Only 1 pickup slot available → single PICKUP, not MultiAction
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+        if (result.plan.type === AIActionType.PickupLoad) {
+          expect(result.plan.load).toBe('Steel'); // Highest payout
+        }
+      });
+
+      it('should NOT override when at full capacity', () => {
+        const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
+        const ctx = makeContext({
+          canPickup: [pickup1],
+          capacity: 2,
+          loads: ['Wine', 'Steel'], // Full
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        // G2 won't fire (capacity full), G4 will fire because loads > 0
+        // But G4 needs demands with delivery/supply on network
+        expect(result.plan.type).not.toBe(AIActionType.PickupLoad);
+      });
+    });
+
     describe('Guardrail priority', () => {
       it('Force DELIVER takes priority over block UPGRADE during initialBuild', () => {
         // Edge case: isInitialBuild=true, canDeliver has items, LLM chose UPGRADE
