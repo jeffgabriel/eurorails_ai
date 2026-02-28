@@ -107,8 +107,10 @@ export class TurnComposer {
         const remainingMovement = simContext.speed - movementUsed;
 
         if (remainingMovement > 0) {
-          const moveTarget = TurnComposer.findMoveTarget(simContext, activeRoute);
-          if (moveTarget) {
+          // Try multiple targets in priority order — the primary route target
+          // may be unreachable if track hasn't been built there yet.
+          const moveTargets = TurnComposer.findMoveTargets(simContext, activeRoute);
+          for (const moveTarget of moveTargets) {
             const moveResult = await ActionResolver.resolve(
               { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
               simSnapshot, simContext,
@@ -131,6 +133,9 @@ export class TurnComposer {
                   ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
                 }
               }
+              break; // Successfully chained a MOVE — stop trying targets
+            } else {
+              console.log(`[TurnComposer] A2 continuation MOVE to ${moveTarget} failed: ${moveResult.error}`);
             }
           }
         }
@@ -145,8 +150,11 @@ export class TurnComposer {
         const movementUsed = TurnComposer.countMovementUsed(steps);
         const remainingMovement = context.speed - movementUsed;
         if (remainingMovement > 0) {
-          const moveTarget = TurnComposer.findMoveTarget(context, activeRoute);
-          if (moveTarget) {
+          // Try multiple targets — the route's build target city is likely
+          // unreachable (that's why PlanExecutor chose BUILD), so fall back
+          // to demand-based cities on the existing track network.
+          const moveTargets = TurnComposer.findMoveTargets(context, activeRoute);
+          for (const moveTarget of moveTargets) {
             const moveResult = await ActionResolver.resolve(
               { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
               snapshot, context,
@@ -170,6 +178,9 @@ export class TurnComposer {
                 const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
                 steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitPlans);
               }
+              break; // Successfully prepended a MOVE — stop trying targets
+            } else {
+              console.log(`[TurnComposer] A3 prepend MOVE to ${moveTarget} failed: ${moveResult.error}`);
             }
           }
         }
@@ -249,25 +260,23 @@ export class TurnComposer {
         }
       }
 
-      // Check for PICKUP: city produces a load matching a demand, bot has capacity
-      const trainCapacity = TurnComposer.getBotCapacity(snapshot);
-      if (snapshot.bot.loads.length < trainCapacity) {
-        const availableLoads = snapshot.loadAvailability[cityName] ?? [];
-        for (const loadType of availableLoads) {
-          if (snapshot.bot.loads.includes(loadType)) continue;
-          const hasDemand = snapshot.bot.resolvedDemands.some(rd =>
-            rd.demands.some(d => d.loadType === loadType),
-          );
-          if (!hasDemand) continue;
-          const result = await ActionResolver.resolve(
-            { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
-            snapshot, context,
-          );
-          if (result.success && result.plan) {
-            actionPlans.push(result.plan);
-            ActionResolver.applyPlanToState(result.plan, snapshot, context);
-            break; // One pickup per city to avoid over-filling
-          }
+      // Check for PICKUP: city produces loads matching demands, bot has capacity
+      // Pick up ALL matching loads up to cargo capacity (FR-5: multi-load pickup)
+      const availableLoads = snapshot.loadAvailability[cityName] ?? [];
+      for (const loadType of availableLoads) {
+        if (snapshot.bot.loads.length >= TurnComposer.getBotCapacity(snapshot)) break;
+        if (snapshot.bot.loads.includes(loadType)) continue;
+        const hasDemand = snapshot.bot.resolvedDemands.some(rd =>
+          rd.demands.some(d => d.loadType === loadType),
+        );
+        if (!hasDemand) continue;
+        const result = await ActionResolver.resolve(
+          { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
+          snapshot, context,
+        );
+        if (result.success && result.plan) {
+          actionPlans.push(result.plan);
+          ActionResolver.applyPlanToState(result.plan, snapshot, context);
         }
       }
 
@@ -378,13 +387,24 @@ export class TurnComposer {
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /**
-   * Find the best MOVE target based on route or demand cards.
+   * Find MOVE targets in priority order: route stops first, then demand-based fallbacks.
+   * Returns ALL candidates so callers can iterate and try resolveMove on each
+   * until one succeeds (the primary route target may be unreachable).
    */
-  private static findMoveTarget(
+  private static findMoveTargets(
     context: GameContext,
     activeRoute?: StrategicRoute | null,
-  ): string | null {
-    // If there's an active route, move toward the next uncompleted stop
+  ): string[] {
+    const targets: string[] = [];
+    const seen = new Set<string>();
+    const add = (city: string) => {
+      if (!seen.has(city)) {
+        seen.add(city);
+        targets.push(city);
+      }
+    };
+
+    // Priority 1: Route stops (in order, skipping completed ones)
     if (activeRoute) {
       for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
         const stop = activeRoute.stops[i];
@@ -396,23 +416,26 @@ export class TurnComposer {
         if (stop.action === 'deliver' && !context.loads.includes(stop.loadType)) {
           continue;
         }
-        return stop.city;
+        add(stop.city);
       }
     }
 
-    // Fallback: move toward the highest-payout demand delivery city on network
+    // Priority 2: Demand delivery cities on network (bot has the load)
     const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
     for (const demand of sorted) {
       if (demand.isLoadOnTrain && demand.isDeliveryOnNetwork) {
-        return demand.deliveryCity;
+        add(demand.deliveryCity);
       }
     }
+
+    // Priority 3: Demand supply cities on network (bot can pick up)
     for (const demand of sorted) {
       if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork) {
-        return demand.supplyCity;
+        add(demand.supplyCity);
       }
     }
-    return null;
+
+    return targets;
   }
 
   /**

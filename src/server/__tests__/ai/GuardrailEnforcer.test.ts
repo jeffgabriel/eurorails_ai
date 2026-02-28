@@ -218,7 +218,7 @@ describe('GuardrailEnforcer', () => {
           expect(result.plan.steps[0].type).toBe(AIActionType.PickupLoad);
           expect(result.plan.steps[1].type).toBe(AIActionType.BuildTrack);
         }
-        expect(result.reason).toContain('Injected PICKUP before BUILD');
+        expect(result.reason).toContain('Injected PICKUP(s) before BUILD');
       });
 
       it('should NOT override when LLM chose MOVE (bot may be moving to deliver)', () => {
@@ -460,6 +460,7 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({
           loads: ['Coal'],
           demands: [
+            makeDemand({ loadType: 'Coal', isLoadOnTrain: true, isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 10, deliveryCity: 'München', payout: 15 }),
             makeDemand({ loadType: 'Wine', isLoadOnTrain: false, isSupplyOnNetwork: true, supplyCity: 'Bordeaux', payout: 25 }),
           ],
         });

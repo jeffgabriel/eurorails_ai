@@ -81,35 +81,47 @@ export class GuardrailEnforcer {
       planType !== AIActionType.DeliverLoad &&
       planType !== AIActionType.DiscardHand
     ) {
-      const best = GuardrailEnforcer.bestPickup(context);
-      // If the LLM chose BUILD, convert to PICKUP + BUILD multi-action
-      if (planType === AIActionType.BuildTrack) {
+      const pickups = GuardrailEnforcer.bestPickups(context);
+      if (pickups.length === 0) {
+        // Capacity full — let the original plan proceed
+      } else {
+        const pickupPlans = pickups.map(p => ({
+          type: AIActionType.PickupLoad as const,
+          load: p.loadType,
+          city: p.supplyCity,
+        }));
+        const pickupDesc = pickups.map(p => `${p.loadType} at ${p.supplyCity}`).join(', ');
+        // If the LLM chose BUILD, convert to PICKUP(s) + BUILD multi-action
+        if (planType === AIActionType.BuildTrack) {
+          return {
+            plan: {
+              type: 'MultiAction' as const,
+              steps: [
+                ...pickupPlans,
+                plan, // Keep the original BUILD plan as last step
+              ],
+            },
+            overridden: true,
+            reason: `Injected PICKUP(s) before BUILD: ${pickupDesc}`,
+          };
+        }
+        // For PASS or other actions: single pickup → force PICKUP, multiple → MultiAction
+        if (pickupPlans.length === 1) {
+          return {
+            plan: pickupPlans[0],
+            overridden: true,
+            reason: `Forced PICKUP: ${pickupDesc} (LLM chose ${planType})`,
+          };
+        }
         return {
           plan: {
-            type: 'MultiAction',
-            steps: [
-              {
-                type: AIActionType.PickupLoad,
-                load: best.loadType,
-                city: best.supplyCity,
-              },
-              plan, // Keep the original BUILD plan as second step
-            ],
+            type: 'MultiAction' as const,
+            steps: pickupPlans,
           },
           overridden: true,
-          reason: `Injected PICKUP before BUILD: ${best.loadType} at ${best.supplyCity} → ${best.bestDeliveryCity} for ${best.bestPayout}M`,
+          reason: `Forced PICKUP(s): ${pickupDesc} (LLM chose ${planType})`,
         };
       }
-      // For PASS or other actions, just force PICKUP
-      return {
-        plan: {
-          type: AIActionType.PickupLoad,
-          load: best.loadType,
-          city: best.supplyCity,
-        },
-        overridden: true,
-        reason: `Forced PICKUP: ${best.loadType} at ${best.supplyCity} → ${best.bestDeliveryCity} for ${best.bestPayout}M (LLM chose ${planType})`,
-      };
     }
 
     // Guardrail 3: Block UPGRADE during initialBuild phase
@@ -218,12 +230,15 @@ export class GuardrailEnforcer {
   }
 
   /**
-   * Pick the highest-payout pickup opportunity.
+   * Pick the highest-payout pickup opportunities, up to remaining cargo capacity.
+   * Returns a sorted array (highest payout first), limited by what the bot can carry.
    */
-  private static bestPickup(context: GameContext) {
-    return context.canPickup.reduce((best, opp) =>
-      opp.bestPayout > best.bestPayout ? opp : best,
-    );
+  private static bestPickups(context: GameContext): typeof context.canPickup {
+    const remainingCapacity = context.capacity - context.loads.length;
+    if (remainingCapacity <= 0) return [];
+    return [...context.canPickup]
+      .sort((a, b) => b.bestPayout - a.bestPayout)
+      .slice(0, remainingCapacity);
   }
 
   /**
