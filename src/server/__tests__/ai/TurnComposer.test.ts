@@ -1443,4 +1443,470 @@ describe('TurnComposer', () => {
       expect(buildCall![0].details.toward).toBe('Lyon');
     });
   });
+
+  describe('A2 multi-target fallback (GH-Cardiff-bug)', () => {
+    it('falls back to demand city when route target is unreachable', async () => {
+      // Scenario: bot picks up Hops at Cardiff, route next stop is Dublin (unreachable).
+      // Dublin MOVE fails. Demand fallback: supply city London is on network → move there.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Hops'],
+          resolvedDemands: [
+            {
+              cardId: 1,
+              demands: [{ city: 'Dublin', loadType: 'Hops', payment: 12 }],
+            },
+          ],
+        },
+      });
+      const context = makeContext({
+        speed: 9,
+        loads: ['Hops'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'London', deliveryCity: 'Bordeaux',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Hops', city: 'Cardiff' },
+          { action: 'deliver', loadType: 'Hops', city: 'Dublin', demandCardId: 1, payment: 12 },
+        ],
+        currentStopIndex: 1, // Already past pickup
+        phase: 'travel',
+      });
+
+      // Primary: PICKUP (simulating A1 split already happened, last step is pickup)
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Hops',
+        city: 'Cardiff',
+      };
+
+      // applyPlanToState: update loads for PICKUP, position for MOVE
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads.push((plan as any).load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+      });
+
+      mockResolve
+        // A2 attempt 1: MOVE to Dublin — FAILS (unreachable, no track to ferry)
+        .mockResolvedValueOnce({ success: false, error: 'No valid path to "Dublin" on existing track network.' })
+        // A2 attempt 2: MOVE to London (demand supply city) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 17, col: 26 }, { row: 18, col: 27 }, { row: 19, col: 28 },
+              { row: 20, col: 29 }, { row: 20, col: 30 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps[0].type).toBe(AIActionType.PickupLoad);
+        // Continuation MOVE should exist (fell back to London)
+        const moveStep = result.steps.find(s => s.type === AIActionType.MoveTrain);
+        expect(moveStep).toBeDefined();
+      }
+
+      // Verify: first MOVE tried Dublin, second tried London
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls).toHaveLength(2);
+      expect(moveCalls[0][0].details.to).toBe('Dublin');
+      expect(moveCalls[1][0].details.to).toBe('London');
+    });
+
+    it('no continuation MOVE when ALL targets are unreachable', async () => {
+      // All route stops and demand cities fail resolveMove — no MOVE added.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Hops'],
+        },
+      });
+      const context = makeContext({
+        speed: 9,
+        loads: ['Hops'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Dublin',
+            payout: 12, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Hops', city: 'Dublin', demandCardId: 1, payment: 12 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Hops',
+        city: 'Cardiff',
+      };
+
+      // All MOVE attempts fail — no valid path to anything
+      mockResolve.mockResolvedValue({ success: false, error: 'No path' });
+
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // Only PICKUP returned — no MOVE could be resolved
+      expect(result.type).toBe(AIActionType.PickupLoad);
+    });
+  });
+
+  describe('A3 multi-target fallback (GH-Dublin-bug)', () => {
+    it('falls back to demand city when BUILD target is unreachable for MOVE', async () => {
+      // Scenario: bot at Dublin, no loads. Primary is BUILD toward München (unreachable).
+      // Route: pickup Cars at München (not on network), deliver Cars at London.
+      // Bot doesn't have Cars, so deliver stop is skipped by findMoveTargets.
+      // findMoveTargets returns [München, Lyon] — München from route, Lyon from 2nd demand.
+      // MOVE to München fails. Fallback MOVE to Lyon (supply city on network) succeeds.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          position: { row: 10, col: 24 },
+        },
+      });
+      const context = makeContext({
+        speed: 9,
+        loads: [],
+        position: { row: 10, col: 24 },
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Cars', supplyCity: 'München', deliveryCity: 'London',
+            payout: 30, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+          {
+            cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Bordeaux',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          },
+        ],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Cars', city: 'München' },
+          { action: 'deliver', loadType: 'Cars', city: 'London', demandCardId: 1, payment: 30 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 24, 11, 25)],
+        targetCity: 'München',
+      };
+
+      mockResolve
+        // A3 attempt 1: MOVE to München (route stop, unreachable) — FAILS
+        .mockResolvedValueOnce({ success: false, error: 'No valid path to "München"' })
+        // A3 attempt 2: MOVE to Lyon (demand supply city on network) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 24 }, { row: 11, col: 25 }, { row: 12, col: 26 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const result = await TurnComposer.compose(buildPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // MOVE should be before BUILD
+        expect(result.steps[0].type).toBe(AIActionType.MoveTrain);
+        expect(result.steps[result.steps.length - 1].type).toBe(AIActionType.BuildTrack);
+      }
+
+      // Verify: first tried München, then fell back to Lyon
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls).toHaveLength(2);
+      expect(moveCalls[0][0].details.to).toBe('München');
+      expect(moveCalls[1][0].details.to).toBe('Lyon');
+    });
+  });
+
+  describe('multi-load pickup (FR-5)', () => {
+    it('picks up multiple matching loads when capacity allows', async () => {
+      // Bot at Berlin which produces Coal and Steel, bot has capacity for 2
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+            { cardId: 2, demands: [{ city: 'Hamburg', loadType: 'Steel', payment: 20 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal', 'Steel'] },
+      });
+      const context = makeContext({ capacity: 2 });
+
+      // Move path ends at Berlin
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      // Two pickup resolves succeed
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Steel', city: 'Berlin' },
+        });
+
+      const result = await TurnComposer.compose(movePlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(2);
+      }
+    });
+
+    it('limits pickups to remaining capacity', async () => {
+      // Bot already carrying 1 load, capacity 2, city has 2 loads
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Wine'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+            { cardId: 2, demands: [{ city: 'Hamburg', loadType: 'Steel', payment: 20 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal', 'Steel'] },
+      });
+      const context = makeContext({ capacity: 2, loads: ['Wine'] });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const endPos = (plan as any).path[(plan as any).path.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      // Only first pickup should succeed (capacity reached after first)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      const result = await TurnComposer.compose(movePlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+    });
+  });
+
+  describe('Phase A0: deliver-before-build (FR-8)', () => {
+    it('prepends MOVE+DELIVER before BUILD when deliverable load is reachable', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+        },
+      });
+      const context = makeContext({
+        loads: ['Coal'],
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Coal',
+          supplyCity: 'Berlin',
+          deliveryCity: 'Paris',
+          payout: 25,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          bestPayout: 25,
+        }] as any[],
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 10, 11, 11)],
+        targetCity: 'Hamburg',
+      };
+
+      // A0: MOVE to Paris resolves successfully
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [{ row: 10, col: 10 }, { row: 15, col: 15 }],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // A0: DELIVER at Paris succeeds
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Paris', cardId: 1, payout: 25 },
+        });
+
+      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps.length).toBeGreaterThanOrEqual(3);
+        expect(result.steps[0].type).toBe(AIActionType.MoveTrain);
+        expect(result.steps[1].type).toBe(AIActionType.DeliverLoad);
+        // BUILD should still be present
+        const hasBuild = result.steps.some(s => s.type === AIActionType.BuildTrack);
+        expect(hasBuild).toBe(true);
+      }
+    });
+
+    it('does NOT prepend deliver when no deliverable load is present', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        demands: [], // No deliverable loads
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 10, 11, 11)],
+        targetCity: 'Hamburg',
+      };
+
+      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // Should still contain BUILD, but no DELIVER
+      if (result.type === 'MultiAction') {
+        const hasDeliver = result.steps.some(s => s.type === AIActionType.DeliverLoad);
+        expect(hasDeliver).toBe(false);
+      } else {
+        expect(result.type).toBe(AIActionType.BuildTrack);
+      }
+    });
+
+    it('does NOT prepend deliver when delivery city is not reachable', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+        },
+      });
+      const context = makeContext({
+        loads: ['Coal'],
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Coal',
+          supplyCity: 'Berlin',
+          deliveryCity: 'London',
+          payout: 25,
+          isDeliveryOnNetwork: false,
+          isDeliveryReachable: false,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 100,
+          bestPayout: 25,
+        }] as any[],
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 10, 11, 11)],
+        targetCity: 'Hamburg',
+      };
+
+      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // No DELIVER should be prepended
+      if (result.type === 'MultiAction') {
+        const hasDeliver = result.steps.some(s => s.type === AIActionType.DeliverLoad);
+        expect(hasDeliver).toBe(false);
+      }
+    });
+  });
 });
