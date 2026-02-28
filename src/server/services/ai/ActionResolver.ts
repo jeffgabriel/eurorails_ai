@@ -22,6 +22,7 @@ import {
   TurnPlanDiscardHand,
   TurnPlanPassTurn,
   AIActionType,
+  TerrainType,
   TrackSegment,
   TrainType,
   TRAIN_PROPERTIES,
@@ -256,8 +257,23 @@ export class ActionResolver {
       }
 
       // Truncate to speed limit if the path is too long (partial move toward destination)
-      const pathLength = Math.min(usage.path.length, speed);
-      const truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
+      let pathLength = Math.min(usage.path.length, speed);
+      let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
+
+      // Ferry detection: if path passes through a FerryPort, truncate at the port.
+      // The bot must stop at the ferry port for this turn (game rule).
+      // Skip index 0 (the starting position — bot is already there).
+      const grid = loadGridPoints();
+      for (let i = 1; i < truncatedPath.length; i++) {
+        const pointKey = `${truncatedPath[i].row},${truncatedPath[i].col}`;
+        const pointData = grid.get(pointKey);
+        if (pointData && pointData.terrain === TerrainType.FerryPort) {
+          console.warn(`[Ferry] Path truncated at ferry port ${pointData.name ?? pointKey} (step ${i}/${truncatedPath.length - 1})`);
+          pathLength = i;
+          truncatedPath = fullPath.slice(0, i + 1);
+          break;
+        }
+      }
 
       // Recalculate fees for the truncated path only
       const truncatedEdges = usage.path.slice(0, pathLength);

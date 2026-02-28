@@ -160,6 +160,28 @@ export function hexDistance(r1: number, c1: number, r2: number, c2: number): num
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
 }
 
+/**
+ * Find the paired ferry port for a given ferry port coordinate.
+ * Uses ferryEdges data to look up which port is on the other side of the crossing.
+ *
+ * @returns The paired port coordinates, or null if the position is not a ferry port.
+ */
+export function getFerryPairPort(
+  row: number,
+  col: number,
+  ferryEdges: Array<{ name: string; pointA: { row: number; col: number }; pointB: { row: number; col: number }; cost: number }>,
+): { row: number; col: number } | null {
+  for (const edge of ferryEdges) {
+    if (edge.pointA.row === row && edge.pointA.col === col) {
+      return { row: edge.pointB.row, col: edge.pointB.col };
+    }
+    if (edge.pointB.row === row && edge.pointB.col === col) {
+      return { row: edge.pointA.row, col: edge.pointA.col };
+    }
+  }
+  return null;
+}
+
 /** Reset the cache (for testing). */
 export function _resetCache(): void {
   gridPointsCache = null;
