@@ -25,6 +25,7 @@ import {
   TurnPlanMoveTrain,
   TurnPlanDeliverLoad,
   TurnPlanPickupLoad,
+  TurnPlanDropLoad,
   TurnPlanUpgradeTrain,
   TurnPlanDiscardHand,
   TurnPlanPassTurn,
@@ -815,6 +816,57 @@ describe('ActionResolver', () => {
       expect(plan.path.length).toBe(6);
     });
 
+    it('should truncate path at ferry port (FR-2)', async () => {
+      // Path of 5 edges: start → 3 clear → ferry port → clear
+      // Should truncate at step 4 (the ferry port)
+      setupGridPoints([
+        { row: 5, col: 5, name: 'Start' },
+        { row: 9, col: 5, name: 'FerryA', terrain: TerrainType.FerryPort },
+        { row: 10, col: 5, name: 'Target' },
+      ]);
+      const path = [
+        makePathEdge(5, 5, 6, 5),
+        makePathEdge(6, 5, 7, 5),
+        makePathEdge(7, 5, 8, 5),
+        makePathEdge(8, 5, 9, 5),  // step 4 → ferry port
+        makePathEdge(9, 5, 10, 5),
+      ];
+      mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path));
+
+      const result = await ActionResolver.resolve(
+        makeMoveIntent('Target'),
+        makeWorldSnapshot(),
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanMoveTrain;
+      // Path should stop at ferry port: start + 4 steps = 5 coords
+      expect(plan.path.length).toBe(5);
+      expect(plan.path[plan.path.length - 1]).toEqual({ row: 9, col: 5 });
+    });
+
+    it('should NOT truncate path when no ferry port is present', async () => {
+      setupGridPoints([{ row: 8, col: 8, name: 'Hamburg' }]);
+      const path = [
+        makePathEdge(5, 5, 6, 5),
+        makePathEdge(6, 5, 7, 6),
+        makePathEdge(7, 6, 8, 8),
+      ];
+      mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path));
+
+      const result = await ActionResolver.resolve(
+        makeMoveIntent('Hamburg'),
+        makeWorldSnapshot(),
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanMoveTrain;
+      // Full path preserved: start + 3 steps = 4 coords
+      expect(plan.path.length).toBe(4);
+    });
+
     it('should fail when path is invalid (no route)', async () => {
       setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
       mockComputeTrackUsageForMove.mockReturnValue(makeInvalidUsage());
@@ -1439,6 +1491,274 @@ describe('ActionResolver', () => {
         planHorizon: 'short',
       };
       expect((await ActionResolver.resolve(intent2, snapshot, makeGameContext())).success).toBe(true);
+    });
+
+    it('should reject speculative pickup when no demand card matches (FR-4)', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Wine', payment: 25 }] },
+          ],
+        } as any,
+        loadAvailability: { Ruhr: ['Steel'] },
+      });
+
+      const result = await ActionResolver.resolve(
+        makePickupIntent('Steel', 'Ruhr'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('No demand card');
+    });
+
+    it('should allow pickup when demand card matches the load type (FR-4)', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] },
+          ],
+        } as any,
+        loadAvailability: { Ruhr: ['Steel'] },
+      });
+
+      const context = makeGameContext({
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Steel',
+          supplyCity: 'Ruhr',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          bestPayout: 20,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        makePickupIntent('Steel', 'Ruhr'),
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanPickupLoad;
+      expect(plan.load).toBe('Steel');
+    });
+
+    it('should reject pickup when delivery is infeasible (FR-6)', async () => {
+      // Bot has 10M, delivery city costs 50M to build to and is not on network
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: [],
+          money: 10,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'London', loadType: 'Steel', payment: 20 }] },
+          ],
+        } as any,
+        loadAvailability: { Ruhr: ['Steel'] },
+      });
+
+      const context = makeGameContext({
+        money: 10,
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Steel',
+          supplyCity: 'Ruhr',
+          deliveryCity: 'London',
+          payout: 20,
+          isDeliveryOnNetwork: false,
+          isDeliveryReachable: false,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 50,
+          bestPayout: 20,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        makePickupIntent('Steel', 'Ruhr'),
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not reachable within budget');
+    });
+
+    it('should allow pickup when delivery city is on network even if build cost is high (FR-6)', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: [],
+          money: 10,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] },
+          ],
+        } as any,
+        loadAvailability: { Ruhr: ['Steel'] },
+      });
+
+      const context = makeGameContext({
+        money: 10,
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Steel',
+          supplyCity: 'Ruhr',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 50,
+          bestPayout: 20,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        makePickupIntent('Steel', 'Ruhr'),
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // resolveDropLoad (via resolve)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('resolveDropLoad', () => {
+    function makeDropIntent(load: string, at?: string): LLMActionIntent {
+      return {
+        action: AIActionType.DropLoad,
+        details: at ? { load, at } : { load },
+        reasoning: 'Drop load',
+        planHorizon: 'short',
+      };
+    }
+
+    beforeEach(() => {
+      setupGridPoints([
+        { row: 5, col: 5, name: 'Ruhr', terrain: TerrainType.MediumCity },
+      ]);
+    });
+
+    it('should succeed when bot carries the load and is at a city', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 }, loads: ['Coal'] } as any,
+      });
+
+      const result = await ActionResolver.resolve(
+        makeDropIntent('Coal', 'Ruhr'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDropLoad;
+      expect(plan.type).toBe(AIActionType.DropLoad);
+      expect(plan.load).toBe('Coal');
+      expect(plan.city).toBe('Ruhr');
+    });
+
+    it('should resolve city from bot position when not explicitly specified', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 }, loads: ['Coal'] } as any,
+      });
+
+      const result = await ActionResolver.resolve(
+        makeDropIntent('Coal'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDropLoad;
+      expect(plan.city).toBe('Ruhr');
+    });
+
+    it('should fail when bot does not carry the specified load', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 }, loads: ['Wine'] } as any,
+      });
+
+      const result = await ActionResolver.resolve(
+        makeDropIntent('Coal', 'Ruhr'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not carrying');
+    });
+
+    it('should fail when bot is not at the specified city', async () => {
+      setupGridPoints([
+        { row: 5, col: 5, name: 'Ruhr' },
+        { row: 20, col: 20, name: 'Berlin' },
+      ]);
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 }, loads: ['Coal'] } as any,
+      });
+
+      const result = await ActionResolver.resolve(
+        makeDropIntent('Coal', 'Berlin'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not at');
+    });
+
+    it('should fail when load type is missing from details', async () => {
+      const intent: LLMActionIntent = {
+        action: AIActionType.DropLoad,
+        details: { at: 'Ruhr' },
+        reasoning: 'Drop',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(
+        intent,
+        makeWorldSnapshot({ bot: { position: { row: 5, col: 5 }, loads: ['Coal'] } as any }),
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('DROP requires');
+    });
+
+    it('should fail when bot is not at any named city', async () => {
+      // Position at a point not in the grid
+      setupGridPoints([]); // no cities
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 99, col: 99 }, loads: ['Coal'] } as any,
+      });
+
+      const result = await ActionResolver.resolve(
+        makeDropIntent('Coal'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('not at a named city');
     });
   });
 
