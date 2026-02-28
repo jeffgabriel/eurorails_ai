@@ -25,6 +25,7 @@ AVAILABLE ACTIONS:
 - DELIVER: Deliver a load you're carrying at a demand city you're currently at
 - MOVE: Move your train along existing track (up to speed limit)
 - PICKUP: Pick up a load at a supply city you're at (if available and you have capacity)
+- DROP: Drop a load you're carrying at the current city (use when carrying a load you cannot deliver)
 - BUILD: Build new track extending your network (up to 20M this turn)
 - UPGRADE: Buy a better train for 20M (no track building this turn)
 - DISCARD_HAND: Discard all 3 demand cards, draw 3 new ones, end turn immediately
@@ -62,6 +63,7 @@ For a single action:
     // MOVE: { "to": "<city name>" }
     // DELIVER: { "load": "<load type>", "at": "<city name>" }
     // PICKUP: { "load": "<load type>", "at": "<city name>" }
+    // DROP: { "load": "<load type>" }
     // UPGRADE: { "to": "<train type>" }
     // DISCARD_HAND or PASS: {} (empty)
   },

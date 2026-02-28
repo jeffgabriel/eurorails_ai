@@ -17,6 +17,7 @@ import {
   TurnPlanMoveTrain,
   TurnPlanDeliverLoad,
   TurnPlanPickupLoad,
+  TurnPlanDropLoad,
   TurnPlanUpgradeTrain,
   TurnPlanDiscardHand,
   TurnPlanPassTurn,
@@ -80,6 +81,9 @@ export class ActionResolver {
       case AIActionType.UpgradeTrain:
       case 'UPGRADE':
         return ActionResolver.resolveUpgrade(details, snapshot);
+      case AIActionType.DropLoad:
+      case 'DROP':
+        return ActionResolver.resolveDropLoad(details, snapshot);
       case AIActionType.DiscardHand:
       case 'DISCARD_HAND':
         return ActionResolver.resolveDiscard(snapshot);
@@ -87,7 +91,7 @@ export class ActionResolver {
       case 'PASS':
         return ActionResolver.resolvePass();
       default:
-        return { success: false, error: `Unknown action type: "${action}". Valid actions: BUILD, MOVE, DELIVER, PICKUP, UPGRADE, DISCARD_HAND, PASS.` };
+        return { success: false, error: `Unknown action type: "${action}". Valid actions: BUILD, MOVE, DELIVER, PICKUP, DROP, UPGRADE, DISCARD_HAND, PASS.` };
     }
   }
 
@@ -392,6 +396,55 @@ export class ActionResolver {
       type: AIActionType.PickupLoad,
       load: loadType,
       city: cityName,
+    };
+
+    return { success: true, plan };
+  }
+
+  /**
+   * Resolve a DROP intent into a TurnPlanDropLoad.
+   *
+   * Checks: bot is at a city and bot carries the specified load.
+   */
+  private static async resolveDropLoad(
+    details: Record<string, string>,
+    snapshot: WorldSnapshot,
+  ): Promise<ResolvedAction> {
+    const loadType = details.load;
+    const cityName = details.at ?? details.city;
+    if (!loadType) {
+      return { success: false, error: 'DROP requires details.load specifying the load type to drop.' };
+    }
+
+    // Bot must be carrying the load
+    if (!snapshot.bot.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    }
+
+    // Resolve city from bot position if not specified
+    let resolvedCity = cityName;
+    if (!resolvedCity) {
+      const grid = loadGridPoints();
+      const posKey = snapshot.bot.position
+        ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+        : '';
+      const point = posKey ? grid.get(posKey) : undefined;
+      resolvedCity = point?.name ?? '';
+    }
+
+    if (!resolvedCity) {
+      return { success: false, error: 'Bot is not at a named city. Loads can only be dropped at cities.' };
+    }
+
+    // Verify bot is actually at the city (if explicitly specified)
+    if (cityName && !ActionResolver.isBotAtCity(snapshot, cityName)) {
+      return { success: false, error: `Bot is not at "${cityName}". Move there before dropping.` };
+    }
+
+    const plan: TurnPlanDropLoad = {
+      type: AIActionType.DropLoad,
+      load: loadType,
+      city: resolvedCity,
     };
 
     return { success: true, plan };

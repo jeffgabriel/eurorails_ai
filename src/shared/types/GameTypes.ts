@@ -681,8 +681,7 @@ export interface LLMActionIntent {
 /**
  * Discriminated union of executable action plans.
  *
- * DropLoad and FerryCrossing are intentionally excluded:
- * - DropLoad: subsumed by PickupLoad/DeliverLoad; drops happen as side effects of MoveTrain.
+ * FerryCrossing is intentionally excluded:
  * - FerryCrossing: transparent in pathfinding; ferry traversal is encoded in MoveTrain.path.
  */
 export type TurnPlan =
@@ -690,6 +689,7 @@ export type TurnPlan =
     | TurnPlanMoveTrain
     | TurnPlanDeliverLoad
     | TurnPlanPickupLoad
+    | TurnPlanDropLoad
     | TurnPlanUpgradeTrain
     | TurnPlanDiscardHand
     | TurnPlanPassTurn
@@ -718,6 +718,12 @@ export interface TurnPlanDeliverLoad {
 
 export interface TurnPlanPickupLoad {
     type: AIActionType.PickupLoad;
+    load: string;
+    city: string;
+}
+
+export interface TurnPlanDropLoad {
+    type: AIActionType.DropLoad;
     load: string;
     city: string;
 }

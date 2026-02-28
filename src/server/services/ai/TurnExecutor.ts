@@ -131,6 +131,14 @@ export class TurnExecutor {
           loadType: plan.load as LoadType,
           targetCity: plan.city,
         };
+      case AIActionType.DropLoad:
+        return {
+          action: AIActionType.DropLoad,
+          feasible: true,
+          reason: 'v6.3 plan',
+          loadType: plan.load as LoadType,
+          targetCity: plan.city,
+        };
       case AIActionType.UpgradeTrain: {
         // Determine upgrade kind based on cost
         const upgradeKind = plan.cost === 5 ? 'crossgrade' : 'upgrade';
