@@ -5,6 +5,8 @@ import {
   gridToPixel,
   getTerrainCost,
   isWater,
+  hexDistance,
+  getFerryPairPort,
   _resetCache,
 } from '../services/ai/MapTopology';
 
@@ -181,6 +183,84 @@ describe('MapTopology', () => {
     it('should return empty array for non-existent grid position', () => {
       const neighbors = getHexNeighbors(999, 999);
       expect(neighbors).toEqual([]);
+    });
+  });
+
+  describe('hexDistance', () => {
+    it('should return 0 for same position', () => {
+      expect(hexDistance(10, 10, 10, 10)).toBe(0);
+    });
+
+    it('should return 1 for adjacent same-row positions', () => {
+      expect(hexDistance(10, 5, 10, 6)).toBe(1);
+      expect(hexDistance(10, 5, 10, 4)).toBe(1);
+    });
+
+    it('should return 1 for adjacent different-row positions (even row)', () => {
+      // Even row neighbors: [-1,-1], [-1,0], [1,-1], [1,0]
+      expect(hexDistance(10, 5, 9, 5)).toBe(1);
+      expect(hexDistance(10, 5, 9, 4)).toBe(1);
+      expect(hexDistance(10, 5, 11, 5)).toBe(1);
+      expect(hexDistance(10, 5, 11, 4)).toBe(1);
+    });
+
+    it('should return 1 for adjacent different-row positions (odd row)', () => {
+      // Odd row neighbors: [-1,0], [-1,1], [1,0], [1,1]
+      expect(hexDistance(11, 5, 10, 5)).toBe(1);
+      expect(hexDistance(11, 5, 10, 6)).toBe(1);
+      expect(hexDistance(11, 5, 12, 5)).toBe(1);
+      expect(hexDistance(11, 5, 12, 6)).toBe(1);
+    });
+
+    it('should compute correct distance for distant positions', () => {
+      // Straight horizontal: same row, 5 cols apart
+      expect(hexDistance(10, 0, 10, 5)).toBe(5);
+    });
+
+    it('should be symmetric', () => {
+      expect(hexDistance(5, 3, 20, 15)).toBe(hexDistance(20, 15, 5, 3));
+    });
+  });
+
+  describe('getFerryPairPort', () => {
+    const ferryEdges = [
+      { name: 'Dover-Calais', pointA: { row: 10, col: 5 }, pointB: { row: 12, col: 8 }, cost: 8 },
+      { name: 'Harwich-HookOfHolland', pointA: { row: 6, col: 15 }, pointB: { row: 8, col: 20 }, cost: 10 },
+    ];
+
+    it('should return pointB when given pointA coordinates', () => {
+      const result = getFerryPairPort(10, 5, ferryEdges);
+      expect(result).toEqual({ row: 12, col: 8 });
+    });
+
+    it('should return pointA when given pointB coordinates', () => {
+      const result = getFerryPairPort(12, 8, ferryEdges);
+      expect(result).toEqual({ row: 10, col: 5 });
+    });
+
+    it('should match the correct ferry edge among multiple edges', () => {
+      const result = getFerryPairPort(6, 15, ferryEdges);
+      expect(result).toEqual({ row: 8, col: 20 });
+    });
+
+    it('should return the reverse for the second edge pointB', () => {
+      const result = getFerryPairPort(8, 20, ferryEdges);
+      expect(result).toEqual({ row: 6, col: 15 });
+    });
+
+    it('should return null for coordinates that are not a ferry port', () => {
+      const result = getFerryPairPort(30, 30, ferryEdges);
+      expect(result).toBeNull();
+    });
+
+    it('should return null for empty ferryEdges array', () => {
+      const result = getFerryPairPort(10, 5, []);
+      expect(result).toBeNull();
+    });
+
+    it('should return null when row matches but col does not', () => {
+      const result = getFerryPairPort(10, 99, ferryEdges);
+      expect(result).toBeNull();
     });
   });
 });
