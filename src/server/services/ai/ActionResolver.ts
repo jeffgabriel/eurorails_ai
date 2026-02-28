@@ -397,6 +397,15 @@ export class ActionResolver {
       return { success: false, error: `Train is full (${snapshot.bot.loads.length}/${capacity}). Drop a load first.` };
     }
 
+    // Bot must hold a demand card matching this load type (no speculative pickups)
+    const hasDemandMatch = snapshot.bot.resolvedDemands.some(
+      rd => rd.demands.some(d => d.loadType === loadType),
+    );
+    if (!hasDemandMatch) {
+      console.warn(`[Pickup] Rejected speculative pickup: "${loadType}" at "${cityName}" — no matching demand card`);
+      return { success: false, error: `No demand card matches "${loadType}". Only pick up loads you have a demand for.` };
+    }
+
     // City must produce this load (static availability)
     const cityLoads = snapshot.loadAvailability[cityName];
     if (!cityLoads || !cityLoads.includes(loadType)) {
