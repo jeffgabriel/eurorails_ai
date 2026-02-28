@@ -78,7 +78,7 @@ export class ActionResolver {
         return ActionResolver.resolveDeliver(details, snapshot);
       case AIActionType.PickupLoad:
       case 'PICKUP':
-        return ActionResolver.resolvePickup(details, snapshot);
+        return ActionResolver.resolvePickup(details, snapshot, context);
       case AIActionType.UpgradeTrain:
       case 'UPGRADE':
         return ActionResolver.resolveUpgrade(details, snapshot);
@@ -379,6 +379,7 @@ export class ActionResolver {
   private static async resolvePickup(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    context: GameContext,
   ): Promise<ResolvedAction> {
     const loadType = details.load;
     const cityName = details.at ?? details.city ?? details.from;
@@ -404,6 +405,26 @@ export class ActionResolver {
     if (!hasDemandMatch) {
       console.warn(`[Pickup] Rejected speculative pickup: "${loadType}" at "${cityName}" — no matching demand card`);
       return { success: false, error: `No demand card matches "${loadType}". Only pick up loads you have a demand for.` };
+    }
+
+    // Delivery must be feasible — city on network or affordable to build to (FR-6)
+    const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+    if (matchingDemands.length > 0) {
+      const hasFeasibleDelivery = matchingDemands.some(
+        d => d.isDeliveryOnNetwork || d.estimatedTrackCostToDelivery <= snapshot.bot.money,
+      );
+      if (!hasFeasibleDelivery) {
+        const bestDemand = matchingDemands[0];
+        console.warn(
+          `[Pickup] Rejected infeasible pickup: "${loadType}" at "${cityName}" — delivery to "${bestDemand.deliveryCity}" ` +
+          `costs ~${bestDemand.estimatedTrackCostToDelivery}M but bot has ${snapshot.bot.money}M`,
+        );
+        return {
+          success: false,
+          error: `Delivery city "${bestDemand.deliveryCity}" not reachable within budget. ` +
+            `Estimated build cost: ${bestDemand.estimatedTrackCostToDelivery}M, available: ${snapshot.bot.money}M.`,
+        };
+      }
     }
 
     // City must produce this load (static availability)
@@ -778,6 +799,7 @@ export class ActionResolver {
       const result = await ActionResolver.resolvePickup(
         { load: best.loadType, at: best.supplyCity },
         snapshot,
+        context,
       );
       if (result.success) return result;
     }
