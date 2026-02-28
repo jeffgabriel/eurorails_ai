@@ -14,6 +14,7 @@ import {
   WorldSnapshot,
   GuardrailPlanResult,
   TurnPlan,
+  TurnPlanDropLoad,
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
@@ -29,13 +30,29 @@ export class GuardrailEnforcer {
    *   1. Force DELIVER: If bot can deliver right now and LLM chose something else
    *   2. Force PICKUP: If bot can pick up a demand-matching load and LLM chose BUILD/PASS
    *   3. Block UPGRADE during initialBuild: Upgrade is illegal during initial build phase
+   *   5. Drop undeliverable loads: If carrying loads with no demand match or unreachable delivery
+   *   4. No passing with loads: If bot has loads, do something productive (re-evaluates after G5)
+   *   6. Stuck turn escape hatch: Force PassTurn after 5 consecutive stuck turns
    */
   static checkPlan(
     plan: TurnPlan,
     context: GameContext,
-    _snapshot: WorldSnapshot,
+    snapshot: WorldSnapshot,
+    consecutivePassTurns: number = 0,
   ): GuardrailPlanResult {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
+
+    // Guardrail 6: Stuck turn escape hatch — must be checked FIRST
+    // After 5 consecutive stuck turns, allow PassTurn regardless of load state.
+    // This prevents infinite loops when all other guardrails fail.
+    if (consecutivePassTurns >= 5) {
+      console.warn(`[Guardrail 6] Escape hatch: ${consecutivePassTurns} consecutive stuck turns — forcing PassTurn`);
+      return {
+        plan: { type: AIActionType.PassTurn },
+        overridden: true,
+        reason: `Escape hatch: ${consecutivePassTurns} consecutive stuck turns — forcing PassTurn to break deadlock`,
+      };
+    }
 
     // Guardrail 1: Force DELIVER when canDeliver has opportunities
     // If the bot is sitting on a completable delivery and the LLM didn't choose DELIVER
@@ -104,8 +121,34 @@ export class GuardrailEnforcer {
       };
     }
 
+    // Guardrail 5: Drop undeliverable loads
+    // If the bot is carrying loads with no matching demand or unreachable delivery,
+    // override to drop them. This must fire BEFORE Guardrail 4 to prevent deadlock.
+    const undeliverableDrops = GuardrailEnforcer.checkForUndeliverableLoads(context, snapshot);
+    if (undeliverableDrops.length > 0) {
+      for (const drop of undeliverableDrops) {
+        console.warn(`[Guardrail 5] Dropping undeliverable load: ${drop.load} at ${drop.city} — no feasible delivery`);
+      }
+      if (undeliverableDrops.length === 1) {
+        return {
+          plan: undeliverableDrops[0],
+          overridden: true,
+          reason: `Dropping undeliverable load: ${undeliverableDrops[0].load} (no matching demand or delivery unreachable)`,
+        };
+      }
+      return {
+        plan: {
+          type: 'MultiAction' as const,
+          steps: undeliverableDrops,
+        },
+        overridden: true,
+        reason: `Dropping ${undeliverableDrops.length} undeliverable loads: [${undeliverableDrops.map(d => d.load).join(', ')}]`,
+      };
+    }
+
     // Guardrail 4: No passing while carrying loads
-    // If bot has loads, it should do something productive instead of passing.
+    // Re-evaluates after Guardrail 5: if G5 dropped all loads, this won't fire.
+    // If bot still has deliverable loads, it should do something productive.
     if (planType === AIActionType.PassTurn && context.loads.length > 0) {
       // Try to move toward highest-payout delivery city on network
       const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
@@ -181,5 +224,58 @@ export class GuardrailEnforcer {
     return context.canPickup.reduce((best, opp) =>
       opp.bestPayout > best.bestPayout ? opp : best,
     );
+  }
+
+  /**
+   * Detect loads on the bot that cannot be delivered.
+   *
+   * A load is undeliverable if:
+   * - No demand card matches the load type, OR
+   * - All matching demand cards have unreachable delivery cities AND
+   *   building to those cities costs more than the bot's money
+   *
+   * Returns DropLoadPlan[] for each undeliverable load.
+   */
+  static checkForUndeliverableLoads(
+    context: GameContext,
+    snapshot: WorldSnapshot,
+  ): TurnPlanDropLoad[] {
+    const drops: TurnPlanDropLoad[] = [];
+    const cityName = context.position?.city ?? '';
+
+    // Can only drop at a city
+    if (!cityName) return drops;
+
+    for (const load of context.loads) {
+      // Find all demand entries for this load type that indicate it's on the train
+      const matchingDemands = context.demands.filter(
+        d => d.loadType === load && d.isLoadOnTrain,
+      );
+
+      // No demand card matches this load at all
+      if (matchingDemands.length === 0) {
+        drops.push({
+          type: AIActionType.DropLoad,
+          load,
+          city: cityName,
+        });
+        continue;
+      }
+
+      // Check if ANY matching demand has a feasible delivery
+      const hasFeasibleDelivery = matchingDemands.some(
+        d => d.isDeliveryOnNetwork || d.estimatedTrackCostToDelivery <= snapshot.bot.money,
+      );
+
+      if (!hasFeasibleDelivery) {
+        drops.push({
+          type: AIActionType.DropLoad,
+          load,
+          city: cityName,
+        });
+      }
+    }
+
+    return drops;
   }
 }
