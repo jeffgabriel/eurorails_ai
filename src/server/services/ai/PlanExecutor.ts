@@ -315,6 +315,28 @@ export class PlanExecutor {
     context: GameContext,
     tag: string,
   ): Promise<PlanExecutorResult> {
+    // FR-8: Deliver before build — if carrying a load whose delivery city is reachable,
+    // prioritize MOVE to deliver over building track this turn.
+    const deliverableDemand = context.demands.find(
+      d => d.isLoadOnTrain && d.isDeliveryReachable,
+    );
+    if (deliverableDemand) {
+      console.warn(`[PlanExecutor] Deliver-before-build: overriding BUILD with MOVE to ${deliverableDemand.deliveryCity} for ${deliverableDemand.payout}M delivery`);
+      const moveResult = await ActionResolver.resolve(
+        { action: 'MOVE', details: { to: deliverableDemand.deliveryCity }, reasoning: '', planHorizon: '' },
+        snapshot, context,
+      );
+      if (moveResult.success && moveResult.plan) {
+        return {
+          plan: moveResult.plan,
+          routeComplete: false,
+          routeAbandoned: false,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Deliver-before-build: moving to ${deliverableDemand.deliveryCity} to deliver ${deliverableDemand.loadType} for ${deliverableDemand.payout}M`,
+        };
+      }
+    }
+
     if (!context.canBuild) {
       return {
         plan: { type: AIActionType.PassTurn },

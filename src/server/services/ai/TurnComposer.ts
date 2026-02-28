@@ -72,6 +72,31 @@ export class TurnComposer {
 
     // ── Phase A: Operational enrichment ──
     try {
+      // A0: Deliver-before-build — if primary plan is BUILD but bot carries a load
+      // whose delivery city is reachable this turn, prepend MOVE+DELIVER (FR-8)
+      if (hasBuild && !hasType(AIActionType.DeliverLoad)) {
+        const deliverable = context.demands.find(
+          d => d.isLoadOnTrain && d.isDeliveryReachable,
+        );
+        if (deliverable) {
+          const moveResult = await ActionResolver.resolve(
+            { action: 'MOVE', details: { to: deliverable.deliveryCity }, reasoning: '', planHorizon: '' },
+            simSnapshot, simContext,
+          );
+          if (moveResult.success && moveResult.plan) {
+            const deliverResult = await ActionResolver.resolve(
+              { action: 'DELIVER', details: { load: deliverable.loadType, at: deliverable.deliveryCity }, reasoning: '', planHorizon: '' },
+              simSnapshot, simContext,
+            );
+            if (deliverResult.success && deliverResult.plan) {
+              steps.unshift(moveResult.plan, deliverResult.plan);
+              ActionResolver.applyPlanToState(moveResult.plan, simSnapshot, simContext);
+              ActionResolver.applyPlanToState(deliverResult.plan, simSnapshot, simContext);
+            }
+          }
+        }
+      }
+
       // A1: If primary contains a MOVE, split it for mid-movement pickup/deliver
       // Per game rules, a player can pick up and deliver at ANY city passed through
       // during movement, then continue moving with remaining movement allowance.
