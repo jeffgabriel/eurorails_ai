@@ -694,12 +694,7 @@ export class ContextBuilder {
     // ── BUILD CONSTRAINTS ──
     if (context.isInitialBuild) {
       lines.push('PHASE: Initial Build \u2014 build track only, no train movement. 20M budget this turn, 40M total over 2 turns.');
-      lines.push('INITIAL BUILD STRATEGY: Pick the demand with the CHEAPEST, SHORTEST route — not the highest payout.');
-      lines.push('  Prefer supply at/near a major city (zero or minimal track to reach goods).');
-      lines.push('  Prefer delivery at/near a major city (short route, useful track for future).');
-      lines.push('  Avoid ferry crossings (costly and burn a full turn).');
-      lines.push('  Start from central Europe (Ruhr, Paris, Holland, Berlin) for best expansion options.');
-      lines.push('  A 6M delivery on turn 4 beats a 73M delivery on turn 15.');
+      lines.push('Apply the GEOGRAPHIC STRATEGY and CAPITAL VELOCITY principles from your instructions to choose where to build first.');
     }
     if (!context.canBuild) {
       lines.push('BUILD: Not available this turn (budget exhausted or no funds).');

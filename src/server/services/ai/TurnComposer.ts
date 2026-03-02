@@ -365,7 +365,7 @@ export class TurnComposer {
     }
 
     // Fallback when no route-specific build target exists.
-    // Prefer secondary build target > victory progress > speculative demand builds.
+    // Prefer route-stop targets > victory progress > speculative demand builds.
     // BUT: skip speculative builds when mid-route (travel/act phase) — the bot should
     // finish its delivery first to earn money, then build toward victory cities.
     const routeNeedsBuild = activeRoute &&
