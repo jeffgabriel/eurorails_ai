@@ -535,6 +535,24 @@ export class TurnExecutor {
       console.error('[TurnExecutor] PickupLoad audit insert failed (load was picked up):', auditError instanceof Error ? auditError.message : auditError);
     }
 
+    // Post-commit: record in turn_actions for traceability (best-effort)
+    try {
+      const pickupAction = {
+        kind: 'pickup',
+        city: cityName,
+        loadType,
+      };
+      await db.query(
+        `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
+         VALUES ($1, $2, $3, $4::jsonb)
+         ON CONFLICT (player_id, game_id, turn_number)
+         DO UPDATE SET actions = turn_actions.actions || $4::jsonb, updated_at = CURRENT_TIMESTAMP`,
+        [snapshot.bot.playerId, snapshot.gameId, snapshot.turnNumber, JSON.stringify([pickupAction])],
+      );
+    } catch (turnActionError) {
+      console.error('[TurnExecutor] PickupLoad turn_actions insert failed (load was picked up):', turnActionError instanceof Error ? turnActionError.message : turnActionError);
+    }
+
     // Post-commit: socket emit (best-effort)
     try {
       const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');

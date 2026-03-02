@@ -681,6 +681,45 @@ describe('TurnExecutor — handlePickupLoad', () => {
     expect(result.success).toBe(true);
     expect(result.action).toBe(AIActionType.PickupLoad);
   });
+
+  it('should insert pickup action into turn_actions table', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makePickupPlan('Coal');
+    await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
+
+    const turnActionCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('turn_actions'),
+    );
+    expect(turnActionCall).toBeDefined();
+    const params = turnActionCall![1] as unknown[];
+    expect(params[0]).toBe('bot-1');   // player_id
+    expect(params[1]).toBe('game-1');  // game_id
+    expect(params[2]).toBe(5);         // turn_number
+    const actions = JSON.parse(params[3] as string);
+    expect(actions).toEqual([{ kind: 'pickup', city: 'Berlin', loadType: 'Coal' }]);
+  });
+
+  it('should still succeed when turn_actions insert fails', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    // First db.query call = bot_turn_audits (succeeds), second = turn_actions (fails)
+    (mockDb.query as jest.Mock)
+      .mockResolvedValueOnce({ rows: [] })   // bot_turn_audits
+      .mockRejectedValueOnce(new Error('turn_actions insert failed'));  // turn_actions
+
+    const plan = makePickupPlan('Coal');
+    const result = await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.PickupLoad);
+  });
 });
 
 describe('TurnExecutor — handleDeliverLoad', () => {
