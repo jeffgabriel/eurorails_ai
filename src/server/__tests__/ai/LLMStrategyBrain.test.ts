@@ -267,22 +267,22 @@ describe('LLMStrategyBrain', () => {
       expect(result.model).toBe('claude-haiku-4-5-20251001');
     });
 
-    it('should use Sonnet for Medium skill level (Anthropic)', async () => {
+    it('should use Sonnet 4.6 for Medium skill level (Anthropic)', async () => {
       setupSuccessfulDecision(mockChat);
       const brain = createBrain(BotSkillLevel.Medium);
       const result = await brain.decideAction(makeSnapshot(), makeContext());
 
       expect(result.model).toBe(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Medium]);
-      expect(result.model).toBe('claude-sonnet-4-20250514');
+      expect(result.model).toBe('claude-sonnet-4-6');
     });
 
-    it('should use Opus for Hard skill level (Anthropic)', async () => {
+    it('should use Opus 4.6 for Hard skill level (Anthropic)', async () => {
       setupSuccessfulDecision(mockChat);
       const brain = createBrain(BotSkillLevel.Hard);
       const result = await brain.decideAction(makeSnapshot(), makeContext());
 
       expect(result.model).toBe(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Hard]);
-      expect(result.model).toBe('claude-opus-4-20250514');
+      expect(result.model).toBe('claude-opus-4-6');
     });
 
     it('should allow explicit model override regardless of skill level', async () => {
@@ -343,10 +343,9 @@ describe('LLMStrategyBrain', () => {
   // --- JIRA-17: Structured output schemas and effort levels ---
   describe('Anthropic structured output and thinking (JIRA-17)', () => {
     it.each([
-      [BotSkillLevel.Easy, 'low'],
       [BotSkillLevel.Medium, 'medium'],
       [BotSkillLevel.Hard, 'high'],
-    ])('decideAction — skill %s should pass ACTION_SCHEMA and effort=%s', async (skill, expectedEffort) => {
+    ])('decideAction — skill %s (4.6 default) should pass schema, thinking, effort=%s', async (skill, expectedEffort) => {
       setupSuccessfulDecision(mockChat);
       const brain = createBrain(skill);
       await brain.decideAction(makeSnapshot(), makeContext());
@@ -355,14 +354,25 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.outputSchema.type).toBe('object');
       expect(callArgs.outputSchema.oneOf).toBeDefined(); // ACTION_SCHEMA has oneOf
-      expect(callArgs.thinking).toEqual({ type: 'adaptive', effort: expectedEffort });
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe(expectedEffort);
+    });
+
+    it('decideAction — Easy (Haiku 4.5) should not pass schema, thinking, or effort', async () => {
+      setupSuccessfulDecision(mockChat);
+      const brain = createBrain(BotSkillLevel.Easy);
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      const callArgs = mockChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.thinking).toBeUndefined();
+      expect(callArgs.effort).toBeUndefined();
     });
 
     it.each([
-      [BotSkillLevel.Easy, 'medium'],
       [BotSkillLevel.Medium, 'high'],
       [BotSkillLevel.Hard, 'high'],
-    ])('planRoute — skill %s should pass ROUTE_SCHEMA and effort=%s', async (skill, expectedEffort) => {
+    ])('planRoute — skill %s (4.6 default) should pass ROUTE_SCHEMA and effort=%s', async (skill, expectedEffort) => {
       mockChat.mockResolvedValue({
         text: '{"route":"..."}',
         usage: { input: 100, output: 50 },
@@ -382,12 +392,38 @@ describe('LLMStrategyBrain', () => {
 
       const callArgs = mockChat.mock.calls[0][0];
       expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.outputSchema.properties?.route).toBeDefined(); // ROUTE_SCHEMA has route property
-      expect(callArgs.thinking).toEqual({ type: 'adaptive', effort: expectedEffort });
-      expect(callArgs.timeoutMs).toBe(30000);
+      expect(callArgs.outputSchema.properties?.route).toBeDefined();
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe(expectedEffort);
+      expect(callArgs.timeoutMs).toBe(60000);
     });
 
-    it('decideAction — should not pass outputSchema or thinking for Google provider', async () => {
+    it('planRoute — Easy (Haiku 4.5) should not pass schema or thinking', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain(BotSkillLevel.Easy);
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const callArgs = mockChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.thinking).toBeUndefined();
+      expect(callArgs.effort).toBeUndefined();
+      expect(callArgs.timeoutMs).toBe(60000);
+    });
+
+    it('decideAction — should pass outputSchema and thinking for Google provider at Medium skill', async () => {
       const mockGoogleChat = jest.fn().mockResolvedValue({
         text: '{"action":"PASS","reasoning":"skip"}',
         usage: { input: 50, output: 20 },
@@ -415,8 +451,9 @@ describe('LLMStrategyBrain', () => {
       await brain.decideAction(makeSnapshot(), makeContext());
 
       const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeUndefined();
-      expect(callArgs.thinking).toBeUndefined();
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe('medium');
     });
   });
 
@@ -671,16 +708,16 @@ describe('LLMStrategyBrain', () => {
       // Anthropic Easy
       expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Easy]).toBe('claude-haiku-4-5-20251001');
       // Anthropic Medium
-      expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Medium]).toBe('claude-sonnet-4-20250514');
+      expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Medium]).toBe('claude-sonnet-4-6');
       // Anthropic Hard
-      expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Hard]).toBe('claude-opus-4-20250514');
+      expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Hard]).toBe('claude-opus-4-6');
 
       // Google Easy
-      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Easy]).toBe('gemini-2.0-flash');
+      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Easy]).toBe('gemini-3-flash-preview');
       // Google Medium
-      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Medium]).toBe('gemini-2.5-flash');
+      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Medium]).toBe('gemini-3-pro-preview');
       // Google Hard
-      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Hard]).toBe('gemini-2.5-pro');
+      expect(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Hard]).toBe('gemini-3.1-pro-preview');
     });
 
     it('should have different models for Medium and Hard for each provider', () => {

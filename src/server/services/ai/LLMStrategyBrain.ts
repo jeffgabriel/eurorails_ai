@@ -122,16 +122,17 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
-        const isAnthropic = this.config.provider === LLMProvider.Anthropic;
+        const useAdvancedFeatures = this.config.skillLevel !== BotSkillLevel.Easy;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ACTION_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: this.systemPrompt,
           userPrompt,
-          ...(isAnthropic && {
+          ...(useAdvancedFeatures && {
             outputSchema: ACTION_SCHEMA,
-            thinking: { type: 'adaptive', effort: ACTION_EFFORT[this.config.skillLevel] },
+            thinking: { type: 'adaptive' },
+            effort: ACTION_EFFORT[this.config.skillLevel],
           }),
         });
         totalLatencyMs += (Date.now() - startTime);
@@ -223,17 +224,18 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
-        const isAnthropic = this.config.provider === LLMProvider.Anthropic;
+        const useAdvancedFeatures = this.config.skillLevel !== BotSkillLevel.Easy;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ROUTE_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: routePrompt,
           userPrompt,
-          timeoutMs: 30000,
-          ...(isAnthropic && {
+          timeoutMs: 60000,
+          ...(useAdvancedFeatures && {
             outputSchema: ROUTE_SCHEMA,
-            thinking: { type: 'adaptive', effort: ROUTE_EFFORT[this.config.skillLevel] },
+            thinking: { type: 'adaptive' },
+            effort: ROUTE_EFFORT[this.config.skillLevel],
           }),
         });
         totalLatencyMs += (Date.now() - startTime);
