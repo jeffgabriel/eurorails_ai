@@ -1,5 +1,5 @@
 import { ProviderResponse } from '../../../../shared/types/GameTypes';
-import { ProviderAdapter } from './ProviderAdapter';
+import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
 
 export class AnthropicAdapter implements ProviderAdapter {
@@ -17,11 +17,41 @@ export class AnthropicAdapter implements ProviderAdapter {
     temperature: number;
     systemPrompt: string;
     userPrompt: string;
+    outputSchema?: object;
+    thinking?: ThinkingConfig;
   }): Promise<ProviderResponse> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
     try {
+      // Build the base request body
+      const body: Record<string, unknown> = {
+        model: request.model,
+        max_tokens: request.maxTokens,
+        temperature: request.temperature,
+        system: [{
+          type: 'text',
+          text: request.systemPrompt,
+          cache_control: { type: 'ephemeral' },
+        }],
+        messages: [{ role: 'user', content: request.userPrompt }],
+      };
+
+      // Conditionally add structured output config
+      if (request.outputSchema) {
+        body.output_config = {
+          format: {
+            type: 'json_schema',
+            schema: request.outputSchema,
+          },
+        };
+      }
+
+      // Conditionally add thinking config
+      if (request.thinking) {
+        body.thinking = request.thinking;
+      }
+
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -29,17 +59,7 @@ export class AnthropicAdapter implements ProviderAdapter {
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
-        body: JSON.stringify({
-          model: request.model,
-          max_tokens: request.maxTokens,
-          temperature: request.temperature,
-          system: [{
-            type: 'text',
-            text: request.systemPrompt,
-            cache_control: { type: 'ephemeral' },
-          }],
-          messages: [{ role: 'user', content: request.userPrompt }],
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
