@@ -261,6 +261,48 @@ describe('GoogleAdapter', () => {
     });
   });
 
+  describe('structured output', () => {
+    const testSchema = { type: 'object', properties: { action: { type: 'string' } } };
+
+    it('should include responseMimeType and responseSchema for Gemini 2.5 models', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+        outputSchema: testSchema,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseMimeType).toBe('application/json');
+      expect(callBody.generationConfig.responseSchema).toEqual(testSchema);
+    });
+
+    it('should NOT include responseMimeType and responseSchema for Gemini 3 models', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+        outputSchema: testSchema,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseMimeType).toBeUndefined();
+      expect(callBody.generationConfig.responseSchema).toBeUndefined();
+    });
+
+    it('should not include structured output when outputSchema is not provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat(makeRequest());
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseMimeType).toBeUndefined();
+      expect(callBody.generationConfig.responseSchema).toBeUndefined();
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({

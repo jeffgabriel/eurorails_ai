@@ -37,6 +37,17 @@ export class GoogleAdapter implements ProviderAdapter {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
 
     try {
+      const generationConfig: Record<string, unknown> = {
+        maxOutputTokens: request.maxTokens,
+        temperature: request.temperature,
+      };
+
+      // Add structured output for non-Gemini-3 models (incompatible with thinkingConfig)
+      if (request.outputSchema && !this.isGemini3Model(request.model)) {
+        generationConfig.responseMimeType = 'application/json';
+        generationConfig.responseSchema = request.outputSchema;
+      }
+
       const body: Record<string, unknown> = {
         system_instruction: {
           parts: [{ text: request.systemPrompt }],
@@ -46,10 +57,7 @@ export class GoogleAdapter implements ProviderAdapter {
             parts: [{ text: request.userPrompt }],
           },
         ],
-        generationConfig: {
-          maxOutputTokens: request.maxTokens,
-          temperature: request.temperature,
-        },
+        generationConfig,
       };
 
       // Add thinkingConfig for models that support it
