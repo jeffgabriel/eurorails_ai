@@ -12,6 +12,7 @@ import {
   getTerrainCost,
   gridToPixel,
   loadGridPoints,
+  hexDistance,
   GridCoord,
   GridPointData,
 } from './MapTopology';
@@ -412,9 +413,81 @@ export function computeBuildSegments(
     const unreachedTargets = targetPositions!.filter(
       t => !onNetwork.has(makeKey(t.row, t.col))
     );
-    const effectiveTargets = unreachedTargets.length > 0
+    let effectiveTargets = unreachedTargets.length > 0
       ? unreachedTargets
       : targetPositions!;  // fallback if ALL targets are connected
+
+    // ── Ferry waypoint: redirect cross-water targets to departure ferry ports ──
+    // Hex distance is misleading for targets on different landmasses — a coastal
+    // point may appear "close" but requires a ferry crossing.  Detect such targets
+    // and replace them with the departure-side ferry port so path selection builds
+    // toward the ferry, not just the nearest coast.
+    const sourceLandmass = new Set<string>();
+    const landQueue: GridCoord[] = [];
+    for (const src of sources) {
+      const key = makeKey(src.row, src.col);
+      if (!sourceLandmass.has(key)) {
+        sourceLandmass.add(key);
+        landQueue.push(src);
+      }
+    }
+    while (landQueue.length > 0) {
+      const node = landQueue.pop()!;
+      for (const nb of getHexNeighbors(node.row, node.col)) {
+        const nbKey = makeKey(nb.row, nb.col);
+        if (sourceLandmass.has(nbKey)) continue;
+        const nbData = grid.get(nbKey);
+        if (!nbData || nbData.terrain === TerrainType.Water) continue;
+        sourceLandmass.add(nbKey);
+        landQueue.push(nb);
+      }
+    }
+
+    const crossWaterTargets = effectiveTargets.filter(
+      t => !sourceLandmass.has(makeKey(t.row, t.col))
+    );
+
+    if (crossWaterTargets.length > 0) {
+      // Check if bot already has track to a departure ferry port — if so,
+      // it can cross the ferry and build on the far side (keep original targets).
+      let botCanCrossFerry = false;
+      for (const ferry of ferryEdges) {
+        const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
+        const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
+        const aOnSource = sourceLandmass.has(aKey);
+        const bOnSource = sourceLandmass.has(bKey);
+        if ((aOnSource && !bOnSource && onNetwork.has(aKey)) ||
+            (bOnSource && !aOnSource && onNetwork.has(bKey))) {
+          botCanCrossFerry = true;
+          break;
+        }
+      }
+
+      if (!botCanCrossFerry) {
+        // Bot can't cross yet — redirect to departure ferry ports
+        const departurePorts: GridCoord[] = [];
+        const seen = new Set<string>();
+        for (const ferry of ferryEdges) {
+          const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
+          const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
+          if (sourceLandmass.has(aKey) && !sourceLandmass.has(bKey) && !seen.has(aKey)) {
+            seen.add(aKey);
+            departurePorts.push({ row: ferry.pointA.row, col: ferry.pointA.col });
+          } else if (sourceLandmass.has(bKey) && !sourceLandmass.has(aKey) && !seen.has(bKey)) {
+            seen.add(bKey);
+            departurePorts.push({ row: ferry.pointB.row, col: ferry.pointB.col });
+          }
+        }
+
+        if (departurePorts.length > 0) {
+          const localTargets = effectiveTargets.filter(
+            t => sourceLandmass.has(makeKey(t.row, t.col))
+          );
+          effectiveTargets = [...localTargets, ...departurePorts];
+          console.log(`${tag} ferry waypoint: ${crossWaterTargets.length} cross-water target(s) → ${departurePorts.length} departure port(s)`);
+        }
+      }
+    }
 
     // Target-aware selection: pick the path that gets closest to a demand city
     let bestTargetDist = Infinity;
@@ -427,19 +500,18 @@ export function computeBuildSegments(
       const endpoint = node.path[node.path.length - 1];
       let minDist = Infinity;
       for (const target of effectiveTargets) {
-        const dist = (endpoint.row - target.row) ** 2 + (endpoint.col - target.col) ** 2;
+        const dist = hexDistance(endpoint.row, endpoint.col, target.row, target.col);
         if (dist < minDist) minDist = dist;
       }
 
-      // Prefer closer to target; among equal distances, prefer most new segments (use full budget);
-      // final tiebreak: cheapest cost.
-      const bestNewSteps = bestPath
-        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)
-        : 0;
+      // Prefer closer to target; among equal distances, prefer cheapest cost (most direct route);
+      // final tiebreak: most new segments (use full budget).
       if (
         minDist < bestTargetDist ||
-        (minDist === bestTargetDist && newSteps > bestNewSteps) ||
-        (minDist === bestTargetDist && newSteps === bestNewSteps && node.cost < (bestPath?.cost ?? Infinity))
+        (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity)) ||
+        (minDist === bestTargetDist && node.cost === (bestPath?.cost ?? Infinity) &&
+          countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys) >
+          countNewSegments(bestPath!.path, onNetwork, builtEdges, ferryEdgeKeys))
       ) {
         bestPath = node;
         bestTargetDist = minDist;
@@ -451,7 +523,7 @@ export function computeBuildSegments(
       const ep = bestPath.path[bestPath.path.length - 1];
       const gridPt = grid.get(makeKey(ep.row, ep.col));
       bestTargetName = gridPt?.name ?? `(${ep.row},${ep.col})`;
-      console.log(`${tag} target-aware: aiming for ${bestTargetName}, dist²=${bestTargetDist}, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
+      console.log(`${tag} target-aware: aiming for ${bestTargetName}, dist=${bestTargetDist}, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
     }
   } else {
     // Original untargeted selection: most new segments, then cheapest
@@ -479,8 +551,15 @@ export function computeBuildSegments(
 
   console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)}`);
 
+  // Valid cold-start positions: major cities only (game rule: build from major city when no track).
+  const validColdStartKeys = new Set<string>();
+  for (const g of majorCityGroups) {
+    validColdStartKeys.add(makeKey(g.center.row, g.center.col));
+    for (const op of g.outposts) validColdStartKeys.add(makeKey(op.row, op.col));
+  }
+
   // Extract up to maxSegments new segments from the path
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys);
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys);
   console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
   return segments;
 }
@@ -524,11 +603,16 @@ function extractSegments(
   maxSegments: number,
   ferryPortCosts: Map<string, number>,
   ferryEdgeKeys: Set<string>,
+  validColdStartKeys: Set<string>,
 ): TrackSegment[] {
-  // Collect all contiguous runs of new (buildable) segments
-  const runs: { segments: TrackSegment[]; cost: number }[] = [];
+  // Collect all contiguous runs of new (buildable) segments.
+  // Each run has a startKey: the grid coord we started building from.
+  // Only runs whose startKey is in onNetwork are valid (connected to our track or a major city).
+  // Runs after a ferry crossing start from the far-side ferry port — not in onNetwork — and would be orphaned.
+  const runs: { segments: TrackSegment[]; cost: number; startKey: string }[] = [];
   let currentRun: TrackSegment[] = [];
   let currentCost = 0;
+  let runStartKey: string | null = null;
 
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = makeKey(path[i].row, path[i].col);
@@ -536,10 +620,11 @@ function extractSegments(
 
     // Skip already-built edges or ferry crossings — start a new run
     if (builtEdges.has(`${fromKey}-${toKey}`) || ferryEdgeKeys.has(`${fromKey}-${toKey}`)) {
-      if (currentRun.length > 0) {
-        runs.push({ segments: currentRun, cost: currentCost });
+      if (currentRun.length > 0 && runStartKey !== null) {
+        runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
         currentRun = [];
         currentCost = 0;
+        runStartKey = null;
       }
       continue;
     }
@@ -547,48 +632,82 @@ function extractSegments(
     const seg = buildSegment(path[i], path[i + 1], grid, ferryPortCosts);
     if (!seg) {
       // Can't build this segment — finalize current run
-      if (currentRun.length > 0) {
-        runs.push({ segments: currentRun, cost: currentCost });
+      if (currentRun.length > 0 && runStartKey !== null) {
+        runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
         currentRun = [];
         currentCost = 0;
+        runStartKey = null;
       }
       break;
     }
 
     if (currentCost + seg.cost > budget) {
       // Over budget — finalize current run without this segment
-      if (currentRun.length > 0) {
-        runs.push({ segments: currentRun, cost: currentCost });
+      if (currentRun.length > 0 && runStartKey !== null) {
+        runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
         currentRun = [];
         currentCost = 0;
+        runStartKey = null;
       }
       break;
     }
 
+    if (currentRun.length === 0) runStartKey = fromKey;
     currentCost += seg.cost;
     currentRun.push(seg);
 
-    if (currentRun.length >= maxSegments) {
-      runs.push({ segments: currentRun, cost: currentCost });
+    if (currentRun.length >= maxSegments && runStartKey !== null) {
+      runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
       currentRun = [];
       currentCost = 0;
+      runStartKey = null;
       break;
     }
   }
 
   // Don't forget the last run
-  if (currentRun.length > 0) {
-    runs.push({ segments: currentRun, cost: currentCost });
+  if (currentRun.length > 0 && runStartKey !== null) {
+    runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
   }
 
   if (runs.length === 0) return [];
 
-  // Return the longest run that fits within budget
-  // (all runs already respect budget individually since we break on overflow)
-  let bestRun = runs[0];
-  for (let i = 1; i < runs.length; i++) {
-    if (runs[i].segments.length > bestRun.segments.length) {
-      bestRun = runs[i];
+  // Build set of nodes reachable from path[0] by traversing built edges only.
+  const connectedViaBuilt = new Set<string>();
+  connectedViaBuilt.add(makeKey(path[0].row, path[0].col));
+  for (let i = 0; i < path.length - 1; i++) {
+    const fromKey = makeKey(path[i].row, path[i].col);
+    const toKey = makeKey(path[i + 1].row, path[i + 1].col);
+    const edgeKey = `${fromKey}-${toKey}`;
+    if (connectedViaBuilt.has(fromKey) && builtEdges.has(edgeKey)) {
+      connectedViaBuilt.add(toKey);
+    }
+  }
+  // Per game rules, we can build from the far side of a ferry only if we have track to the near side.
+  // When builtEdges is empty (no track), we cannot legally build from a ferry port.
+  const connectedFromPath = new Set(connectedViaBuilt);
+  if (builtEdges.size > 0) {
+    for (let i = 0; i < path.length - 1; i++) {
+      const fromKey = makeKey(path[i].row, path[i].col);
+      const toKey = makeKey(path[i + 1].row, path[i + 1].col);
+      const edgeKey = `${fromKey}-${toKey}`;
+      if (ferryEdgeKeys.has(edgeKey) && connectedViaBuilt.has(fromKey)) {
+        connectedFromPath.add(toKey);
+      }
+    }
+  }
+
+  // When no track: only allow runs from major cities (game rule). When we have track: allow
+  // runs from path-connected nodes (including far-side ferry port when we have track to near side).
+  const validRuns = builtEdges.size === 0
+    ? runs.filter(r => validColdStartKeys.has(r.startKey))
+    : runs.filter(r => connectedFromPath.has(r.startKey));
+  if (validRuns.length === 0) return [];
+
+  let bestRun = validRuns[0];
+  for (let i = 1; i < validRuns.length; i++) {
+    if (validRuns[i].segments.length > bestRun.segments.length) {
+      bestRun = validRuns[i];
     }
   }
 
