@@ -25,7 +25,7 @@ function mockFetchSuccess(text: string, inputTokens: number = 50, outputTokens: 
     ok: true,
     status: 200,
     json: async () => ({
-      content: [{ text }],
+      content: [{ type: 'text', text }],
       usage: { input_tokens: inputTokens, output_tokens: outputTokens },
     }),
   });

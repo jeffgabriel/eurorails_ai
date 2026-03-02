@@ -20,7 +20,7 @@ function makeSuccessResponse(text = 'Hello', inputTokens = 100, outputTokens = 5
     ok: true,
     status: 200,
     json: async () => ({
-      content: [{ text }],
+      content: [{ type: 'text', text }],
       usage: { input_tokens: inputTokens, output_tokens: outputTokens },
     }),
     text: async () => '',
@@ -141,6 +141,143 @@ describe('AnthropicAdapter', () => {
 
       expect(result.text).toBe('Test response');
       expect(result.usage).toEqual({ input: 150, output: 75 });
+    });
+  });
+
+  describe('multi-block response extraction', () => {
+    it('should extract only text block from response with thinking and text blocks', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [
+            { type: 'thinking', thinking: 'Let me analyze this step by step...' },
+            { type: 'text', text: '{"action":"BUILD","reasoning":"Build toward Berlin"}' },
+          ],
+          usage: { input_tokens: 500, output_tokens: 200 },
+        }),
+        text: async () => '',
+      });
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.text).toBe('{"action":"BUILD","reasoning":"Build toward Berlin"}');
+      expect(result.text).not.toContain('Let me analyze');
+    });
+
+    it('should return empty string when response has only thinking blocks', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [
+            { type: 'thinking', thinking: 'Reasoning here...' },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        }),
+        text: async () => '',
+      });
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.text).toBe('');
+    });
+
+    it('should handle response with multiple text blocks (takes first)', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [
+            { type: 'thinking', thinking: 'Step 1...' },
+            { type: 'text', text: 'First text block' },
+            { type: 'text', text: 'Second text block' },
+          ],
+          usage: { input_tokens: 100, output_tokens: 50 },
+        }),
+        text: async () => '',
+      });
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.text).toBe('First text block');
+    });
+  });
+
+  describe('structured output and thinking params', () => {
+    it('should include output_config when outputSchema is provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      await adapter.chat({ ...makeRequest(), outputSchema: schema });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toEqual({
+        format: { type: 'json_schema', schema },
+      });
+    });
+
+    it('should not include output_config when outputSchema is absent', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat(makeRequest());
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toBeUndefined();
+    });
+
+    it('should include thinking config when provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        thinking: { type: 'adaptive', effort: 'high' },
+      });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.thinking).toEqual({ type: 'adaptive', effort: 'high' });
+    });
+
+    it('should use per-request timeoutMs when provided', async () => {
+      const slowAdapter = new AnthropicAdapter('test-key', 50);
+      mockFetch.mockImplementation(
+        (_url: string, opts: { signal: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            const onAbort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (opts.signal.aborted) return onAbort();
+            opts.signal.addEventListener('abort', onAbort);
+          }),
+      );
+
+      // With 50ms default but 100ms override, the timeout error should report 100ms
+      await expect(
+        slowAdapter.chat({ ...makeRequest(), timeoutMs: 100 }),
+      ).rejects.toThrow(ProviderTimeoutError);
+    });
+
+    it('should retry without output_config on schema rejection (400)', async () => {
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      // First call: 400 with schema error
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => 'invalid schema: output_config not supported',
+      });
+      // Retry call: success
+      mockFetch.mockResolvedValueOnce(makeSuccessResponse('retry response'));
+
+      const result = await adapter.chat({ ...makeRequest(), outputSchema: schema });
+
+      expect(result.text).toBe('retry response');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Second call should not have output_config
+      const retryBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(retryBody.output_config).toBeUndefined();
     });
   });
 
