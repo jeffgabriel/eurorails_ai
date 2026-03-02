@@ -321,7 +321,7 @@ describe('LLMStrategyBrain', () => {
       expect(mockChat).toHaveBeenCalledWith(
         expect.objectContaining({
           temperature: 0.7,
-          maxTokens: 200,
+          maxTokens: 2048,
         }),
       );
     });
@@ -334,9 +334,89 @@ describe('LLMStrategyBrain', () => {
       expect(mockChat).toHaveBeenCalledWith(
         expect.objectContaining({
           temperature: 0.2,
-          maxTokens: 400,
+          maxTokens: 8192,
         }),
       );
+    });
+  });
+
+  // --- JIRA-17: Structured output schemas and effort levels ---
+  describe('Anthropic structured output and thinking (JIRA-17)', () => {
+    it.each([
+      [BotSkillLevel.Easy, 'low'],
+      [BotSkillLevel.Medium, 'medium'],
+      [BotSkillLevel.Hard, 'high'],
+    ])('decideAction — skill %s should pass ACTION_SCHEMA and effort=%s', async (skill, expectedEffort) => {
+      setupSuccessfulDecision(mockChat);
+      const brain = createBrain(skill);
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      const callArgs = mockChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.outputSchema.type).toBe('object');
+      expect(callArgs.outputSchema.oneOf).toBeDefined(); // ACTION_SCHEMA has oneOf
+      expect(callArgs.thinking).toEqual({ type: 'adaptive', effort: expectedEffort });
+    });
+
+    it.each([
+      [BotSkillLevel.Easy, 'medium'],
+      [BotSkillLevel.Medium, 'high'],
+      [BotSkillLevel.Hard, 'high'],
+    ])('planRoute — skill %s should pass ROUTE_SCHEMA and effort=%s', async (skill, expectedEffort) => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain(skill);
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const callArgs = mockChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.outputSchema.properties?.route).toBeDefined(); // ROUTE_SCHEMA has route property
+      expect(callArgs.thinking).toEqual({ type: 'adaptive', effort: expectedEffort });
+      expect(callArgs.timeoutMs).toBe(30000);
+    });
+
+    it('decideAction — should not pass outputSchema or thinking for Google provider', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"action":"PASS","reasoning":"skip"}',
+        usage: { input: 50, output: 20 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseActionIntent.mockReturnValue({
+        action: 'PASS',
+        reasoning: 'skip',
+        planHorizon: '',
+      });
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.thinking).toBeUndefined();
     });
   });
 
@@ -513,6 +593,7 @@ describe('LLMStrategyBrain', () => {
         expect.anything(),  // context
         expect.anything(),  // skillLevel
         gridPoints,         // gridPoints passed through
+        expect.anything(),  // existingSegments
       );
     });
 
@@ -531,7 +612,8 @@ describe('LLMStrategyBrain', () => {
       expect(mockSerializeRoutePlanningPrompt).toHaveBeenCalledWith(
         ctx,
         BotSkillLevel.Hard,
-        expect.anything(),
+        expect.anything(),  // gridPoints
+        expect.anything(),  // existingSegments
       );
     });
 
