@@ -1,8 +1,9 @@
 /**
  * WorldSnapshotService — ferryHalfSpeed flag tests (TEST-004)
  *
- * Tests that capture() correctly sets bot.ferryHalfSpeed based on
- * whether the bot's current position is a FerryPort terrain type.
+ * After BE-006, ferryHalfSpeed is no longer set by terrain detection in capture().
+ * Instead, ActionResolver.resolveMove() handles ferry crossing and half-speed
+ * directly when the bot teleports across a ferry.
  */
 
 import { TerrainType } from '../../../shared/types/GameTypes';
@@ -73,7 +74,9 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should set ferryHalfSpeed=true when bot is at a FerryPort', async () => {
+  it('should always set ferryHalfSpeed=false (BE-006: moved to ActionResolver)', async () => {
+    // After BE-006, ferryHalfSpeed is always false in capture().
+    // Half-speed is applied directly in resolveMove() during ferry teleportation.
     const botRow = makeBotRow(10, 20);
     mockQuery.mockResolvedValueOnce({ rows: [botRow] });
 
@@ -82,24 +85,10 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     mockLoadGridPoints.mockReturnValue(grid);
 
     const snapshot = await capture(GAME_ID, BOT_ID);
-
-    expect(snapshot.bot.ferryHalfSpeed).toBe(true);
+    expect(snapshot.bot.ferryHalfSpeed).toBe(false);
   });
 
-  it('should set ferryHalfSpeed=true for unnamed FerryPort', async () => {
-    const botRow = makeBotRow(15, 25);
-    mockQuery.mockResolvedValueOnce({ rows: [botRow] });
-
-    const grid = new Map();
-    grid.set('15,25', { row: 15, col: 25, terrain: TerrainType.FerryPort });
-    mockLoadGridPoints.mockReturnValue(grid);
-
-    const snapshot = await capture(GAME_ID, BOT_ID);
-
-    expect(snapshot.bot.ferryHalfSpeed).toBe(true);
-  });
-
-  it('should set ferryHalfSpeed=false when bot is at a Clear terrain', async () => {
+  it('should set ferryHalfSpeed=false when bot is at Clear terrain', async () => {
     const botRow = makeBotRow(10, 20);
     mockQuery.mockResolvedValueOnce({ rows: [botRow] });
 
@@ -108,20 +97,6 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     mockLoadGridPoints.mockReturnValue(grid);
 
     const snapshot = await capture(GAME_ID, BOT_ID);
-
-    expect(snapshot.bot.ferryHalfSpeed).toBe(false);
-  });
-
-  it('should set ferryHalfSpeed=false when bot is at a MajorCity', async () => {
-    const botRow = makeBotRow(5, 10);
-    mockQuery.mockResolvedValueOnce({ rows: [botRow] });
-
-    const grid = new Map();
-    grid.set('5,10', { row: 5, col: 10, terrain: TerrainType.MajorCity, name: 'Berlin' });
-    mockLoadGridPoints.mockReturnValue(grid);
-
-    const snapshot = await capture(GAME_ID, BOT_ID);
-
     expect(snapshot.bot.ferryHalfSpeed).toBe(false);
   });
 
@@ -132,19 +107,6 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     mockLoadGridPoints.mockReturnValue(new Map());
 
     const snapshot = await capture(GAME_ID, BOT_ID);
-
-    expect(snapshot.bot.ferryHalfSpeed).toBe(false);
-  });
-
-  it('should set ferryHalfSpeed=false when position not in grid', async () => {
-    const botRow = makeBotRow(99, 99);
-    mockQuery.mockResolvedValueOnce({ rows: [botRow] });
-
-    // Grid does NOT contain 99,99
-    mockLoadGridPoints.mockReturnValue(new Map());
-
-    const snapshot = await capture(GAME_ID, BOT_ID);
-
     expect(snapshot.bot.ferryHalfSpeed).toBe(false);
   });
 });

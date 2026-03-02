@@ -94,6 +94,7 @@ function makeWorldSnapshot(overrides: Partial<WorldSnapshot> = {}): WorldSnapsho
     ],
     loadAvailability: overrides.loadAvailability ?? {},
     opponents: overrides.opponents,
+    ferryEdges: overrides.ferryEdges,
   };
 }
 
@@ -776,16 +777,27 @@ describe('ActionResolver', () => {
       expect(plan.path.length).toBe(10);
     });
 
-    it('should respect ferry half-speed', async () => {
-      setupGridPoints([{ row: 10, col: 10, name: 'Target' }]);
-      // Freight has speed 9, ferry halves to ceil(9/2)=5
-      // Path with 5 edges should still work
-      const path5 = Array.from({ length: 5 }, (_, i) =>
-        makePathEdge(5 + i, 5, 6 + i, 5),
-      );
-      mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path5));
+    it('should teleport to paired port and apply half speed when at ferry port (BE-006)', async () => {
+      // Bot is at ferry port A (5,5). Ferry connects A(5,5) ↔ B(20,20).
+      // resolveMove should teleport to B and compute path from there at half speed.
+      setupGridPoints([
+        { row: 5, col: 5, name: 'FerryPortA', terrain: TerrainType.FerryPort },
+        { row: 20, col: 20, name: 'FerryPortB', terrain: TerrainType.FerryPort },
+        { row: 25, col: 25, name: 'Target' },
+      ]);
 
-      const snapshot = makeWorldSnapshot({ bot: { ferryHalfSpeed: true } as any });
+      // Path from the paired port (20,20) to target — 4 edges
+      const path = Array.from({ length: 4 }, (_, i) =>
+        makePathEdge(20 + i, 20, 21 + i, 20),
+      );
+      mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path));
+
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 } } as any,
+        ferryEdges: [
+          { name: 'TestFerry', pointA: { row: 5, col: 5 }, pointB: { row: 20, col: 20 }, cost: 4 },
+        ],
+      } as any);
       const result = await ActionResolver.resolve(
         makeMoveIntent('Target'),
         snapshot,
@@ -793,17 +805,32 @@ describe('ActionResolver', () => {
       );
 
       expect(result.success).toBe(true);
+      // Verify pathfinding was called from the paired port, not the original position
+      expect(mockComputeTrackUsageForMove).toHaveBeenCalledWith(
+        expect.objectContaining({ from: { row: 20, col: 20 } }),
+      );
     });
 
-    it('should truncate path to halved speed with ferry half-speed', async () => {
-      setupGridPoints([{ row: 10, col: 10, name: 'Target' }]);
-      // Freight speed=9, halved=5. Path with 6 edges should be truncated to 5.
+    it('should truncate path to halved speed during ferry crossing (BE-006)', async () => {
+      // Bot is at ferry port. Freight speed=9, halved=ceil(9/2)=5.
+      // Path with 6 edges should be truncated to 5.
+      setupGridPoints([
+        { row: 5, col: 5, name: 'FerryPortA', terrain: TerrainType.FerryPort },
+        { row: 20, col: 20, name: 'FerryPortB', terrain: TerrainType.FerryPort },
+        { row: 26, col: 20, name: 'Target' },
+      ]);
+
       const path6 = Array.from({ length: 6 }, (_, i) =>
-        makePathEdge(5 + i, 5, 6 + i, 5),
+        makePathEdge(20 + i, 20, 21 + i, 20),
       );
       mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path6));
 
-      const snapshot = makeWorldSnapshot({ bot: { ferryHalfSpeed: true } as any });
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 } } as any,
+        ferryEdges: [
+          { name: 'TestFerry', pointA: { row: 5, col: 5 }, pointB: { row: 20, col: 20 }, cost: 4 },
+        ],
+      } as any);
       const result = await ActionResolver.resolve(
         makeMoveIntent('Target'),
         snapshot,
@@ -812,7 +839,7 @@ describe('ActionResolver', () => {
 
       expect(result.success).toBe(true);
       const plan = result.plan as TurnPlanMoveTrain;
-      // Path should be truncated: 5 edges + 1 start = 6 coords
+      // Path should be truncated to half speed: 5 edges + 1 start = 6 coords
       expect(plan.path.length).toBe(6);
     });
 
@@ -844,6 +871,45 @@ describe('ActionResolver', () => {
       // Path should stop at ferry port: start + 4 steps = 5 coords
       expect(plan.path.length).toBe(5);
       expect(plan.path[plan.path.length - 1]).toEqual({ row: 9, col: 5 });
+    });
+
+    it('should skip departure port in truncation after ferry crossing (BE-006)', async () => {
+      // Bot is at ferry port A (5,5). Ferry connects A(5,5) ↔ B(20,20).
+      // After teleportation, the path starts from B (20,20).
+      // If the pathfinder routes through A (back across the ferry), the
+      // truncation should NOT stop at A since it's the departure port.
+      setupGridPoints([
+        { row: 5, col: 5, name: 'FerryPortA', terrain: TerrainType.FerryPort },
+        { row: 20, col: 20, name: 'FerryPortB', terrain: TerrainType.FerryPort },
+        { row: 25, col: 25, name: 'Target' },
+      ]);
+
+      // Path from B that passes through the departure port A at step 1
+      // B(20,20) → A(5,5) → (21,20) → (22,20)
+      const path = [
+        makePathEdge(20, 20, 5, 5),    // step 1: the departure port (should be skipped)
+        makePathEdge(5, 5, 21, 20),     // step 2
+        makePathEdge(21, 20, 22, 20),   // step 3
+      ];
+      mockComputeTrackUsageForMove.mockReturnValue(makeValidUsage(path));
+
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 } } as any,
+        ferryEdges: [
+          { name: 'TestFerry', pointA: { row: 5, col: 5 }, pointB: { row: 20, col: 20 }, cost: 4 },
+        ],
+      } as any);
+      const result = await ActionResolver.resolve(
+        makeMoveIntent('Target'),
+        snapshot,
+        makeGameContext(),
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanMoveTrain;
+      // Path should NOT be truncated at step 1 (departure port A) —
+      // all 3 edges should be preserved (within half-speed limit of 5)
+      expect(plan.path.length).toBe(4); // start + 3 edges
     });
 
     it('should NOT truncate path when no ferry port is present', async () => {
@@ -1534,13 +1600,17 @@ describe('ActionResolver', () => {
           supplyCity: 'Ruhr',
           deliveryCity: 'Berlin',
           payout: 20,
+          isSupplyReachable: true,
           isDeliveryOnNetwork: true,
           isDeliveryReachable: true,
           isSupplyOnNetwork: true,
           isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 0,
-          bestPayout: 20,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -1577,13 +1647,17 @@ describe('ActionResolver', () => {
           supplyCity: 'Ruhr',
           deliveryCity: 'London',
           payout: 20,
+          isSupplyReachable: true,
           isDeliveryOnNetwork: false,
           isDeliveryReachable: false,
           isSupplyOnNetwork: true,
           isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 50,
-          bestPayout: 20,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -1618,13 +1692,17 @@ describe('ActionResolver', () => {
           supplyCity: 'Ruhr',
           deliveryCity: 'Berlin',
           payout: 20,
+          isSupplyReachable: true,
           isDeliveryOnNetwork: true,
           isDeliveryReachable: true,
           isSupplyOnNetwork: true,
           isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 50,
-          bestPayout: 20,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -2111,6 +2189,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: false,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2150,6 +2229,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: true,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2199,6 +2279,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: true,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2231,6 +2312,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'B', deliveryCity: 'ExpensiveCity',
@@ -2239,6 +2321,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2267,6 +2350,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 40,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'FarC', deliveryCity: 'FarD',
@@ -2275,6 +2359,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 50, estimatedTrackCostToDelivery: 60,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2307,6 +2392,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2333,6 +2419,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 100, estimatedTrackCostToDelivery: 100,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });

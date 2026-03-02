@@ -232,7 +232,21 @@ export class ActionResolver {
       return { success: false, error: `Bot is already at "${targetCity}".` };
     }
 
-    const speed = ActionResolver.getBotSpeed(snapshot);
+    // Ferry crossing: if bot is at a ferry port, teleport to paired port
+    // and apply half speed for this turn (game rule).
+    let fromPosition = snapshot.bot.position;
+    let speed = ActionResolver.getBotSpeed(snapshot);
+    let skipFerryPortKey: string | null = null;
+
+    const ferryCrossing = ActionResolver.resolveFerryCrossing(fromPosition, snapshot);
+    if (ferryCrossing) {
+      skipFerryPortKey = `${fromPosition.row},${fromPosition.col}`;
+      fromPosition = ferryCrossing.pairedPort;
+      const trainType = snapshot.bot.trainType as TrainType;
+      const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
+      speed = Math.ceil(rawSpeed / 2);
+      console.log(`[Ferry] Crossing ${ferryCrossing.ferryName}: (${skipFerryPortKey}) → (${fromPosition.row},${fromPosition.col}) — half speed (${speed})`);
+    }
 
     // Try each target milepost (major cities have multiple), pick the shortest valid path
     let bestResult: { path: { row: number; col: number }[]; fees: Set<string>; totalFee: number } | null = null;
@@ -240,7 +254,7 @@ export class ActionResolver {
     for (const target of targetPositions) {
       const usage = computeTrackUsageForMove({
         allTracks: snapshot.allPlayerTracks as PlayerTrackState[],
-        from: snapshot.bot.position,
+        from: fromPosition,
         to: target,
         currentPlayerId: snapshot.bot.playerId,
       });
@@ -263,9 +277,11 @@ export class ActionResolver {
       // Ferry detection: if path passes through a FerryPort, truncate at the port.
       // The bot must stop at the ferry port for this turn (game rule).
       // Skip index 0 (the starting position — bot is already there).
+      // Also skip the departure port when the bot just crossed a ferry (skipFerryPortKey).
       const grid = loadGridPoints();
       for (let i = 1; i < truncatedPath.length; i++) {
         const pointKey = `${truncatedPath[i].row},${truncatedPath[i].col}`;
+        if (pointKey === skipFerryPortKey) continue; // departure port from ferry crossing
         const pointData = grid.get(pointKey);
         if (pointData && pointData.terrain === TerrainType.FerryPort) {
           console.warn(`[Ferry] Path truncated at ferry port ${pointData.name ?? pointKey} (step ${i}/${truncatedPath.length - 1})`);
@@ -1074,6 +1090,27 @@ export class ActionResolver {
       }
     }
     return bestCardId !== null ? { cardId: bestCardId, payout: bestPayout } : null;
+  }
+
+  /**
+   * Detect if bot is at a ferry port and return the paired port for teleportation.
+   * Per game rules, a bot at a ferry port crosses to the paired port at the start
+   * of its turn, then moves from there at half speed.
+   */
+  static resolveFerryCrossing(
+    position: { row: number; col: number },
+    snapshot: WorldSnapshot,
+  ): { pairedPort: { row: number; col: number }; ferryName: string } | null {
+    const ferryEdges = snapshot.ferryEdges ?? [];
+    for (const ferry of ferryEdges) {
+      if (position.row === ferry.pointA.row && position.col === ferry.pointA.col) {
+        return { pairedPort: ferry.pointB, ferryName: ferry.name };
+      }
+      if (position.row === ferry.pointB.row && position.col === ferry.pointB.col) {
+        return { pairedPort: ferry.pointA, ferryName: ferry.name };
+      }
+    }
+    return null;
   }
 
   /** Get the bot's train speed, accounting for ferry half-speed. */
