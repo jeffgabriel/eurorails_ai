@@ -89,8 +89,27 @@ export class GoogleAdapter implements ProviderAdapter {
       }
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new ProviderAPIError(response.status, body);
+        const errorBody = await response.text();
+
+        // On schema rejection (400) for non-Gemini-3 models, retry without structured output
+        if (
+          response.status === 400 &&
+          request.outputSchema &&
+          !this.isGemini3Model(request.model)
+        ) {
+          const isSchemaRejection = errorBody.includes('schema') ||
+            errorBody.includes('responseSchema') ||
+            errorBody.includes('invalid_argument') ||
+            errorBody.includes('INVALID_ARGUMENT');
+          if (isSchemaRejection) {
+            console.warn(
+              `[GoogleAdapter] Schema rejected (400), retrying without structured output: ${errorBody.substring(0, 200)}`,
+            );
+            return this.chat({ ...request, outputSchema: undefined });
+          }
+        }
+
+        throw new ProviderAPIError(response.status, errorBody);
       }
 
       const data = await response.json();

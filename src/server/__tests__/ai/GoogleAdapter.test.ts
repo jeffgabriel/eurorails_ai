@@ -400,6 +400,82 @@ describe('GoogleAdapter', () => {
     });
   });
 
+  describe('schema-rejection retry', () => {
+    const testSchema = { type: 'object', properties: { action: { type: 'string' } } };
+
+    it('should retry without structured output on schema rejection for Gemini 2.5', async () => {
+      // First call: 400 schema rejection
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: jest.fn().mockResolvedValue('INVALID_ARGUMENT: responseSchema is not valid'),
+      });
+      // Retry call: success without schema
+      mockFetch.mockResolvedValueOnce(makeSuccessResponse('{"action":"BuildTrack"}'));
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+        outputSchema: testSchema,
+      });
+
+      expect(result.text).toBe('{"action":"BuildTrack"}');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Verify retry does not include structured output
+      const retryBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(retryBody.generationConfig.responseMimeType).toBeUndefined();
+      expect(retryBody.generationConfig.responseSchema).toBeUndefined();
+    });
+
+    it('should NOT retry on non-schema 400 error for Gemini 2.5', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: jest.fn().mockResolvedValue('Bad request: content too long'),
+      });
+
+      await expect(adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+        outputSchema: testSchema,
+      })).rejects.toThrow(ProviderAPIError);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT retry schema rejection for Gemini 3 models', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: jest.fn().mockResolvedValue('INVALID_ARGUMENT: responseSchema is not valid'),
+      });
+
+      await expect(adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+        outputSchema: testSchema,
+      })).rejects.toThrow(ProviderAPIError);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('should NOT retry when no outputSchema was provided', async () => {
+      mockFetch.mockResolvedValue({
+        ok: false,
+        status: 400,
+        text: jest.fn().mockResolvedValue('INVALID_ARGUMENT: responseSchema is not valid'),
+      });
+
+      await expect(adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+      })).rejects.toThrow(ProviderAPIError);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({
