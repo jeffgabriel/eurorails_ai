@@ -32,6 +32,7 @@ import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
+import { ACTION_SCHEMA, ROUTE_SCHEMA } from './schemas';
 
 /** Token budgets for turn action decisions by skill level */
 const ACTION_MAX_TOKENS: Record<BotSkillLevel, number> = {
@@ -121,12 +122,17 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
+        const isAnthropic = this.config.provider === LLMProvider.Anthropic;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ACTION_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: this.systemPrompt,
           userPrompt,
+          ...(isAnthropic && {
+            outputSchema: ACTION_SCHEMA,
+            thinking: { type: 'adaptive', effort: ACTION_EFFORT[this.config.skillLevel] },
+          }),
         });
         totalLatencyMs += (Date.now() - startTime);
         totalInputTokens += response.usage?.input ?? 0;
