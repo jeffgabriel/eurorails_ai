@@ -54,6 +54,8 @@ export interface BotTurnResult {
   planHorizon?: string;
   guardrailOverride?: boolean;
   guardrailReason?: string;
+  // JIRA-13: demand ranking for debug overlay
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
 }
 
 export class AIStrategyEngine {
@@ -176,16 +178,31 @@ export class AIStrategyEngine {
             activeRoute = execResult.updatedRoute;
           }
         } else {
-          // Route planning failed — pass turn with debug logging
-          console.error(`${tag} [LLM] Route planning failed — passing turn`);
-          decision = {
-            plan: { type: AIActionType.PassTurn },
-            reasoning: '[llm-failed] LLM planning failed — passing turn',
-            planHorizon: 'Immediate',
-            model: 'llm-failed',
-            latencyMs: 0,
-            retried: false,
-          };
+          // Route planning failed — try heuristic fallback before passing
+          console.warn(`${tag} [LLM] Route planning failed — attempting heuristic fallback`);
+          const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+          if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
+            console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
+            decision = {
+              plan: fallback.plan,
+              reasoning: `[heuristic-fallback] LLM planning failed — heuristic produced ${fallback.plan.type}`,
+              planHorizon: 'Immediate',
+              model: 'heuristic-fallback',
+              latencyMs: 0,
+              retried: false,
+            };
+          } else {
+            // Heuristic also failed — pass turn
+            console.error(`${tag} [LLM] Route planning and heuristic fallback both failed — passing turn`);
+            decision = {
+              plan: { type: AIActionType.PassTurn },
+              reasoning: '[llm-failed] LLM planning and heuristic fallback both failed — passing turn',
+              planHorizon: 'Immediate',
+              model: 'llm-failed',
+              latencyMs: 0,
+              retried: false,
+            };
+          }
         }
       } else {
         // No LLM key — pass turn with debug logging
@@ -355,6 +372,18 @@ export class AIStrategyEngine {
         }
       }
 
+      // Build demand ranking from context for debug overlay (JIRA-13)
+      const demandRanking = [...context.demands]
+        .sort((a, b) => b.demandScore - a.demandScore)
+        .map((d, i) => ({
+          loadType: d.loadType,
+          supplyCity: d.supplyCity,
+          deliveryCity: d.deliveryCity,
+          payout: d.payout,
+          score: d.demandScore,
+          rank: i + 1,
+        }));
+
       return {
         action: result.action,
         segmentsBuilt: result.segmentsBuilt,
@@ -367,6 +396,7 @@ export class AIStrategyEngine {
         planHorizon: decision.planHorizon,
         guardrailOverride: guardrailResult.overridden || undefined,
         guardrailReason: guardrailResult.reason,
+        demandRanking,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

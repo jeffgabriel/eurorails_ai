@@ -369,7 +369,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('guardrail override — force DELIVER', () => {
-    it('should force DELIVER when LLM chose BUILD but delivery is available', async () => {
+    it('should force DELIVER when LLM route chose BUILD but delivery is available', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const delivery: DeliveryOpportunity = {
@@ -391,18 +391,32 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // LLM chose BUILD, but guardrail should override to DELIVER
-      mockDecideAction.mockResolvedValue({
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
+      // LLM route planning succeeds with a route
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
         reasoning: 'Extend network',
-        planHorizon: '3 turns',
+        createdAtTurn: 3,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
         model: 'claude-sonnet-4-20250514',
         latencyMs: 300,
-        retried: false,
+      });
+
+      // PlanExecutor returns a BUILD plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Ruhr',
       });
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
+      // Guardrail should override BUILD to DELIVER
       expect(result.action).toBe(AIActionType.DeliverLoad);
       expect(result.guardrailOverride).toBe(true);
       expect(result.guardrailReason).toContain('Forced DELIVER');
@@ -457,7 +471,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should PassTurn during initialBuild when planRoute returns null', async () => {
+    it('should try heuristicFallback during initialBuild when planRoute returns null', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -471,13 +485,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // planRoute fails
       mockPlanRoute.mockResolvedValue(null);
 
+      // heuristicFallback also fails → PassTurn
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
-      // heuristicFallback should NOT have been called
-      expect(mockHeuristicFallback).not.toHaveBeenCalled();
+      // heuristicFallback SHOULD have been called before PassTurn
+      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -739,7 +756,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should PassTurn when route planning fails (no heuristic fallback)', async () => {
+    it('should try heuristicFallback when route planning fails, PassTurn only if both fail', async () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
@@ -767,13 +784,16 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // planRoute returns null (failed)
       mockPlanRoute.mockResolvedValue(null);
 
+      // heuristicFallback also fails → PassTurn
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
-      // heuristicFallback should NOT have been called
-      expect(mockHeuristicFallback).not.toHaveBeenCalled();
+      // heuristicFallback SHOULD have been called
+      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -850,8 +870,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('LLM failure → PassTurn (BE-002)', () => {
-    it('should PassTurn when LLM planRoute returns null — not heuristic fallback', async () => {
+  describe('LLM failure → heuristic fallback (BE-004)', () => {
+    it('should use heuristicFallback BUILD when LLM planRoute returns null', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       mockGetMemory.mockReturnValue({
@@ -878,15 +898,98 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // LLM planRoute returns null (failure)
       mockPlanRoute.mockResolvedValue(null);
 
+      // heuristicFallback returns a BUILD plan
+      const buildPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Berlin' };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: buildPlan });
+
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Should be PassTurn, not a heuristic fallback action
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.reasoning).toContain('heuristic-fallback');
+      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should PassTurn when both LLM and heuristicFallback fail', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // LLM planRoute returns null (failure)
+      mockPlanRoute.mockResolvedValue(null);
+
+      // heuristicFallback also fails
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.reasoning).toContain('llm-failed');
-      expect(result.reasoning).not.toContain('heuristic');
+      expect(result.reasoning).toContain('heuristic fallback both failed');
+      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
 
-      // heuristicFallback should NOT have been called
-      expect(mockHeuristicFallback).not.toHaveBeenCalled();
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should PassTurn when heuristicFallback returns PassTurn plan', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // LLM planRoute returns null
+      mockPlanRoute.mockResolvedValue(null);
+
+      // heuristicFallback returns PassTurn (nothing useful to do)
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Should still PassTurn since heuristic returned PassTurn
+      expect(result.action).toBe(AIActionType.PassTurn);
+      expect(result.reasoning).toContain('llm-failed');
+      expect(mockHeuristicFallback).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
