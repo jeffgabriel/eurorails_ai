@@ -223,6 +223,7 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
+        const isAnthropic = this.config.provider === LLMProvider.Anthropic;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ROUTE_MAX_TOKENS[this.config.skillLevel],
@@ -230,6 +231,10 @@ export class LLMStrategyBrain {
           systemPrompt: routePrompt,
           userPrompt,
           timeoutMs: 30000,
+          ...(isAnthropic && {
+            outputSchema: ROUTE_SCHEMA,
+            thinking: { type: 'adaptive', effort: ROUTE_EFFORT[this.config.skillLevel] },
+          }),
         });
         totalLatencyMs += (Date.now() - startTime);
         totalInputTokens += response.usage?.input ?? 0;
