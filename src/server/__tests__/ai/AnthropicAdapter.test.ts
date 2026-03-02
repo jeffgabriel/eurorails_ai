@@ -218,7 +218,7 @@ describe('AnthropicAdapter', () => {
       });
     });
 
-    it('should not include output_config when outputSchema is absent', async () => {
+    it('should not include output_config or thinking when no optional params provided', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat(makeRequest());
@@ -226,6 +226,39 @@ describe('AnthropicAdapter', () => {
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
       expect(body.output_config).toBeUndefined();
+      expect(body.thinking).toBeUndefined();
+    });
+
+    it('should include both output_config and thinking when all params provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      await adapter.chat({
+        ...makeRequest(),
+        outputSchema: schema,
+        thinking: { type: 'adaptive', effort: 'high' },
+      });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toEqual({
+        format: { type: 'json_schema', schema },
+      });
+      expect(body.thinking).toEqual({ type: 'adaptive', effort: 'high' });
+    });
+
+    it('should include output_config but not thinking when only outputSchema provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      await adapter.chat({ ...makeRequest(), outputSchema: schema });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toEqual({
+        format: { type: 'json_schema', schema },
+      });
+      expect(body.thinking).toBeUndefined();
     });
 
     it('should include thinking config when provided', async () => {
