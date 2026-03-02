@@ -1,5 +1,10 @@
 import { ProviderResponse } from '../../../../shared/types/GameTypes';
 
+export interface ThinkingConfig {
+  type: string;
+  effort?: string;
+}
+
 export interface ProviderAdapter {
   chat(request: {
     model: string;
@@ -7,5 +12,7 @@ export interface ProviderAdapter {
     temperature: number;
     systemPrompt: string;
     userPrompt: string;
+    outputSchema?: object;
+    thinking?: ThinkingConfig;
   }): Promise<ProviderResponse>;
 }
