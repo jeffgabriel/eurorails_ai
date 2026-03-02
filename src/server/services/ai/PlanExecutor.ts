@@ -52,6 +52,9 @@ export class PlanExecutor {
     snapshot: WorldSnapshot,
     context: GameContext,
   ): Promise<PlanExecutorResult> {
+    // Advance past any stops already completed (e.g., mid-turn pickups/deliveries)
+    route = PlanExecutor.skipCompletedStops(route, context);
+
     const currentStop = route.stops[route.currentStopIndex];
     if (!currentStop) {
       // All stops completed — route is done
@@ -408,6 +411,50 @@ export class PlanExecutor {
       updatedRoute: route,
       description,
     };
+  }
+
+  /**
+   * Advance currentStopIndex past stops that are already completed.
+   *
+   * For pickup stops: completed if the load is already on the train.
+   * For deliver stops: completed if the load is NOT on the train AND
+   *   the demand card is no longer present (i.e., it was already fulfilled).
+   *
+   * Stops advancing at the first incomplete stop.
+   */
+  static skipCompletedStops(route: StrategicRoute, context: GameContext): StrategicRoute {
+    let idx = route.currentStopIndex;
+    const demandCardIds = context.demands.map(d => d.cardIndex);
+
+    while (idx < route.stops.length) {
+      const stop = route.stops[idx];
+
+      if (stop.action === 'pickup') {
+        // Pickup is complete if the load type is already on the train
+        if (context.loads.includes(stop.loadType)) {
+          console.log(`[PlanExecutor] Skipping completed pickup: ${stop.loadType} at ${stop.city} (already on train)`);
+          idx++;
+          continue;
+        }
+      } else if (stop.action === 'deliver') {
+        // Delivery is complete if the load is NOT on the train AND the demand card is gone
+        const loadOnTrain = context.loads.includes(stop.loadType);
+        const demandPresent = stop.demandCardId != null && demandCardIds.includes(stop.demandCardId);
+        if (!loadOnTrain && !demandPresent) {
+          console.log(`[PlanExecutor] Skipping completed delivery: ${stop.loadType} at ${stop.city} (demand fulfilled)`);
+          idx++;
+          continue;
+        }
+      }
+
+      // Stop is not complete — stop advancing
+      break;
+    }
+
+    if (idx !== route.currentStopIndex) {
+      return { ...route, currentStopIndex: idx };
+    }
+    return route;
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
