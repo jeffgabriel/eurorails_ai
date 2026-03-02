@@ -121,6 +121,12 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   ActionResolver: {
     resolve: jest.fn(),
     heuristicFallback: jest.fn(),
+    cloneSnapshot: jest.fn((snapshot: any) => ({
+      ...snapshot,
+      bot: { ...snapshot.bot, loads: [...snapshot.bot.loads], existingSegments: [...snapshot.bot.existingSegments], demandCards: [...snapshot.bot.demandCards], resolvedDemands: snapshot.bot.resolvedDemands.map((rd: any) => ({ ...rd, demands: [...rd.demands] })) },
+      allPlayerTracks: snapshot.allPlayerTracks.map((pt: any) => ({ ...pt, segments: [...pt.segments] })),
+    })),
+    applyPlanToState: jest.fn(),
   },
 }));
 
@@ -1125,6 +1131,170 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(patch.activeRoute).toBeNull();
 
       delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
+
+  describe('route completion continuation (BE-003)', () => {
+    it('should chain BUILD from heuristicFallback after route completes', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+        reasoning: 'Deliver coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns delivery + routeComplete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      // heuristicFallback returns a BUILD action for continuation
+      const buildPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Paris' };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: buildPlan });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Should have called heuristicFallback for continuation
+      expect(mockHeuristicFallback).toHaveBeenCalled();
+
+      // Route should be cleared in memory (routeComplete)
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.routeHistory).toBeDefined();
+      expect(patch.routeHistory[0].outcome).toBe('completed');
+    });
+
+    it('should not chain continuation when heuristicFallback fails', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+        reasoning: 'Deliver coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns delivery + routeComplete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      // heuristicFallback fails — no continuation
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // heuristicFallback should have been called for continuation attempt
+      expect(mockHeuristicFallback).toHaveBeenCalled();
+      // Route should be cleared in memory (routeComplete)
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+    });
+
+    it('should not call heuristicFallback continuation when route was abandoned', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 3,
+        reasoning: 'Pick up coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns abandoned (not completed)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: true,
+        updatedRoute: route,
+        description: 'Route abandoned — cannot reach pickup',
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // routeWasCompleted is false, so continuation logic should NOT trigger
+      // heuristicFallback might be called by post-guardrail safety, but not by continuation
+      // Verify memory shows abandoned route, not completed route
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.routeHistory).toBeDefined();
+      const lastEntry = patch.routeHistory[patch.routeHistory.length - 1];
+      expect(lastEntry.outcome).toBe('abandoned');
     });
   });
 });

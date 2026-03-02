@@ -259,6 +259,24 @@ export class AIStrategyEngine {
         activeRoute = null;
       }
 
+      // ── Stage 3e: Continuation after route completion ──
+      // When the route just completed, fill remaining budget with a heuristic action.
+      if (routeWasCompleted) {
+        // Simulate plan effects so heuristicFallback sees post-route state
+        const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
+        const simContext = { ...context };
+        const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        for (const step of planSteps) {
+          ActionResolver.applyPlanToState(step, simSnapshot, simContext);
+        }
+
+        const continuation = await ActionResolver.heuristicFallback(simContext, simSnapshot);
+        if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn) {
+          decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
+          console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
+        }
+      }
+
       // ── Stage 4: Apply guardrails ──
       let guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.consecutivePassTurns);
       let finalPlan: TurnPlan = guardrailResult.plan;
