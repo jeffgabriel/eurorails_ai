@@ -144,6 +144,47 @@ describe('AnthropicAdapter', () => {
     });
   });
 
+  describe('token usage tracking', () => {
+    it('should correctly track input and output tokens including thinking tokens', async () => {
+      // Simulate response where input_tokens includes thinking token overhead
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [
+            { type: 'thinking', thinking: 'Deep analysis of the game state...' },
+            { type: 'text', text: '{"action":"BUILD"}' },
+          ],
+          usage: { input_tokens: 1500, output_tokens: 350 },
+        }),
+        text: async () => '',
+      });
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        thinking: { type: 'adaptive', effort: 'high' },
+      });
+
+      expect(result.usage).toEqual({ input: 1500, output: 350 });
+    });
+
+    it('should track zero tokens when usage field has zero values', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 0, output_tokens: 0 },
+        }),
+        text: async () => '',
+      });
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.usage).toEqual({ input: 0, output: 0 });
+    });
+  });
+
   describe('multi-block response extraction', () => {
     it('should extract only text block from response with thinking and text blocks', async () => {
       mockFetch.mockResolvedValue({
