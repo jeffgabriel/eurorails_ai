@@ -124,27 +124,9 @@ export class PlanExecutor {
           };
         }
       }
-      // All route stops reachable — try secondary build target, then demand cities
+      // All route stops reachable — build toward demand cities with remaining budget
       if (context.canBuild) {
-        // Priority 1: Secondary build target from LLM route planning
-        const secondaryCity = route.secondaryBuildTarget?.city;
-        if (secondaryCity && !context.citiesOnNetwork.includes(secondaryCity)) {
-          console.log(`${tag} All route stops reachable, building toward secondary target ${secondaryCity}`);
-          const buildResult = await ActionResolver.resolve(
-            { action: 'BUILD', details: { toward: secondaryCity }, reasoning: '', planHorizon: '' },
-            snapshot, context, route.startingCity,
-          );
-          if (buildResult.success && buildResult.plan) {
-            return {
-              plan: buildResult.plan,
-              routeComplete: false,
-              routeAbandoned: false,
-              updatedRoute: { ...route, phase: 'build' },
-              description: `${tag} Building toward secondary target ${secondaryCity} (all route stops reachable)`,
-            };
-          }
-        }
-        // Priority 2: Build toward demand card cities with remaining budget
+        // Build toward demand card cities with remaining budget
         const demandTarget = PlanExecutor.findDemandBuildTarget(context);
         if (demandTarget) {
           console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);

@@ -848,6 +848,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1196,6 +1197,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1261,54 +1263,9 @@ describe('TurnComposer', () => {
     });
   });
 
-  describe('secondaryBuildTarget priority', () => {
-    it('route stops take precedence over secondaryBuildTarget', async () => {
-      // Route has stops where Bordeaux is NOT on network — should build there, not secondaryBuildTarget
-      const snapshot = makeSnapshot();
-      const context = makeContext({
-        money: 50,
-        turnBuildCost: 0,
-        citiesOnNetwork: ['Berlin'], // Berlin on network, Bordeaux is NOT
-      });
-      const route = makeRoute({
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Bordeaux', demandCardId: 1, payment: 25 },
-        ],
-        currentStopIndex: 0,
-        phase: 'build',
-        secondaryBuildTarget: { city: 'Roma', reasoning: 'Good network extension' },
-      });
-
-      // MOVE as primary to isolate Phase B
-      const movePlan: TurnPlan = {
-        type: AIActionType.MoveTrain,
-        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
-        fees: new Set<string>(),
-        totalFee: 0,
-      };
-
-      // Phase B: BUILD toward Bordeaux (route stop) succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
-      });
-
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
-
-      expect(result.type).toBe('MultiAction');
-      // Build should target Bordeaux (route stop), not Roma (secondaryBuildTarget)
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall).toBeDefined();
-      expect(buildCall![0].details.toward).toBe('Bordeaux');
-      // findDemandBuildTarget should NOT have been called
-      expect(mockFindDemandBuildTarget).not.toHaveBeenCalled();
-    });
-
-    it('secondaryBuildTarget chosen when route stops are all connected', async () => {
-      // All route stops on network, secondaryBuildTarget (Roma) is NOT on network
+  describe('build fallback when route stops all connected', () => {
+    it('falls back to findDemandBuildTarget when all route stops on network', async () => {
+      // All route stops on network — should fall through to demand build target
       const snapshot = makeSnapshot();
       const context = makeContext({
         money: 50,
@@ -1323,98 +1280,6 @@ describe('TurnComposer', () => {
         ],
         currentStopIndex: 0,
         phase: 'build',
-        secondaryBuildTarget: { city: 'Roma', reasoning: 'Good network extension' },
-      });
-
-      const movePlan: TurnPlan = {
-        type: AIActionType.MoveTrain,
-        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
-        fees: new Set<string>(),
-        totalFee: 0,
-      };
-
-      // Phase B: BUILD toward Roma (secondaryBuildTarget) succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Roma' },
-      });
-
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
-
-      expect(result.type).toBe('MultiAction');
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall).toBeDefined();
-      expect(buildCall![0].details.toward).toBe('Roma');
-      // findDemandBuildTarget should NOT have been called (secondaryBuildTarget took priority)
-      expect(mockFindDemandBuildTarget).not.toHaveBeenCalled();
-    });
-
-    it('secondaryBuildTarget skipped when already on network', async () => {
-      // All route stops on network, secondaryBuildTarget (Roma) ALSO on network
-      const snapshot = makeSnapshot();
-      const context = makeContext({
-        money: 50,
-        turnBuildCost: 0,
-        citiesOnNetwork: ['Berlin', 'Paris', 'Roma'],
-        unconnectedMajorCities: [],
-      });
-      const route = makeRoute({
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
-        ],
-        currentStopIndex: 0,
-        phase: 'build',
-        secondaryBuildTarget: { city: 'Roma', reasoning: 'Good network extension' },
-      });
-
-      // findDemandBuildTarget returns a fallback target
-      mockFindDemandBuildTarget.mockReturnValue('München');
-
-      const movePlan: TurnPlan = {
-        type: AIActionType.MoveTrain,
-        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
-        fees: new Set<string>(),
-        totalFee: 0,
-      };
-
-      // Phase B: BUILD toward München (demand fallback) succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'München' },
-      });
-
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
-
-      expect(result.type).toBe('MultiAction');
-      // Roma was skipped (already on network), fell through to findDemandBuildTarget
-      expect(mockFindDemandBuildTarget).toHaveBeenCalled();
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall).toBeDefined();
-      expect(buildCall![0].details.toward).toBe('München');
-    });
-
-    it('falls back to findDemandBuildTarget without secondaryBuildTarget', async () => {
-      // All route stops on network, NO secondaryBuildTarget set
-      const snapshot = makeSnapshot();
-      const context = makeContext({
-        money: 50,
-        turnBuildCost: 0,
-        citiesOnNetwork: ['Berlin', 'Paris'],
-        unconnectedMajorCities: [],
-      });
-      const route = makeRoute({
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
-        ],
-        currentStopIndex: 0,
-        phase: 'build',
-        // No secondaryBuildTarget set
       });
 
       mockFindDemandBuildTarget.mockReturnValue('Lyon');
@@ -1471,6 +1336,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1559,6 +1425,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1612,6 +1479,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Bordeaux',
@@ -1620,6 +1488,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });

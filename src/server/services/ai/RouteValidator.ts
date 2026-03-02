@@ -95,22 +95,6 @@ export class RouteValidator {
       }
     }
 
-    // ── Validate secondaryBuildTarget (ADR-3: strip if invalid, never fail route) ──
-    if (route.secondaryBuildTarget) {
-      const gridPoints = loadGridPoints();
-      const targetCity = route.secondaryBuildTarget.city;
-      const cityTerrains = new Set([TerrainType.SmallCity, TerrainType.MediumCity, TerrainType.MajorCity]);
-
-      const matchingPoint = Array.from(gridPoints.values()).find(
-        gp => gp.name === targetCity && cityTerrains.has(gp.terrain),
-      );
-
-      if (!matchingPoint) {
-        console.warn(`${tag} Stripping invalid secondaryBuildTarget "${targetCity}" — not a valid city in gridPoints`);
-        route.secondaryBuildTarget = undefined;
-      }
-    }
-
     const feasibleStops = validations.filter(v => v.feasible).map(v => v.stop);
     const errors = validations.filter(v => !v.feasible).map(v => v.error!);
 

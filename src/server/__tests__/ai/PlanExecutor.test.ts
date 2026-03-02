@@ -352,6 +352,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -488,9 +490,9 @@ describe('PlanExecutor', () => {
     });
   });
 
-  describe('secondaryBuildTarget in initial build', () => {
-    it('secondaryBuildTarget used after route stops connected', async () => {
-      // All route stops are on the network, secondaryBuildTarget (Roma) is off-network
+  describe('demand fallback when all route stops connected', () => {
+    it('falls back to findDemandBuildTarget when all route stops are on network', async () => {
+      // All route stops are on the network — should build toward demand cities
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'Berlin',
@@ -498,41 +500,6 @@ describe('PlanExecutor', () => {
           { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
         ],
-        secondaryBuildTarget: { city: 'Roma', reasoning: 'Good network extension' },
-      });
-      const context = makeContext({
-        isInitialBuild: true,
-        citiesOnNetwork: ['Paris'], // Berlin is starting city (skipped), Paris is on network
-        canBuild: true,
-      });
-
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
-      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
-
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
-      expect(result.routeComplete).toBe(false);
-      expect(result.updatedRoute.currentStopIndex).toBe(0);
-      // Should build toward Roma (secondaryBuildTarget)
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Roma',
-      );
-      expect(buildCall).toBeDefined();
-    });
-
-    it('falls back to findDemandBuildTarget without secondaryBuildTarget', async () => {
-      // All route stops are on the network, no secondaryBuildTarget
-      const route = makeRoute({
-        currentStopIndex: 0,
-        startingCity: 'Berlin',
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
-        ],
-        // No secondaryBuildTarget
       });
       const context = makeContext({
         isInitialBuild: true,
@@ -545,6 +512,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -564,47 +533,6 @@ describe('PlanExecutor', () => {
       );
       expect(buildCall).toBeDefined();
     });
-
-    it('secondaryBuildTarget skipped when already on network during initial build', async () => {
-      // All route stops are on the network, secondaryBuildTarget (Roma) ALSO on network
-      const route = makeRoute({
-        currentStopIndex: 0,
-        startingCity: 'Berlin',
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
-        ],
-        secondaryBuildTarget: { city: 'Roma', reasoning: 'Good network extension' },
-      });
-      const context = makeContext({
-        isInitialBuild: true,
-        citiesOnNetwork: ['Paris', 'Roma'], // Both Paris and Roma on network
-        canBuild: true,
-        demands: [
-          {
-            cardIndex: 0, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Lyon',
-            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
-            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
-            estimatedTrackCostToSupply: 8, estimatedTrackCostToDelivery: 12,
-            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
-          },
-        ],
-      });
-
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
-      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
-
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
-      // Should skip Roma (already on network) and build toward demand city
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Lyon',
-      );
-      expect(buildCall).toBeDefined();
-    });
   });
 
   describe('deliver-before-build (FR-8)', () => {
@@ -621,6 +549,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -656,6 +586,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -686,6 +618,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -713,6 +647,8 @@ describe('PlanExecutor', () => {
             isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 50,
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });

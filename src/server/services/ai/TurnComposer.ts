@@ -375,12 +375,7 @@ export class TurnComposer {
     const isMidRoute = activeRoute &&
       (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
     if (!buildTarget && !routeNeedsBuild && !isMidRoute) {
-      // Priority 1: Secondary build target from active route (LLM-chosen)
-      if (activeRoute?.secondaryBuildTarget?.city &&
-          !context.citiesOnNetwork.includes(activeRoute.secondaryBuildTarget.city)) {
-        buildTarget = activeRoute.secondaryBuildTarget.city;
-      }
-      // Priority 2: Build toward cheapest unconnected major city (victory progress)
+      // Build toward cheapest unconnected major city (victory progress)
       // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
       if (!buildTarget) {
         const unconnected = context.unconnectedMajorCities ?? [];

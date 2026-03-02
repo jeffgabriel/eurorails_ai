@@ -411,11 +411,6 @@ export interface StrategicRoute {
   startingCity?: string;        // for initial build: where to start building from
   createdAtTurn: number;
   reasoning: string;            // LLM's reasoning for choosing this route
-  /** LLM-chosen secondary build target — where to build after route stops are connected */
-  secondaryBuildTarget?: {
-    city: string;
-    reasoning: string;
-  };
 }
 
 /** Persistent bot state that spans across turns within a game */
@@ -604,6 +599,12 @@ export interface DemandContext {
     loadChipCarried: number;
     /** Estimated total turns to complete this demand (build + travel + deliver) */
     estimatedTurns: number;
+    /** Computed demand score: immediateROI + networkValueBonus + victoryBonus */
+    demandScore: number;
+    /** Count of cities near the proposed track corridor (network value) */
+    networkCitiesUnlocked: number;
+    /** Count of unconnected major cities reachable via the track corridor */
+    victoryMajorCitiesEnRoute: number;
 }
 
 /** An immediately completable delivery at the bot's current position */
