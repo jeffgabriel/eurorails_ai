@@ -455,6 +455,185 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.thinking).toEqual({ type: 'adaptive' });
       expect(callArgs.effort).toBe('medium');
     });
+
+    it('decideAction — should pass outputSchema and thinking for Google provider at Hard skill', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"action":"BUILD","reasoning":"expand network"}',
+        usage: { input: 80, output: 40 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseActionIntent.mockReturnValue({
+        action: 'BuildTrack',
+        reasoning: 'expand network',
+        planHorizon: '3 turns',
+      });
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack },
+      });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Hard,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe('high');
+      expect(callArgs.maxTokens).toBe(8192);
+      expect(callArgs.temperature).toBe(0.2);
+    });
+
+    it('decideAction — should NOT pass outputSchema or thinking for Google provider at Easy skill', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"action":"PASS","reasoning":"easy bot"}',
+        usage: { input: 30, output: 10 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseActionIntent.mockReturnValue({
+        action: 'PASS',
+        reasoning: 'easy bot',
+        planHorizon: '',
+      });
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Easy,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.thinking).toBeUndefined();
+      expect(callArgs.effort).toBeUndefined();
+      expect(callArgs.maxTokens).toBe(2048);
+      expect(callArgs.temperature).toBe(0.7);
+    });
+
+    it('planRoute — should pass ROUTE_SCHEMA and thinking for Google provider at Medium skill', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.outputSchema.properties?.route).toBeDefined();
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe('high');
+      expect(callArgs.timeoutMs).toBe(60000);
+      expect(callArgs.maxTokens).toBe(12288);
+    });
+
+    it('planRoute — should pass ROUTE_SCHEMA and thinking for Google provider at Hard skill', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 120, output: 60 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Wine', city: 'Bordeaux' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Paris',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Hard,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeDefined();
+      expect(callArgs.outputSchema.properties?.route).toBeDefined();
+      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
+      expect(callArgs.effort).toBe('high');
+      expect(callArgs.timeoutMs).toBe(60000);
+      expect(callArgs.maxTokens).toBe(16384);
+      expect(callArgs.temperature).toBe(0.2);
+    });
+
+    it('planRoute — should NOT pass outputSchema or thinking for Google provider at Easy skill', async () => {
+      const mockGoogleChat = jest.fn().mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 60, output: 30 },
+      });
+      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
+        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
+      );
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Easy,
+        provider: LLMProvider.Google,
+        apiKey: 'google-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const callArgs = mockGoogleChat.mock.calls[0][0];
+      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.thinking).toBeUndefined();
+      expect(callArgs.effort).toBeUndefined();
+      expect(callArgs.timeoutMs).toBe(60000);
+      expect(callArgs.maxTokens).toBe(8192);
+      expect(callArgs.temperature).toBe(0.7);
+    });
   });
 
   // --- JIRA-6: planRoute with RouteValidator ---
