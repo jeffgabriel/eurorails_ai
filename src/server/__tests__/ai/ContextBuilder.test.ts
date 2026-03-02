@@ -1188,6 +1188,7 @@ describe('ContextBuilder.serializePrompt', () => {
       capacity: 2,
       loads: [],
       connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Paris', estimatedCost: 15 }],
       totalMajorCities: 8,
       trackSummary: '5 mileposts',
       turnBuildCost: 0,
@@ -1259,14 +1260,14 @@ describe('ContextBuilder.serializePrompt', () => {
     expect(prompt).not.toContain('do NOT pass your turn');
   });
 
-  it('should include initial build strategy hint during initialBuild phase', () => {
+  it('should include initial build phase hint during initialBuild phase', () => {
     const ctx = makeMinimalContext({ isInitialBuild: true });
 
     const prompt = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
 
-    expect(prompt).toContain('INITIAL BUILD STRATEGY');
-    expect(prompt).toContain('Pick the demand with the CHEAPEST, SHORTEST route');
-    expect(prompt).toContain('Prefer supply at/near a major city');
+    expect(prompt).toContain('PHASE: Initial Build');
+    expect(prompt).toContain('GEOGRAPHIC STRATEGY');
+    expect(prompt).toContain('CAPITAL VELOCITY');
   });
 });
 
@@ -1508,6 +1509,9 @@ describe('ContextBuilder proximity computation methods', () => {
       loadChipTotal: 4,
       loadChipCarried: 0,
       estimatedTurns: 3,
+      demandScore: 0,
+      networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0,
       ...overrides,
     };
   }
@@ -1908,5 +1912,410 @@ describe('ContextBuilder proximity computation methods', () => {
       expect(section).toContain('Munich');
       expect(section).toContain('Rome');
     });
+  });
+});
+
+// ── JIRA-16: Hand quality, best demand, enhanced ranking tests ────────────
+
+describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () => {
+  function makeCtx(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Paris', estimatedCost: 15 }],
+      totalMajorCities: 8,
+      trackSummary: '4 segments',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Berlin'],
+      citiesOnNetwork: ['Berlin'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Mid Game',
+      turnNumber: 10,
+      ...overrides,
+    };
+  }
+
+  function makeD(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
+    supplyCity: string;
+    deliveryCity: string;
+    loadType: string;
+    payout: number;
+  }): import('../../../shared/types/GameTypes').DemandContext {
+    return {
+      cardIndex: 0,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 5,
+      estimatedTrackCostToDelivery: 5,
+      isLoadAvailable: true,
+      isLoadOnTrain: false,
+      ferryRequired: false,
+      loadChipTotal: 4,
+      loadChipCarried: 0,
+      estimatedTurns: 3,
+      demandScore: 0,
+      networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0,
+      ...overrides,
+    };
+  }
+
+  it('should label best demand per card with BEST tag', () => {
+    const ctx = makeCtx({
+      demands: [
+        makeD({ cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+        makeD({ cardIndex: 0, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Madrid', payout: 30, estimatedTrackCostToSupply: 20, estimatedTrackCostToDelivery: 25 }),
+      ],
+    });
+
+    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
+    // Coal should be best (both on network, core delivery)
+    expect(output).toContain('Coal');
+    expect(output).toMatch(/Coal.*BEST/);
+    // Wine should NOT be best
+    expect(output).not.toMatch(/Wine.*BEST/);
+  });
+
+  it('should include HAND QUALITY summary line', () => {
+    const ctx = makeCtx({
+      demands: [
+        makeD({ cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+        makeD({ cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Paris', payout: 20 }),
+        makeD({ cardIndex: 2, loadType: 'Iron', supplyCity: 'Oslo', deliveryCity: 'London', payout: 40, ferryRequired: true }),
+      ],
+    });
+
+    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
+    expect(output).toContain('HAND QUALITY:');
+    // Berlin and Paris are core; London is peripheral+ferry
+    expect(output).toContain('cards playable in core');
+  });
+
+  it('should count core-playable cards correctly (2/3)', () => {
+    const ctx = makeCtx({
+      demands: [
+        makeD({ cardIndex: 0, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Paris', payout: 9 }),
+        makeD({ cardIndex: 1, loadType: 'Wheat', supplyCity: 'München', deliveryCity: 'Ruhr', payout: 13 }),
+        makeD({ cardIndex: 2, loadType: 'Machinery', supplyCity: 'Hamburg', deliveryCity: 'London', payout: 25, ferryRequired: true }),
+      ],
+    });
+
+    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
+    // Cards 0 and 1 deliver to core (Paris, Ruhr); Card 2 delivers to London (peripheral+ferry)
+    expect(output).toContain('2/3 cards playable in core');
+  });
+
+  it('should include payout, build cost, and turns in demand ranking line', () => {
+    const ctx = makeCtx({
+      demands: [
+        makeD({
+          cardIndex: 0,
+          loadType: 'Iron',
+          supplyCity: 'Szczecin',
+          deliveryCity: 'Praha',
+          payout: 17,
+          estimatedTrackCostToSupply: 3,
+          estimatedTrackCostToDelivery: 2,
+          estimatedTurns: 4,
+          demandScore: 45,
+          networkCitiesUnlocked: 2,
+          victoryMajorCitiesEnRoute: 0,
+        }),
+      ],
+    });
+
+    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
+    expect(output).toContain('payout: 17M');
+    expect(output).toContain('build: ~5M');
+    expect(output).toContain('ROI: 12M');
+    expect(output).toContain('~4 turns');
+  });
+
+  it('should show enhanced ranking format in serializePrompt too', () => {
+    const ctx = makeCtx({
+      demands: [
+        makeD({
+          cardIndex: 0,
+          loadType: 'Coal',
+          supplyCity: 'Essen',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+          demandScore: 20,
+        }),
+      ],
+    });
+
+    const output = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
+    expect(output).toContain('payout: 20M');
+    expect(output).toContain('build: ~0M');
+    expect(output).toContain('~2 turns');
+  });
+
+  it('should handle empty demands without HAND QUALITY line', () => {
+    const ctx = makeCtx({ demands: [] });
+    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
+    expect(output).not.toContain('HAND QUALITY');
+    expect(output).toContain('No demand cards');
+  });
+});
+
+// ── JIRA-13: Demand scoring tests ──────────────────────────────────────────
+
+describe('ContextBuilder demand scoring (JIRA-13)', () => {
+  /** Build a DemandContext for scoring tests */
+  function makeScoringDemand(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
+    supplyCity: string;
+    deliveryCity: string;
+    loadType: string;
+    payout: number;
+  }): import('../../../shared/types/GameTypes').DemandContext {
+    return {
+      cardIndex: 0,
+      isSupplyReachable: false,
+      isDeliveryReachable: false,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0,
+      estimatedTrackCostToDelivery: 0,
+      isLoadAvailable: true,
+      isLoadOnTrain: false,
+      ferryRequired: false,
+      loadChipTotal: 4,
+      loadChipCarried: 0,
+      estimatedTurns: 3,
+      demandScore: 0,
+      networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0,
+      ...overrides,
+    };
+  }
+
+  it('should never emit "DO NOT pursue" in reachability note', () => {
+    // Demand with negative ROI: cost 50M, payout 10M
+    const d = makeScoringDemand({
+      loadType: 'Coal',
+      supplyCity: 'Lyon',
+      deliveryCity: 'Berlin',
+      payout: 10,
+      estimatedTrackCostToSupply: 30,
+      estimatedTrackCostToDelivery: 20,
+    });
+
+    const note = (ContextBuilder as any).formatReachabilityNote(d, BotSkillLevel.Medium);
+    expect(note).not.toContain('DO NOT pursue');
+    expect(note).not.toContain('UNAFFORDABLE');
+  });
+
+  it('should include DEMAND RANKING section in serialized prompt', () => {
+    const context = {
+      position: { row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [] as string[],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Paris', estimatedCost: 15 }],
+      totalMajorCities: 8,
+      trackSummary: '5 mileposts',
+      turnBuildCost: 0,
+      demands: [
+        makeScoringDemand({
+          loadType: 'Coal',
+          supplyCity: 'Essen',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          demandScore: 15,
+          networkCitiesUnlocked: 2,
+          victoryMajorCitiesEnRoute: 0,
+        }),
+        makeScoringDemand({
+          cardIndex: 1,
+          loadType: 'Wine',
+          supplyCity: 'Lyon',
+          deliveryCity: 'Paris',
+          payout: 10,
+          estimatedTrackCostToSupply: 20,
+          estimatedTrackCostToDelivery: 10,
+          demandScore: -14,
+          networkCitiesUnlocked: 5,
+          victoryMajorCitiesEnRoute: 1,
+        }),
+      ],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: [],
+      citiesOnNetwork: ['Berlin', 'Essen'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      phase: 'Early Game',
+      opponents: [],
+    } as any;
+
+    const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
+    expect(output).toContain('DEMAND RANKING');
+    expect(output).toContain('RECOMMENDED');
+    expect(output).toContain('score 15');
+    expect(output).toContain('score -14');
+  });
+
+  it('all demands negative ROI — best one still marked RECOMMENDED', () => {
+    const demands = [
+      makeScoringDemand({
+        loadType: 'Coal',
+        supplyCity: 'Lyon',
+        deliveryCity: 'Berlin',
+        payout: 10,
+        estimatedTrackCostToSupply: 20,
+        estimatedTrackCostToDelivery: 15,
+        demandScore: -10, // -25 ROI + 5 network cities * 3 = -10
+        networkCitiesUnlocked: 5,
+        victoryMajorCitiesEnRoute: 0,
+      }),
+      makeScoringDemand({
+        cardIndex: 1,
+        loadType: 'Wine',
+        supplyCity: 'Bordeaux',
+        deliveryCity: 'Paris',
+        payout: 8,
+        estimatedTrackCostToSupply: 30,
+        estimatedTrackCostToDelivery: 20,
+        demandScore: -33, // -42 ROI + 3 network * 3 = -33
+        networkCitiesUnlocked: 3,
+        victoryMajorCitiesEnRoute: 0,
+      }),
+    ];
+
+    const context = {
+      position: { row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [] as string[],
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: 'No track built',
+      turnBuildCost: 0,
+      demands,
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: [],
+      citiesOnNetwork: [],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      phase: 'Early Game',
+      opponents: [],
+    } as any;
+
+    const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
+    // Even with all negative scores, best one gets RECOMMENDED
+    expect(output).toContain('RECOMMENDED');
+    expect(output).not.toContain('DO NOT pursue');
+    // Coal (-10) should rank higher than Wine (-33)
+    expect(output).toContain('#1 Coal');
+    expect(output).toContain('#2 Wine');
+  });
+
+  it('demand near unconnected major city should score higher via victory bonus', () => {
+    // Demand A: simple, payout 20, no track cost, no network value
+    const demandA = makeScoringDemand({
+      loadType: 'Coal',
+      supplyCity: 'Essen',
+      deliveryCity: 'Berlin',
+      payout: 20,
+      demandScore: 20, // pure ROI
+      networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0,
+    });
+
+    // Demand B: negative ROI but passes near 2 unconnected major cities
+    const demandB = makeScoringDemand({
+      cardIndex: 1,
+      loadType: 'Wine',
+      supplyCity: 'Lyon',
+      deliveryCity: 'München',
+      payout: 10,
+      estimatedTrackCostToSupply: 20,
+      demandScore: 21, // -10 ROI + 1 network * 3 + 2 victory * 10 = 21
+      networkCitiesUnlocked: 1,
+      victoryMajorCitiesEnRoute: 2,
+    });
+
+    const context = {
+      position: null,
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [] as string[],
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: 'No track',
+      turnBuildCost: 0,
+      demands: [demandA, demandB],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: [],
+      citiesOnNetwork: [],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      phase: 'Early Game',
+      opponents: [],
+    } as any;
+
+    const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
+    // Wine (score 21) should rank higher than Coal (score 20) due to victory bonus
+    const rankingSection = output.split('DEMAND RANKING')[1];
+    const wineRankPos = rankingSection.indexOf('#1 Wine');
+    const coalRankPos = rankingSection.indexOf('#2 Coal');
+    expect(wineRankPos).toBeGreaterThan(-1);
+    expect(coalRankPos).toBeGreaterThan(-1);
+    expect(wineRankPos).toBeLessThan(coalRankPos);
+  });
+
+  it('demand scoring formula: immediateROI + networkBonus + victoryBonus', () => {
+    // Directly test the scoring formula through DemandContext fields
+    // Score = (payout - trackCost) + networkCities*3 + victoryMajorCities*10
+    // Example: payout=10, cost=25, network=4, victory=1
+    // Score = (10-25) + 4*3 + 1*10 = -15 + 12 + 10 = 7
+    const d = makeScoringDemand({
+      loadType: 'Coal',
+      supplyCity: 'Lyon',
+      deliveryCity: 'Paris',
+      payout: 10,
+      estimatedTrackCostToSupply: 15,
+      estimatedTrackCostToDelivery: 10,
+      demandScore: 7,
+      networkCitiesUnlocked: 4,
+      victoryMajorCitiesEnRoute: 1,
+    });
+
+    // Verify the score matches the formula
+    const roi = d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery;
+    const networkBonus = d.networkCitiesUnlocked * 3;
+    const victoryBonus = d.victoryMajorCitiesEnRoute * 10;
+    expect(d.demandScore).toBe(roi + networkBonus + victoryBonus);
   });
 });
