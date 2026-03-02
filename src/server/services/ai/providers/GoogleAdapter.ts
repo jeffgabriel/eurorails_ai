@@ -96,7 +96,7 @@ export class GoogleAdapter implements ProviderAdapter {
       const data = await response.json();
 
       const candidate = data.candidates?.[0];
-      if (!candidate?.content?.parts?.[0]?.text) {
+      if (!candidate?.content?.parts?.length) {
         const reason = candidate?.finishReason ?? 'UNKNOWN';
         throw new ProviderAPIError(
           200,
@@ -104,8 +104,34 @@ export class GoogleAdapter implements ProviderAdapter {
         );
       }
 
+      // For Gemini 3 models, filter out thought parts and concatenate remaining text
+      let responseText: string;
+      if (this.isGemini3Model(request.model)) {
+        const textParts = candidate.content.parts
+          .filter((part: { thought?: boolean }) => !part.thought)
+          .map((part: { text?: string }) => part.text ?? '')
+          .filter((text: string) => text.length > 0);
+
+        if (textParts.length === 0) {
+          throw new ProviderAPIError(
+            200,
+            'Gemini 3 response contained only thought parts, no actionable text'
+          );
+        }
+        responseText = textParts.join('');
+      } else {
+        if (!candidate.content.parts[0]?.text) {
+          const reason = candidate?.finishReason ?? 'UNKNOWN';
+          throw new ProviderAPIError(
+            200,
+            `No content in response (finishReason: ${reason})`
+          );
+        }
+        responseText = candidate.content.parts[0].text;
+      }
+
       return {
-        text: candidate.content.parts[0].text,
+        text: responseText,
         usage: {
           input: data.usageMetadata?.promptTokenCount ?? 0,
           output: data.usageMetadata?.candidatesTokenCount ?? 0,

@@ -303,6 +303,103 @@ describe('GoogleAdapter', () => {
     });
   });
 
+  describe('Gemini 3 thought part filtering', () => {
+    it('should filter out thought parts and return only text parts', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          candidates: [{
+            content: {
+              parts: [
+                { text: 'Let me think...', thought: true },
+                { text: '{"action":"BuildTrack"}' },
+              ],
+            },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
+        }),
+        text: jest.fn(),
+      });
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+      });
+
+      expect(result.text).toBe('{"action":"BuildTrack"}');
+    });
+
+    it('should concatenate multiple non-thought text parts', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          candidates: [{
+            content: {
+              parts: [
+                { text: 'thinking...', thought: true },
+                { text: '{"action":' },
+                { text: '"MoveTrain"}' },
+              ],
+            },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
+        }),
+        text: jest.fn(),
+      });
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+      });
+
+      expect(result.text).toBe('{"action":"MoveTrain"}');
+    });
+
+    it('should throw ProviderAPIError when response has only thought parts', async () => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: jest.fn().mockResolvedValue({
+          candidates: [{
+            content: {
+              parts: [
+                { text: 'Let me think about this...', thought: true },
+                { text: 'More thinking...', thought: true },
+              ],
+            },
+            finishReason: 'STOP',
+          }],
+          usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50 },
+        }),
+        text: jest.fn(),
+      });
+
+      await expect(adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+      })).rejects.toThrow(ProviderAPIError);
+      await expect(adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+      })).rejects.toThrow('only thought parts');
+    });
+
+    it('should use standard parsing for non-Gemini-3 models', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse('{"action":"BuildTrack"}'));
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+      });
+
+      expect(result.text).toBe('{"action":"BuildTrack"}');
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({
