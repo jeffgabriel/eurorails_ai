@@ -52,42 +52,29 @@ export class AnthropicAdapter implements ProviderAdapter {
         body.thinking = request.thinking;
       }
 
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'x-api-key': this.apiKey,
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      const result = await this.executeRequest(body, controller.signal);
 
-      if (response.status === 401 || response.status === 403) {
-        const body = await response.text();
-        throw new ProviderAuthError(body);
+      // On schema rejection (400), retry without output_config
+      if (result.error && result.error.status === 400 && request.outputSchema) {
+        const errorText = result.error.body;
+        if (errorText.includes('schema') || errorText.includes('output_config') || errorText.includes('invalid')) {
+          console.warn(
+            `[AnthropicAdapter] Schema rejected (400), retrying without output_config: ${errorText.substring(0, 200)}`,
+          );
+          delete body.output_config;
+          const retryResult = await this.executeRequest(body, controller.signal);
+          if (retryResult.error) {
+            this.throwApiError(retryResult.error.status, retryResult.error.body);
+          }
+          return retryResult.response!;
+        }
       }
 
-      if (!response.ok) {
-        const body = await response.text();
-        throw new ProviderAPIError(response.status, body);
+      if (result.error) {
+        this.throwApiError(result.error.status, result.error.body);
       }
 
-      const data = await response.json();
-
-      // Extract text from multi-block response, skipping thinking blocks
-      const textBlock = Array.isArray(data.content)
-        ? data.content.find((block: { type: string }) => block.type === 'text')
-        : undefined;
-      const text = textBlock?.text ?? '';
-
-      return {
-        text,
-        usage: {
-          input: data.usage.input_tokens,
-          output: data.usage.output_tokens,
-        },
-      };
+      return result.response!;
     } catch (error) {
       if (error instanceof ProviderAuthError || error instanceof ProviderAPIError) {
         throw error;
@@ -99,5 +86,53 @@ export class AnthropicAdapter implements ProviderAdapter {
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  private async executeRequest(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<{ response?: ProviderResponse; error?: { status: number; body: string } }> {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      const text = await response.text();
+      throw new ProviderAuthError(text);
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      return { error: { status: response.status, body: text } };
+    }
+
+    const data = await response.json();
+
+    // Extract text from multi-block response, skipping thinking blocks
+    const textBlock = Array.isArray(data.content)
+      ? data.content.find((block: { type: string }) => block.type === 'text')
+      : undefined;
+    const text = textBlock?.text ?? '';
+
+    return {
+      response: {
+        text,
+        usage: {
+          input: data.usage.input_tokens,
+          output: data.usage.output_tokens,
+        },
+      },
+    };
+  }
+
+  private throwApiError(status: number, body: string): never {
+    throw new ProviderAPIError(status, body);
   }
 }
