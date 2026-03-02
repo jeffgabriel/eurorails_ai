@@ -54,6 +54,7 @@ export class DebugOverlay {
       currentStopIndex: number;
       phase: string;
     };
+    demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
   } | null = null;
 
   private static readonly MAX_EVENTS = 50;
@@ -212,6 +213,14 @@ export class DebugOverlay {
       if (payload?.activeRoute) {
         this.lastBotTurnInfo.activeRoute = payload.activeRoute;
       }
+      if (payload?.demandRanking?.length) {
+        this.lastBotTurnInfo.demandRanking = payload.demandRanking;
+      }
+    } else if (eventName === 'bot:demandRankingUpdate' && this.lastBotTurnInfo) {
+      // FE-001: refresh demand ranking mid-turn after delivery
+      if (payload?.demandRanking?.length) {
+        this.lastBotTurnInfo.demandRanking = payload.demandRanking;
+      }
     }
 
     if (this.isOpen) this.render();
@@ -357,6 +366,10 @@ export class DebugOverlay {
       if (this.lastBotTurnInfo.guardrailOverride) {
         content += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${this.lastBotTurnInfo.guardrailReason || 'unknown'}</div>`;
       }
+      // Demand ranking table (JIRA-13)
+      if (this.lastBotTurnInfo.demandRanking && this.lastBotTurnInfo.demandRanking.length > 0) {
+        content += this.renderDemandRanking(this.lastBotTurnInfo.demandRanking);
+      }
       // Show load actions first (most interesting to watch)
       if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
         content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);
@@ -373,6 +386,23 @@ export class DebugOverlay {
       <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
         <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Bot Turn <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
         ${content}
+      </div>
+    `;
+  }
+
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>): string {
+    const rows = ranking.map(d => {
+      const color = d.rank === 1 ? '#34d399' : d.score < 0 ? '#f87171' : '#e5e7eb';
+      const tag = d.rank === 1 ? ' \u2190 BEST' : '';
+      return `<tr style="color:${color};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
+    }).join('');
+    return `
+      <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid #34d399;">
+        <div style="color:#34d399;font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
+        <table style="font-size:13px;border-collapse:collapse;width:100%;">
+          <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Score</th><th></th></tr>
+          ${rows}
+        </table>
       </div>
     `;
   }

@@ -573,6 +573,24 @@ jest.mock('../services/loadService', () => ({
   LoadService: {
     getInstance: jest.fn().mockReturnValue({
       pickupDroppedLoad: jest.fn().mockResolvedValue(undefined),
+      getSourceCitiesForLoad: jest.fn().mockReturnValue(['Essen']),
+    }),
+  },
+}));
+
+jest.mock('../services/demandDeckService', () => ({
+  DemandDeckService: {
+    getInstance: jest.fn().mockReturnValue({
+      getCard: jest.fn().mockReturnValue({
+        id: 99,
+        demands: [
+          { city: 'Paris', resource: 'Wine', payment: 20 },
+          { city: 'Madrid', resource: 'Iron', payment: 15 },
+          { city: 'Wien', resource: 'Oil', payment: 12 },
+        ],
+      }),
+      drawCard: jest.fn(),
+      discardCard: jest.fn(),
     }),
   },
 }));
@@ -787,5 +805,58 @@ describe('TurnExecutor — handleDeliverLoad', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('not at a named city');
+  });
+
+  it('should emit bot:demandRankingUpdate with refreshed demand ranking after delivery (FE-001)', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDeliveryPlan('Coal', 42);
+    await TurnExecutor.execute(plan, makePickupSnapshot2());
+
+    // Find the bot:demandRankingUpdate call
+    const rankingCall = mockEmitToGame.mock.calls.find(
+      (call: unknown[]) => call[1] === 'bot:demandRankingUpdate',
+    );
+    expect(rankingCall).toBeDefined();
+    expect(rankingCall![0]).toBe('game-1');
+    const payload = rankingCall![2] as any;
+    expect(payload.botPlayerId).toBe('bot-1');
+    expect(payload.demandRanking).toBeDefined();
+    expect(payload.demandRanking.length).toBeGreaterThan(0);
+    // Ranking should be sorted by score descending and have rank numbers
+    const ranks = payload.demandRanking.map((d: any) => d.rank);
+    expect(ranks).toEqual(ranks.map((_: number, i: number) => i + 1));
+    // Each entry should have required fields
+    for (const entry of payload.demandRanking) {
+      expect(entry).toHaveProperty('loadType');
+      expect(entry).toHaveProperty('supplyCity');
+      expect(entry).toHaveProperty('deliveryCity');
+      expect(entry).toHaveProperty('payout');
+      expect(entry).toHaveProperty('score');
+      expect(entry).toHaveProperty('rank');
+    }
+  });
+
+  it('should still succeed when demand ranking emit fails (FE-001)', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    // Make emitToGame throw for the ranking event
+    mockEmitToGame.mockImplementation((_gameId: string, event: string) => {
+      if (event === 'bot:demandRankingUpdate') throw new Error('emit failed');
+    });
+
+    const plan = makeDeliveryPlan('Coal', 42);
+    const result = await TurnExecutor.execute(plan, makePickupSnapshot2());
+
+    // Delivery should still succeed despite ranking emit failure
+    expect(result.success).toBe(true);
+    expect(result.payment).toBe(10);
+    expect(result.newCardId).toBe(99);
   });
 });

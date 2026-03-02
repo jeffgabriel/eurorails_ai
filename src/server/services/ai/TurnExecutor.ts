@@ -663,6 +663,38 @@ export class TurnExecutor {
       console.error('[TurnExecutor] DeliverLoad post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
     }
 
+    // Post-delivery: emit refreshed demand ranking for debug overlay (FE-001)
+    try {
+      const updatedHand = snapshot.bot.demandCards.filter(id => id !== cardId);
+      updatedHand.push(newCardId);
+      const demandDeck = DemandDeckService.getInstance();
+      const loadSvc = LoadService.getInstance();
+      const ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }> = [];
+      for (const cid of updatedHand) {
+        const card = demandDeck.getCard(cid);
+        if (!card) continue;
+        for (const d of card.demands) {
+          const sourceCities = loadSvc.getSourceCitiesForLoad(d.resource);
+          ranking.push({
+            loadType: d.resource,
+            supplyCity: sourceCities[0] ?? '?',
+            deliveryCity: d.city,
+            payout: d.payment,
+            score: d.payment, // simplified score (full re-score on next turn)
+            rank: 0,
+          });
+        }
+      }
+      ranking.sort((a, b) => b.score - a.score);
+      ranking.forEach((r, i) => { r.rank = i + 1; });
+      emitToGame(snapshot.gameId, 'bot:demandRankingUpdate', {
+        botPlayerId: snapshot.bot.playerId,
+        demandRanking: ranking,
+      });
+    } catch (rankErr) {
+      console.error('[TurnExecutor] DeliverLoad demand ranking emit failed:', rankErr instanceof Error ? rankErr.message : rankErr);
+    }
+
     return {
       success: true,
       action: AIActionType.DeliverLoad,
