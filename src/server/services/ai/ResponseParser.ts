@@ -148,7 +148,12 @@ export class ResponseParser {
    * @returns Validated LLMActionIntent
    * @throws ParseError if the response cannot be parsed or action types are invalid
    */
-  static parseActionIntent(responseText: string): LLMActionIntent {
+  static parseActionIntent(responseText: string | Record<string, unknown>): LLMActionIntent {
+    // Fast-path: structured output already parsed as an object
+    if (typeof responseText === 'object' && responseText !== null) {
+      return ResponseParser.validateActionIntent(responseText);
+    }
+
     const text = responseText.trim();
 
     // Strip markdown fences if present
@@ -194,6 +199,14 @@ export class ResponseParser {
       );
     }
 
+    return ResponseParser.validateActionIntent(parsed);
+  }
+
+  /**
+   * Validate a parsed object into an LLMActionIntent.
+   * Shared by fast-path (pre-parsed object) and string-path (after JSON.parse).
+   */
+  private static validateActionIntent(parsed: Record<string, unknown>): LLMActionIntent {
     // Validate: must have either 'action' (single) or 'actions' (multi)
     if (parsed.action) {
       const action = String(parsed.action);
@@ -240,7 +253,7 @@ export class ResponseParser {
     }
 
     throw new ParseError(
-      `LLM response missing 'action' or 'actions' field: ${clean.substring(0, 200)}`,
+      `LLM response missing 'action' or 'actions' field: ${JSON.stringify(parsed).substring(0, 200)}`,
     );
   }
 
@@ -263,15 +276,21 @@ export class ResponseParser {
    * @returns Validated StrategicRoute
    * @throws ParseError if the response cannot be parsed or route is invalid
    */
-  static parseStrategicRoute(responseText: string, turnNumber: number): StrategicRoute {
-    const text = responseText.trim();
-    const clean = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
-
+  static parseStrategicRoute(responseText: string | Record<string, unknown>, turnNumber: number): StrategicRoute {
     let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(clean);
-    } catch {
-      throw new ParseError(`Unparseable route planning response: ${text.substring(0, 200)}`);
+
+    // Fast-path: structured output already parsed as an object
+    if (typeof responseText === 'object' && responseText !== null) {
+      parsed = responseText;
+    } else {
+      const text = responseText.trim();
+      const clean = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+
+      try {
+        parsed = JSON.parse(clean);
+      } catch {
+        throw new ParseError(`Unparseable route planning response: ${text.substring(0, 200)}`);
+      }
     }
 
     const routeArray = parsed.route;
