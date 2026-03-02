@@ -11,6 +11,10 @@ export class GoogleAdapter implements ProviderAdapter {
     this.timeoutMs = timeoutMs;
   }
 
+  private isGemini3Model(model: string): boolean {
+    return model.startsWith('gemini-3');
+  }
+
   async chat(request: {
     model: string;
     maxTokens: number;

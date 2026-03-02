@@ -43,6 +43,32 @@ describe('GoogleAdapter', () => {
     adapter = new GoogleAdapter('test-api-key', 5000);
   });
 
+  describe('isGemini3Model', () => {
+    it('should return true for gemini-3-flash-preview', () => {
+      expect((adapter as any).isGemini3Model('gemini-3-flash-preview')).toBe(true);
+    });
+
+    it('should return true for gemini-3-pro-preview', () => {
+      expect((adapter as any).isGemini3Model('gemini-3-pro-preview')).toBe(true);
+    });
+
+    it('should return true for gemini-3.1-pro-preview', () => {
+      expect((adapter as any).isGemini3Model('gemini-3.1-pro-preview')).toBe(true);
+    });
+
+    it('should return false for gemini-2.5-pro', () => {
+      expect((adapter as any).isGemini3Model('gemini-2.5-pro')).toBe(false);
+    });
+
+    it('should return false for gemini-2.0-flash', () => {
+      expect((adapter as any).isGemini3Model('gemini-2.0-flash')).toBe(false);
+    });
+
+    it('should return false for non-Gemini models', () => {
+      expect((adapter as any).isGemini3Model('claude-3-opus-20240229')).toBe(false);
+    });
+  });
+
   describe('successful response parsing', () => {
     it('should parse a valid Gemini response', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse('{"action":"BuildTrack"}'));
