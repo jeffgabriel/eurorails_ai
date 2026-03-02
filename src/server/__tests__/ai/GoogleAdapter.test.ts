@@ -194,6 +194,73 @@ describe('GoogleAdapter', () => {
     });
   });
 
+  describe('thinkingConfig', () => {
+    it('should include thinkingLevel for Gemini 3 models when thinking is enabled', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+        thinking: { type: 'adaptive' },
+        effort: 'high',
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'high' });
+    });
+
+    it('should default thinkingLevel to medium when effort is not provided for Gemini 3', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-flash-preview',
+        thinking: { type: 'adaptive' },
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'medium' });
+    });
+
+    it('should include thinkingBudget: -1 for Gemini 2.5 models when thinking is enabled', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.5-pro',
+        thinking: { type: 'adaptive' },
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.thinkingConfig).toEqual({ thinkingBudget: -1 });
+    });
+
+    it('should not include thinkingConfig when thinking is not enabled', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.thinkingConfig).toBeUndefined();
+    });
+
+    it('should not include thinkingConfig for non-thinking models', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-2.0-flash',
+        thinking: { type: 'adaptive' },
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.thinkingConfig).toBeUndefined();
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({

@@ -1,5 +1,5 @@
 import { ProviderResponse } from '../../../../shared/types/GameTypes';
-import { ProviderAdapter } from './ProviderAdapter';
+import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
 
 export class GoogleAdapter implements ProviderAdapter {
@@ -15,12 +15,19 @@ export class GoogleAdapter implements ProviderAdapter {
     return model.startsWith('gemini-3');
   }
 
+  private isGemini25Model(model: string): boolean {
+    return model.startsWith('gemini-2.5');
+  }
+
   async chat(request: {
     model: string;
     maxTokens: number;
     temperature: number;
     systemPrompt: string;
     userPrompt: string;
+    outputSchema?: object;
+    thinking?: ThinkingConfig;
+    effort?: string;
     timeoutMs?: number;
   }): Promise<ProviderResponse> {
     const effectiveTimeout = request.timeoutMs ?? this.timeoutMs;
@@ -30,26 +37,41 @@ export class GoogleAdapter implements ProviderAdapter {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
 
     try {
+      const body: Record<string, unknown> = {
+        system_instruction: {
+          parts: [{ text: request.systemPrompt }],
+        },
+        contents: [
+          {
+            parts: [{ text: request.userPrompt }],
+          },
+        ],
+        generationConfig: {
+          maxOutputTokens: request.maxTokens,
+          temperature: request.temperature,
+        },
+      };
+
+      // Add thinkingConfig for models that support it
+      if (request.thinking) {
+        if (this.isGemini3Model(request.model)) {
+          body.thinkingConfig = {
+            thinkingLevel: request.effort ?? 'medium',
+          };
+        } else if (this.isGemini25Model(request.model)) {
+          body.thinkingConfig = {
+            thinkingBudget: -1,
+          };
+        }
+      }
+
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'x-goog-api-key': this.apiKey,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: request.systemPrompt }],
-          },
-          contents: [
-            {
-              parts: [{ text: request.userPrompt }],
-            },
-          ],
-          generationConfig: {
-            maxOutputTokens: request.maxTokens,
-            temperature: request.temperature,
-          },
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
