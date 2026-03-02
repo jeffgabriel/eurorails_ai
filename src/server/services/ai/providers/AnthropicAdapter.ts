@@ -75,8 +75,14 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       const data = await response.json();
 
+      // Extract text from multi-block response, skipping thinking blocks
+      const textBlock = Array.isArray(data.content)
+        ? data.content.find((block: { type: string }) => block.type === 'text')
+        : undefined;
+      const text = textBlock?.text ?? '';
+
       return {
-        text: data.content[0].text,
+        text,
         usage: {
           input: data.usage.input_tokens,
           output: data.usage.output_tokens,
