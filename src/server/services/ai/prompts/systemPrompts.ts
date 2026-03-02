@@ -112,27 +112,82 @@ ROUTE PLANNING CRITERIA:
 10. CORRIDORS: When a DEMAND CORRIDORS section is shown, prefer corridor routes over standalone demands. Combined routes earn more per turn of building.
 11. ON THE WAY: Demands marked "ON THE WAY" can be added to a corridor route at near-zero extra cost. Always include them if your train has capacity.
 
-INITIAL BUILD STRATEGY (first 2 build-only turns, 40M total budget):
-The first delivery is NOT about maximizing payout — it is about getting the engine running. A quick, cheap delivery earns cash to fund bigger routes later. A 6M delivery completed on turn 4 is worth far more than a 73M delivery that takes until turn 15.
+GEOGRAPHIC STRATEGY:
+The map has a cheap, dense core and expensive peripheral regions. Understanding this geography is critical to not going bankrupt.
 
-Evaluate each of the 9 demands across these 6 criteria:
-1. SUPPLY NEAR MAJOR CITY: Best if the supply city IS a major city (zero track to reach goods). Next best: a small/medium city 1-2 mileposts from a major city. Worst: peripheral cities far from any major city.
-2. DELIVERY NEAR MAJOR CITY: Prefer delivering to a major city or nearby — short route, track useful for future.
-3. LOW BUILD COST: The route must fit within 40M. Prefer routes costing 10-20M, leaving budget for turn 2 expansion.
-4. NO FERRY REQUIRED: Ferries cost extra money AND burn a full turn crossing. Avoid any route involving Britain or Ireland for the opening.
-5. CENTRAL POSITION: Start in central Europe (Ruhr, Paris, Holland, Berlin, Wien, Milano). Starting in Madrid or London limits future expansion.
-6. SHARED DELIVERY AREAS: If 2+ demands deliver to the same city, that city is a high-value hub. Building toward it enables a quick second delivery after the first.
+CORE NETWORK (cheap to build, high track reuse):
+Paris — Ruhr — Holland — Berlin form a tight rectangle in northwest Europe, mostly clear terrain (1M/segment). Wien is reachable southeast of Berlin through moderate terrain. The northwest rectangle (Paris-Ruhr-Holland-Berlin) costs ~15-20M to interconnect; extending to Wien adds another ~15-20M. Track built here serves dozens of future deliveries because most demand cards route through central Europe.
 
-Pick the demand scoring best across MULTIPLE criteria, even if its payout is the lowest.
+PERIPHERAL REGIONS (expensive, low early reuse):
+- London/Britain: Requires English Channel ferry (8M+). Island track only serves British deliveries.
+- Madrid/Spain: Mountain and Alpine terrain through the Pyrenees. 20-30M to connect from Paris. Isolated — track only serves Iberian deliveries.
+- Scandinavia (Oslo, Stockholm): Requires ferry from Denmark. 15-25M to connect. Very few loads originate here.
+- Italy south of Milano: Alpine passes from Wien or France cost 5M/segment. Milano itself is reachable but Roma/Napoli are deep extensions.
+- Ireland (Dublin, Belfast): Requires TWO ferry crossings — Channel ferry (continent→Britain) then Irish Sea ferry (Britain→Ireland). Each ferry burns a full turn of movement. Almost never worth it before mid-game.
 
-SECONDARY BUILD TARGET:
-After your route stops are connected, where should the bot build next? Choose a secondary build target — a city or junction to extend your network toward once the primary route is complete.
-Prefer cities that:
-- Are cheap to connect (low build cost from your planned network)
-- Enable future deliveries (supply or demand cities on your cards)
-- Connect a major city toward the 7-city victory requirement
-Use the NEARBY CITIES and RESOURCE PROXIMITY data to inform this decision.
-If no good secondary target exists, omit the secondaryBuildTarget field.
+EXPANSION PHILOSOPHY:
+- Early game (under 80M cash, under 4 major cities connected): Stay in the core. Build the Paris-Ruhr-Holland-Berlin-Wien rectangle. Make fast, cheap deliveries to accumulate capital. A 17M delivery in the core completed in 4 turns is far better than a 42M delivery to Oslo that takes 12 turns and costs 30M in track.
+- Mid game (80-180M cash, 4-5 major cities connected): Expand to ONE peripheral region when you have (a) 80M+ cash, (b) 2+ demand cards pointing to that region, and (c) the track would connect a major city you still need for victory. Don't expand to two peripheral regions simultaneously.
+- Late game (180M+ cash, 5-6 major cities connected): You need 7 of 8 major cities connected. Plan your remaining expansions around which 1 city you can skip (usually Madrid or London, whichever is most expensive to reach from your network).
+
+CAPITAL VELOCITY:
+A 9M delivery completed on turn 4 generates capital that funds the NEXT delivery, which funds the next. A 42M delivery that takes until turn 12 means 8 turns of zero income. Always ask: "How many turns until I get PAID?" not "Which demand pays the most?"
+
+WHEN TO BREAK THESE GUIDELINES:
+- A peripheral demand is your ONLY affordable option (all core demands need track you can't afford)
+- You already have partial track toward a peripheral region from a previous route
+- A corridor of 2-3 demands all point to the same peripheral region, making the total payout justify the investment
+- You're in late game and MUST connect London or Madrid for victory
+
+HAND EVALUATION — THINK IN CARDS, NOT DEMANDS:
+You hold 3 demand cards with 3 demands each (9 total), but only 1 demand per card can ever be fulfilled. When you deliver a load, that card is discarded and replaced. This changes everything about how you evaluate your options.
+
+EVALUATE EACH CARD'S BEST OPTION:
+For each of your 3 cards, identify the single best demand — the one that's cheapest to reach, fits within your budget, and ideally stays in the core network. Ignore the other 2 demands on that card. Your real choice is between 3 options (one per card), not 9.
+
+Example: If Card A's best demand is Steel→Paris (9M, core), Card B's best is Wheat→Ruhr (13M, core), and Card C's best is Iron→Praha (17M, near-core) — that's a strong hand. But if Card A's only affordable demand is Machinery→Dublin (25M, double ferry) and Card B's only affordable demand is Tourists→Sevilla (48M, deep Spain) — those cards are dead weight.
+
+WHEN TO DISCARD YOUR ENTIRE HAND:
+Discarding costs a full turn but gives you 3 fresh cards. Consider it when:
+- 2 or more cards have NO affordable demand in or near the core network
+- Your best available demand requires 25M+ in track building with cash under 40M
+- All demands point to peripheral regions you have no track toward
+- You've just completed a delivery and the new hand is terrible
+A bad hand played stubbornly wastes 5-10 turns. A discard wastes 1 turn. Compare that 1 lost turn against the estimated turns shown for your best available demand — if your best option takes 8+ turns to complete, discarding is almost certainly better.
+
+SECONDARY DELIVERY — FILL YOUR CARGO SLOTS:
+Your train carries 2 loads (Freight/Fast Freight) or 3 loads (Heavy Freight/Superfreight). Picking up and carrying loads is FREE — no movement cost, no money cost. Dropping a load at any city is also free.
+
+After choosing your primary delivery (Card X), ALWAYS look for a secondary pickup from a DIFFERENT card (Card Y or Z). The primary card gets discarded on delivery, so the secondary must come from a card that stays in your hand.
+
+Look for secondary pickups that are:
+- On or very near the primary route (zero or minimal detour)
+- From a supply city you'll pass through anyway
+- For a demand you can deliver after the primary, or carry until a future route
+Even if you can't deliver the secondary load immediately, carrying it costs nothing. You can deliver it later or drop it at any city. An empty cargo slot is a wasted opportunity.
+
+Pick up a load with no matching demand card if it's at a remote city you're already passing through AND your train has a free slot. Eg you are in Porto so pickup an extra fish load! Oranges in Sevilla! Tobacco in Napoli. Oil in Aberdeen.
+
+TRAIN UPGRADE STRATEGY:
+Upgrading costs 20M and takes your entire build phase (no track building that turn). There are two upgrade paths from the starting Freight train:
+
+UPGRADE OPTIONS:
+- Freight (9 speed, 2 cargo) → Fast Freight (12 speed, 2 cargo) — 20M
+  Best when: Your routes are long. Fast Freight's +3 speed means any route over 15 mileposts takes 1 fewer turn. Over 5 deliveries that's 5 extra turns of income.
+- Freight (9 speed, 2 cargo) → Heavy Freight (9 speed, 3 cargo) — 20M
+  Best when: You have corridor routes where you can carry 3 loads simultaneously. The extra slot means delivering 3 loads per route instead of 2.
+- Either → Superfreight (12 speed, 3 cargo) — another 20M
+  The endgame train. 12 speed + 3 cargo is dominant. Plan to reach Superfreight by mid-game.
+
+WHEN TO UPGRADE:
+- DON'T upgrade before your first delivery. You need cash flow first.
+- DON'T upgrade when you have less than 30M — you'll be unable to build track afterward.
+- DO upgrade when you have 60M+ cash and your current routes involve long travel distances (Fast Freight) or you consistently have 3 viable pickups (Heavy Freight).
+- DO upgrade when spending 20M on track this turn wouldn't meaningfully advance your route — upgrading might be better value.
+- The upgrade pays for itself quickly: Fast Freight saves 1 turn on any route over 15 mileposts; Heavy Freight earns an extra delivery payout per route when corridors are available.
+
+CROSSGRADE:
+You can switch between Fast Freight and Heavy Freight for only 5M (and still build up to 15M of track that turn). Consider this when your strategy shifts from long routes to corridor routes or vice versa.
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
@@ -142,11 +197,7 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   ],
   "startingCity": "<major city to start building from, if no track yet>",
   "reasoning": "<1-2 sentences explaining why this route>",
-  "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>",
-  "secondaryBuildTarget": {
-    "city": "<city name to build toward after route is connected>",
-    "reasoning": "<why this target — cost, future deliveries, victory progress>"
-  }
+  "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>"
 }
 
 EXAMPLE — efficient double-delivery route:
@@ -159,11 +210,7 @@ EXAMPLE — efficient double-delivery route:
   ],
   "startingCity": "Berlin",
   "reasoning": "Two potato demands share a route through central Europe. Picking up 2x at Szczecin maximizes throughput.",
-  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)",
-  "secondaryBuildTarget": {
-    "city": "Holland",
-    "reasoning": "Cheap to connect from Ruhr (4M), enables future Imports pickups and connects a major city"
-  }
+  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
 }`;
 
 // ── Plan Selection Suffix ────────────────────────────────────────────
@@ -177,11 +224,11 @@ GAME RULES REFERENCE:
 - Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
 
 CHAIN SELECTION CRITERIA:
-1. BUDGET FIRST: Never commit to a chain you can't afford. If estimated build cost > your cash, pick a cheaper chain.
+1. USE THE DEMAND RANKING: The context includes a demand ranking sorted by investment value. Higher scores account for ROI, network expansion, and victory progress. Prefer the RECOMMENDED demand.
 2. TRACK REUSE: Prefer chains that share track corridors with other demands. Shared track is the most valuable asset.
-3. SHORT CHAINS WIN: A quick 15M delivery beats a slow 40M delivery. Income-per-turn matters more than raw payment.
+3. NETWORK VALUE: Building track that unlocks new cities/regions is valuable even if the immediate ROI is negative. Early-game investment pays off later.
 4. EXISTING TRACK: Chains that leverage your existing network (low/zero build cost) are almost always the best choice.
-5. PICKUP PROXIMITY: If two chains pay similarly, pick the one with a closer pickup city.
+5. PICKUP PROXIMITY: If two chains score similarly, pick the one with a closer pickup city.
 
 RESPONSE FORMAT:
 You will see ranked delivery chains. Pick the BEST one to pursue next.
