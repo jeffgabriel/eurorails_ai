@@ -455,6 +455,103 @@ describe('ResponseParser', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Fast-path: pre-validated JSON object inputs (structured output)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('parseActionIntent — fast-path (object input)', () => {
+    it('should parse a pre-validated single action object directly', () => {
+      const obj = {
+        action: 'BUILD',
+        details: { toward: 'Berlin' },
+        reasoning: 'Connect to demand city',
+        planHorizon: 'Next 2 turns',
+      };
+
+      const result = ResponseParser.parseActionIntent(obj);
+
+      expect(result.action).toBe('BUILD');
+      expect(result.details).toEqual({ toward: 'Berlin' });
+      expect(result.reasoning).toBe('Connect to demand city');
+      expect(result.planHorizon).toBe('Next 2 turns');
+    });
+
+    it('should parse a pre-validated multi-action object directly', () => {
+      const obj = {
+        actions: [
+          { action: 'MOVE', details: { to: 'Paris' } },
+          { action: 'DELIVER', details: { load: 'Wine', at: 'Paris' } },
+        ],
+        reasoning: 'Move and deliver',
+        planHorizon: 'This turn',
+      };
+
+      const result = ResponseParser.parseActionIntent(obj);
+
+      expect(result.actions).toHaveLength(2);
+      expect(result.actions![0].action).toBe('MOVE');
+      expect(result.actions![1].action).toBe('DELIVER');
+      expect(result.reasoning).toBe('Move and deliver');
+    });
+
+    it('should throw ParseError for invalid action type in object input', () => {
+      const obj = { action: 'TELEPORT', reasoning: 'invalid' };
+
+      expect(() => ResponseParser.parseActionIntent(obj)).toThrow(ParseError);
+      expect(() => ResponseParser.parseActionIntent(obj)).toThrow('Invalid action type');
+    });
+
+    it('should throw ParseError when object has neither action nor actions', () => {
+      const obj = { reasoning: 'no action here' };
+
+      expect(() => ResponseParser.parseActionIntent(obj)).toThrow(ParseError);
+      expect(() => ResponseParser.parseActionIntent(obj)).toThrow("missing 'action' or 'actions'");
+    });
+  });
+
+  describe('parseStrategicRoute — fast-path (object input)', () => {
+    it('should parse a pre-validated route object directly', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20 },
+        ],
+        startingCity: 'Essen',
+        reasoning: 'Quick coal delivery',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 10);
+
+      expect(result.stops).toHaveLength(2);
+      expect(result.stops[0]).toEqual({ action: 'pickup', loadType: 'Coal', city: 'Essen' });
+      expect(result.stops[1]).toEqual({
+        action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20,
+      });
+      expect(result.startingCity).toBe('Essen');
+      expect(result.reasoning).toBe('Quick coal delivery');
+      expect(result.createdAtTurn).toBe(10);
+      expect(result.currentStopIndex).toBe(0);
+      expect(result.phase).toBe('build');
+    });
+
+    it('should throw ParseError for empty route array in object input', () => {
+      const obj = { route: [], reasoning: 'empty' };
+
+      expect(() => ResponseParser.parseStrategicRoute(obj, 1)).toThrow(ParseError);
+      expect(() => ResponseParser.parseStrategicRoute(obj, 1)).toThrow('non-empty');
+    });
+
+    it('should throw ParseError for invalid route stop action in object input', () => {
+      const obj = {
+        route: [{ action: 'MOVE', load: 'Steel', city: 'Berlin' }],
+        reasoning: 'bad action',
+      };
+
+      expect(() => ResponseParser.parseStrategicRoute(obj, 1)).toThrow(ParseError);
+      expect(() => ResponseParser.parseStrategicRoute(obj, 1)).toThrow('Must be PICKUP or DELIVER');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // parseStrategicRoute — secondaryBuildTarget parsing
   // ═══════════════════════════════════════════════════════════════════════════
 
