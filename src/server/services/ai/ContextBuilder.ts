@@ -620,7 +620,8 @@ export class ContextBuilder {
       for (let i = 0; i < sorted.length; i++) {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (ROI: ${d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery}M, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');
@@ -819,7 +820,8 @@ export class ContextBuilder {
       for (let i = 0; i < sorted.length; i++) {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (ROI: ${d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery}M, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');
