@@ -14,5 +14,6 @@ export interface ProviderAdapter {
     userPrompt: string;
     outputSchema?: object;
     thinking?: ThinkingConfig;
+    timeoutMs?: number;
   }): Promise<ProviderResponse>;
 }

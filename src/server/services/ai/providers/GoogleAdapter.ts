@@ -17,9 +17,11 @@ export class GoogleAdapter implements ProviderAdapter {
     temperature: number;
     systemPrompt: string;
     userPrompt: string;
+    timeoutMs?: number;
   }): Promise<ProviderResponse> {
+    const effectiveTimeout = request.timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
 
@@ -80,7 +82,7 @@ export class GoogleAdapter implements ProviderAdapter {
         throw error;
       }
       if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new ProviderTimeoutError(this.timeoutMs);
+        throw new ProviderTimeoutError(effectiveTimeout);
       }
       throw error;
     } finally {

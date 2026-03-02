@@ -202,6 +202,7 @@ export class LLMStrategyBrain {
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: routePrompt,
           userPrompt,
+          timeoutMs: 30000,
         });
         totalLatencyMs += (Date.now() - startTime);
         totalInputTokens += response.usage?.input ?? 0;

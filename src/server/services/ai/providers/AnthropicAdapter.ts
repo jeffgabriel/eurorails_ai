@@ -19,9 +19,11 @@ export class AnthropicAdapter implements ProviderAdapter {
     userPrompt: string;
     outputSchema?: object;
     thinking?: ThinkingConfig;
+    timeoutMs?: number;
   }): Promise<ProviderResponse> {
+    const effectiveTimeout = request.timeoutMs ?? this.timeoutMs;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
     try {
       // Build the base request body
@@ -80,7 +82,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         throw error;
       }
       if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new ProviderTimeoutError(this.timeoutMs);
+        throw new ProviderTimeoutError(effectiveTimeout);
       }
       throw error;
     } finally {
