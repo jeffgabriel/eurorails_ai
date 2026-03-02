@@ -33,11 +33,32 @@ import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
 
-/** Max tokens for LLM response — JSON with reasoning is ~100-150 tokens */
-const MAX_TOKENS_BY_SKILL: Record<BotSkillLevel, number> = {
-  [BotSkillLevel.Easy]: 200,
-  [BotSkillLevel.Medium]: 300,
-  [BotSkillLevel.Hard]: 400,
+/** Token budgets for turn action decisions by skill level */
+const ACTION_MAX_TOKENS: Record<BotSkillLevel, number> = {
+  [BotSkillLevel.Easy]: 2048,
+  [BotSkillLevel.Medium]: 4096,
+  [BotSkillLevel.Hard]: 8192,
+};
+
+/** Token budgets for route planning decisions by skill level */
+const ROUTE_MAX_TOKENS: Record<BotSkillLevel, number> = {
+  [BotSkillLevel.Easy]: 8192,
+  [BotSkillLevel.Medium]: 12288,
+  [BotSkillLevel.Hard]: 16384,
+};
+
+/** Thinking effort for turn action decisions by skill level */
+const ACTION_EFFORT: Record<BotSkillLevel, string> = {
+  [BotSkillLevel.Easy]: 'low',
+  [BotSkillLevel.Medium]: 'medium',
+  [BotSkillLevel.Hard]: 'high',
+};
+
+/** Thinking effort for route planning decisions by skill level */
+const ROUTE_EFFORT: Record<BotSkillLevel, string> = {
+  [BotSkillLevel.Easy]: 'medium',
+  [BotSkillLevel.Medium]: 'high',
+  [BotSkillLevel.Hard]: 'high',
 };
 
 /** Temperature: lower = more deterministic */
@@ -102,7 +123,7 @@ export class LLMStrategyBrain {
       try {
         const response = await this.adapter.chat({
           model: this.model,
-          maxTokens: MAX_TOKENS_BY_SKILL[this.config.skillLevel],
+          maxTokens: ACTION_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: this.systemPrompt,
           userPrompt,
@@ -198,7 +219,7 @@ export class LLMStrategyBrain {
       try {
         const response = await this.adapter.chat({
           model: this.model,
-          maxTokens: MAX_TOKENS_BY_SKILL[this.config.skillLevel],
+          maxTokens: ROUTE_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: routePrompt,
           userPrompt,
