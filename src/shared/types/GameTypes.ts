@@ -31,13 +31,13 @@ export enum LLMProvider {
 export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, string>> = {
     [LLMProvider.Anthropic]: {
         [BotSkillLevel.Easy]: 'claude-haiku-4-5-20251001',
-        [BotSkillLevel.Medium]: 'claude-sonnet-4-20250514',
-        [BotSkillLevel.Hard]: 'claude-opus-4-20250514',
+        [BotSkillLevel.Medium]: 'claude-sonnet-4-6',
+        [BotSkillLevel.Hard]: 'claude-opus-4-6',
     },
     [LLMProvider.Google]: {
-        [BotSkillLevel.Easy]: 'gemini-2.0-flash',
-        [BotSkillLevel.Medium]: 'gemini-2.5-flash',
-        [BotSkillLevel.Hard]: 'gemini-2.5-pro',
+        [BotSkillLevel.Easy]: 'gemini-3-flash-preview',
+        [BotSkillLevel.Medium]: 'gemini-3-pro-preview',
+        [BotSkillLevel.Hard]: 'gemini-3.1-pro-preview',
     },
 };
 
