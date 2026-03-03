@@ -19,6 +19,7 @@ import {
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
+import { ActionResolver } from './ActionResolver';
 
 export class GuardrailEnforcer {
   /**
@@ -36,12 +37,12 @@ export class GuardrailEnforcer {
    *   7. Strategic hand discard: Force DiscardHand after 3 consecutive stuck turns
    *   6. Stuck turn escape hatch: Force PassTurn after 5 consecutive stuck turns
    */
-  static checkPlan(
+  static async checkPlan(
     plan: TurnPlan,
     context: GameContext,
     snapshot: WorldSnapshot,
     consecutivePassTurns: number = 0,
-  ): GuardrailPlanResult {
+  ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
     // Guardrail 6: Stuck turn escape hatch — must be checked FIRST
@@ -175,7 +176,7 @@ export class GuardrailEnforcer {
       };
     }
 
-    // Guardrail 4: No passing while carrying loads
+    // Guardrail 4: No passing while carrying loads (BE-008: real path computation)
     // Re-evaluates after Guardrail 5: if G5 dropped all loads, this won't fire.
     // If bot still has deliverable loads, it should do something productive.
     if (planType === AIActionType.PassTurn && context.loads.length > 0) {
@@ -184,33 +185,39 @@ export class GuardrailEnforcer {
       const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
       for (const demand of sorted) {
         if (demand.isLoadOnTrain && demand.isDeliveryOnNetwork) {
-          return {
-            plan: {
-              type: AIActionType.MoveTrain,
-              path: [],
-              fees: new Set<string>(),
-              totalFee: 0,
-            },
-            overridden: true,
-            reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.deliveryCity} for ${demand.payout}M delivery`,
-          };
+          const moveResult = await ActionResolver.resolveMove(
+            { to: demand.deliveryCity },
+            snapshot,
+          );
+          if (moveResult.success && moveResult.plan) {
+            return {
+              plan: moveResult.plan,
+              overridden: true,
+              reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.deliveryCity} for ${demand.payout}M delivery`,
+            };
+          }
+          console.warn(`[Guardrail 4] Skipping ${demand.deliveryCity}: ${moveResult.error}`);
         }
       }
       // Fallback: move toward any supply city on network
       for (const demand of sorted) {
         if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork) {
-          return {
-            plan: {
-              type: AIActionType.MoveTrain,
-              path: [],
-              fees: new Set<string>(),
-              totalFee: 0,
-            },
-            overridden: true,
-            reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.supplyCity} to pick up ${demand.loadType}`,
-          };
+          const moveResult = await ActionResolver.resolveMove(
+            { to: demand.supplyCity },
+            snapshot,
+          );
+          if (moveResult.success && moveResult.plan) {
+            return {
+              plan: moveResult.plan,
+              overridden: true,
+              reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.supplyCity} to pick up ${demand.loadType}`,
+            };
+          }
+          console.warn(`[Guardrail 4] Skipping ${demand.supplyCity}: ${moveResult.error}`);
         }
       }
+      // All targets failed path computation — allow PassTurn to proceed (BE-008)
+      console.warn(`[Guardrail 4] No feasible movement path found — allowing PassTurn`);
     }
 
     // Guardrail 8: Movement budget enforcement (defense-in-depth)

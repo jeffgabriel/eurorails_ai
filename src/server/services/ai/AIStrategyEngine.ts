@@ -283,7 +283,7 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 4: Apply guardrails ──
-      let guardrailResult = GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.consecutivePassTurns);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.consecutivePassTurns);
       let finalPlan: TurnPlan = guardrailResult.plan;
 
       if (guardrailResult.overridden) {

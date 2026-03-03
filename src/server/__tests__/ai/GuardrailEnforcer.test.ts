@@ -1,4 +1,5 @@
 import { GuardrailEnforcer } from '../../services/ai/GuardrailEnforcer';
+import { ActionResolver } from '../../services/ai/ActionResolver';
 import {
   AIActionType,
   WorldSnapshot,
@@ -10,6 +11,8 @@ import {
   TerrainType,
   TrackSegment,
 } from '../../../shared/types/GameTypes';
+
+jest.mock('../../services/ai/ActionResolver');
 
 function makeSnapshot(money: number = 50): WorldSnapshot {
   return {
@@ -71,9 +74,21 @@ function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: num
 }
 
 describe('GuardrailEnforcer', () => {
+  const mockResolveMove = ActionResolver.resolveMove as jest.MockedFunction<typeof ActionResolver.resolveMove>;
+
+  beforeEach(() => {
+    mockResolveMove.mockReset();
+    // Default: resolveMove fails (no valid path) — tests that need success override this
+    mockResolveMove.mockResolvedValue({ success: false, error: 'No valid path (test default)' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
   describe('checkPlan', () => {
     describe('Guardrail 1: Force DELIVER', () => {
-      it('should force DELIVER when canDeliver has opportunities and LLM chose BUILD', () => {
+      it('should force DELIVER when canDeliver has opportunities and LLM chose BUILD', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Coal',
           deliveryCity: 'Berlin',
@@ -86,7 +101,7 @@ describe('GuardrailEnforcer', () => {
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DeliverLoad);
@@ -100,7 +115,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('Coal');
       });
 
-      it('should force DELIVER when canDeliver has opportunities and LLM chose PASS', () => {
+      it('should force DELIVER when canDeliver has opportunities and LLM chose PASS', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Wine',
           deliveryCity: 'Paris',
@@ -110,13 +125,13 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canDeliver: [delivery] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DeliverLoad);
       });
 
-      it('should pick the highest-payout delivery when multiple are available', () => {
+      it('should pick the highest-payout delivery when multiple are available', async () => {
         const deliveries: DeliveryOpportunity[] = [
           { loadType: 'Coal', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
           { loadType: 'Wine', deliveryCity: 'Paris', payout: 40, cardIndex: 1 },
@@ -125,7 +140,7 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canDeliver: deliveries });
         const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         if (result.plan.type === AIActionType.DeliverLoad) {
@@ -134,7 +149,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should NOT override when LLM already chose DELIVER', () => {
+      it('should NOT override when LLM already chose DELIVER', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Coal',
           deliveryCity: 'Berlin',
@@ -150,13 +165,13 @@ describe('GuardrailEnforcer', () => {
           payout: 25,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan); // Same reference
       });
 
-      it('should NOT override MultiAction that includes a DELIVER step', () => {
+      it('should NOT override MultiAction that includes a DELIVER step', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Coal',
           deliveryCity: 'Berlin',
@@ -172,7 +187,7 @@ describe('GuardrailEnforcer', () => {
           ],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -187,11 +202,11 @@ describe('GuardrailEnforcer', () => {
         bestDeliveryCity: 'Berlin',
       };
 
-      it('should force PICKUP when canPickup has opportunities and LLM chose PASS', () => {
+      it('should force PICKUP when canPickup has opportunities and LLM chose PASS', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.PickupLoad);
@@ -202,14 +217,14 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('Forced PICKUP');
       });
 
-      it('should inject PICKUP before BUILD when LLM chose BUILD', () => {
+      it('should inject PICKUP before BUILD when LLM chose BUILD', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = {
           type: AIActionType.BuildTrack,
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe('MultiAction');
@@ -221,7 +236,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('Injected PICKUP(s) before BUILD');
       });
 
-      it('should NOT override when LLM chose MOVE (bot may be moving to deliver)', () => {
+      it('should NOT override when LLM chose MOVE (bot may be moving to deliver)', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = {
           type: AIActionType.MoveTrain,
@@ -230,13 +245,13 @@ describe('GuardrailEnforcer', () => {
           totalFee: 0,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should NOT override when LLM already chose PICKUP', () => {
+      it('should NOT override when LLM already chose PICKUP', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = {
           type: AIActionType.PickupLoad,
@@ -244,13 +259,13 @@ describe('GuardrailEnforcer', () => {
           city: 'Stuttgart',
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should NOT override when LLM chose DELIVER', () => {
+      it('should NOT override when LLM chose DELIVER', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Coal',
           deliveryCity: 'Berlin',
@@ -268,23 +283,23 @@ describe('GuardrailEnforcer', () => {
           payout: 25,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         // Guardrail 1 fires (force DELIVER) but plan is already DELIVER, so no override
         expect(result.overridden).toBe(false);
       });
 
-      it('should NOT override when LLM chose DISCARD_HAND', () => {
+      it('should NOT override when LLM chose DISCARD_HAND', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should pick the highest-payout pickup when multiple are available', () => {
+      it('should pick the highest-payout pickup when multiple are available', async () => {
         const pickups: PickupOpportunity[] = [
           { loadType: 'Cars', supplyCity: 'Stuttgart', bestPayout: 20, bestDeliveryCity: 'Berlin' },
           { loadType: 'Wine', supplyCity: 'Stuttgart', bestPayout: 35, bestDeliveryCity: 'London' },
@@ -293,7 +308,7 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canPickup: pickups });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         if (result.plan.type === AIActionType.PickupLoad) {
@@ -301,7 +316,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should NOT override MultiAction that already includes PICKUP', () => {
+      it('should NOT override MultiAction that already includes PICKUP', async () => {
         const ctx = makeContext({ canPickup: [pickup] });
         const plan: TurnPlan = {
           type: 'MultiAction',
@@ -311,7 +326,7 @@ describe('GuardrailEnforcer', () => {
           ],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -319,7 +334,7 @@ describe('GuardrailEnforcer', () => {
     });
 
     describe('Guardrail 3: Block UPGRADE during initialBuild', () => {
-      it('should block UPGRADE during initialBuild phase', () => {
+      it('should block UPGRADE during initialBuild phase', async () => {
         const ctx = makeContext({ isInitialBuild: true });
         const plan: TurnPlan = {
           type: AIActionType.UpgradeTrain,
@@ -327,7 +342,7 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.PassTurn);
@@ -335,7 +350,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('initialBuild');
       });
 
-      it('should allow UPGRADE outside initialBuild phase', () => {
+      it('should allow UPGRADE outside initialBuild phase', async () => {
         const ctx = makeContext({ isInitialBuild: false });
         const plan: TurnPlan = {
           type: AIActionType.UpgradeTrain,
@@ -343,7 +358,7 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -351,40 +366,40 @@ describe('GuardrailEnforcer', () => {
     });
 
     describe('No guardrail fires', () => {
-      it('should pass through BUILD when no deliveries available', () => {
+      it('should pass through BUILD when no deliveries available', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = {
           type: AIActionType.BuildTrack,
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
         expect(result.reason).toBeUndefined();
       });
 
-      it('should pass through PASS when no deliveries available', () => {
+      it('should pass through PASS when no deliveries available', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should pass through DISCARD_HAND without interference', () => {
+      it('should pass through DISCARD_HAND without interference', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should pass through PICKUP when no deliveries available', () => {
+      it('should pass through PICKUP when no deliveries available', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = {
           type: AIActionType.PickupLoad,
@@ -392,7 +407,7 @@ describe('GuardrailEnforcer', () => {
           city: 'Berlin',
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
@@ -426,7 +441,14 @@ describe('GuardrailEnforcer', () => {
         };
       }
 
-      it('should override PassTurn to MoveTrain when bot has loads and delivery is on network', () => {
+      it('should override PassTurn to MoveTrain when bot has loads and delivery is on network', async () => {
+        const movePlan = {
+          type: AIActionType.MoveTrain as const,
+          path: [{ row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+        mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
         const ctx = makeContext({
           loads: ['Wine'],
           demands: [
@@ -435,15 +457,26 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.MoveTrain);
+        if (result.plan.type === AIActionType.MoveTrain) {
+          expect(result.plan.path.length).toBeGreaterThan(0); // BE-008: real path, not empty
+        }
         expect(result.reason).toContain('Blocked PASS with loads');
         expect(result.reason).toContain('Berlin');
+        expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Berlin' }, expect.any(Object));
       });
 
-      it('should pick highest-payout delivery when multiple demands match', () => {
+      it('should pick highest-payout delivery when multiple demands match', async () => {
+        const movePlan = {
+          type: AIActionType.MoveTrain as const,
+          path: [{ row: 10, col: 10 }, { row: 10, col: 11 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+        mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
         const ctx = makeContext({
           loads: ['Wine', 'Coal'],
           demands: [
@@ -453,14 +486,23 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.MoveTrain);
         expect(result.reason).toContain('Paris'); // highest payout demand
+        // Should try Paris first (highest payout)
+        expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Paris' }, expect.any(Object));
       });
 
-      it('should fall back to supply city movement when no delivery is on network', () => {
+      it('should fall back to supply city movement when no delivery is on network', async () => {
+        const movePlan = {
+          type: AIActionType.MoveTrain as const,
+          path: [{ row: 10, col: 10 }, { row: 10, col: 11 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+        mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
         const ctx = makeContext({
           loads: ['Coal'],
           demands: [
@@ -470,27 +512,72 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.MoveTrain);
         expect(result.reason).toContain('Bordeaux');
         expect(result.reason).toContain('pick up');
+        expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Bordeaux' }, expect.any(Object));
       });
 
-      it('should NOT override when bot has no loads', () => {
+      it('should NOT override when resolveMove fails for all targets (BE-008)', async () => {
+        // Default mock returns failure — no paths computable
+        const ctx = makeContext({
+          loads: ['Wine'],
+          demands: [
+            makeDemand({ isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Berlin', payout: 20 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false); // PassTurn allowed — no feasible path
+        expect(mockResolveMove).toHaveBeenCalledWith({ to: 'Berlin' }, expect.any(Object));
+      });
+
+      it('should try next target when first resolveMove fails (BE-008)', async () => {
+        // First call fails, second succeeds
+        const movePlan = {
+          type: AIActionType.MoveTrain as const,
+          path: [{ row: 10, col: 10 }, { row: 10, col: 11 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+        mockResolveMove
+          .mockResolvedValueOnce({ success: false, error: 'No path to Paris' })
+          .mockResolvedValueOnce({ success: true, plan: movePlan });
+        const ctx = makeContext({
+          loads: ['Wine', 'Coal'],
+          demands: [
+            makeDemand({ loadType: 'Wine', isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Paris', payout: 30 }),
+            makeDemand({ loadType: 'Coal', isLoadOnTrain: true, isDeliveryOnNetwork: true, deliveryCity: 'Hamburg', payout: 10 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.MoveTrain);
+        expect(result.reason).toContain('Hamburg'); // Falls back to second target
+        expect(mockResolveMove).toHaveBeenCalledTimes(2);
+      });
+
+      it('should NOT override when bot has no loads', async () => {
         const ctx = makeContext({
           loads: [],
           demands: [makeDemand({ isLoadOnTrain: false, isDeliveryOnNetwork: true })],
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should NOT override when plan is not PassTurn', () => {
+      it('should NOT override when plan is not PassTurn', async () => {
         const ctx = makeContext({
           loads: ['Wine'],
           demands: [makeDemand({ isLoadOnTrain: true, isDeliveryOnNetwork: true })],
@@ -500,12 +587,12 @@ describe('GuardrailEnforcer', () => {
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should NOT override when no demands have delivery or supply on network', () => {
+      it('should NOT override when no demands have delivery or supply on network', async () => {
         const ctx = makeContext({
           loads: ['Wine'],
           demands: [
@@ -515,21 +602,21 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
     });
 
     describe('Guardrail 5: Drop undeliverable loads', () => {
-      it('should drop a load with no matching demand card', () => {
+      it('should drop a load with no matching demand card', async () => {
         const ctx = makeContext({
           loads: ['Iron'],
           demands: [], // No demands at all
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DropLoad);
@@ -539,7 +626,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('undeliverable');
       });
 
-      it('should drop a load when delivery city is unreachable and too expensive', () => {
+      it('should drop a load when delivery city is unreachable and too expensive', async () => {
         const ctx = makeContext({
           loads: ['Coal'],
           demands: [{
@@ -562,13 +649,13 @@ describe('GuardrailEnforcer', () => {
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
         // Bot has 50M, delivery costs 100M → infeasible
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DropLoad);
       });
 
-      it('should NOT drop a load when delivery city is on network', () => {
+      it('should NOT drop a load when delivery city is on network', async () => {
         const ctx = makeContext({
           loads: ['Coal'],
           demands: [{
@@ -590,12 +677,12 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should NOT drop a load when build cost is within budget', () => {
+      it('should NOT drop a load when build cost is within budget', async () => {
         const ctx = makeContext({
           loads: ['Coal'],
           demands: [{
@@ -618,19 +705,19 @@ describe('GuardrailEnforcer', () => {
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
         // Bot has 50M, delivery costs 10M → feasible
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should drop multiple undeliverable loads as MultiAction', () => {
+      it('should drop multiple undeliverable loads as MultiAction', async () => {
         const ctx = makeContext({
           loads: ['Iron', 'Bauxite'],
           demands: [], // No demands for either load
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe('MultiAction');
@@ -643,81 +730,81 @@ describe('GuardrailEnforcer', () => {
     });
 
     describe('Guardrail 7: Strategic hand discard after 3 stuck turns', () => {
-      it('should force DiscardHand after 3 consecutive stuck turns', () => {
+      it('should force DiscardHand after 3 consecutive stuck turns', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
         expect(result.reason).toContain('Strategic hand discard');
       });
 
-      it('should force DiscardHand after 4 consecutive stuck turns', () => {
+      it('should force DiscardHand after 4 consecutive stuck turns', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 4);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 4);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
       });
 
-      it('should NOT override if plan is already DiscardHand', () => {
+      it('should NOT override if plan is already DiscardHand', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
 
         expect(result.overridden).toBe(false);
       });
 
-      it('should NOT force DiscardHand with fewer than 3 stuck turns', () => {
+      it('should NOT force DiscardHand with fewer than 3 stuck turns', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 2);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 2);
 
         expect(result.overridden).toBe(false);
       });
     });
 
     describe('Guardrail 6: Escape hatch after 5 stuck turns', () => {
-      it('should force PassTurn after 5 consecutive stuck turns', () => {
+      it('should force PassTurn after 5 consecutive stuck turns', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.PassTurn);
         expect(result.reason).toContain('Escape hatch');
       });
 
-      it('should force PassTurn after 6+ consecutive stuck turns', () => {
+      it('should force PassTurn after 6+ consecutive stuck turns', async () => {
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 6);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 6);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.PassTurn);
       });
 
-      it('should take priority over Guardrail 7 (G6 fires at 5, G7 at 3)', () => {
+      it('should take priority over Guardrail 7 (G6 fires at 5, G7 at 3)', async () => {
         // At 5 turns, G6 escape should fire, NOT G7 discard
         const ctx = makeContext();
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
 
         expect(result.plan.type).toBe(AIActionType.PassTurn); // G6, not DiscardHand
       });
     });
 
     describe('bestPickups multi-load scenarios', () => {
-      it('should return multiple pickups sorted by payout up to capacity', () => {
+      it('should return multiple pickups sorted by payout up to capacity', async () => {
         const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
         const pickup2: PickupOpportunity = { loadType: 'Steel', supplyCity: 'Berlin', bestPayout: 25 };
         const pickup3: PickupOpportunity = { loadType: 'Wine', supplyCity: 'Berlin', bestPayout: 20 };
@@ -728,7 +815,7 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe('MultiAction');
@@ -745,7 +832,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should respect remaining capacity when bot already carries loads', () => {
+      it('should respect remaining capacity when bot already carries loads', async () => {
         const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
         const pickup2: PickupOpportunity = { loadType: 'Steel', supplyCity: 'Berlin', bestPayout: 25 };
         const ctx = makeContext({
@@ -755,7 +842,7 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         // Only 1 pickup slot available → single PICKUP, not MultiAction
@@ -765,7 +852,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should NOT override when at full capacity', () => {
+      it('should NOT override when at full capacity', async () => {
         const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 15 };
         const ctx = makeContext({
           canPickup: [pickup1],
@@ -774,7 +861,7 @@ describe('GuardrailEnforcer', () => {
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         // G2 won't fire (capacity full), G4 will fire because loads > 0
         // But G4 needs demands with delivery/supply on network
@@ -783,7 +870,7 @@ describe('GuardrailEnforcer', () => {
     });
 
     describe('Guardrail priority', () => {
-      it('Force DELIVER takes priority over block UPGRADE during initialBuild', () => {
+      it('Force DELIVER takes priority over block UPGRADE during initialBuild', async () => {
         // Edge case: isInitialBuild=true, canDeliver has items, LLM chose UPGRADE
         // Guardrail 1 (force DELIVER) should fire before Guardrail 3 (block UPGRADE)
         const delivery: DeliveryOpportunity = {
@@ -799,7 +886,7 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DeliverLoad);
@@ -813,7 +900,7 @@ describe('GuardrailEnforcer', () => {
         return Array.from({ length: mp + 1 }, (_, i) => ({ row: 10, col: 10 + i }));
       }
 
-      it('should truncate last MOVE when MultiAction total exceeds speed', () => {
+      it('should truncate last MOVE when MultiAction total exceeds speed', async () => {
         const ctx = makeContext({ speed: 9 });
         const plan: TurnPlan = {
           type: 'MultiAction',
@@ -825,7 +912,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 5 + 7 = 12mp, speed = 9, excess = 3 → last MOVE truncated from 7 to 4
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan.type).toBe('MultiAction');
@@ -844,7 +931,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should not modify MultiAction plan within speed limit', () => {
+      it('should not modify MultiAction plan within speed limit', async () => {
         const ctx = makeContext({ speed: 9 });
         const plan: TurnPlan = {
           type: 'MultiAction',
@@ -856,13 +943,13 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 4 + 5 = 9mp = speed limit, no truncation
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan); // Same reference — no changes
       });
 
-      it('should remove MOVE step entirely when truncation leaves path of length 1', () => {
+      it('should remove MOVE step entirely when truncation leaves path of length 1', async () => {
         const ctx = makeContext({ speed: 9 });
         const plan: TurnPlan = {
           type: 'MultiAction',
@@ -874,7 +961,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 9 + 3 = 12mp, excess = 3, last MOVE has 3mp → removed entirely
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan.type).toBe('MultiAction');
@@ -885,7 +972,7 @@ describe('GuardrailEnforcer', () => {
         }
       });
 
-      it('should log a warning when truncation occurs', () => {
+      it('should log a warning when truncation occurs', async () => {
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
         const ctx = makeContext({ speed: 9 });
         const plan: TurnPlan = {
@@ -897,7 +984,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 6 + 6 = 12mp > 9
 
-        GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(warnSpy).toHaveBeenCalledWith(
           expect.stringContaining('[Guardrail 8]'),
@@ -908,7 +995,7 @@ describe('GuardrailEnforcer', () => {
         warnSpy.mockRestore();
       });
 
-      it('should not affect single MOVE plans (only MultiAction)', () => {
+      it('should not affect single MOVE plans (only MultiAction)', async () => {
         const ctx = makeContext({ speed: 9 });
         const plan: TurnPlan = {
           type: AIActionType.MoveTrain,
@@ -917,7 +1004,7 @@ describe('GuardrailEnforcer', () => {
           totalFee: 0,
         };
 
-        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         // Guardrail 8 only handles MultiAction; single MOVE passes through
         expect(result.overridden).toBe(false);

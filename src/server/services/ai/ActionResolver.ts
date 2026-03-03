@@ -209,7 +209,7 @@ export class ActionResolver {
    * If the full path exceeds the speed limit, the path is truncated to the
    * maximum distance the bot can travel this turn (partial move toward destination).
    */
-  private static async resolveMove(
+  static async resolveMove(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
     remainingSpeed?: number,
