@@ -25,6 +25,7 @@ import {
 import { ActionResolver } from './ActionResolver';
 import { PlanExecutor } from './PlanExecutor';
 import { loadGridPoints } from './MapTopology';
+import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 export class TurnComposer {
   /**
@@ -515,14 +516,23 @@ export class TurnComposer {
   }
 
   /**
-   * Count total mileposts used across all MOVE steps.
-   * Path includes the start position, so milepost count = path.length - 1.
+   * Count total effective mileposts used across all MOVE steps.
+   * Intra-city hops (within a major city's red area) are discounted as free.
    */
   private static countMovementUsed(steps: TurnPlan[]): number {
+    const majorCityLookup = getMajorCityLookup();
     let used = 0;
     for (const step of steps) {
       if (step.type === AIActionType.MoveTrain) {
-        used += Math.max(0, (step as TurnPlanMoveTrain).path.length - 1);
+        const movePath = (step as TurnPlanMoveTrain).path;
+        const rawLength = Math.max(0, movePath.length - 1);
+        const effectiveLength = computeEffectivePathLength(movePath, majorCityLookup);
+        if (effectiveLength !== rawLength) {
+          console.warn(
+            `[TurnComposer] Movement step: raw ${rawLength} edges, effective ${effectiveLength}mp (intra-city hops discounted)`,
+          );
+        }
+        used += effectiveLength;
       }
     }
     return used;

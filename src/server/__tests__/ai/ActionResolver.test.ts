@@ -38,7 +38,15 @@ import type { TrackUsageComputation, PathEdge } from '../../../shared/services/t
 jest.mock('../../services/ai/computeBuildSegments');
 jest.mock('../../../shared/services/trackUsageFees');
 jest.mock('../../services/ai/MapTopology');
-jest.mock('../../../shared/services/majorCityGroups');
+jest.mock('../../../shared/services/majorCityGroups', () => {
+  const actual = jest.requireActual('../../../shared/services/majorCityGroups');
+  return {
+    ...actual,
+    getMajorCityGroups: jest.fn(),
+    getMajorCityLookup: jest.fn(),
+    getFerryEdges: jest.fn().mockReturnValue([]),
+  };
+});
 
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';

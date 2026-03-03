@@ -30,7 +30,7 @@ import {
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, GridCoord, GridPointData, hexDistance } from './MapTopology';
-import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 
@@ -271,12 +271,36 @@ export class ActionResolver {
         fullPath.push({ row: edge.to.row, col: edge.to.col });
       }
 
-      // Truncate to speed limit if the path is too long (partial move toward destination)
+      // Truncate to speed limit if the path is too long (partial move toward destination).
+      // Use effective path length (discounting intra-city hops) for movement budget.
       const effectiveSpeed = remainingSpeed ?? speed;
-      let pathLength = Math.min(usage.path.length, effectiveSpeed);
-      if (usage.path.length > effectiveSpeed) {
+      const majorCityLookup = getMajorCityLookup();
+      const rawPathLength = usage.path.length;
+      const effectivePathLen = computeEffectivePathLength(fullPath, majorCityLookup);
+
+      // Find the raw truncation index where effective mileposts reach the speed limit
+      let pathLength = rawPathLength;
+      if (effectivePathLen > effectiveSpeed) {
+        let effectiveCount = 0;
+        for (let idx = 0; idx < fullPath.length - 1; idx++) {
+          const fromKey = `${fullPath[idx].row},${fullPath[idx].col}`;
+          const toKey = `${fullPath[idx + 1].row},${fullPath[idx + 1].col}`;
+          const fromCity = majorCityLookup.get(fromKey);
+          const toCity = majorCityLookup.get(toKey);
+          if (!(fromCity && fromCity === toCity)) {
+            effectiveCount++;
+          }
+          if (effectiveCount >= effectiveSpeed) {
+            pathLength = idx + 1; // raw index for truncation
+            break;
+          }
+        }
         console.warn(
-          `[Movement Budget] MOVE truncated: requested ${usage.path.length}mp, budget ${effectiveSpeed}mp remaining`,
+          `[Movement Budget] MOVE truncated: raw ${rawPathLength} edges, effective ${effectivePathLen}mp, budget ${effectiveSpeed}mp remaining`,
+        );
+      } else if (effectivePathLen !== rawPathLength) {
+        console.warn(
+          `[Movement Budget] Path: raw ${rawPathLength} edges, effective ${effectivePathLen}mp (intra-city hops discounted)`,
         );
       }
       let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
@@ -700,10 +724,10 @@ export class ActionResolver {
       }
       plans.push(result.plan!);
 
-      // Track cumulative movement from MOVE plans
+      // Track cumulative movement from MOVE plans (effective mileposts, discounting intra-city hops)
       if (isMove && result.plan) {
         const movePlan = result.plan as TurnPlanMoveTrain;
-        const stepsUsed = movePlan.path.length - 1; // path includes start node
+        const stepsUsed = computeEffectivePathLength(movePlan.path, getMajorCityLookup());
         movementUsed += stepsUsed;
       }
 
