@@ -212,6 +212,7 @@ export class ActionResolver {
   private static async resolveMove(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    remainingSpeed?: number,
   ): Promise<ResolvedAction> {
     const targetCity = details.to ?? details.toward ?? details.city;
     if (!targetCity) {
@@ -271,7 +272,13 @@ export class ActionResolver {
       }
 
       // Truncate to speed limit if the path is too long (partial move toward destination)
-      let pathLength = Math.min(usage.path.length, speed);
+      const effectiveSpeed = remainingSpeed ?? speed;
+      let pathLength = Math.min(usage.path.length, effectiveSpeed);
+      if (usage.path.length > effectiveSpeed) {
+        console.warn(
+          `[Movement Budget] MOVE truncated: requested ${usage.path.length}mp, budget ${effectiveSpeed}mp remaining`,
+        );
+      }
       let truncatedPath = fullPath.slice(0, pathLength + 1); // +1 for the start node
 
       // Ferry detection: if path passes through a FerryPort, truncate at the port.
@@ -654,16 +661,36 @@ export class ActionResolver {
     const plans: TurnPlan[] = [];
     let currentSnapshot = ActionResolver.cloneSnapshot(snapshot);
     let currentContext = { ...context };
+    let movementUsed = 0;
+    const maxMovement = context.speed;
 
     for (let i = 0; i < actions.length; i++) {
       const a = actions[i];
-      const result = await ActionResolver.resolveSingleAction(
-        a.action,
-        a.details ?? {},
-        currentSnapshot,
-        currentContext,
-        startingCity,
-      );
+      const isMove = a.action === AIActionType.MoveTrain || a.action === 'MOVE';
+      const budgetRemaining = maxMovement - movementUsed;
+
+      let result: ResolvedAction;
+      if (isMove) {
+        if (budgetRemaining <= 0) {
+          console.warn(
+            `[Movement Budget] Step ${i + 1} MOVE skipped: 0mp remaining (${movementUsed}mp used of ${maxMovement}mp)`,
+          );
+          continue;
+        }
+        result = await ActionResolver.resolveMove(
+          a.details ?? {},
+          currentSnapshot,
+          budgetRemaining,
+        );
+      } else {
+        result = await ActionResolver.resolveSingleAction(
+          a.action,
+          a.details ?? {},
+          currentSnapshot,
+          currentContext,
+          startingCity,
+        );
+      }
 
       if (!result.success) {
         return {
@@ -672,6 +699,13 @@ export class ActionResolver {
         };
       }
       plans.push(result.plan!);
+
+      // Track cumulative movement from MOVE plans
+      if (isMove && result.plan) {
+        const movePlan = result.plan as TurnPlanMoveTrain;
+        const stepsUsed = movePlan.path.length - 1; // path includes start node
+        movementUsed += stepsUsed;
+      }
 
       // Simulate state changes for subsequent steps
       ActionResolver.applyPlanToState(result.plan!, currentSnapshot, currentContext);
