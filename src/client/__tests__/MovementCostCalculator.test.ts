@@ -240,9 +240,10 @@ describe('MovementCostCalculator', () => {
       );
       
       expect(result.isValid).toBe(true);
-      expect(result.totalCost).toBe(1); // City internal movement always costs 1
+      expect(result.totalCost).toBe(0); // City internal movement is free (red area traversal)
       expect(result.segments).toHaveLength(1);
       expect(result.segments[0].type).toBe('city_internal');
+      expect(result.segments[0].cost).toBe(0);
     });
 
     it('should reject movement when no track data and not major city case', () => {

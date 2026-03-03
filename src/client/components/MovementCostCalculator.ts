@@ -142,32 +142,8 @@ export class MovementCostCalculator {
       };
     }
 
-    // Check if we're starting from an unconnected perimeter node within a city
-    // This is true when we have a direct path (length 2) within same city that was created
-    // by the special handling in findPath method (starting from unconnected node)
-    const graph = new Map<string, Set<string>>();
-    if (playerTrackState) {
-      for (const segment of playerTrackState.segments) {
-        const fromKey = this.getNodeKey(segment.from);
-        const toKey = this.getNodeKey(segment.to);
-        
-        if (!graph.has(fromKey)) graph.set(fromKey, new Set());
-        if (!graph.has(toKey)) graph.set(toKey, new Set());
-        
-        graph.get(fromKey)!.add(toKey);
-        graph.get(toKey)!.add(fromKey);
-      }
-    }
-    
-    const startingNodeKey = this.getNodeKey(path[0]);
-    const startingFromUnconnectedCityNode = path.length === 2 && 
-      this.isNodeInMajorCity(path[0]) && 
-      this.isNodeInMajorCity(path[1]) && 
-      this.areNodesInSameCity(path[0], path[1]) &&
-      !graph.has(startingNodeKey); // Key difference: starting node not in track graph
-
     // Analyze path segments and calculate costs
-    const segments = this.analyzePathSegments(path, startingFromUnconnectedCityNode);
+    const segments = this.analyzePathSegments(path);
     const totalCost = segments.reduce((sum, segment) => sum + segment.cost, 0);
 
     return {
@@ -281,7 +257,7 @@ export class MovementCostCalculator {
   /**
    * Analyze path segments and apply city movement rules
    */
-  private analyzePathSegments(path: Point[], startingFromUnconnectedCityNode: boolean = false): MovementSegment[] {
+  private analyzePathSegments(path: Point[]): MovementSegment[] {
     if (path.length < 2) return [];
 
     const segments: MovementSegment[] = [];
@@ -310,15 +286,9 @@ export class MovementCostCalculator {
         segmentType = 'city_exit';
         cost = 1;
       } else if (fromInCity && toInCity && sameCity) {
-        // Internal city movement - special handling for starting from unconnected node
+        // Internal city movement - free traversal through major city red area
         segmentType = 'city_internal';
-        
-        // If this is the first segment and we're starting from unconnected city node
-        if (i === 0 && startingFromUnconnectedCityNode) {
-          cost = 0; // Free movement within city when starting from unconnected perimeter
-        } else {
-          cost = 1; // Normal city internal movement cost
-        }
+        cost = 0;
       } else {
         // Between different cities (shouldn't happen in normal gameplay)
         segmentType = 'normal';
