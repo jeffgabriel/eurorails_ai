@@ -3084,4 +3084,86 @@ describe('TurnComposer', () => {
       expect(lastMoveState!.position.row).toBeGreaterThan(14); // Past CityA
     });
   });
+
+  // ── BE-007: Phase A error handling and logging ──
+
+  describe('Phase A error handling (BE-007)', () => {
+    it('should log phase context when Phase A throws an error', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      mockCloneSnapshot.mockImplementation((s: WorldSnapshot) => ({
+        ...s,
+        bot: { ...s.bot, loads: [...s.bot.loads] },
+        allPlayerTracks: [...s.allPlayerTracks],
+      }));
+
+      // Throw inside Phase A when resolve is called (A2 continuation)
+      mockResolve.mockImplementation(() => {
+        throw new Error('Simulated Phase A failure');
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 20, isSupplyReachable: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 2,
+            demandScore: 10, efficiencyPerTurn: 5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+
+      // Primary PICKUP triggers A2 which calls resolve() → throws
+      const pickupPlan = { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' };
+      const result = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
+
+      // Should still return the primary plan (error is non-fatal)
+      expect(result).toBeDefined();
+
+      // Error should be logged with phase context
+      const errorLogs = errorSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] Phase'),
+      );
+      expect(errorLogs.length).toBeGreaterThan(0);
+      expect(errorLogs[0][1]).toContain('Simulated Phase A failure');
+
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    });
+
+    it('should not crash when A2 loop encounters error during continuation MOVE', async () => {
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation();
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      mockCloneSnapshot.mockImplementation((s: WorldSnapshot) => ({
+        ...s,
+        bot: { ...s.bot, loads: [...s.bot.loads] },
+        allPlayerTracks: [...s.allPlayerTracks],
+      }));
+
+      // Primary PICKUP succeeds
+      mockResolve.mockRejectedValue(new Error('Continuation resolve failed'));
+
+      const pickupPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Coal',
+        city: 'Berlin',
+      };
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+
+      const result = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
+
+      // Should fall back to returning just the primary plan
+      expect(result).toBeDefined();
+
+      errorSpy.mockRestore();
+      logSpy.mockRestore();
+    });
+  });
 });

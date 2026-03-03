@@ -268,8 +268,13 @@ export class TurnComposer {
         }
       }
     } catch (err) {
-      // Phase A errors are non-fatal — keep the primary plan
-      console.error('[TurnComposer] Phase A error:', err instanceof Error ? err.message : err);
+      // Phase A errors are non-fatal — keep the primary plan (BE-007: improved logging)
+      const phase = steps.length <= 1 ? 'A0/A1' : `A2 (iteration ${steps.length})`;
+      console.error(
+        `[TurnComposer] Phase ${phase} error:`,
+        err instanceof Error ? err.message : err,
+        err instanceof Error ? err.stack : '',
+      );
     }
 
     // ── Phase B: Build/Upgrade ──
