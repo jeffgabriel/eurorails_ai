@@ -3142,6 +3142,362 @@ describe('ActionResolver', () => {
         expect(result.error).toContain('Cannot upgrade and build track in the same turn');
       });
     });
+
+    describe('cumulative movement budget', () => {
+      /** Build a mock PathEdge[] of a given length (edges = milepost steps) */
+      function makeMockPath(
+        startRow: number, startCol: number,
+        length: number,
+      ): PathEdge[] {
+        const edges: PathEdge[] = [];
+        for (let i = 0; i < length; i++) {
+          edges.push({
+            from: { row: startRow, col: startCol + i },
+            to: { row: startRow, col: startCol + i + 1 },
+          } as PathEdge);
+        }
+        return edges;
+      }
+
+      /** Set up grid with CityA at (5,5), CityB and CityC at configurable columns */
+      function setupMovementTestGrid(cityBCol = 8, cityCCol = 14): void {
+        const gridMap = new Map<string, GridPointData>();
+        gridMap.set('5,5', { row: 5, col: 5, terrain: TerrainType.MajorCity, name: 'CityA' });
+        for (let c = 6; c <= 30; c++) {
+          if (c === cityBCol || c === cityCCol) continue;
+          gridMap.set(`5,${c}`, { row: 5, col: c, terrain: TerrainType.Clear });
+        }
+        gridMap.set(`5,${cityBCol}`, { row: 5, col: cityBCol, terrain: TerrainType.MajorCity, name: 'CityB' });
+        gridMap.set(`5,${cityCCol}`, { row: 5, col: cityCCol, terrain: TerrainType.MajorCity, name: 'CityC' });
+        mockLoadGridPoints.mockReturnValue(gridMap);
+        mockGetMajorCityGroups.mockReturnValue([]);
+        mockGetMajorCityLookup.mockReturnValue(new Map([
+          ['5,5', 'CityA'],
+          [`5,${cityBCol}`, 'CityB'],
+          [`5,${cityCCol}`, 'CityC'],
+        ]));
+      }
+
+      it('should truncate second MOVE when cumulative movement exceeds speed (3mp + 9mp → 3mp + 6mp)', async () => {
+        setupMovementTestGrid();
+
+        // First MOVE: 3mp from CityA to CityB
+        // Second MOVE: 9mp requested from CityB to CityC, but should be truncated to 6mp
+        let callCount = 0;
+        mockComputeTrackUsageForMove.mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            // First MOVE: 3 edges from (5,5) to (5,8)
+            return {
+              isValid: true,
+              path: makeMockPath(5, 5, 3),
+              ownersUsed: new Set<string>(),
+              ownersPaid: [],
+              feeTotal: 0,
+            } as unknown as TrackUsageComputation;
+          }
+          // Second MOVE: 9 edges from (5,8) to (5,17) — will be truncated
+          return {
+            isValid: true,
+            path: makeMockPath(5, 8, 9),
+            ownersUsed: new Set<string>(),
+            ownersPaid: [],
+            feeTotal: 0,
+          } as unknown as TrackUsageComputation;
+        });
+
+        const snapshot = makeWorldSnapshot({
+          bot: {
+            playerId: 'bot-1',
+            userId: 'user-bot',
+            money: 50,
+            position: { row: 5, col: 5 },
+            existingSegments: [makeSegment(5, 5, 5, 8), makeSegment(5, 8, 5, 14)],
+            demandCards: [1],
+            resolvedDemands: [
+              { cardId: 1, demands: [{ city: 'CityB', loadType: 'Coal', payment: 30 }] },
+            ] as ResolvedDemand[],
+            trainType: TrainType.Freight,
+            loads: ['Coal'],
+            botConfig: null,
+            ferryHalfSpeed: false,
+            connectedMajorCityCount: 0,
+          } as WorldSnapshot['bot'],
+        });
+
+        const context = makeGameContext({ speed: 9 });
+
+        const intent = makeMultiIntent(
+          { action: 'MOVE', details: { to: 'CityB' } },
+          { action: 'DELIVER', details: { load: 'Coal', at: 'CityB' } },
+          { action: 'MOVE', details: { to: 'CityC' } },
+        );
+
+        const result = await ActionResolver.resolve(intent, snapshot, context);
+
+        expect(result.success).toBe(true);
+        expect(result.plan!.type).toBe('MultiAction');
+        if (result.plan!.type === 'MultiAction') {
+          expect(result.plan!.steps).toHaveLength(3);
+          // First MOVE: 3mp (path length 4 = 3 edges + start node)
+          const move1 = result.plan!.steps[0] as TurnPlanMoveTrain;
+          expect(move1.path).toHaveLength(4); // 3 edges + start
+          // Second MOVE: truncated to 6mp (9 - 3 = 6 remaining)
+          const move2 = result.plan!.steps[2] as TurnPlanMoveTrain;
+          expect(move2.path).toHaveLength(7); // 6 edges + start
+        }
+      });
+
+      it('should block second MOVE when speed budget is fully consumed (9mp + any → skip)', async () => {
+        // CityC at col 14 = 9 edges from CityA at col 5
+        setupMovementTestGrid(8, 14);
+
+        // First MOVE: 9mp — uses the entire budget
+        mockComputeTrackUsageForMove.mockReturnValue({
+          isValid: true,
+          path: makeMockPath(5, 5, 9),
+          ownersUsed: new Set<string>(),
+          ownersPaid: [],
+          feeTotal: 0,
+        } as unknown as TrackUsageComputation);
+
+        const snapshot = makeWorldSnapshot({
+          bot: {
+            playerId: 'bot-1',
+            userId: 'user-bot',
+            money: 50,
+            position: { row: 5, col: 5 },
+            existingSegments: [makeSegment(5, 5, 5, 14)],
+            demandCards: [1],
+            resolvedDemands: [
+              { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 15 }] },
+            ] as ResolvedDemand[],
+            trainType: TrainType.Freight,
+            loads: [],
+            botConfig: null,
+            ferryHalfSpeed: false,
+            connectedMajorCityCount: 0,
+          } as WorldSnapshot['bot'],
+          loadAvailability: { CityC: ['Coal'] },
+        });
+
+        const context = makeGameContext({
+          speed: 9,
+          demands: [{
+            loadType: 'Coal',
+            supplyCity: 'CityC',
+            deliveryCity: 'CityA',
+            payout: 15,
+            isLoadOnTrain: false,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: true,
+            isSupplyReachable: true,
+            isDeliveryReachable: true,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 0,
+          } as DemandContext],
+        });
+
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+        // MOVE(9mp) to CityC, PICKUP Coal at CityC, then MOVE to CityA should be skipped
+        const intent = makeMultiIntent(
+          { action: 'MOVE', details: { to: 'CityC' } },
+          { action: 'PICKUP', details: { load: 'Coal', at: 'CityC' } },
+          { action: 'MOVE', details: { to: 'CityA' } },
+        );
+
+        const result = await ActionResolver.resolve(intent, snapshot, context);
+
+        expect(result.success).toBe(true);
+        expect(result.plan!.type).toBe('MultiAction');
+        if (result.plan!.type === 'MultiAction') {
+          // Second MOVE should be skipped — only MOVE + PICKUP remain
+          expect(result.plan!.steps).toHaveLength(2);
+          expect(result.plan!.steps[0].type).toBe(AIActionType.MoveTrain);
+          expect(result.plan!.steps[1].type).toBe(AIActionType.PickupLoad);
+        }
+
+        // Should have logged a warning about skipping the second MOVE
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('MOVE skipped: 0mp remaining'),
+        );
+
+        warnSpy.mockRestore();
+      });
+
+      it('should allow two MOVEs that exactly equal the speed limit (5mp + 4mp = 9mp)', async () => {
+        // CityB at col 10 = 5 edges from CityA, CityC at col 14 = 4 edges from CityB
+        setupMovementTestGrid(10, 14);
+
+        let callCount = 0;
+        mockComputeTrackUsageForMove.mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              isValid: true,
+              path: makeMockPath(5, 5, 5),
+              ownersUsed: new Set<string>(),
+              ownersPaid: [],
+              feeTotal: 0,
+            } as unknown as TrackUsageComputation;
+          }
+          return {
+            isValid: true,
+            path: makeMockPath(5, 10, 4),
+            ownersUsed: new Set<string>(),
+            ownersPaid: [],
+            feeTotal: 0,
+          } as unknown as TrackUsageComputation;
+        });
+
+        const snapshot = makeWorldSnapshot({
+          bot: {
+            playerId: 'bot-1',
+            userId: 'user-bot',
+            money: 50,
+            position: { row: 5, col: 5 },
+            existingSegments: [makeSegment(5, 5, 5, 14)],
+            demandCards: [1],
+            resolvedDemands: [
+              { cardId: 1, demands: [{ city: 'CityB', loadType: 'Coal', payment: 30 }] },
+            ] as ResolvedDemand[],
+            trainType: TrainType.Freight,
+            loads: ['Coal'],
+            botConfig: null,
+            ferryHalfSpeed: false,
+            connectedMajorCityCount: 0,
+          } as WorldSnapshot['bot'],
+        });
+
+        const context = makeGameContext({ speed: 9 });
+
+        const intent = makeMultiIntent(
+          { action: 'MOVE', details: { to: 'CityB' } },
+          { action: 'DELIVER', details: { load: 'Coal', at: 'CityB' } },
+          { action: 'MOVE', details: { to: 'CityC' } },
+        );
+
+        const result = await ActionResolver.resolve(intent, snapshot, context);
+
+        expect(result.success).toBe(true);
+        expect(result.plan!.type).toBe('MultiAction');
+        if (result.plan!.type === 'MultiAction') {
+          expect(result.plan!.steps).toHaveLength(3);
+          const move1 = result.plan!.steps[0] as TurnPlanMoveTrain;
+          const move2 = result.plan!.steps[2] as TurnPlanMoveTrain;
+          expect(move1.path).toHaveLength(6); // 5 edges + start
+          expect(move2.path).toHaveLength(5); // 4 edges + start
+          // Total: 5 + 4 = 9 = speed limit
+        }
+      });
+
+      it('should not truncate a single MOVE at the speed limit (backward compatibility)', async () => {
+        setupMovementTestGrid();
+
+        // Single MOVE of exactly 9 edges
+        mockComputeTrackUsageForMove.mockReturnValue({
+          isValid: true,
+          path: makeMockPath(5, 5, 9),
+          ownersUsed: new Set<string>(),
+          ownersPaid: [],
+          feeTotal: 0,
+        } as unknown as TrackUsageComputation);
+
+        const snapshot = makeWorldSnapshot({
+          bot: {
+            playerId: 'bot-1',
+            userId: 'user-bot',
+            money: 50,
+            position: { row: 5, col: 5 },
+            existingSegments: [makeSegment(5, 5, 5, 14)],
+            demandCards: [1],
+            resolvedDemands: [],
+            trainType: TrainType.Freight,
+            loads: [],
+            botConfig: null,
+            ferryHalfSpeed: false,
+            connectedMajorCityCount: 0,
+          } as WorldSnapshot['bot'],
+        });
+
+        const context = makeGameContext({ speed: 9 });
+
+        const intent = makeMoveIntent('CityC');
+
+        const result = await ActionResolver.resolve(intent, snapshot, context);
+
+        expect(result.success).toBe(true);
+        const plan = result.plan as TurnPlanMoveTrain;
+        expect(plan.type).toBe(AIActionType.MoveTrain);
+        // Path should be 9 edges + start = 10 nodes, no truncation
+        expect(plan.path).toHaveLength(10);
+      });
+
+      it('should log console.warn when a MOVE path is truncated by remainingSpeed', async () => {
+        // CityB at col 10 = 5 edges from CityA
+        setupMovementTestGrid(10, 20);
+
+        let callCount = 0;
+        mockComputeTrackUsageForMove.mockImplementation(() => {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              isValid: true,
+              path: makeMockPath(5, 5, 5),
+              ownersUsed: new Set<string>(),
+              ownersPaid: [],
+              feeTotal: 0,
+            } as unknown as TrackUsageComputation;
+          }
+          // Second MOVE: 9 edges, but only 4mp remaining — should trigger warn
+          return {
+            isValid: true,
+            path: makeMockPath(5, 10, 9),
+            ownersUsed: new Set<string>(),
+            ownersPaid: [],
+            feeTotal: 0,
+          } as unknown as TrackUsageComputation;
+        });
+
+        const snapshot = makeWorldSnapshot({
+          bot: {
+            playerId: 'bot-1',
+            userId: 'user-bot',
+            money: 50,
+            position: { row: 5, col: 5 },
+            existingSegments: [makeSegment(5, 5, 5, 14)],
+            demandCards: [1],
+            resolvedDemands: [
+              { cardId: 1, demands: [{ city: 'CityB', loadType: 'Coal', payment: 30 }] },
+            ] as ResolvedDemand[],
+            trainType: TrainType.Freight,
+            loads: ['Coal'],
+            botConfig: null,
+            ferryHalfSpeed: false,
+            connectedMajorCityCount: 0,
+          } as WorldSnapshot['bot'],
+        });
+
+        const context = makeGameContext({ speed: 9 });
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+        const intent = makeMultiIntent(
+          { action: 'MOVE', details: { to: 'CityB' } },
+          { action: 'DELIVER', details: { load: 'Coal', at: 'CityB' } },
+          { action: 'MOVE', details: { to: 'CityC' } },
+        );
+
+        await ActionResolver.resolve(intent, snapshot, context);
+
+        // Should warn about truncation in resolveMove
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[Movement Budget] MOVE truncated'),
+        );
+
+        warnSpy.mockRestore();
+      });
+    });
   });
 
 });
