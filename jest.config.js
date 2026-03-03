@@ -21,6 +21,17 @@ module.exports = {
   moduleDirectories: ['node_modules', 'src'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
 
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov', 'clover'],
+  coverageThreshold: {
+    global: {
+      statements: 50,
+      branches: 40,
+      functions: 50,
+      lines: 50,
+    },
+  },
+
   projects: [
     {
       displayName: 'client',
