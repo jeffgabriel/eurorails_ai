@@ -27,6 +27,7 @@ import {
   ResolvedAction,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
+import { loadGridPoints } from './MapTopology';
 
 export interface PlanExecutorResult {
   plan: TurnPlan;
@@ -243,6 +244,31 @@ export class PlanExecutor {
       };
     }
 
+    // Pickup failed due to full capacity — try drop-and-retry recovery (BE-003)
+    if (stop.action === 'pickup' && actionResult.error && actionResult.error.includes('full')) {
+      const dropCandidate = PlanExecutor.evaluateCargoForDrop(snapshot, context);
+      if (dropCandidate) {
+        const cityName = PlanExecutor.getBotCityName(snapshot);
+        if (cityName) {
+          console.warn(
+            `${tag} Pickup failed (full capacity). Dropping worst load "${dropCandidate.loadType}" ` +
+            `(score: ${dropCandidate.score}) at ${cityName} to recover.`,
+          );
+          return {
+            plan: {
+              type: AIActionType.DropLoad,
+              load: dropCandidate.loadType,
+              city: cityName,
+            },
+            routeComplete: false,
+            routeAbandoned: false,
+            updatedRoute: { ...route, phase: 'act' },
+            description: `${tag} Pickup failed (full). Dropping "${dropCandidate.loadType}" at ${cityName} to free slot.`,
+          };
+        }
+      }
+    }
+
     // Action failed — abandon the route
     console.warn(`${tag} ${stop.action} failed: ${actionResult.error}. Abandoning route.`);
     return {
@@ -389,6 +415,56 @@ export class PlanExecutor {
       }
     }
     return null;
+  }
+
+  // ── Cargo Evaluation ──────────────────────────────────────────────────────
+
+  /**
+   * Evaluate each carried load and score by delivery feasibility.
+   * Returns loads sorted worst-first (highest score = least feasible).
+   *
+   * Score heuristic: build cost to delivery minus payout. Higher = worse.
+   * Loads with no matching demand get maximum penalty (Infinity).
+   * Loads already deliverable on-network get score 0 (best).
+   */
+  static evaluateCargoForDrop(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): { loadType: string; score: number } | null {
+    if (snapshot.bot.loads.length === 0) return null;
+
+    const scored = snapshot.bot.loads.map(loadType => {
+      const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+      if (matchingDemands.length === 0) {
+        // No demand card for this load — worst possible score
+        return { loadType, score: Infinity };
+      }
+
+      // Find the best (most feasible) delivery option for this load
+      const bestScore = Math.min(
+        ...matchingDemands.map(d => {
+          if (d.isDeliveryOnNetwork) return 0;
+          // Score = build cost - payout (higher = worse deal)
+          return d.estimatedTrackCostToDelivery - d.payout;
+        }),
+      );
+
+      return { loadType, score: bestScore };
+    });
+
+    // Sort worst-first (highest score)
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0] ?? null;
+  }
+
+  /**
+   * Get the city name at the bot's current position, if any.
+   */
+  private static getBotCityName(snapshot: WorldSnapshot): string | null {
+    if (!snapshot.bot.position) return null;
+    const grid = loadGridPoints();
+    const key = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+    return grid.get(key)?.name ?? null;
   }
 
   // ── Route State Management ────────────────────────────────────────────────

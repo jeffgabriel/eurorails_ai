@@ -61,9 +61,11 @@ jest.mock('../../../shared/services/TrackNetworkService', () => ({
 
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { loadGridPoints } from '../../services/ai/MapTopology';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockGetMajorCityLookup = getMajorCityLookup as jest.Mock;
+const mockLoadGridPoints = loadGridPoints as jest.Mock;
 
 function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
   return {
@@ -826,6 +828,177 @@ describe('PlanExecutor', () => {
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
       expect(result.plan.type).toBe(AIActionType.BuildTrack);
+    });
+  });
+
+  describe('evaluateCargoForDrop (BE-003)', () => {
+    it('scores loads by delivery feasibility — worst first', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Coal', 'Wine'];
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+          {
+            cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Madrid',
+            payout: 15, isDeliveryOnNetwork: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+
+      const result = PlanExecutor.evaluateCargoForDrop(snapshot, context);
+
+      // Wine is worst: cost 30 - payout 15 = 15 score
+      // Coal is best: on network = 0 score
+      expect(result).not.toBeNull();
+      expect(result!.loadType).toBe('Wine');
+      expect(result!.score).toBe(15); // 30 - 15
+    });
+
+    it('gives maximum score to loads with no matching demand', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Coal', 'Steel'];
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+          // No demand for Steel
+        ] as any[],
+      });
+
+      const result = PlanExecutor.evaluateCargoForDrop(snapshot, context);
+
+      expect(result).not.toBeNull();
+      expect(result!.loadType).toBe('Steel');
+      expect(result!.score).toBe(Infinity);
+    });
+
+    it('returns null when bot has no loads', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = [];
+      const context = makeContext();
+
+      const result = PlanExecutor.evaluateCargoForDrop(snapshot, context);
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('drop-and-retry recovery on pickup failure (BE-003)', () => {
+    it('generates DropLoad plan when pickup fails due to full capacity', async () => {
+      // Bot at Berlin, carrying Wine+Steel (full at capacity 2), wants to pick up Coal
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Wine', 'Steel'];
+      snapshot.bot.position = { row: 10, col: 10 };
+
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'act',
+      });
+
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        citiesOnNetwork: ['Berlin', 'Paris'],
+        loads: ['Wine', 'Steel'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Madrid',
+            payout: 15, isDeliveryOnNetwork: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+          {
+            cardIndex: 1, loadType: 'Steel', supplyCity: 'Hamburg', deliveryCity: 'London',
+            payout: 20, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isLoadOnTrain: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+
+      // Setup grid so getBotCityName resolves
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,10', { row: 10, col: 10, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      // Pickup fails with "full" capacity error
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'Train is full (2/2). Drop a load first.',
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      // Should generate DropLoad for Wine (worst: cost 30 - payout 15 = 15)
+      expect(result.plan.type).toBe(AIActionType.DropLoad);
+      expect((result.plan as any).load).toBe('Wine');
+      expect((result.plan as any).city).toBe('Berlin');
+      expect(result.routeAbandoned).toBe(false); // Route preserved
+      expect(result.routeComplete).toBe(false);
+
+      warnSpy.mockRestore();
+    });
+
+    it('abandons route when pickup fails for non-capacity reasons', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        ],
+        currentStopIndex: 0,
+        phase: 'act',
+      });
+
+      const context = makeContext({
+        position: { city: 'Berlin', row: 10, col: 10 },
+        citiesOnNetwork: ['Berlin'],
+      });
+
+      // Pickup fails for non-capacity reason
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'No demand card matches "Coal".',
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // Should abandon the route (not a capacity issue)
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+
+      warnSpy.mockRestore();
     });
   });
 });
