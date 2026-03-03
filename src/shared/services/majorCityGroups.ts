@@ -78,6 +78,40 @@ export function getMajorCityGroups(): MajorCityGroup[] {
 }
 
 /**
+ * Returns true if the edge from `fromKey` to `toKey` is entirely within
+ * a single major city's red area (both endpoints belong to the same city).
+ */
+export function isIntraCityEdge(
+  fromKey: string,
+  toKey: string,
+  majorCityLookup: Map<string, string>,
+): boolean {
+  const fromCity = majorCityLookup.get(fromKey);
+  const toCity = majorCityLookup.get(toKey);
+  return fromCity !== undefined && fromCity === toCity;
+}
+
+/**
+ * Counts the effective number of mileposts in a path, treating intra-city
+ * hops (edges where both endpoints belong to the same major city) as free
+ * (0 mileposts). Each non-intra-city edge counts as 1 milepost.
+ */
+export function computeEffectivePathLength(
+  path: Array<{ row: number; col: number }>,
+  majorCityLookup: Map<string, string>,
+): number {
+  let effectiveLength = 0;
+  for (let i = 0; i < path.length - 1; i++) {
+    const fromKey = `${path[i].row},${path[i].col}`;
+    const toKey = `${path[i + 1].row},${path[i + 1].col}`;
+    if (!isIntraCityEdge(fromKey, toKey, majorCityLookup)) {
+      effectiveLength++;
+    }
+  }
+  return effectiveLength;
+}
+
+/**
  * Shared ferry edge geometry derived from configuration files.
  *
  * Purpose:
