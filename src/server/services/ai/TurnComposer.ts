@@ -143,49 +143,83 @@ export class TurnComposer {
         }
       }
 
-      // A2: If the last step is PICKUP or DELIVER, try to chain a continuation MOVE.
+      // A2: Chain continuation MOVEs after PICKUP/DELIVER actions.
       // This handles both:
       //   - Primary was PICKUP/DELIVER (no MOVE yet) — chain a full MOVE
       //   - A1 split a MOVE and found a pickup/deliver at the destination — continue moving
-      const lastStepType = steps[steps.length - 1]?.type;
-      if (lastStepType === AIActionType.PickupLoad || lastStepType === AIActionType.DeliverLoad) {
-        // Cap continuation MOVE at remaining movement allowance
+      // The while loop allows repeated chaining: MOVE → PICKUP → MOVE → DELIVER → MOVE...
+      // until the movement budget is exhausted or no valid target remains.
+      const A2_MAX_ITERATIONS = 5;
+      let a2Iterations = 0;
+      let a2TerminationReason = '';
+
+      while (a2Iterations < A2_MAX_ITERATIONS) {
+        const lastStepType = steps[steps.length - 1]?.type;
+        if (lastStepType !== AIActionType.PickupLoad && lastStepType !== AIActionType.DeliverLoad) {
+          if (a2Iterations > 0) a2TerminationReason = 'last step is MOVE';
+          break;
+        }
+
         const movementUsed = TurnComposer.countMovementUsed(steps);
         const remainingMovement = simContext.speed - movementUsed;
+        if (remainingMovement <= 0) {
+          a2TerminationReason = 'budget exhausted';
+          break;
+        }
 
-        if (remainingMovement > 0) {
-          // Try multiple targets in priority order — the primary route target
-          // may be unreachable if track hasn't been built there yet.
-          const moveTargets = TurnComposer.findMoveTargets(simContext, activeRoute);
-          for (const moveTarget of moveTargets) {
-            const moveResult = await ActionResolver.resolve(
-              { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
-              simSnapshot, simContext,
-            );
-            if (moveResult.success && moveResult.plan) {
-              let chainedMove = moveResult.plan as TurnPlanMoveTrain;
-              // Truncate path to remaining movement allowance
-              if (chainedMove.path.length - 1 > remainingMovement) {
-                chainedMove = {
-                  ...chainedMove,
-                  path: chainedMove.path.slice(0, remainingMovement + 1),
-                };
-              }
-              if (chainedMove.path.length > 1) {
-                const splitPlans = await TurnComposer.splitMoveForOpportunities(
-                  chainedMove, simSnapshot, simContext,
-                );
-                for (const plan of splitPlans) {
-                  steps.push(plan);
-                  ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
-                }
-              }
-              break; // Successfully chained a MOVE — stop trying targets
-            } else {
-              console.log(`[TurnComposer] A2 continuation MOVE to ${moveTarget} failed: ${moveResult.error}`);
+        // Try multiple targets in priority order — the primary route target
+        // may be unreachable if track hasn't been built there yet.
+        const moveTargets = TurnComposer.findMoveTargets(simContext, activeRoute);
+        let chainedSuccessfully = false;
+
+        for (const moveTarget of moveTargets) {
+          const moveResult = await ActionResolver.resolve(
+            { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
+            simSnapshot, simContext,
+          );
+          if (moveResult.success && moveResult.plan) {
+            let chainedMove = moveResult.plan as TurnPlanMoveTrain;
+            // Truncate path to remaining movement allowance
+            if (chainedMove.path.length - 1 > remainingMovement) {
+              chainedMove = {
+                ...chainedMove,
+                path: chainedMove.path.slice(0, remainingMovement + 1),
+              };
             }
+            if (chainedMove.path.length > 1) {
+              const splitPlans = await TurnComposer.splitMoveForOpportunities(
+                chainedMove, simSnapshot, simContext,
+              );
+              for (const plan of splitPlans) {
+                steps.push(plan);
+                ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
+              }
+              chainedSuccessfully = true;
+            }
+            break; // Found a valid target — exit target loop
+          } else {
+            console.log(`[TurnComposer] A2 continuation MOVE to ${moveTarget} failed: ${moveResult.error}`);
           }
         }
+
+        if (!chainedSuccessfully) {
+          a2TerminationReason = 'no valid target';
+          break;
+        }
+
+        a2Iterations++;
+      }
+
+      if (a2Iterations >= A2_MAX_ITERATIONS) {
+        a2TerminationReason = 'iteration cap';
+      }
+      if (a2Iterations > 0) {
+        const totalMovement = TurnComposer.countMovementUsed(steps);
+        console.log(
+          `[TurnComposer] A2 loop: ${a2Iterations} chained continuation(s), ` +
+          `${totalMovement}mp/${simContext.speed}mp used. ` +
+          `Terminated: ${a2TerminationReason}`,
+        );
       }
 
       // A3: If primary is BUILD and no MOVE exists, prepend a MOVE before the build.

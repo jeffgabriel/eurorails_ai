@@ -1920,4 +1920,741 @@ describe('TurnComposer', () => {
       }
     });
   });
+
+  describe('A2 loop: multi-chaining and budget respect', () => {
+    it('chains MOVE → DELIVER → MOVE using full movement budget', async () => {
+      // Bot carrying Coal, route: deliver Coal at CityA → pickup Wine at CityB
+      // Speed: 9. MOVE to CityA = 4mp. After DELIVER, MOVE to CityB = 5mp. Total = 9mp.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+      });
+      const context = makeContext({ speed: 9, loads: ['Coal'] });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'CityA', demandCardId: 1, payment: 25 },
+          { action: 'pickup', loadType: 'Wine', city: 'CityB' },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      // Primary: PICKUP (simulates A1 having already produced a pickup)
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Iron',
+        city: 'StartCity',
+      };
+
+      // loadGridPoints: CityA at (14,10)
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['14,10', { row: 14, col: 10, terrain: TerrainType.MediumCity, name: 'CityA' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      mockResolve
+        // A2 iter 1: MOVE to CityA (5 positions = 4mp)
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 10 }, { row: 11, col: 10 },
+              { row: 12, col: 10 }, { row: 13, col: 10 }, { row: 14, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // splitMoveForOpportunities: DELIVER Coal at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'CityA', cardId: 1, payout: 25 },
+        })
+        // A2 iter 2: MOVE to CityB (6 positions = 5mp, remaining budget)
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 14, col: 10 }, { row: 15, col: 10 },
+              { row: 16, col: 10 }, { row: 17, col: 10 },
+              { row: 18, col: 10 }, { row: 19, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // PICKUP + MOVE(4mp) + DELIVER + MOVE(5mp) = 4 steps
+        expect(result.steps[0].type).toBe(AIActionType.PickupLoad);
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        expect(moves.length).toBe(2);
+        const delivers = result.steps.filter(s => s.type === AIActionType.DeliverLoad);
+        expect(delivers.length).toBe(1);
+        // Total movement: 4 + 5 = 9mp (fully used)
+        const totalMp = moves.reduce(
+          (sum, m) => sum + ((m as any).path.length - 1), 0,
+        );
+        expect(totalMp).toBe(9);
+      }
+
+      // Verify A2 loop logged
+      const a2Logs = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] A2 loop'),
+      );
+      expect(a2Logs.length).toBe(1);
+      expect(a2Logs[0][0]).toContain('chained continuation');
+
+      logSpy.mockRestore();
+    });
+
+    it('stops chaining when movement budget is exhausted', async () => {
+      // Speed: 4. Primary PICKUP. MOVE 4mp to CityA → DELIVER. No budget left for iter 2.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+      });
+      const context = makeContext({ speed: 4, loads: ['Coal'] });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'CityA', demandCardId: 1, payment: 25 },
+          { action: 'pickup', loadType: 'Wine', city: 'CityB' },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Iron',
+        city: 'StartCity',
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['14,10', { row: 14, col: 10, terrain: TerrainType.MediumCity, name: 'CityA' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      mockResolve
+        // A2 iter 1: MOVE to CityA (5 positions = 4mp, uses all budget)
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 10 }, { row: 11, col: 10 },
+              { row: 12, col: 10 }, { row: 13, col: 10 }, { row: 14, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // splitMoveForOpportunities: DELIVER Coal at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'CityA', cardId: 1, payout: 25 },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // PICKUP + MOVE(4mp) + DELIVER — no second MOVE (budget exhausted)
+        expect(result.steps).toHaveLength(3);
+        expect(result.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.steps[1].type).toBe(AIActionType.MoveTrain);
+        expect(result.steps[2].type).toBe(AIActionType.DeliverLoad);
+      }
+
+      // Verify log says budget exhausted
+      const a2Logs = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] A2 loop'),
+      );
+      expect(a2Logs.length).toBe(1);
+      expect(a2Logs[0][0]).toContain('budget exhausted');
+
+      logSpy.mockRestore();
+    });
+
+    it('respects movement budget across multiple chained MOVEs', async () => {
+      // Speed: 6. Primary PICKUP. Iter 1: MOVE 3mp → DELIVER. Iter 2: MOVE(resolves 5mp, truncated to 3mp).
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+      });
+      const context = makeContext({ speed: 6, loads: ['Coal'] });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'CityA', demandCardId: 1, payment: 25 },
+          { action: 'pickup', loadType: 'Wine', city: 'CityB' },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Iron',
+        city: 'StartCity',
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['13,10', { row: 13, col: 10, terrain: TerrainType.MediumCity, name: 'CityA' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      mockResolve
+        // A2 iter 1: MOVE 3mp to CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 10 }, { row: 11, col: 10 },
+              { row: 12, col: 10 }, { row: 13, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // splitMoveForOpportunities: DELIVER at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'CityA', cardId: 1, payout: 25 },
+        })
+        // A2 iter 2: MOVE toward CityB — returns 6mp path (too long, should be truncated to 3mp)
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 13, col: 10 }, { row: 14, col: 10 },
+              { row: 15, col: 10 }, { row: 16, col: 10 },
+              { row: 17, col: 10 }, { row: 18, col: 10 }, { row: 19, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        expect(moves.length).toBe(2);
+        // First MOVE: 3mp
+        expect((moves[0] as any).path.length - 1).toBe(3);
+        // Second MOVE: truncated to 3mp (6 - 3 = 3 remaining)
+        expect((moves[1] as any).path.length - 1).toBeLessThanOrEqual(3);
+        // Total movement never exceeds speed
+        const totalMp = moves.reduce(
+          (sum, m) => sum + ((m as any).path.length - 1), 0,
+        );
+        expect(totalMp).toBeLessThanOrEqual(6);
+      }
+    });
+  });
+
+  describe('A2 loop: termination conditions and state consistency', () => {
+    it('terminates when last step is MOVE (no further pickup/deliver)', async () => {
+      // Primary PICKUP. A2 chains a MOVE with no intermediate city. Last step = MOVE → exit.
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Coal',
+        city: 'Berlin',
+      };
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+      });
+
+      // A2: MOVE toward Paris — no intermediate cities → split returns [MOVE]
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 10, col: 10 }, { row: 12, col: 12 }, { row: 14, col: 14 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        },
+      });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps).toHaveLength(2);
+        expect(result.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.steps[1].type).toBe(AIActionType.MoveTrain);
+      }
+
+      // Log says "last step is MOVE"
+      const a2Logs = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] A2 loop'),
+      );
+      expect(a2Logs.length).toBe(1);
+      expect(a2Logs[0][0]).toContain('last step is MOVE');
+
+      logSpy.mockRestore();
+    });
+
+    it('terminates when no valid target resolves in iteration > 0', async () => {
+      // Primary PICKUP. Iter 1: MOVE → DELIVER. Iter 2: no target resolves → exit.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+      });
+      const context = makeContext({ speed: 9, loads: ['Coal'] });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'CityA', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Iron',
+        city: 'StartCity',
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['14,10', { row: 14, col: 10, terrain: TerrainType.MediumCity, name: 'CityA' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      mockResolve
+        // A2 iter 1: MOVE 4mp → split finds DELIVER at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 10 }, { row: 11, col: 10 },
+              { row: 12, col: 10 }, { row: 13, col: 10 }, { row: 14, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // splitMoveForOpportunities: DELIVER at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'CityA', cardId: 1, payout: 25 },
+        })
+        // A2 iter 2: all MOVE attempts fail
+        .mockResolvedValue({ success: false, error: 'No path' });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // PICKUP + MOVE + DELIVER — no second MOVE
+        expect(result.steps).toHaveLength(3);
+        expect(result.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.steps[1].type).toBe(AIActionType.MoveTrain);
+        expect(result.steps[2].type).toBe(AIActionType.DeliverLoad);
+      }
+
+      // Log says "no valid target"
+      const a2Logs = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] A2 loop'),
+      );
+      expect(a2Logs.length).toBe(1);
+      expect(a2Logs[0][0]).toContain('no valid target');
+
+      logSpy.mockRestore();
+    });
+
+    it('respects iteration cap of 5', async () => {
+      // Bot at start with Coal. Each iteration: MOVE to city → DELIVER + PICKUP new load.
+      // This chains indefinitely (budget=1000, capacity maintained at 1 via deliver+pickup).
+      // Loop MUST stop at 5 iterations.
+      const cities = ['CityA', 'CityB', 'CityC', 'CityD', 'CityE', 'CityF'];
+      const loads = ['Coal', 'Wine', 'Steel', 'Oil', 'Grain', 'Timber'];
+      // resolvedDemands: demand for each load at corresponding city
+      const resolvedDemands = loads.map((load, i) => ({
+        cardId: i + 1,
+        demands: [{ city: cities[i], loadType: load, payment: 25 }],
+      }));
+      // loadAvailability: each city produces the NEXT load in sequence
+      const loadAvailability: Record<string, string[]> = {};
+      for (let i = 0; i < cities.length - 1; i++) {
+        loadAvailability[cities[i]] = [loads[i + 1]];
+      }
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          trainType: TrainType.Superfreight,
+          resolvedDemands,
+        },
+        loadAvailability,
+      });
+      // turnBuildCost: 20 prevents Phase B (tryAppendBuild) from consuming mock resolve calls
+      const context = makeContext({ speed: 1000, loads: ['Coal'], capacity: 3, turnBuildCost: 20 });
+
+      // Route: deliver Coal at CityA, pickup Wine at CityA, deliver Wine at CityB, ...
+      const routeStops: any[] = [];
+      for (let i = 0; i < cities.length - 1; i++) {
+        routeStops.push({ action: 'deliver', loadType: loads[i], city: cities[i], demandCardId: i + 1, payment: 25 });
+        routeStops.push({ action: 'pickup', loadType: loads[i + 1], city: cities[i] });
+      }
+      routeStops.push({ action: 'deliver', loadType: loads[loads.length - 1], city: cities[cities.length - 1], demandCardId: loads.length, payment: 25 });
+
+      const route = makeRoute({
+        stops: routeStops,
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Coal',
+        city: 'StartCity',
+      };
+
+      // loadGridPoints: map each city to a grid position (2mp apart)
+      const gridMap = new Map<string, any>();
+      for (let i = 0; i < cities.length; i++) {
+        const row = 10 + (i + 1) * 2;
+        gridMap.set(`${row},10`, { row, col: 10, terrain: TerrainType.MediumCity, name: cities[i] });
+      }
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      // Each iteration: MOVE resolve (2mp path) + DELIVER resolve + PICKUP resolve
+      // Need 5 iterations × 3 resolves = 15, but 6th iter is prevented by cap.
+      for (let i = 0; i < 6; i++) {
+        const startRow = 10 + i * 2;
+        const endRow = 10 + (i + 1) * 2;
+        // MOVE
+        mockResolve.mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [{ row: startRow, col: 10 }, { row: startRow + 1, col: 10 }, { row: endRow, col: 10 }],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+        // DELIVER (found by splitMoveForOpportunities at city)
+        mockResolve.mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: loads[i], city: cities[i], cardId: i + 1, payout: 25 },
+        });
+        // PICKUP (found by splitMoveForOpportunities at city, if not last city)
+        if (i < cities.length - 1) {
+          mockResolve.mockResolvedValueOnce({
+            success: true,
+            plan: { type: AIActionType.PickupLoad, load: loads[i + 1], city: cities[i] },
+          });
+        }
+      }
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // Count continuation MOVEs (excluding any A1 MOVEs)
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        // Should have exactly 5 MOVEs (one per A2 iteration, capped at 5)
+        expect(moves.length).toBe(5);
+      }
+
+      // Log says "iteration cap"
+      const a2Logs = logSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] A2 loop'),
+      );
+      expect(a2Logs.length).toBe(1);
+      expect(a2Logs[0][0]).toContain('iteration cap');
+
+      logSpy.mockRestore();
+    });
+
+    it('maintains correct simulated state across loop iterations', async () => {
+      // Verify position and loads are updated correctly across 2 A2 iterations.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 10, col: 10 },
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'CityA', loadType: 'Coal', payment: 25 }] },
+            { cardId: 2, demands: [{ city: 'CityB', loadType: 'Wine', payment: 30 }] },
+          ],
+        },
+        loadAvailability: { CityA: ['Wine'] },
+      });
+      // turnBuildCost: 20 prevents Phase B from consuming mock resolve calls
+      const context = makeContext({
+        speed: 9,
+        loads: ['Coal'],
+        position: { row: 10, col: 10 },
+        turnBuildCost: 20,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'CityA', demandCardId: 1, payment: 25 },
+          { action: 'pickup', loadType: 'Wine', city: 'CityA' },
+          { action: 'deliver', loadType: 'Wine', city: 'CityB', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Coal',
+        city: 'StartCity',
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['14,10', { row: 14, col: 10, terrain: TerrainType.MediumCity, name: 'CityA' }],
+      ]));
+
+      // Track all applyPlanToState calls to verify state updates
+      const stateHistory: Array<{ type: string; loads: string[]; position: { row: number; col: number } }> = [];
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.DeliverLoad) {
+          const load = (plan as any).load;
+          const idx = snap.bot.loads.indexOf(load);
+          if (idx >= 0) snap.bot.loads.splice(idx, 1);
+          ctx.loads = [...snap.bot.loads];
+        }
+        stateHistory.push({
+          type: plan.type,
+          loads: [...snap.bot.loads],
+          position: { ...snap.bot.position },
+        });
+      });
+
+      mockResolve
+        // A2 iter 1: MOVE to CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 10 }, { row: 11, col: 10 },
+              { row: 12, col: 10 }, { row: 13, col: 10 }, { row: 14, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        })
+        // splitMoveForOpportunities: DELIVER Coal at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'CityA', cardId: 1, payout: 25 },
+        })
+        // splitMoveForOpportunities: PICKUP Wine at CityA
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Wine', city: 'CityA' },
+        })
+        // A2 iter 2: MOVE toward CityB (5mp remaining)
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 14, col: 10 }, { row: 15, col: 10 },
+              { row: 16, col: 10 }, { row: 17, col: 10 },
+              { row: 18, col: 10 }, { row: 19, col: 10 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      jest.spyOn(console, 'log').mockImplementation();
+      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      (console.log as jest.Mock).mockRestore();
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // PICKUP + MOVE(4mp) + DELIVER + PICKUP(Wine) + MOVE(5mp)
+        expect(result.steps.length).toBeGreaterThanOrEqual(4);
+      }
+
+      // Verify state transitions via stateHistory
+      // After initial PICKUP: loads should include Coal
+      const pickupState = stateHistory.find(s => s.type === AIActionType.PickupLoad && s.loads.includes('Coal'));
+      expect(pickupState).toBeDefined();
+
+      // After DELIVER Coal: Coal should be removed
+      const deliverState = stateHistory.find(s => s.type === AIActionType.DeliverLoad);
+      expect(deliverState).toBeDefined();
+      expect(deliverState!.loads).not.toContain('Coal');
+
+      // After PICKUP Wine: Wine should be present
+      const pickupWineState = stateHistory.find(s => s.type === AIActionType.PickupLoad && s.loads.includes('Wine'));
+      expect(pickupWineState).toBeDefined();
+
+      // Final MOVE should be at a position past CityA
+      const lastMoveState = stateHistory.filter(s => s.type === AIActionType.MoveTrain).pop();
+      expect(lastMoveState).toBeDefined();
+      expect(lastMoveState!.position.row).toBeGreaterThan(14); // Past CityA
+    });
+  });
 });
