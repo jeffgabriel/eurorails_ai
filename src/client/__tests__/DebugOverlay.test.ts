@@ -763,4 +763,115 @@ describe('DebugOverlay', () => {
       expect(entry.retried).toBe(false);
     });
   });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-002: Per-bot collapsible sections and turn history rendering
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('per-bot collapsible sections (FE-002)', () => {
+    it('should render a separate <details> section for each bot', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200, turnNumber: 1 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('data-bot-section="BotAlpha"');
+      expect(html).toContain('data-bot-section="BotBeta"');
+    });
+
+    it('should assign distinct accent colors to each bot section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      // Most recently active bot (BotBeta) is sorted first → gets color index 0 (#34d399)
+      // BotAlpha gets color index 1 (#60a5fa)
+      expect(html).toContain('border-left:3px solid #34d399');
+      expect(html).toContain('border-left:3px solid #60a5fa');
+    });
+
+    it('should display condensed history rows for past turns', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 1000, turnNumber: 1, reasoning: 'Build toward Berlin' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'MoveTrain', durationMs: 800, turnNumber: 2, reasoning: 'Moving along route' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 500, turnNumber: 3 });
+
+      const html = container.innerHTML;
+      // Latest turn (T3) is shown as detail, T2 and T1 are history rows
+      expect(html).toContain('History (2)');
+      expect(html).toContain('T2: MoveTrain');
+      expect(html).toContain('T1: BuildTrack');
+    });
+
+    it('should truncate reasoning to 60 chars in history rows', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const longReasoning = 'A'.repeat(80);
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1, reasoning: longReasoning });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      // History row for T1 should have truncated reasoning
+      expect(html).toContain('A'.repeat(60) + '...');
+      expect(html).not.toContain('A'.repeat(80));
+    });
+
+    it('should show guardrail override tag [GR] in history rows', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100, turnNumber: 1, guardrailOverride: true, guardrailReason: 'budget exceeded' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 200, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('[GR]');
+    });
+
+    it('should show "Bot Turns" header with total count', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 100 });
+
+      expect(container.innerHTML).toContain('Bot Turns');
+      expect(container.innerHTML).toContain('turns this game: 2');
+    });
+
+    it('should display summary line in collapsed bot section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 250, turnNumber: 7 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('BotAlpha — T7: BuildTrack (250ms)');
+    });
+
+    it('should format duration as seconds in history rows', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 1300, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50, turnNumber: 2 });
+
+      // T1 should be in history with duration "1.3s"
+      expect(container.innerHTML).toContain('(1.3s)');
+    });
+  });
 });

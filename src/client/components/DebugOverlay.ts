@@ -69,6 +69,7 @@ export class DebugOverlay {
 
   private static readonly MAX_EVENTS = 50;
   private static readonly MAX_BOT_TURNS_PER_PLAYER = 10;
+  private static readonly BOT_ACCENT_COLORS = ['#34d399', '#60a5fa', '#fbbf24', '#f472b6', '#a78bfa'];
   private static readonly STORAGE_KEY = 'eurorails.debugOverlay.open';
 
   constructor(scene: Phaser.Scene, gameStateService: GameStateService) {
@@ -397,59 +398,128 @@ export class DebugOverlay {
   }
 
   private renderBotTurnSection(): string {
-    const info = this.getLatestBotTurnEntry();
-    let content: string;
-    if (!info) {
-      content = '<div style="color:#6b7280;font-size:15px;">No bot turn data yet</div>';
-    } else if (!info.completed) {
-      const time = new Date(info.startTime)
-        .toLocaleTimeString('en-US', { hour12: false });
-      content = `<div style="color:#fbbf24;font-size:15px;">Bot ${info.name} turn started at ${time}</div>`;
-    } else {
-      content = `<div style="color:#34d399;font-size:15px;">Bot ${info.name} turn completed: ${info.action} (${info.durationMs}ms)</div>`;
-      // Show reasoning/strategy (most useful for debugging AI decisions)
-      if (info.reasoning) {
-        content += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${info.reasoning}</div>`;
-      }
-      if (info.planHorizon) {
-        content += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${info.planHorizon}</div>`;
-      }
-      if (info.activeRoute) {
-        const route = info.activeRoute;
-        const stopsHtml = route.stops.map((s, i) => {
-          const isCurrent = i === route.currentStopIndex;
-          const isDone = i < route.currentStopIndex;
-          const color = isDone ? '#6b7280' : isCurrent ? '#fbbf24' : '#9ca3af';
-          const prefix = isDone ? '\u2713' : isCurrent ? '\u25b6' : '\u2022';
-          return `<span style="color:${color};">${prefix} ${s.action.toUpperCase()} ${s.loadType} @ ${s.city}</span>`;
-        }).join(' &rarr; ');
-        content += `<div style="color:#a78bfa;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(167,139,250,0.1);border-radius:4px;border-left:3px solid #a78bfa;"><strong>Route:</strong> ${stopsHtml} <span style="color:#6b7280;margin-left:8px;">[phase: ${route.phase}]</span></div>`;
-      }
-      if (info.guardrailOverride) {
-        content += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${info.guardrailReason || 'unknown'}</div>`;
-      }
-      // Demand ranking table (JIRA-13)
-      if (info.demandRanking && info.demandRanking.length > 0) {
-        content += this.renderDemandRanking(info.demandRanking);
-      }
-      // Show load actions first (most interesting to watch)
-      if (info.loadsPickedUp || info.loadsDelivered) {
-        content += this.renderLoadDetails(info.loadsPickedUp, info.loadsDelivered);
-      }
-      if (info.buildTrackData) {
-        content += this.renderBuildTrackDetails(info.buildTrackData);
-      }
-      if (info.movementData) {
-        content += this.renderMovementDetails(info.movementData);
-      }
+    if (this.botTurnHistory.size === 0) {
+      return `
+        <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
+          <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Bot Turns <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
+          <div style="color:#6b7280;font-size:15px;">No bot turn data yet</div>
+        </div>
+      `;
     }
+
+    // Sort bots: most recently active first
+    const sortedBots = [...this.botTurnHistory.entries()].sort((a, b) => {
+      if (a[0] === this.lastActiveBotId) return -1;
+      if (b[0] === this.lastActiveBotId) return 1;
+      const aTime = a[1][0]?.startTime || 0;
+      const bTime = b[1][0]?.startTime || 0;
+      return bTime - aTime;
+    });
+
+    const sections = sortedBots.map(([botId, entries], i) =>
+      this.renderBotSection(botId, entries, i),
+    ).join('');
 
     return `
       <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
-        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Bot Turn <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
-        ${content}
+        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Bot Turns <span style="color:#6b7280;font-weight:normal;">turns this game: ${this.botTurnCount}</span></div>
+        ${sections}
       </div>
     `;
+  }
+
+  private renderBotSection(botPlayerId: string, entries: BotTurnEntry[], colorIndex: number): string {
+    const color = DebugOverlay.BOT_ACCENT_COLORS[colorIndex % DebugOverlay.BOT_ACCENT_COLORS.length];
+    const isActive = botPlayerId === this.lastActiveBotId;
+    const latest = entries[0];
+
+    if (!latest) {
+      return `
+        <details data-bot-section="${botPlayerId}" ${isActive ? 'open' : ''} style="margin-bottom:8px;border-left:3px solid ${color};padding-left:10px;">
+          <summary style="cursor:pointer;color:${color};font-weight:bold;font-size:16px;padding:6px 0;">${botPlayerId}</summary>
+          <div style="padding:6px 0;color:#6b7280;">No turns yet</div>
+        </details>
+      `;
+    }
+
+    // Summary line for collapsed view
+    const summaryText = latest.completed
+      ? `${botPlayerId} — T${latest.turnNumber ?? '?'}: ${latest.action} (${latest.durationMs}ms)`
+      : `${botPlayerId} — turn in progress...`;
+
+    // Full detail for the current (most recent) turn
+    let latestDetail = '';
+    if (!latest.completed) {
+      const time = new Date(latest.startTime).toLocaleTimeString('en-US', { hour12: false });
+      latestDetail = `<div style="color:#fbbf24;font-size:15px;">Bot ${latest.name} turn started at ${time}</div>`;
+    } else {
+      latestDetail = `<div style="color:#34d399;font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
+      if (latest.reasoning) {
+        latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
+      }
+      if (latest.planHorizon) {
+        latestDetail += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${latest.planHorizon}</div>`;
+      }
+      if (latest.activeRoute) {
+        const route = latest.activeRoute;
+        const stopsHtml = route.stops.map((s, i) => {
+          const isCurrent = i === route.currentStopIndex;
+          const isDone = i < route.currentStopIndex;
+          const c = isDone ? '#6b7280' : isCurrent ? '#fbbf24' : '#9ca3af';
+          const prefix = isDone ? '\u2713' : isCurrent ? '\u25b6' : '\u2022';
+          return `<span style="color:${c};">${prefix} ${s.action.toUpperCase()} ${s.loadType} @ ${s.city}</span>`;
+        }).join(' &rarr; ');
+        latestDetail += `<div style="color:#a78bfa;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(167,139,250,0.1);border-radius:4px;border-left:3px solid #a78bfa;"><strong>Route:</strong> ${stopsHtml} <span style="color:#6b7280;margin-left:8px;">[phase: ${route.phase}]</span></div>`;
+      }
+      if (latest.guardrailOverride) {
+        latestDetail += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${latest.guardrailReason || 'unknown'}</div>`;
+      }
+      if (latest.demandRanking && latest.demandRanking.length > 0) {
+        latestDetail += this.renderDemandRanking(latest.demandRanking);
+      }
+      if (latest.loadsPickedUp || latest.loadsDelivered) {
+        latestDetail += this.renderLoadDetails(latest.loadsPickedUp, latest.loadsDelivered);
+      }
+      if (latest.buildTrackData) {
+        latestDetail += this.renderBuildTrackDetails(latest.buildTrackData);
+      }
+      if (latest.movementData) {
+        latestDetail += this.renderMovementDetails(latest.movementData);
+      }
+    }
+
+    // Condensed history rows for past turns
+    const pastEntries = entries.slice(1);
+    let historyHtml = '';
+    if (pastEntries.length > 0) {
+      const rows = pastEntries.map(e => this.renderTurnHistoryRow(e)).join('');
+      historyHtml = `
+        <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;">
+          <div style="color:#6b7280;font-size:13px;margin-bottom:4px;">History (${pastEntries.length})</div>
+          <div style="max-height:150px;overflow-y:auto;">${rows}</div>
+        </div>
+      `;
+    }
+
+    return `
+      <details data-bot-section="${botPlayerId}" ${isActive ? 'open' : ''} style="margin-bottom:8px;border-left:3px solid ${color};padding-left:10px;">
+        <summary style="cursor:pointer;color:${color};font-weight:bold;font-size:16px;padding:6px 0;">${summaryText}</summary>
+        <div style="padding:6px 0;">
+          ${latestDetail}
+          ${historyHtml}
+        </div>
+      </details>
+    `;
+  }
+
+  private renderTurnHistoryRow(entry: BotTurnEntry): string {
+    const turn = entry.turnNumber != null ? `T${entry.turnNumber}` : 'T?';
+    const reasoning = entry.reasoning
+      ? entry.reasoning.substring(0, 60) + (entry.reasoning.length > 60 ? '...' : '')
+      : '';
+    const duration = `${(entry.durationMs / 1000).toFixed(1)}s`;
+    const grTag = entry.guardrailOverride ? ' <span style="color:#f87171;">[GR]</span>' : '';
+    return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}</div>`;
   }
 
   private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>): string {
