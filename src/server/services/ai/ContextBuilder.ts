@@ -624,7 +624,7 @@ export class ContextBuilder {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
         const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');
@@ -799,7 +799,7 @@ export class ContextBuilder {
           const isBest = d === best;
           const bestTag = isBest ? ' \u2605 BEST' : '';
           const note = ContextBuilder.formatReachabilityNote(d, skillLevel);
-          const turnEst = `~${d.estimatedTurns} turns`;
+          const turnEst = `~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn`;
           const victoryBonus = ContextBuilder.formatVictoryBonus(d, context.unconnectedMajorCities);
           let suffix = ` \u2014 ${note}, ${turnEst}`;
           if (victoryBonus) suffix += ` \u2014 ${victoryBonus}`;
@@ -819,7 +819,7 @@ export class ContextBuilder {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
         const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');
