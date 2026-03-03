@@ -9,6 +9,45 @@ interface SocketEvent {
   timestamp: Date;
 }
 
+/** Per-bot turn entry for the debug overlay history ring buffer */
+export interface BotTurnEntry {
+  name: string;
+  startTime: number;
+  action: string;
+  durationMs: number;
+  completed: boolean;
+  turnNumber?: number;
+  buildTrackData?: {
+    segmentsBuilt: number;
+    totalCost: number;
+    remainingMoney: number;
+    targetCity?: string;
+  };
+  movementData?: {
+    from: { row: number; col: number };
+    to: { row: number; col: number };
+    mileposts: number;
+    trackUsageFee: number;
+  };
+  loadsPickedUp?: Array<{ loadType: string; city: string }>;
+  loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
+  reasoning?: string;
+  planHorizon?: string;
+  guardrailOverride?: boolean;
+  guardrailReason?: string;
+  activeRoute?: {
+    stops: Array<{ action: string; loadType: string; city: string }>;
+    currentStopIndex: number;
+    phase: string;
+  };
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
+  // JIRA-19: LLM decision metadata
+  model?: string;
+  llmLatencyMs?: number;
+  tokenUsage?: { input: number; output: number };
+  retried?: boolean;
+}
+
 /**
  * Toggleable HTML overlay for debugging game state.
  * Activated by the backtick key (`) during gameplay.
@@ -25,39 +64,11 @@ export class DebugOverlay {
   private turnChangeListener: (index: number) => void;
 
   private botTurnCount: number = 0;
-  private lastBotTurnInfo: {
-    name: string;
-    startTime: number;
-    action: string;
-    durationMs: number;
-    completed: boolean;
-    buildTrackData?: {
-      segmentsBuilt: number;
-      totalCost: number;
-      remainingMoney: number;
-      targetCity?: string;
-    };
-    movementData?: {
-      from: { row: number; col: number };
-      to: { row: number; col: number };
-      mileposts: number;
-      trackUsageFee: number;
-    };
-    loadsPickedUp?: Array<{ loadType: string; city: string }>;
-    loadsDelivered?: Array<{ loadType: string; city: string; payment: number; cardId: number }>;
-    reasoning?: string;
-    planHorizon?: string;
-    guardrailOverride?: boolean;
-    guardrailReason?: string;
-    activeRoute?: {
-      stops: Array<{ action: string; loadType: string; city: string }>;
-      currentStopIndex: number;
-      phase: string;
-    };
-    demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
-  } | null = null;
+  private botTurnHistory: Map<string, BotTurnEntry[]> = new Map();
+  private lastActiveBotId: string | null = null;
 
   private static readonly MAX_EVENTS = 50;
+  private static readonly MAX_BOT_TURNS_PER_PLAYER = 10;
   private static readonly STORAGE_KEY = 'eurorails.debugOverlay.open';
 
   constructor(scene: Phaser.Scene, gameStateService: GameStateService) {
@@ -159,27 +170,54 @@ export class DebugOverlay {
       this.eventLog.pop();
     }
 
-    // Track bot turn events for the dedicated section
+    // Track bot turn events in per-bot ring buffer
     if (eventName === 'bot:turn-start') {
-      this.lastBotTurnInfo = {
-        name: payload?.botPlayerId || 'unknown',
+      const botId = payload?.botPlayerId || 'unknown';
+      this.lastActiveBotId = botId;
+      const entry: BotTurnEntry = {
+        name: botId,
         startTime: Date.now(),
         action: '',
         durationMs: 0,
         completed: false,
+        turnNumber: payload?.turnNumber,
       };
+      const history = this.botTurnHistory.get(botId) || [];
+      history.unshift(entry);
+      if (history.length > DebugOverlay.MAX_BOT_TURNS_PER_PLAYER) {
+        history.pop();
+      }
+      this.botTurnHistory.set(botId, history);
     } else if (eventName === 'bot:turn-complete') {
       this.botTurnCount++;
+      const botId = payload?.botPlayerId || 'unknown';
+      this.lastActiveBotId = botId;
       const action = payload?.action || AIActionType.PassTurn;
-      this.lastBotTurnInfo = {
-        name: payload?.botPlayerId || 'unknown',
-        startTime: this.lastBotTurnInfo?.startTime || Date.now(),
-        action,
-        durationMs: payload?.durationMs || 0,
-        completed: true,
-      };
+      const history = this.botTurnHistory.get(botId) || [];
+
+      // Find pending entry from bot:turn-start, or create a new one
+      let entry = history.find(e => !e.completed);
+      if (!entry) {
+        entry = {
+          name: botId,
+          startTime: Date.now(),
+          action: '',
+          durationMs: 0,
+          completed: false,
+        };
+        history.unshift(entry);
+        if (history.length > DebugOverlay.MAX_BOT_TURNS_PER_PLAYER) {
+          history.pop();
+        }
+      }
+
+      entry.action = action;
+      entry.durationMs = payload?.durationMs || 0;
+      entry.completed = true;
+      entry.turnNumber = payload?.turnNumber;
+
       if (action === AIActionType.BuildTrack && payload?.segmentsBuilt) {
-        this.lastBotTurnInfo.buildTrackData = {
+        entry.buildTrackData = {
           segmentsBuilt: payload.segmentsBuilt,
           totalCost: payload.cost ?? 0,
           remainingMoney: payload.remainingMoney ?? 0,
@@ -187,7 +225,7 @@ export class DebugOverlay {
         };
       }
       if (payload?.movementData) {
-        this.lastBotTurnInfo.movementData = {
+        entry.movementData = {
           from: payload.movementData.from,
           to: payload.movementData.to,
           mileposts: payload.movementData.mileposts ?? 0,
@@ -195,31 +233,40 @@ export class DebugOverlay {
         };
       }
       if (payload?.loadsPickedUp?.length) {
-        this.lastBotTurnInfo.loadsPickedUp = payload.loadsPickedUp;
+        entry.loadsPickedUp = payload.loadsPickedUp;
       }
       if (payload?.loadsDelivered?.length) {
-        this.lastBotTurnInfo.loadsDelivered = payload.loadsDelivered;
+        entry.loadsDelivered = payload.loadsDelivered;
       }
       if (payload?.reasoning) {
-        this.lastBotTurnInfo.reasoning = payload.reasoning;
+        entry.reasoning = payload.reasoning;
       }
       if (payload?.planHorizon) {
-        this.lastBotTurnInfo.planHorizon = payload.planHorizon;
+        entry.planHorizon = payload.planHorizon;
       }
       if (payload?.guardrailOverride) {
-        this.lastBotTurnInfo.guardrailOverride = payload.guardrailOverride;
-        this.lastBotTurnInfo.guardrailReason = payload.guardrailReason;
+        entry.guardrailOverride = payload.guardrailOverride;
+        entry.guardrailReason = payload.guardrailReason;
       }
       if (payload?.activeRoute) {
-        this.lastBotTurnInfo.activeRoute = payload.activeRoute;
+        entry.activeRoute = payload.activeRoute;
       }
       if (payload?.demandRanking?.length) {
-        this.lastBotTurnInfo.demandRanking = payload.demandRanking;
+        entry.demandRanking = payload.demandRanking;
       }
-    } else if (eventName === 'bot:demandRankingUpdate' && this.lastBotTurnInfo) {
-      // FE-001: refresh demand ranking mid-turn after delivery
-      if (payload?.demandRanking?.length) {
-        this.lastBotTurnInfo.demandRanking = payload.demandRanking;
+      // JIRA-19: LLM decision metadata
+      entry.model = payload?.model;
+      entry.llmLatencyMs = payload?.llmLatencyMs;
+      entry.tokenUsage = payload?.tokenUsage;
+      entry.retried = payload?.retried;
+
+      this.botTurnHistory.set(botId, history);
+    } else if (eventName === 'bot:demandRankingUpdate') {
+      // Refresh demand ranking mid-turn on the latest entry for the relevant bot
+      const botId = payload?.botPlayerId || this.lastActiveBotId;
+      const entries = botId ? this.botTurnHistory.get(botId) : null;
+      if (entries && entries.length > 0 && payload?.demandRanking?.length) {
+        entries[0].demandRanking = payload.demandRanking;
       }
     }
 
@@ -335,25 +382,40 @@ export class DebugOverlay {
     `;
   }
 
+  /** Get the most recently active bot's latest entry */
+  private getLatestBotTurnEntry(): BotTurnEntry | null {
+    if (this.lastActiveBotId) {
+      const entries = this.botTurnHistory.get(this.lastActiveBotId);
+      if (entries && entries.length > 0) return entries[0];
+    }
+    return null;
+  }
+
+  /** Expose turn history for testing */
+  public getBotTurnHistory(): Map<string, BotTurnEntry[]> {
+    return this.botTurnHistory;
+  }
+
   private renderBotTurnSection(): string {
+    const info = this.getLatestBotTurnEntry();
     let content: string;
-    if (!this.lastBotTurnInfo) {
+    if (!info) {
       content = '<div style="color:#6b7280;font-size:15px;">No bot turn data yet</div>';
-    } else if (!this.lastBotTurnInfo.completed) {
-      const time = new Date(this.lastBotTurnInfo.startTime)
+    } else if (!info.completed) {
+      const time = new Date(info.startTime)
         .toLocaleTimeString('en-US', { hour12: false });
-      content = `<div style="color:#fbbf24;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn started at ${time}</div>`;
+      content = `<div style="color:#fbbf24;font-size:15px;">Bot ${info.name} turn started at ${time}</div>`;
     } else {
-      content = `<div style="color:#34d399;font-size:15px;">Bot ${this.lastBotTurnInfo.name} turn completed: ${this.lastBotTurnInfo.action} (${this.lastBotTurnInfo.durationMs}ms)</div>`;
+      content = `<div style="color:#34d399;font-size:15px;">Bot ${info.name} turn completed: ${info.action} (${info.durationMs}ms)</div>`;
       // Show reasoning/strategy (most useful for debugging AI decisions)
-      if (this.lastBotTurnInfo.reasoning) {
-        content += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${this.lastBotTurnInfo.reasoning}</div>`;
+      if (info.reasoning) {
+        content += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${info.reasoning}</div>`;
       }
-      if (this.lastBotTurnInfo.planHorizon) {
-        content += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${this.lastBotTurnInfo.planHorizon}</div>`;
+      if (info.planHorizon) {
+        content += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${info.planHorizon}</div>`;
       }
-      if (this.lastBotTurnInfo.activeRoute) {
-        const route = this.lastBotTurnInfo.activeRoute;
+      if (info.activeRoute) {
+        const route = info.activeRoute;
         const stopsHtml = route.stops.map((s, i) => {
           const isCurrent = i === route.currentStopIndex;
           const isDone = i < route.currentStopIndex;
@@ -363,22 +425,22 @@ export class DebugOverlay {
         }).join(' &rarr; ');
         content += `<div style="color:#a78bfa;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(167,139,250,0.1);border-radius:4px;border-left:3px solid #a78bfa;"><strong>Route:</strong> ${stopsHtml} <span style="color:#6b7280;margin-left:8px;">[phase: ${route.phase}]</span></div>`;
       }
-      if (this.lastBotTurnInfo.guardrailOverride) {
-        content += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${this.lastBotTurnInfo.guardrailReason || 'unknown'}</div>`;
+      if (info.guardrailOverride) {
+        content += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${info.guardrailReason || 'unknown'}</div>`;
       }
       // Demand ranking table (JIRA-13)
-      if (this.lastBotTurnInfo.demandRanking && this.lastBotTurnInfo.demandRanking.length > 0) {
-        content += this.renderDemandRanking(this.lastBotTurnInfo.demandRanking);
+      if (info.demandRanking && info.demandRanking.length > 0) {
+        content += this.renderDemandRanking(info.demandRanking);
       }
       // Show load actions first (most interesting to watch)
-      if (this.lastBotTurnInfo.loadsPickedUp || this.lastBotTurnInfo.loadsDelivered) {
-        content += this.renderLoadDetails(this.lastBotTurnInfo.loadsPickedUp, this.lastBotTurnInfo.loadsDelivered);
+      if (info.loadsPickedUp || info.loadsDelivered) {
+        content += this.renderLoadDetails(info.loadsPickedUp, info.loadsDelivered);
       }
-      if (this.lastBotTurnInfo.buildTrackData) {
-        content += this.renderBuildTrackDetails(this.lastBotTurnInfo.buildTrackData);
+      if (info.buildTrackData) {
+        content += this.renderBuildTrackDetails(info.buildTrackData);
       }
-      if (this.lastBotTurnInfo.movementData) {
-        content += this.renderMovementDetails(this.lastBotTurnInfo.movementData);
+      if (info.movementData) {
+        content += this.renderMovementDetails(info.movementData);
       }
     }
 
@@ -407,7 +469,7 @@ export class DebugOverlay {
     `;
   }
 
-  private renderBuildTrackDetails(data: NonNullable<typeof this.lastBotTurnInfo>['buildTrackData']): string {
+  private renderBuildTrackDetails(data: BotTurnEntry['buildTrackData']): string {
     if (!data) return '';
     const targetLine = data.targetCity
       ? `<div style="color:#60a5fa;font-size:15px;margin-top:6px;font-weight:bold;">Building toward: ${data.targetCity}</div>`
@@ -416,7 +478,7 @@ export class DebugOverlay {
     return `${targetLine}${costLine}`;
   }
 
-  private renderMovementDetails(data: NonNullable<typeof this.lastBotTurnInfo>['movementData']): string {
+  private renderMovementDetails(data: BotTurnEntry['movementData']): string {
     if (!data) return '';
     return `<div style="color:#e5e7eb;font-size:15px;">Moved: (${data.from.row},${data.from.col}) → (${data.to.row},${data.to.col}), ${data.mileposts}mp, fee: ${data.trackUsageFee}M</div>`;
   }

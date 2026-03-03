@@ -1,4 +1,4 @@
-import { DebugOverlay } from '../components/DebugOverlay';
+import { DebugOverlay, BotTurnEntry } from '../components/DebugOverlay';
 import { GameStateService } from '../services/GameStateService';
 import { GameState } from '../../shared/types/GameTypes';
 
@@ -668,6 +668,99 @@ describe('DebugOverlay', () => {
       });
 
       expect(container.innerHTML).toContain('Coal at Hamburg, Iron at Hamburg, Oil at Hamburg');
+    });
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-001: Per-bot turn history with ring buffer
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('per-bot turn history (FE-001)', () => {
+    it('should store turns separately for different bots', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      const history = overlay.getBotTurnHistory();
+      expect(history.get('BotAlpha')).toHaveLength(1);
+      expect(history.get('BotBeta')).toHaveLength(1);
+      expect(history.get('BotAlpha')![0].action).toBe('BuildTrack');
+      expect(history.get('BotBeta')![0].action).toBe('PassTurn');
+    });
+
+    it('should accumulate multiple turns per bot', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'MoveTrain', durationMs: 200 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50 });
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      expect(alphaHistory).toHaveLength(3);
+      // Most recent first (ring buffer unshift)
+      expect(alphaHistory[0].action).toBe('PassTurn');
+      expect(alphaHistory[1].action).toBe('MoveTrain');
+      expect(alphaHistory[2].action).toBe('BuildTrack');
+    });
+
+    it('should cap per-bot history at MAX_BOT_TURNS_PER_PLAYER (10)', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      for (let i = 0; i < 15; i++) {
+        overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: `Action${i}`, durationMs: i * 10 });
+      }
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      expect(alphaHistory).toHaveLength(10);
+      // Newest entry should be the last one logged
+      expect(alphaHistory[0].action).toBe('Action14');
+      // Oldest retained entry
+      expect(alphaHistory[9].action).toBe('Action5');
+    });
+
+    it('should link bot:turn-start to subsequent bot:turn-complete for same bot', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-start', { botPlayerId: 'BotAlpha', turnNumber: 5 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 300, turnNumber: 5 });
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      // Start and complete should merge into a single entry
+      expect(alphaHistory).toHaveLength(1);
+      expect(alphaHistory[0].completed).toBe(true);
+      expect(alphaHistory[0].action).toBe('BuildTrack');
+    });
+
+    it('should render the most recently active bot in the bot turn section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      // BotBeta was the last active bot
+      expect(container.innerHTML).toContain('Bot BotBeta turn completed');
+    });
+
+    it('should store LLM metadata in turn entry from bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'BuildTrack',
+        durationMs: 800,
+        model: 'claude-sonnet-4-20250514',
+        llmLatencyMs: 750,
+        tokenUsage: { input: 200, output: 80 },
+        retried: false,
+      });
+
+      const entry = overlay.getBotTurnHistory().get('BotAlpha')![0];
+      expect(entry.model).toBe('claude-sonnet-4-20250514');
+      expect(entry.llmLatencyMs).toBe(750);
+      expect(entry.tokenUsage).toEqual({ input: 200, output: 80 });
+      expect(entry.retried).toBe(false);
     });
   });
 });
