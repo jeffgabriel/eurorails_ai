@@ -56,6 +56,11 @@ export interface BotTurnResult {
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
   demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
+  // JIRA-19: LLM decision metadata
+  model?: string;
+  llmLatencyMs?: number;
+  tokenUsage?: { input: number; output: number };
+  retried?: boolean;
 }
 
 export class AIStrategyEngine {
@@ -415,6 +420,11 @@ export class AIStrategyEngine {
         guardrailOverride: guardrailResult.overridden || undefined,
         guardrailReason: guardrailResult.reason,
         demandRanking,
+        // JIRA-19: LLM decision metadata
+        model: decision.model,
+        llmLatencyMs: decision.latencyMs,
+        tokenUsage: decision.tokenUsage,
+        retried: decision.retried,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -437,6 +447,9 @@ export class AIStrategyEngine {
         durationMs,
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        model: 'pipeline-error',
+        llmLatencyMs: 0,
+        retried: false,
       };
     }
   }

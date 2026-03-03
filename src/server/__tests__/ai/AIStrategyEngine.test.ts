@@ -1297,4 +1297,190 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(lastEntry.outcome).toBe('abandoned');
     });
   });
+
+  describe('JIRA-19: LLM metadata in BotTurnResult', () => {
+    it('should populate model/latency/tokenUsage/retried from LLM route planning', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Build toward Berlin',
+        createdAtTurn: 5,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 750,
+        tokenUsage: { input: 200, output: 80 },
+      });
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.model).toBe('claude-sonnet-4-20250514');
+      expect(result.llmLatencyMs).toBe(750);
+      expect(result.tokenUsage).toEqual({ input: 200, output: 80 });
+      expect(result.retried).toBe(false);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should set model="route-executor" and llmLatencyMs=0 for active route path', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 3,
+        reasoning: 'Test route',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.model).toBe('route-executor');
+      expect(result.llmLatencyMs).toBe(0);
+      expect(result.tokenUsage).toBeUndefined();
+      expect(result.retried).toBe(false);
+    });
+
+    it('should set model="no-api-key" when no LLM API key configured', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.GOOGLE_AI_API_KEY;
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({ botConfig: null } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.model).toBe('no-api-key');
+      expect(result.llmLatencyMs).toBe(0);
+      expect(result.tokenUsage).toBeUndefined();
+      expect(result.retried).toBe(false);
+    });
+
+    it('should set model="heuristic-fallback" when LLM fails and heuristic succeeds', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockPlanRoute.mockResolvedValue(null);
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Berlin' },
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.model).toBe('heuristic-fallback');
+      expect(result.llmLatencyMs).toBe(0);
+      expect(result.tokenUsage).toBeUndefined();
+      expect(result.retried).toBe(false);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should set model="pipeline-error" when pipeline throws', async () => {
+      mockCapture.mockRejectedValue(new Error('DB failure'));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.model).toBe('pipeline-error');
+      expect(result.llmLatencyMs).toBe(0);
+      expect(result.tokenUsage).toBeUndefined();
+      expect(result.retried).toBe(false);
+    });
+  });
 });
