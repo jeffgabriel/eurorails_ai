@@ -279,6 +279,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    // Re-set all mock implementations explicitly — clearAllMocks only resets
+    // call history, NOT mockReturnValue/mockImplementation. Without these
+    // re-sets, mock behavior from a previous test leaks into the next one.
+
     // Set up mock transaction client for TurnExecutor
     mockClient = {
       query: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(mockResult([])),

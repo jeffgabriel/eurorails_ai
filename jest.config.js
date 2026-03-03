@@ -7,6 +7,12 @@ module.exports = {
   // JUnit XML reporter for CircleCI
   reporters: ['default', ['jest-junit', { outputDirectory: 'test-results' }]],
 
+  // Automatically clear mock call history, instances, contexts and results
+  // between tests. This prevents cross-test contamination of mock.calls etc.
+  // NOTE: This does NOT reset mockReturnValue/mockImplementation — those must
+  // be explicitly re-set in beforeEach when tests need specific mock behavior.
+  clearMocks: true,
+
   // Shared defaults (projects can override)
   moduleNameMapper: {
     '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',

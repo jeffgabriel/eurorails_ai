@@ -66,6 +66,8 @@ describe('BotTurnTrigger — JIRA-19: LLM metadata persistence', () => {
     pendingBotTurns.clear();
     process.env.ENABLE_AI_BOTS = 'true';
 
+    // Re-set mockImplementation explicitly after clearAllMocks — clearAllMocks
+    // only resets call history, NOT mockReturnValue/mockImplementation.
     // Default query responses for the standard flow:
     // 1. is_bot check
     // 2. game status check
