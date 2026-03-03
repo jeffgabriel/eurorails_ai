@@ -122,6 +122,26 @@ export async function onTurnChange(
     const result = await AIStrategyEngine.takeTurn(gameId, currentPlayerId);
     console.log(`[BotTurnTrigger] Pipeline result: action=${result.action}, built=${result.segmentsBuilt}, cost=${result.cost}, success=${result.success}${result.error ? `, error=${result.error}` : ''}`);
 
+    // JIRA-19: Best-effort persist LLM decision metadata to bot_turn_audits
+    try {
+      const details = {
+        reasoning: result.reasoning ?? null,
+        planHorizon: result.planHorizon ?? null,
+        model: result.model ?? null,
+        llmLatencyMs: result.llmLatencyMs ?? null,
+        tokenUsage: result.tokenUsage ?? null,
+        retried: result.retried ?? false,
+        guardrailOverride: result.guardrailOverride ?? false,
+        guardrailReason: result.guardrailReason ?? null,
+      };
+      await db.query(
+        'UPDATE bot_turn_audits SET details = $1 WHERE game_id = $2 AND player_id = $3 AND turn_number = $4',
+        [JSON.stringify(details), gameId, currentPlayerId, turnNumber + 1],
+      );
+    } catch (auditError) {
+      console.error(`[BotTurnTrigger] details UPDATE failed for game ${gameId} player ${currentPlayerId} turn ${turnNumber + 1}:`, auditError instanceof Error ? auditError.message : auditError);
+    }
+
     // Emit bot:turn-complete with audit data + strategy reasoning
     emitToGame(gameId, 'bot:turn-complete', {
       botPlayerId: currentPlayerId,
@@ -143,6 +163,7 @@ export async function onTurnChange(
       planHorizon: result.planHorizon,
       guardrailOverride: result.guardrailOverride,
       guardrailReason: result.guardrailReason,
+      demandRanking: result.demandRanking,
     });
 
     // Advance to next player
