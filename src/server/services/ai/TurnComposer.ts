@@ -127,7 +127,7 @@ export class TurnComposer {
       const movePlan = moveIdx >= 0 ? steps[moveIdx] as TurnPlanMoveTrain : undefined;
       if (movePlan && movePlan.path.length > 0) {
         const splitPlans = await TurnComposer.splitMoveForOpportunities(
-          movePlan, simSnapshot, simContext,
+          movePlan, simSnapshot, simContext, activeRoute,
         );
         // Replace the original MOVE with the interleaved sequence
         if (splitPlans.length > 1) {
@@ -189,7 +189,7 @@ export class TurnComposer {
             }
             if (chainedMove.path.length > 1) {
               const splitPlans = await TurnComposer.splitMoveForOpportunities(
-                chainedMove, simSnapshot, simContext,
+                chainedMove, simSnapshot, simContext, activeRoute,
               );
               for (const plan of splitPlans) {
                 steps.push(plan);
@@ -254,7 +254,7 @@ export class TurnComposer {
                 const moveSim = ActionResolver.cloneSnapshot(snapshot);
                 const moveCtx = { ...context };
                 const splitPlans = await TurnComposer.splitMoveForOpportunities(
-                  chainedMove, moveSim, moveCtx,
+                  chainedMove, moveSim, moveCtx, activeRoute,
                 );
                 // Insert move steps before the build step
                 const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
@@ -307,11 +307,19 @@ export class TurnComposer {
     movePlan: TurnPlanMoveTrain,
     snapshot: WorldSnapshot,
     context: GameContext,
+    activeRoute?: StrategicRoute | null,
   ): Promise<TurnPlan[]> {
     const plans: TurnPlan[] = [];
     const gridPoints = loadGridPoints();
     const path = movePlan.path;
     let lastSplitIndex = 0;
+
+    // Cargo slot reservation: if the active route's next stop is a pickup,
+    // reserve one slot so opportunistic pickups don't block the planned pickup (BE-002).
+    const nextRouteStopIsPickup = activeRoute &&
+      activeRoute.currentStopIndex < activeRoute.stops.length &&
+      activeRoute.stops[activeRoute.currentStopIndex]?.action === 'pickup';
+    const reservedSlots = nextRouteStopIsPickup ? 1 : 0;
 
     // Walk path positions (skip index 0 — that's where the bot started)
     for (let i = 1; i < path.length; i++) {
@@ -344,9 +352,11 @@ export class TurnComposer {
 
       // Check for PICKUP: city produces loads matching demands, bot has capacity
       // Pick up ALL matching loads up to cargo capacity (FR-5: multi-load pickup)
+      // Reserve slots for planned pickups so opportunistic ones don't block them (BE-002)
+      const effectiveCapacity = TurnComposer.getBotCapacity(snapshot) - reservedSlots;
       const availableLoads = snapshot.loadAvailability[cityName] ?? [];
       for (const loadType of availableLoads) {
-        if (snapshot.bot.loads.length >= TurnComposer.getBotCapacity(snapshot)) break;
+        if (snapshot.bot.loads.length >= effectiveCapacity) break;
         if (snapshot.bot.loads.includes(loadType)) continue;
         const hasDemand = snapshot.bot.resolvedDemands.some(rd =>
           rd.demands.some(d => d.loadType === loadType),

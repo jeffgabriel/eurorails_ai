@@ -1887,6 +1887,199 @@ describe('TurnComposer', () => {
     });
   });
 
+  describe('cargo slot reservation for planned pickups (BE-002)', () => {
+    it('rejects opportunistic pickup when only one slot left and route has planned pickup', async () => {
+      // Bot has 1 load, capacity 2 → 1 empty slot. Route next stop is pickup.
+      // Reservation leaves 0 effective slots → opportunistic pickup blocked.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Wine'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        loads: ['Wine'],
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Hamburg' },
+          { action: 'deliver', loadType: 'Steel', city: 'London', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      // No resolve calls should happen — pickup should be blocked before calling ActionResolver
+      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Only MOVE should remain — no opportunistic pickup
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(0);
+      } else {
+        expect(result.type).toBe(AIActionType.MoveTrain);
+      }
+    });
+
+    it('allows opportunistic pickup when two slots are empty and route has planned pickup', async () => {
+      // Bot has 0 loads, capacity 2 → 2 empty slots. Route next stop is pickup.
+      // Reservation leaves 1 effective slot → opportunistic pickup allowed.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        loads: [],
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Hamburg' },
+          { action: 'deliver', loadType: 'Steel', city: 'London', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const endPos = (plan as any).path[(plan as any).path.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+    });
+
+    it('allows opportunistic pickup when no active route exists', async () => {
+      // Bot has 1 load, capacity 2 → 1 empty slot. No active route.
+      // No reservation → opportunistic pickup allowed.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Wine'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        loads: ['Wine'],
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isDeliveryOnNetwork: true, isDeliveryReachable: true,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const endPos = (plan as any).path[(plan as any).path.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      // No activeRoute passed
+      const result = await TurnComposer.compose(movePlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+    });
+  });
+
   describe('Phase A0: deliver-before-build (FR-8)', () => {
     it('prepends MOVE+DELIVER before BUILD when deliverable load is reachable', async () => {
       const snapshot = makeSnapshot({
