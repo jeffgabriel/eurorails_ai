@@ -599,8 +599,10 @@ export interface DemandContext {
     loadChipCarried: number;
     /** Estimated total turns to complete this demand (build + travel + deliver) */
     estimatedTurns: number;
-    /** Computed demand score: immediateROI + networkValueBonus + victoryBonus */
+    /** Computed demand score: (immediateROI / estimatedTurns) + networkValueBonus + victoryBonus */
     demandScore: number;
+    /** Efficiency: ROI per estimated turn (M/turn) */
+    efficiencyPerTurn: number;
     /** Count of cities near the proposed track corridor (network value) */
     networkCitiesUnlocked: number;
     /** Count of unconnected major cities reachable via the track corridor */

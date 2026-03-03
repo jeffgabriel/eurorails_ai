@@ -1618,7 +1618,7 @@ describe('ActionResolver', () => {
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 0,
           loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -1665,7 +1665,7 @@ describe('ActionResolver', () => {
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 50,
           loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -1710,7 +1710,7 @@ describe('ActionResolver', () => {
           estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 50,
           loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-          demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as DemandContext[],
       });
 
@@ -2197,7 +2197,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: false,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2237,7 +2237,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: true,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2287,7 +2287,7 @@ describe('ActionResolver', () => {
             isLoadOnTrain: true,
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2320,7 +2320,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'B', deliveryCity: 'ExpensiveCity',
@@ -2329,7 +2329,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2358,7 +2358,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 40,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'FarC', deliveryCity: 'FarD',
@@ -2367,7 +2367,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 50, estimatedTrackCostToDelivery: 60,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2400,7 +2400,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -2427,7 +2427,7 @@ describe('ActionResolver', () => {
             estimatedTrackCostToSupply: 100, estimatedTrackCostToDelivery: 100,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });

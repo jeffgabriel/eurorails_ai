@@ -453,6 +453,7 @@ export class ContextBuilder {
       loadChipCarried: carriedCount,
       estimatedTurns,
       demandScore,
+      efficiencyPerTurn: 0,
       networkCitiesUnlocked: corridorValue.networkCities,
       victoryMajorCitiesEnRoute: corridorValue.victoryMajorCities,
     };

@@ -419,6 +419,7 @@ describe('GuardrailEnforcer', () => {
           loadChipCarried: 0,
           estimatedTurns: 5,
           demandScore: 0,
+          efficiencyPerTurn: 0,
           networkCitiesUnlocked: 0,
           victoryMajorCitiesEnRoute: 0,
           ...overrides,

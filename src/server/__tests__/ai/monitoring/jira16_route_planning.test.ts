@@ -38,6 +38,7 @@ function makeDemandContext(overrides: Partial<DemandContext> = {}): DemandContex
     loadChipCarried: 0,
     estimatedTurns: 4,
     demandScore: 0,
+    efficiencyPerTurn: 0,
     networkCitiesUnlocked: 0,
     victoryMajorCitiesEnRoute: 0,
     ...overrides,

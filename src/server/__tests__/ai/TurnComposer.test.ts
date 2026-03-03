@@ -848,7 +848,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1197,7 +1197,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1336,7 +1336,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1425,7 +1425,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
@@ -1479,7 +1479,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
           {
             cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Bordeaux',
@@ -1488,7 +1488,7 @@ describe('TurnComposer', () => {
             estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
-            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           },
         ],
       });
