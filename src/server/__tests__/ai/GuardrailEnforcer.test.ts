@@ -418,6 +418,9 @@ describe('GuardrailEnforcer', () => {
           loadChipTotal: 4,
           loadChipCarried: 0,
           estimatedTurns: 5,
+          demandScore: 0,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
           ...overrides,
         };
       }
@@ -550,7 +553,9 @@ describe('GuardrailEnforcer', () => {
             isLoadOnTrain: true,
             estimatedTrackCostToSupply: 0,
             estimatedTrackCostToDelivery: 100,
-            bestPayout: 20,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           }] as DemandContext[],
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
@@ -577,7 +582,9 @@ describe('GuardrailEnforcer', () => {
             isLoadOnTrain: true,
             estimatedTrackCostToSupply: 0,
             estimatedTrackCostToDelivery: 0,
-            bestPayout: 20,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           }] as DemandContext[],
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
@@ -602,7 +609,9 @@ describe('GuardrailEnforcer', () => {
             isLoadOnTrain: true,
             estimatedTrackCostToSupply: 0,
             estimatedTrackCostToDelivery: 10,
-            bestPayout: 20,
+            isLoadAvailable: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
           }] as DemandContext[],
         });
         const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 2, 2)], totalCost: 5 };
@@ -794,6 +803,124 @@ describe('GuardrailEnforcer', () => {
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DeliverLoad);
         expect(result.reason).toContain('Forced DELIVER');
+      });
+    });
+
+    describe('Guardrail 8: Movement budget enforcement', () => {
+      /** Helper: build a path array of the given milepost count (path.length = mp + 1) */
+      function makePath(mp: number): { row: number; col: number }[] {
+        return Array.from({ length: mp + 1 }, (_, i) => ({ row: 10, col: 10 + i }));
+      }
+
+      it('should truncate last MOVE when MultiAction total exceeds speed', () => {
+        const ctx = makeContext({ speed: 9 });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.MoveTrain, path: makePath(5), fees: new Set<string>(), totalFee: 0 },
+            { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+            { type: AIActionType.MoveTrain, path: makePath(7), fees: new Set<string>(), totalFee: 0 },
+          ],
+        };
+        // Total: 5 + 7 = 12mp, speed = 9, excess = 3 → last MOVE truncated from 7 to 4
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan.type).toBe('MultiAction');
+        if (result.plan.type === 'MultiAction') {
+          expect(result.plan.steps).toHaveLength(3);
+          // First MOVE unchanged (5mp)
+          const firstMove = result.plan.steps[0];
+          if (firstMove.type === AIActionType.MoveTrain) {
+            expect(firstMove.path).toHaveLength(6); // 5mp + 1
+          }
+          // Last MOVE truncated (7mp → 4mp)
+          const lastMove = result.plan.steps[2];
+          if (lastMove.type === AIActionType.MoveTrain) {
+            expect(lastMove.path).toHaveLength(5); // 4mp + 1
+          }
+        }
+      });
+
+      it('should not modify MultiAction plan within speed limit', () => {
+        const ctx = makeContext({ speed: 9 });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.MoveTrain, path: makePath(4), fees: new Set<string>(), totalFee: 0 },
+            { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+            { type: AIActionType.MoveTrain, path: makePath(5), fees: new Set<string>(), totalFee: 0 },
+          ],
+        };
+        // Total: 4 + 5 = 9mp = speed limit, no truncation
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan); // Same reference — no changes
+      });
+
+      it('should remove MOVE step entirely when truncation leaves path of length 1', () => {
+        const ctx = makeContext({ speed: 9 });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.MoveTrain, path: makePath(9), fees: new Set<string>(), totalFee: 0 },
+            { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+            { type: AIActionType.MoveTrain, path: makePath(3), fees: new Set<string>(), totalFee: 0 },
+          ],
+        };
+        // Total: 9 + 3 = 12mp, excess = 3, last MOVE has 3mp → removed entirely
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan.type).toBe('MultiAction');
+        if (result.plan.type === 'MultiAction') {
+          expect(result.plan.steps).toHaveLength(2); // MOVE step removed
+          expect(result.plan.steps[0].type).toBe(AIActionType.MoveTrain);
+          expect(result.plan.steps[1].type).toBe(AIActionType.PickupLoad);
+        }
+      });
+
+      it('should log a warning when truncation occurs', () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+        const ctx = makeContext({ speed: 9 });
+        const plan: TurnPlan = {
+          type: 'MultiAction',
+          steps: [
+            { type: AIActionType.MoveTrain, path: makePath(6), fees: new Set<string>(), totalFee: 0 },
+            { type: AIActionType.MoveTrain, path: makePath(6), fees: new Set<string>(), totalFee: 0 },
+          ],
+        };
+        // Total: 6 + 6 = 12mp > 9
+
+        GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[Guardrail 8]'),
+        );
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('12mp > 9mp'),
+        );
+        warnSpy.mockRestore();
+      });
+
+      it('should not affect single MOVE plans (only MultiAction)', () => {
+        const ctx = makeContext({ speed: 9 });
+        const plan: TurnPlan = {
+          type: AIActionType.MoveTrain,
+          path: makePath(12), // 12mp > 9, but not MultiAction
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+
+        const result = GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        // Guardrail 8 only handles MultiAction; single MOVE passes through
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
       });
     });
   });
