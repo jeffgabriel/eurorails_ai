@@ -432,7 +432,9 @@ export class ContextBuilder {
     const demandScore = ContextBuilder.scoreDemand(
       demand.payment, totalTrackCost,
       corridorValue.networkCities, corridorValue.victoryMajorCities,
+      estimatedTurns,
     );
+    const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
 
     return {
       cardIndex,
@@ -453,7 +455,7 @@ export class ContextBuilder {
       loadChipCarried: carriedCount,
       estimatedTurns,
       demandScore,
-      efficiencyPerTurn: 0,
+      efficiencyPerTurn,
       networkCitiesUnlocked: corridorValue.networkCities,
       victoryMajorCitiesEnRoute: corridorValue.victoryMajorCities,
     };
@@ -1408,21 +1410,22 @@ export class ContextBuilder {
   }
 
   /**
-   * Compute a demand score from immediate ROI, network value, and victory bonus.
+   * Compute a demand score from efficiency (ROI per turn), network value, and victory bonus.
    * Higher scores mean better demand options for the bot to pursue.
    *
-   * Score = immediateROI + networkCities * 3 + victoryMajorCities * 10
+   * Score = (immediateROI / estimatedTurns) + networkCities * 3 + victoryMajorCities * 10
    */
   private static scoreDemand(
     payout: number,
     totalTrackCost: number,
     networkCities: number,
     victoryMajorCities: number,
+    estimatedTurns: number,
   ): number {
     const immediateROI = payout - totalTrackCost;
     const networkBonus = networkCities * ContextBuilder.NETWORK_CITY_WEIGHT;
     const victoryBonus = victoryMajorCities * ContextBuilder.VICTORY_CITY_WEIGHT;
-    return immediateROI + networkBonus + victoryBonus;
+    return (immediateROI / estimatedTurns) + networkBonus + victoryBonus;
   }
 
   // ── Demand context helpers (BE-005) ─────────────────────────────────────
