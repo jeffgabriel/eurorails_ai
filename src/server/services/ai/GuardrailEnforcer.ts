@@ -15,6 +15,7 @@ import {
   GuardrailPlanResult,
   TurnPlan,
   TurnPlanDropLoad,
+  TurnPlanMoveTrain,
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
@@ -209,6 +210,46 @@ export class GuardrailEnforcer {
             reason: `Blocked PASS with loads: overriding to MOVE toward ${demand.supplyCity} to pick up ${demand.loadType}`,
           };
         }
+      }
+    }
+
+    // Guardrail 8: Movement budget enforcement (defense-in-depth)
+    // For MultiAction plans, ensure total movement doesn't exceed speed limit.
+    // This is a silent truncation — returns overridden: false.
+    if (plan.type === 'MultiAction') {
+      const moveIndices: number[] = [];
+      let totalMovement = 0;
+      for (let i = 0; i < plan.steps.length; i++) {
+        if (plan.steps[i].type === AIActionType.MoveTrain) {
+          moveIndices.push(i);
+          totalMovement += (plan.steps[i] as TurnPlanMoveTrain).path.length - 1;
+        }
+      }
+
+      if (totalMovement > context.speed) {
+        let excess = totalMovement - context.speed;
+        console.warn(
+          `[Guardrail 8] Movement budget exceeded: ${totalMovement}mp > ${context.speed}mp limit. Truncating.`,
+        );
+        const newSteps = [...plan.steps];
+        // Truncate from last MOVE backward
+        for (let i = moveIndices.length - 1; i >= 0 && excess > 0; i--) {
+          const idx = moveIndices[i];
+          const movePlan = newSteps[idx] as TurnPlanMoveTrain;
+          const currentMp = movePlan.path.length - 1;
+          const reduction = Math.min(excess, currentMp);
+          const newPathLength = movePlan.path.length - reduction;
+          if (newPathLength > 1) {
+            newSteps[idx] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) };
+          } else {
+            newSteps.splice(idx, 1);
+          }
+          excess -= reduction;
+        }
+        return {
+          plan: { ...plan, steps: newSteps },
+          overridden: false,
+        };
       }
     }
 
