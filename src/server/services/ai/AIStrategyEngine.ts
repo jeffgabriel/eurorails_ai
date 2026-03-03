@@ -440,6 +440,22 @@ export class AIStrategyEngine {
 
       flushTurnLog();
 
+      // BE-009: Best-effort audit record for pipeline errors
+      try {
+        const auditDetails = JSON.stringify({
+          source: 'pipeline-error',
+          error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+        await db.query(
+          `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms, details)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [gameId, botPlayerId, memory.turnNumber + 1, AIActionType.PassTurn, 0, 0, durationMs, auditDetails],
+        );
+      } catch (auditError) {
+        console.warn(`${tag} Failed to write pipeline-error audit record:`, auditError instanceof Error ? auditError.message : auditError);
+      }
+
       return {
         action: AIActionType.PassTurn,
         segmentsBuilt: 0,

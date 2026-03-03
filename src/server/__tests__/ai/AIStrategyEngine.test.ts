@@ -1487,4 +1487,87 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.retried).toBe(false);
     });
   });
+
+  describe('BE-009: pipeline error audit records', () => {
+    beforeEach(() => {
+      // Reset getMemory to default since other tests may set mockReturnValue
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+      } as any);
+    });
+
+    it('should insert bot_turn_audits record when pipeline throws', async () => {
+      mockCapture.mockRejectedValue(new Error('Snapshot capture failed'));
+      mockQuery.mockResolvedValue({ rows: [] });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      const auditCall = mockQuery.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('bot_turn_audits'),
+      );
+      expect(auditCall).toBeDefined();
+      expect(auditCall![0]).toContain('INSERT INTO bot_turn_audits');
+      // Verify params: game_id, player_id, turn_number, action, cost, remaining_money, duration_ms, details
+      const params = auditCall![1] as any[];
+      expect(params[0]).toBe('game-1');     // game_id
+      expect(params[1]).toBe('bot-1');      // player_id
+      expect(params[2]).toBe(1);            // turn_number (memory.turnNumber=0 + 1)
+      expect(params[3]).toBe('PassTurn');   // action
+      expect(params[4]).toBe(0);            // cost
+      // Verify details JSON contains error info
+      const details = JSON.parse(params[7]);
+      expect(details.source).toBe('pipeline-error');
+      expect(details.error).toBe('Snapshot capture failed');
+      expect(details.stack).toBeDefined();
+    });
+
+    it('should not crash when audit INSERT itself fails', async () => {
+      mockCapture.mockRejectedValue(new Error('Pipeline boom'));
+      mockQuery.mockRejectedValue(new Error('bot_turn_audits does not exist'));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Pipeline error is returned normally — audit failure is swallowed
+      expect(result.action).toBe('PassTurn');
+      expect(result.error).toBe('Pipeline boom');
+      expect(result.model).toBe('pipeline-error');
+    });
+
+    it('should include stack trace in audit details', async () => {
+      mockCapture.mockRejectedValue(new Error('Stack trace test'));
+      mockQuery.mockResolvedValue({ rows: [] });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      const auditCall = mockQuery.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('bot_turn_audits'),
+      );
+      expect(auditCall).toBeDefined();
+      const details = JSON.parse((auditCall![1] as any[])[7]);
+      expect(details.stack).toContain('Stack trace test');
+      expect(details.stack).toContain('Error');
+    });
+
+    it('should handle non-Error objects in audit details', async () => {
+      mockCapture.mockRejectedValue('string error');
+      mockQuery.mockResolvedValue({ rows: [] });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      const auditCall = mockQuery.mock.calls.find(
+        (call: any[]) => typeof call[0] === 'string' && call[0].includes('bot_turn_audits'),
+      );
+      expect(auditCall).toBeDefined();
+      const details = JSON.parse((auditCall![1] as any[])[7]);
+      expect(details.source).toBe('pipeline-error');
+      expect(details.error).toBe('string error');
+      expect(details.stack).toBeUndefined();
+    });
+  });
 });
