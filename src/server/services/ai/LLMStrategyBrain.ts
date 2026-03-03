@@ -206,6 +206,7 @@ export class LLMStrategyBrain {
     snapshot: WorldSnapshot,
     context: GameContext,
     gridPoints: GridPoint[],
+    lastAbandonedRouteKey?: string | null,
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
@@ -215,7 +216,7 @@ export class LLMStrategyBrain {
     let totalOutputTokens = 0;
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments);
+      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey);
 
       if (lastError) {
         userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;

@@ -730,6 +730,7 @@ export class ContextBuilder {
     skillLevel: BotSkillLevel,
     gridPoints: GridPoint[],
     segments: TrackSegment[] = [],
+    lastAbandonedRouteKey?: string | null,
   ): string {
     const lines: string[] = [];
 
@@ -918,6 +919,13 @@ export class ContextBuilder {
         if (opp.recentBuildDirection) parts.push(`building toward ${opp.recentBuildDirection}`);
         lines.push(`- ${parts.join('. ')}.`);
       }
+    }
+
+    // ── RECENTLY ABANDONED ROUTE (BE-005) ──
+    if (lastAbandonedRouteKey) {
+      lines.push('');
+      lines.push(`RECENTLY ABANDONED ROUTE: ${lastAbandonedRouteKey}`);
+      lines.push('Avoid planning a route identical to this one — it was abandoned because it could not be completed.');
     }
 
     return lines.join('\n');

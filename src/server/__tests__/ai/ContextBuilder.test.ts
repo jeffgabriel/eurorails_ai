@@ -1918,6 +1918,75 @@ describe('ContextBuilder proximity computation methods', () => {
 
 // ── JIRA-16: Hand quality, best demand, enhanced ranking tests ────────────
 
+// ── BE-005: RECENTLY ABANDONED ROUTE in serializeRoutePlanningPrompt ──
+
+describe('RECENTLY ABANDONED ROUTE section in serializeRoutePlanningPrompt (BE-005)', () => {
+  function makeCtxForAbandoned(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Rome', estimatedCost: 10 }],
+      totalMajorCities: 8,
+      trackSummary: '4 segments',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Berlin'],
+      citiesOnNetwork: ['Berlin'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Mid Game',
+      turnNumber: 10,
+      ...overrides,
+    };
+  }
+
+  it('should include abandoned route key in prompt when provided', () => {
+    const ctx = makeCtxForAbandoned();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], 'pickup(Coal@Hamburg)->deliver(Coal@Berlin)',
+    );
+
+    expect(output).toContain('RECENTLY ABANDONED ROUTE: pickup(Coal@Hamburg)->deliver(Coal@Berlin)');
+    expect(output).toContain('Avoid planning a route identical to this one');
+  });
+
+  it('should NOT include abandoned route section when key is null', () => {
+    const ctx = makeCtxForAbandoned();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], null,
+    );
+
+    expect(output).not.toContain('RECENTLY ABANDONED ROUTE');
+  });
+
+  it('should NOT include abandoned route section when key is undefined', () => {
+    const ctx = makeCtxForAbandoned();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [],
+    );
+
+    expect(output).not.toContain('RECENTLY ABANDONED ROUTE');
+  });
+
+  it('should NOT include abandoned route section when key is empty string', () => {
+    const ctx = makeCtxForAbandoned();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], '',
+    );
+
+    expect(output).not.toContain('RECENTLY ABANDONED ROUTE');
+  });
+});
+
 describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () => {
   function makeCtx(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
     return {

@@ -156,7 +156,7 @@ export class AIStrategyEngine {
         const brain = AIStrategyEngine.createBrain(botConfig!);
 
         // Try to plan a route first
-        const routeResult = await brain.planRoute(snapshot, context, gridPoints);
+        const routeResult = await brain.planRoute(snapshot, context, gridPoints, memory.lastAbandonedRouteKey);
 
         if (routeResult) {
           activeRoute = routeResult.route;
