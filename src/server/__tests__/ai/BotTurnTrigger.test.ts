@@ -47,10 +47,12 @@ jest.mock('../../services/ai/BotMemory', () => ({
 import { onTurnChange, pendingBotTurns } from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
+import { emitToGame } from '../../services/socketService';
 import { AIActionType } from '../../../shared/types/GameTypes';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
+const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
 
 function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
@@ -205,5 +207,23 @@ describe('BotTurnTrigger — JIRA-19: LLM metadata persistence', () => {
     expect(details.planHorizon).toBeNull();
     expect(details.guardrailOverride).toBe(false);
     expect(details.guardrailReason).toBeNull();
+  });
+
+  it('should include LLM metadata in bot:turn-complete socket event', async () => {
+    mockTakeTurn.mockResolvedValue(makeBotTurnResult() as any);
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    // Find the bot:turn-complete emit call
+    const turnCompleteCall = mockEmitToGame.mock.calls.find(
+      (call: any[]) => call[1] === 'bot:turn-complete',
+    );
+    expect(turnCompleteCall).toBeDefined();
+
+    const payload = turnCompleteCall![2] as Record<string, any>;
+    expect(payload.model).toBe('claude-sonnet-4-20250514');
+    expect(payload.llmLatencyMs).toBe(750);
+    expect(payload.tokenUsage).toEqual({ input: 200, output: 80 });
+    expect(payload.retried).toBe(false);
   });
 });

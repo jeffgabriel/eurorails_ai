@@ -164,6 +164,11 @@ export async function onTurnChange(
       guardrailOverride: result.guardrailOverride,
       guardrailReason: result.guardrailReason,
       demandRanking: result.demandRanking,
+      // JIRA-19: LLM decision metadata
+      model: result.model,
+      llmLatencyMs: result.llmLatencyMs,
+      tokenUsage: result.tokenUsage,
+      retried: result.retried,
     });
 
     // Advance to next player
