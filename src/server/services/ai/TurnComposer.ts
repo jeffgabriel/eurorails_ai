@@ -352,6 +352,27 @@ export class TurnComposer {
           rd.demands.some(d => d.loadType === loadType),
         );
         if (!hasDemand) continue;
+
+        // Delivery feasibility pre-filter: reject if no demand has an affordable,
+        // profitable delivery path. Prevents picking up "dead weight" loads that
+        // the bot can't profitably deliver (Bug 1 / BE-001).
+        const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+        if (matchingDemands.length > 0) {
+          const hasFeasibleDelivery = matchingDemands.some(
+            d => d.isDeliveryOnNetwork ||
+              (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
+          );
+          if (!hasFeasibleDelivery) {
+            const bestDemand = matchingDemands[0];
+            console.warn(
+              `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
+              `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
+              `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+            );
+            continue;
+          }
+        }
+
         const result = await ActionResolver.resolve(
           { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
           snapshot, context,
