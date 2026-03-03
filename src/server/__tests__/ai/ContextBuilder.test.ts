@@ -2340,4 +2340,21 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     const roi = d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery;
     expect(d.efficiencyPerTurn).toBe(roi / d.estimatedTurns);
   });
+
+  it('efficiencyPerTurn equals immediateROI when estimatedTurns is 1', () => {
+    const d = makeScoringDemand({
+      loadType: 'Wine',
+      supplyCity: 'Lyon',
+      deliveryCity: 'Paris',
+      payout: 20,
+      estimatedTrackCostToSupply: 5,
+      estimatedTrackCostToDelivery: 0,
+      estimatedTurns: 1,
+      efficiencyPerTurn: 15,
+    });
+
+    const roi = d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery;
+    expect(d.efficiencyPerTurn).toBe(roi);
+    expect(d.efficiencyPerTurn).toBe(roi / d.estimatedTurns);
+  });
 });
