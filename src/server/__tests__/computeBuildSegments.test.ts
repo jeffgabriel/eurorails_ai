@@ -375,7 +375,7 @@ describe('computeBuildSegments', () => {
       }
     });
 
-    it('continuation first segment starts from a knownSegments node', () => {
+    it('continuation first segment starts from a knownSegments node or connected city outpost', () => {
       // Build primary path from Paris
       const primary = computeBuildSegments([PARIS], [], 5, 5);
       expect(primary.length).toBeGreaterThan(1);
@@ -389,8 +389,9 @@ describe('computeBuildSegments', () => {
       );
 
       if (continuation.length > 0) {
-        // The continuation's first segment `from` must be on the primary path
-        // or at the contStart — valid even when it branches from a mid-point
+        // The continuation's first segment `from` must be on the primary path,
+        // at contStart, or at a city outpost reachable via the red area from
+        // a primary node (major city interior traversal is free).
         const primaryNodes = new Set<string>();
         for (const seg of primary) {
           primaryNodes.add(`${seg.from.row},${seg.from.col}`);
@@ -398,8 +399,25 @@ describe('computeBuildSegments', () => {
         }
         primaryNodes.add(`${contStart[0].row},${contStart[0].col}`);
 
+        // Expand: if a primary node is inside a major city, all outposts of
+        // that city are reachable via the red area at zero cost.
+        const cityLookup = getMajorCityLookup();
+        const cityGroups = getMajorCityGroups();
+        const cityGroupMap = new Map(cityGroups.map(g => [g.cityName, g]));
+        const expandedNodes = new Set(primaryNodes);
+        for (const key of primaryNodes) {
+          const cityName = cityLookup.get(key);
+          if (!cityName) continue;
+          const group = cityGroupMap.get(cityName);
+          if (!group) continue;
+          expandedNodes.add(`${group.center.row},${group.center.col}`);
+          for (const op of group.outposts) {
+            expandedNodes.add(`${op.row},${op.col}`);
+          }
+        }
+
         const firstFrom = `${continuation[0].from.row},${continuation[0].from.col}`;
-        expect(primaryNodes.has(firstFrom)).toBe(true);
+        expect(expandedNodes.has(firstFrom)).toBe(true);
       }
     });
   });

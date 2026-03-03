@@ -16,7 +16,7 @@ import {
   GridCoord,
   GridPointData,
 } from './MapTopology';
-import { getMajorCityLookup, getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { getMajorCityLookup, getMajorCityGroups, getFerryEdges, isIntraCityEdge } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
 // Precompute water crossing costs for O(1) edge lookup.
@@ -328,10 +328,22 @@ export function computeBuildSegments(
       const nbData = grid.get(nbKey);
       if (!nbData) continue;
 
-      // No track may be built within a major city red area (GH-213)
-      const currentCityName = majorCityLookup.get(currentKey);
-      const nbCityName = majorCityLookup.get(nbKey);
-      if (currentCityName && nbCityName && currentCityName === nbCityName) continue;
+      // Intra-city edge: free traversal through major city red area (no track built).
+      // The red area connects all mileposts within a major city at zero cost.
+      if (isIntraCityEdge(currentKey, nbKey, majorCityLookup)) {
+        const newCost = current.cost; // zero cost
+        const existingCost = minCost.get(nbKey);
+        if (existingCost === undefined || newCost < existingCost) {
+          minCost.set(nbKey, newCost);
+          heap.push({
+            row: nb.row,
+            col: nb.col,
+            cost: newCost,
+            path: [...current.path, { row: nb.row, col: nb.col }],
+          });
+        }
+        continue;
+      }
 
       // Ferry ports use their connection cost (4–16M) instead of terrain cost
       const terrainCost = ferryPortCosts.get(nbKey) ?? getTerrainCost(nbData.terrain);
@@ -494,7 +506,7 @@ export function computeBuildSegments(
     let bestTargetName = '';
 
     for (const node of bestPaths.values()) {
-      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys);
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
       if (newSteps === 0) continue;
 
       const endpoint = node.path[node.path.length - 1];
@@ -510,8 +522,8 @@ export function computeBuildSegments(
         minDist < bestTargetDist ||
         (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity)) ||
         (minDist === bestTargetDist && node.cost === (bestPath?.cost ?? Infinity) &&
-          countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys) >
-          countNewSegments(bestPath!.path, onNetwork, builtEdges, ferryEdgeKeys))
+          countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup) >
+          countNewSegments(bestPath!.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup))
       ) {
         bestPath = node;
         bestTargetDist = minDist;
@@ -528,11 +540,11 @@ export function computeBuildSegments(
   } else {
     // Original untargeted selection: most new segments, then cheapest
     for (const node of bestPaths.values()) {
-      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys);
+      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
       if (newSteps === 0) continue;
 
       const bestNewSteps = bestPath
-        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)
+        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)
         : 0;
 
       if (
@@ -549,7 +561,7 @@ export function computeBuildSegments(
     return [];
   }
 
-  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys)}`);
+  console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)}`);
 
   // Valid cold-start positions: major cities only (game rule: build from major city when no track).
   const validColdStartKeys = new Set<string>();
@@ -559,25 +571,28 @@ export function computeBuildSegments(
   }
 
   // Extract up to maxSegments new segments from the path
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys);
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup);
   console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
   return segments;
 }
 
 /**
  * Count segments in a path that are genuinely new (not already built).
+ * Skips intra-city edges (public red area, no track built) and ferry crossings.
  */
 function countNewSegments(
   path: GridCoord[],
   onNetwork: Set<string>,
   builtEdges: Set<string>,
   ferryEdgeKeys: Set<string>,
+  majorCityLookup?: Map<string, string>,
 ): number {
   let count = 0;
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
     if (ferryEdgeKeys.has(`${fromKey}-${toKey}`)) continue; // public ferry crossing, not buildable
+    if (majorCityLookup && isIntraCityEdge(fromKey, toKey, majorCityLookup)) continue; // intra-city, not buildable
     if (!builtEdges.has(`${fromKey}-${toKey}`)) {
       count++;
     }
@@ -587,12 +602,12 @@ function countNewSegments(
 
 /**
  * Convert a grid-coord path into TrackSegment[], limited by maxSegments and budget.
- * Skips edges that already exist on the network or are ferry crossings.
+ * Skips edges that already exist on the network, are ferry crossings, or are
+ * intra-city hops (public red area, no track built).
  *
- * Collects multiple contiguous runs of new segments (separated by built edges
- * or ferry crossings) and returns the longest run that fits within budget.
- * This prevents ferry crossings mid-path from truncating the build to only
- * the segments before the ferry.
+ * Collects multiple contiguous runs of new segments (separated by built edges,
+ * ferry crossings, or intra-city hops) and returns the longest run that fits
+ * within budget.
  */
 function extractSegments(
   path: GridCoord[],
@@ -604,6 +619,7 @@ function extractSegments(
   ferryPortCosts: Map<string, number>,
   ferryEdgeKeys: Set<string>,
   validColdStartKeys: Set<string>,
+  majorCityLookup: Map<string, string>,
 ): TrackSegment[] {
   // Collect all contiguous runs of new (buildable) segments.
   // Each run has a startKey: the grid coord we started building from.
@@ -618,8 +634,8 @@ function extractSegments(
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
 
-    // Skip already-built edges or ferry crossings — start a new run
-    if (builtEdges.has(`${fromKey}-${toKey}`) || ferryEdgeKeys.has(`${fromKey}-${toKey}`)) {
+    // Skip already-built edges, ferry crossings, or intra-city hops — don't break the run
+    if (builtEdges.has(`${fromKey}-${toKey}`) || ferryEdgeKeys.has(`${fromKey}-${toKey}`) || isIntraCityEdge(fromKey, toKey, majorCityLookup)) {
       if (currentRun.length > 0 && runStartKey !== null) {
         runs.push({ segments: currentRun, cost: currentCost, startKey: runStartKey });
         currentRun = [];
@@ -672,14 +688,14 @@ function extractSegments(
 
   if (runs.length === 0) return [];
 
-  // Build set of nodes reachable from path[0] by traversing built edges only.
+  // Build set of nodes reachable from path[0] by traversing built edges or intra-city edges.
   const connectedViaBuilt = new Set<string>();
   connectedViaBuilt.add(makeKey(path[0].row, path[0].col));
   for (let i = 0; i < path.length - 1; i++) {
     const fromKey = makeKey(path[i].row, path[i].col);
     const toKey = makeKey(path[i + 1].row, path[i + 1].col);
     const edgeKey = `${fromKey}-${toKey}`;
-    if (connectedViaBuilt.has(fromKey) && builtEdges.has(edgeKey)) {
+    if (connectedViaBuilt.has(fromKey) && (builtEdges.has(edgeKey) || isIntraCityEdge(fromKey, toKey, majorCityLookup))) {
       connectedViaBuilt.add(toKey);
     }
   }
