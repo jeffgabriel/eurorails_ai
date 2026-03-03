@@ -54,6 +54,28 @@ export class TurnComposer {
       ? [...primaryPlan.steps]
       : [primaryPlan];
 
+    // ── Defensive backstop: validate movement budget before enrichment ──
+    const incomingMovement = TurnComposer.countMovementUsed(steps);
+    if (incomingMovement > context.speed) {
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (steps[i].type === AIActionType.MoveTrain) {
+          const movePlan = steps[i] as TurnPlanMoveTrain;
+          const excess = incomingMovement - context.speed;
+          const newPathLength = movePlan.path.length - excess;
+          console.warn(
+            `[TurnComposer] Movement budget exceeded: ${incomingMovement}mp > ${context.speed}mp limit. ` +
+            `Truncating last MOVE from ${movePlan.path.length - 1}mp to ${Math.max(0, newPathLength - 1)}mp.`,
+          );
+          if (newPathLength > 1) {
+            steps[i] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) } as TurnPlanMoveTrain;
+          } else {
+            steps.splice(i, 1);
+          }
+          break;
+        }
+      }
+    }
+
     // ── Track which action types are already present ──
     const hasType = (type: AIActionType | 'MultiAction') =>
       steps.some(s => s.type === type);
