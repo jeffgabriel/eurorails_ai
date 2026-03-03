@@ -2044,6 +2044,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     expect(output).toContain('build: ~5M');
     expect(output).toContain('ROI: 12M');
     expect(output).toContain('~4 turns');
+    expect(output).toContain('M/turn');
   });
 
   it('should show enhanced ranking format in serializePrompt too', () => {
@@ -2067,6 +2068,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     expect(output).toContain('payout: 20M');
     expect(output).toContain('build: ~0M');
     expect(output).toContain('~2 turns');
+    expect(output).toContain('M/turn');
   });
 
   it('should handle empty demands without HAND QUALITY line', () => {
@@ -2298,11 +2300,11 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     expect(wineRankPos).toBeLessThan(coalRankPos);
   });
 
-  it('demand scoring formula: immediateROI + networkBonus + victoryBonus', () => {
+  it('demand scoring formula: (immediateROI / estimatedTurns) + networkBonus + victoryBonus', () => {
     // Directly test the scoring formula through DemandContext fields
-    // Score = (payout - trackCost) + networkCities*3 + victoryMajorCities*10
-    // Example: payout=10, cost=25, network=4, victory=1
-    // Score = (10-25) + 4*3 + 1*10 = -15 + 12 + 10 = 7
+    // Score = (payout - trackCost) / estimatedTurns + networkCities*3 + victoryMajorCities*10
+    // Example: payout=10, cost=25, turns=3, network=4, victory=1
+    // Score = (10-25)/3 + 4*3 + 1*10 = -5 + 12 + 10 = 17
     const d = makeScoringDemand({
       loadType: 'Coal',
       supplyCity: 'Lyon',
@@ -2310,7 +2312,8 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
       payout: 10,
       estimatedTrackCostToSupply: 15,
       estimatedTrackCostToDelivery: 10,
-      demandScore: 7,
+      estimatedTurns: 3,
+      demandScore: 17,
       networkCitiesUnlocked: 4,
       victoryMajorCitiesEnRoute: 1,
     });
@@ -2319,6 +2322,22 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     const roi = d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery;
     const networkBonus = d.networkCitiesUnlocked * 3;
     const victoryBonus = d.victoryMajorCitiesEnRoute * 10;
-    expect(d.demandScore).toBe(roi + networkBonus + victoryBonus);
+    expect(d.demandScore).toBe(roi / d.estimatedTurns + networkBonus + victoryBonus);
+  });
+
+  it('efficiencyPerTurn should equal ROI / estimatedTurns', () => {
+    const d = makeScoringDemand({
+      loadType: 'Coal',
+      supplyCity: 'Essen',
+      deliveryCity: 'Berlin',
+      payout: 15,
+      estimatedTrackCostToSupply: 2,
+      estimatedTrackCostToDelivery: 0,
+      estimatedTurns: 2,
+      efficiencyPerTurn: 6.5,
+    });
+
+    const roi = d.payout - d.estimatedTrackCostToSupply - d.estimatedTrackCostToDelivery;
+    expect(d.efficiencyPerTurn).toBe(roi / d.estimatedTurns);
   });
 });
