@@ -266,6 +266,19 @@ export class LLMStrategyBrain {
         // Use pruned route if some stops were removed, otherwise original
         const validatedRoute = validation.prunedRoute ?? route;
 
+        // Post-LLM abandoned route check (BE-006): reject if the proposed
+        // route's first stop matches the most recently abandoned route key.
+        if (lastAbandonedRouteKey && validatedRoute.stops.length > 0) {
+          const firstStop = validatedRoute.stops[0];
+          const proposedKey = `${firstStop.loadType}:${firstStop.city}`;
+          if (proposedKey === lastAbandonedRouteKey) {
+            lastError = `Route rejected: first stop "${proposedKey}" matches recently abandoned route. Choose a different route.`;
+            console.warn(`[LLMStrategyBrain] Abandoned route re-proposed (attempt ${attempt + 1}): ${proposedKey}`);
+            attempt++;
+            continue;
+          }
+        }
+
         return {
           route: validatedRoute,
           model: this.model,

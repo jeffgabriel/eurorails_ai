@@ -760,6 +760,113 @@ describe('LLMStrategyBrain', () => {
     });
   });
 
+  // --- BE-006: post-LLM validation for abandoned routes ---
+  describe('planRoute — abandoned route rejection (BE-006)', () => {
+    const abandonedRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Krakow' },
+        { action: 'deliver', loadType: 'Coal', city: 'Roma', payment: 29 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build' as const,
+      startingCity: 'Berlin',
+      createdAtTurn: 5,
+      reasoning: 'test route',
+    };
+
+    const differentRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Wine', city: 'Lyon' },
+        { action: 'deliver', loadType: 'Wine', city: 'Berlin', payment: 20 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build' as const,
+      startingCity: 'Paris',
+      createdAtTurn: 5,
+      reasoning: 'different route',
+    };
+
+    it('should reject route matching lastAbandonedRouteKey and retry', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+
+      // First call returns abandoned route, second returns different route
+      mockParseStrategicRoute
+        .mockReturnValueOnce(abandonedRoute)
+        .mockReturnValueOnce(differentRoute);
+
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(
+        makeSnapshot(), makeContext(), [], 'Coal:Krakow',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.route.stops[0].loadType).toBe('Wine');
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      // Second prompt should include rejection feedback
+      const secondCallArgs = mockChat.mock.calls[1][0];
+      expect(secondCallArgs.userPrompt).toContain('matches recently abandoned route');
+    });
+
+    it('should accept route when it does NOT match lastAbandonedRouteKey', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue(differentRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(
+        makeSnapshot(), makeContext(), [], 'Coal:Krakow',
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.route.stops[0].loadType).toBe('Wine');
+      expect(mockChat).toHaveBeenCalledTimes(1);
+    });
+
+    it('should accept any route when lastAbandonedRouteKey is null', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue(abandonedRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(
+        makeSnapshot(), makeContext(), [], null,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.route.stops[0].loadType).toBe('Coal');
+      expect(mockChat).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return null when all retries produce the abandoned route', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue(abandonedRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(
+        makeSnapshot(), makeContext(), [], 'Coal:Krakow',
+      );
+
+      expect(result).toBeNull();
+      // Should exhaust all retries (initial + 2 retries = 3 calls)
+      expect(mockChat).toHaveBeenCalledTimes(3);
+    });
+  });
+
   // --- JIRA-5: planRoute prompt enrichment ---
   describe('planRoute — serializeRoutePlanningPrompt integration (JIRA-5)', () => {
     const mockSerializeRoutePlanningPrompt = ContextBuilder.serializeRoutePlanningPrompt as jest.Mock;
@@ -810,6 +917,7 @@ describe('LLMStrategyBrain', () => {
         expect.anything(),  // skillLevel
         gridPoints,         // gridPoints passed through
         expect.anything(),  // existingSegments
+        undefined,          // lastAbandonedRouteKey (BE-005)
       );
     });
 
@@ -830,6 +938,7 @@ describe('LLMStrategyBrain', () => {
         BotSkillLevel.Hard,
         expect.anything(),  // gridPoints
         expect.anything(),  // existingSegments
+        undefined,          // lastAbandonedRouteKey (BE-005)
       );
     });
 
