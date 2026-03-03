@@ -2439,6 +2439,140 @@ describe('ActionResolver', () => {
       // Should PASS, not discard (initialBuild blocks discard)
       expect(result.plan!.type).toBe(AIActionType.PassTurn);
     });
+
+    // ── BE-004: DROP dead-weight loads before PASS ──────────────────────────
+
+    it('should drop worst load when bot carries dead weight and all other actions fail (BE-004)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: ['Wine', 'Coal'],
+          money: 10,
+        } as any,
+      });
+
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'A', deliveryCity: 'FarCity',
+            payout: 10, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'B', deliveryCity: 'NearCity',
+            payout: 15, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDropLoad;
+      expect(plan.type).toBe(AIActionType.DropLoad);
+      // Wine has score=20 (cost 30 - payout 10), Coal has score=0 (on network) → drop Wine
+      expect(plan.load).toBe('Wine');
+    });
+
+    it('should NOT drop load when bot has no loads (BE-004)', async () => {
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: false,
+        demands: [],
+      });
+      const snapshot = makeWorldSnapshot({
+        bot: { loads: [] } as any,
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.PassTurn);
+    });
+
+    it('should NOT drop load when all loads have feasible deliveries (BE-004)', async () => {
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'A', deliveryCity: 'NearCity',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+      const snapshot = makeWorldSnapshot({
+        bot: { loads: ['Steel'] } as any,
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Score = 0 (on network) — not dead weight, so should PASS not DROP
+      expect(result.plan!.type).toBe(AIActionType.PassTurn);
+    });
+
+    it('should prioritize DELIVER over DROP (BE-004)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: ['Steel', 'Wine'],
+          resolvedDemands: [
+            { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 15 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        canDeliver: [
+          { loadType: 'Steel', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
+        ],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'A', deliveryCity: 'FarCity',
+            payout: 5, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 50,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Should DELIVER Steel, not DROP Wine
+      expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

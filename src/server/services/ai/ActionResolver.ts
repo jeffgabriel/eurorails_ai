@@ -968,7 +968,35 @@ export class ActionResolver {
       }
     }
 
-    // 4. Always fall back to PASS
+    // 4. Try to DROP a dead-weight load to unblock capacity (BE-004).
+    // If all higher-priority actions failed and the bot is carrying loads with
+    // poor delivery feasibility, dropping the worst one frees a cargo slot so
+    // future turns can pick up something useful instead of passing endlessly.
+    if (!context.isInitialBuild && snapshot.bot.loads.length > 0) {
+      const scored = snapshot.bot.loads.map(loadType => {
+        const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+        if (matchingDemands.length === 0) return { loadType, score: Infinity };
+        const bestScore = Math.min(
+          ...matchingDemands.map(d => {
+            if (d.isDeliveryOnNetwork) return 0;
+            return d.estimatedTrackCostToDelivery - d.payout;
+          }),
+        );
+        return { loadType, score: bestScore };
+      });
+      scored.sort((a, b) => b.score - a.score);
+      const worst = scored[0];
+      // Only drop if the load is genuinely dead weight (no demand or net-negative delivery)
+      if (worst && worst.score > 0) {
+        const result = await ActionResolver.resolveDropLoad(
+          { load: worst.loadType },
+          snapshot,
+        );
+        if (result.success) return result;
+      }
+    }
+
+    // 5. Always fall back to PASS
     return ActionResolver.resolvePass();
   }
 
