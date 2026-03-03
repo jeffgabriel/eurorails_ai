@@ -256,7 +256,7 @@ export class TurnComposer {
     if (steps.length > 1) {
       return { type: 'MultiAction' as const, steps };
     }
-    return primaryPlan;
+    return steps[0] ?? primaryPlan;
   }
 
   /**

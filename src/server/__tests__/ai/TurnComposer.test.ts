@@ -1778,4 +1778,146 @@ describe('TurnComposer', () => {
       }
     });
   });
+
+  describe('pre-enrichment movement budget validation', () => {
+    it('should truncate last MOVE when incoming plan exceeds speed limit', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+
+      // MultiAction with two MOVEs totaling 12mp (7 + 5 = 12 > 9)
+      const plan: TurnPlan = {
+        type: 'MultiAction' as const,
+        steps: [
+          {
+            type: AIActionType.MoveTrain,
+            path: Array.from({ length: 8 }, (_, i) => ({ row: 10, col: 10 + i })), // 7mp
+          } as TurnPlan,
+          {
+            type: AIActionType.DeliverLoad,
+            load: 'Coal',
+            city: 'Berlin',
+            cardId: 1,
+            payout: 25,
+          } as TurnPlan,
+          {
+            type: AIActionType.MoveTrain,
+            path: Array.from({ length: 6 }, (_, i) => ({ row: 10, col: 17 + i })), // 5mp
+          } as TurnPlan,
+        ],
+      };
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await TurnComposer.compose(plan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        // Last MOVE should be truncated from 5mp to 2mp (12 - 9 = 3 excess, 5 - 3 = 2)
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        expect(moves).toHaveLength(2);
+        const firstMove = moves[0] as any;
+        expect(firstMove.path).toHaveLength(8); // 7mp unchanged
+        const secondMove = moves[1] as any;
+        expect(secondMove.path).toHaveLength(3); // 2mp (truncated from 5)
+      }
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[TurnComposer] Movement budget exceeded'),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it('should not truncate when plan is exactly at speed limit', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+
+      // MultiAction with MOVE totaling exactly 9mp
+      const plan: TurnPlan = {
+        type: 'MultiAction' as const,
+        steps: [
+          {
+            type: AIActionType.MoveTrain,
+            path: Array.from({ length: 10 }, (_, i) => ({ row: 10, col: 10 + i })), // 9mp
+          } as TurnPlan,
+          {
+            type: AIActionType.DeliverLoad,
+            load: 'Coal',
+            city: 'Berlin',
+            cardId: 1,
+            payout: 25,
+          } as TurnPlan,
+        ],
+      };
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await TurnComposer.compose(plan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const move = result.steps.find(s => s.type === AIActionType.MoveTrain) as any;
+        expect(move.path).toHaveLength(10); // 9mp, no truncation
+      }
+
+      // No budget warning should be logged
+      const budgetWarnings = warnSpy.mock.calls.filter(
+        c => typeof c[0] === 'string' && c[0].includes('[TurnComposer] Movement budget exceeded'),
+      );
+      expect(budgetWarnings).toHaveLength(0);
+
+      warnSpy.mockRestore();
+    });
+
+    it('should not truncate when plan is under speed limit', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+
+      // Single MOVE of 5mp
+      const plan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: Array.from({ length: 6 }, (_, i) => ({ row: 10, col: 10 + i })), // 5mp
+      } as TurnPlan;
+
+      const result = await TurnComposer.compose(plan, snapshot, context);
+
+      // The plan should pass through unmodified (enrichment may add steps, but the MOVE shouldn't be truncated)
+      if (result.type === 'MultiAction') {
+        const move = result.steps.find(s => s.type === AIActionType.MoveTrain) as any;
+        expect(move.path.length).toBeGreaterThanOrEqual(6); // at least original 5mp
+      } else {
+        const move = result as any;
+        expect(move.path).toHaveLength(6); // 5mp, unchanged
+      }
+    });
+
+    it('should remove MOVE entirely when truncation would leave path of length 1', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ speed: 9 });
+
+      // Two MOVEs: first uses 9mp, second has 2mp — second should be removed entirely
+      const plan: TurnPlan = {
+        type: 'MultiAction' as const,
+        steps: [
+          {
+            type: AIActionType.MoveTrain,
+            path: Array.from({ length: 10 }, (_, i) => ({ row: 10, col: 10 + i })), // 9mp
+          } as TurnPlan,
+          {
+            type: AIActionType.MoveTrain,
+            path: Array.from({ length: 3 }, (_, i) => ({ row: 10, col: 19 + i })), // 2mp
+          } as TurnPlan,
+        ],
+      };
+
+      const result = await TurnComposer.compose(plan, snapshot, context);
+
+      // The second MOVE (2mp excess) should be removed entirely since 2 - 2 = 0 < 1
+      if (result.type === 'MultiAction') {
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        expect(moves).toHaveLength(1);
+        expect((moves[0] as any).path).toHaveLength(10); // first MOVE unchanged
+      }
+    });
+  });
 });
