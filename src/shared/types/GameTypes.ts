@@ -443,6 +443,8 @@ export interface BotMemoryState {
     lastReasoning?: string | null;
     /** Previous turn's plan horizon — fed into next turn's prompt for continuity */
     lastPlanHorizon?: string | null;
+    /** Remaining stops from a partially completed route — passed to LLM for context (BE-010) */
+    previousRouteStops?: RouteStop[] | null;
 }
 
 /** Simplified option summary for decision logging */

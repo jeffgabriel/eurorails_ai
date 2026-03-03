@@ -918,6 +918,7 @@ describe('LLMStrategyBrain', () => {
         gridPoints,         // gridPoints passed through
         expect.anything(),  // existingSegments
         undefined,          // lastAbandonedRouteKey (BE-005)
+        undefined,          // previousRouteStops (BE-010)
       );
     });
 
@@ -939,6 +940,7 @@ describe('LLMStrategyBrain', () => {
         expect.anything(),  // gridPoints
         expect.anything(),  // existingSegments
         undefined,          // lastAbandonedRouteKey (BE-005)
+        undefined,          // previousRouteStops (BE-010)
       );
     });
 

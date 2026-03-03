@@ -29,6 +29,7 @@ import {
   LLMDecisionResult,
   TurnPlan,
   StrategicRoute,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -126,6 +127,7 @@ export class AIStrategyEngine {
       let activeRoute = memory.activeRoute;
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
+      let previousRouteStops: RouteStop[] | null = null; // BE-010
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -155,8 +157,8 @@ export class AIStrategyEngine {
         // ── No active route — consult LLM for a new strategic route ──
         const brain = AIStrategyEngine.createBrain(botConfig!);
 
-        // Try to plan a route first
-        const routeResult = await brain.planRoute(snapshot, context, gridPoints, memory.lastAbandonedRouteKey);
+        // Try to plan a route first (BE-010: pass previous route context)
+        const routeResult = await brain.planRoute(snapshot, context, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
 
         if (routeResult) {
           activeRoute = routeResult.route;
@@ -259,8 +261,15 @@ export class AIStrategyEngine {
 
       // Clear active route after any delivery — new demand card drawn means
       // LLM should re-evaluate the route on the next turn.
+      // BE-010: Preserve remaining stops for LLM context on next turn.
       if (hasDelivery && activeRoute && !routeWasCompleted && !routeWasAbandoned) {
-        console.log(`${tag} Delivery detected in composed plan — clearing active route for re-planning`);
+        const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
+        if (remaining.length > 0) {
+          previousRouteStops = remaining;
+          console.log(`${tag} Delivery detected — preserving ${remaining.length} remaining route stops for LLM context`);
+        } else {
+          console.log(`${tag} Delivery detected — no remaining stops, clearing active route`);
+        }
         activeRoute = null;
       }
 
@@ -378,6 +387,14 @@ export class AIStrategyEngine {
         // Route was cleared mid-turn (e.g., delivery triggered re-planning)
         memoryPatch.activeRoute = null;
         memoryPatch.turnsOnRoute = 0;
+      }
+
+      // BE-010: Store/clear previous route stops for LLM context
+      if (previousRouteStops) {
+        memoryPatch.previousRouteStops = previousRouteStops;
+      } else if (activeRoute) {
+        // New route planned — clear any previous route context
+        memoryPatch.previousRouteStops = null;
       }
 
       updateMemory(gameId, botPlayerId, memoryPatch);

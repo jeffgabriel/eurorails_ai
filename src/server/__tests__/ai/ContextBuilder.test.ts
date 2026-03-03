@@ -2427,3 +2427,90 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     expect(d.efficiencyPerTurn).toBe(roi / d.estimatedTurns);
   });
 });
+
+describe('PREVIOUS ROUTE CONTEXT section in serializeRoutePlanningPrompt (BE-010)', () => {
+  function makeCtxForPreviousRoute(overrides?: Partial<import('../../../shared/types/GameTypes').GameContext>): import('../../../shared/types/GameTypes').GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [{ cityName: 'Rome', estimatedCost: 10 }],
+      totalMajorCities: 8,
+      trackSummary: '4 segments',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Berlin'],
+      citiesOnNetwork: ['Berlin'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Mid Game',
+      turnNumber: 10,
+      ...overrides,
+    };
+  }
+
+  it('should include previous route stops in prompt when provided', () => {
+    const ctx = makeCtxForPreviousRoute();
+    const previousStops = [
+      { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
+      { action: 'deliver' as const, loadType: 'Steel', city: 'Paris', demandCardId: 10, payment: 15 },
+    ];
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], null, previousStops,
+    );
+
+    expect(output).toContain('PREVIOUS ROUTE (remaining stops from partially completed route):');
+    expect(output).toContain('- pickup Steel at Ruhr');
+    expect(output).toContain('- deliver Steel at Paris for 15M');
+    expect(output).toContain('Consider continuing this route');
+  });
+
+  it('should NOT include previous route section when stops are null', () => {
+    const ctx = makeCtxForPreviousRoute();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], null, null,
+    );
+
+    expect(output).not.toContain('PREVIOUS ROUTE');
+  });
+
+  it('should NOT include previous route section when stops are undefined', () => {
+    const ctx = makeCtxForPreviousRoute();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [],
+    );
+
+    expect(output).not.toContain('PREVIOUS ROUTE');
+  });
+
+  it('should NOT include previous route section when stops array is empty', () => {
+    const ctx = makeCtxForPreviousRoute();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], null, [],
+    );
+
+    expect(output).not.toContain('PREVIOUS ROUTE');
+  });
+
+  it('should omit payment for pickup stops', () => {
+    const ctx = makeCtxForPreviousRoute();
+    const previousStops = [
+      { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
+    ];
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      ctx, BotSkillLevel.Medium, [], [], null, previousStops,
+    );
+
+    expect(output).toContain('- pickup Coal at Essen');
+    expect(output).not.toContain('for undefined');
+    expect(output).not.toContain('for null');
+  });
+});

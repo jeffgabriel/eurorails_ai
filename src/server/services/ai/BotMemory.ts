@@ -29,6 +29,7 @@ function defaultState(): BotMemoryState {
     routeHistory: [],
     lastReasoning: null,
     lastPlanHorizon: null,
+    previousRouteStops: null,
   };
 }
 

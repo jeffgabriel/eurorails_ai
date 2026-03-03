@@ -1570,4 +1570,279 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(details.stack).toBeUndefined();
     });
   });
+
+  describe('BE-010: preserve remaining route context after delivery', () => {
+    beforeEach(() => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      } as any);
+      // Reset TurnComposer to passthrough (clearAllMocks doesn't reset mockResolvedValue)
+      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve(plan));
+    });
+
+    it('should store remaining route stops in memory when delivery clears active route', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 5, payment: 20 },
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', demandCardId: 10, payment: 15 },
+        ],
+        currentStopIndex: 1, // Working on delivering Coal to Berlin
+        phase: 'travel' as const,
+        reasoning: 'Multi-stop route',
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 7,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 3,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      } as any);
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns a move toward Berlin
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving toward Berlin',
+      });
+
+      // TurnComposer enriches with a delivery that does NOT match the current route stop
+      // (non-route delivery, e.g., an opportunistic one)
+      mockTurnComposerCompose.mockResolvedValue({
+        type: 'MultiAction' as const,
+        steps: [
+          { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
+          { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
+        ],
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      // activeRoute should be cleared
+      expect(patch.activeRoute).toBeNull();
+      // previousRouteStops should contain remaining stops from currentStopIndex onward
+      expect(patch.previousRouteStops).toBeDefined();
+      expect(patch.previousRouteStops).toHaveLength(3); // stops 1, 2, 3 (from index 1)
+      expect(patch.previousRouteStops[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Coal', city: 'Berlin' }));
+      expect(patch.previousRouteStops[1]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }));
+      expect(patch.previousRouteStops[2]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Steel', city: 'Paris' }));
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should pass previousRouteStops from memory to planRoute on next turn', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const previousStops = [
+        { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
+        { action: 'deliver' as const, loadType: 'Steel', city: 'Paris', demandCardId: 10, payment: 15 },
+      ];
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null, // No active route — will consult LLM
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 1,
+        totalEarnings: 20,
+        previousRouteStops: previousStops,
+        lastAbandonedRouteKey: null,
+      } as any);
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // LLM plans a new route
+      mockPlanRoute.mockResolvedValue({
+        route: {
+          stops: [{ action: 'pickup', loadType: 'Oil', city: 'Baku' }],
+          currentStopIndex: 0,
+          phase: 'build',
+          reasoning: 'New plan',
+          createdAtTurn: 8,
+        },
+        model: 'test-model',
+        latencyMs: 100,
+      });
+
+      // PlanExecutor runs the first step
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: {
+          stops: [{ action: 'pickup', loadType: 'Oil', city: 'Baku' }],
+          currentStopIndex: 0,
+          phase: 'build',
+          reasoning: 'New plan',
+          createdAtTurn: 8,
+        },
+        description: 'Building toward Baku',
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify planRoute was called with previousRouteStops
+      expect(mockPlanRoute).toHaveBeenCalledWith(
+        expect.anything(), // snapshot
+        expect.anything(), // context
+        expect.anything(), // gridPoints
+        null,              // lastAbandonedRouteKey
+        previousStops,     // previousRouteStops (BE-010)
+      );
+
+      // With a new active route, previousRouteStops should be cleared
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.previousRouteStops).toBeNull();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should not set previousRouteStops when route is completed (all stops done)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'Single delivery',
+        createdAtTurn: 5,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 6,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      } as any);
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns route complete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      mockHeuristicFallback.mockResolvedValue({ success: false, error: 'no options' });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      // Route was completed — previousRouteStops should be null (no remaining stops to pass)
+      expect(patch.previousRouteStops).toBeNull();
+      // Route should be logged as completed
+      expect(patch.routeHistory).toBeDefined();
+      expect(patch.routeHistory[0]?.outcome).toBe('completed');
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should handle null previousRouteStops in memory gracefully', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 10,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 2,
+        totalEarnings: 40,
+        previousRouteStops: null,
+        lastAbandonedRouteKey: null,
+      } as any);
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockPlanRoute.mockResolvedValue(null);
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // planRoute should still be called with null previousRouteStops
+      expect(mockPlanRoute).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        null,
+        null,
+      );
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
 });

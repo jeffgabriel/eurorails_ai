@@ -22,6 +22,7 @@ import {
   AIActionType,
   StrategicRoute,
   GridPoint,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
@@ -207,6 +208,7 @@ export class LLMStrategyBrain {
     context: GameContext,
     gridPoints: GridPoint[],
     lastAbandonedRouteKey?: string | null,
+    previousRouteStops?: RouteStop[] | null, // BE-010
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
@@ -216,7 +218,7 @@ export class LLMStrategyBrain {
     let totalOutputTokens = 0;
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey);
+      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
 
       if (lastError) {
         userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;

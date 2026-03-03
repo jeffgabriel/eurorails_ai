@@ -20,6 +20,7 @@ import {
   TrainType,
   GridPoint,
   TerrainType,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
@@ -731,6 +732,7 @@ export class ContextBuilder {
     gridPoints: GridPoint[],
     segments: TrackSegment[] = [],
     lastAbandonedRouteKey?: string | null,
+    previousRouteStops?: RouteStop[] | null, // BE-010
   ): string {
     const lines: string[] = [];
 
@@ -926,6 +928,17 @@ export class ContextBuilder {
       lines.push('');
       lines.push(`RECENTLY ABANDONED ROUTE: ${lastAbandonedRouteKey}`);
       lines.push('Avoid planning a route identical to this one — it was abandoned because it could not be completed.');
+    }
+
+    // ── PREVIOUS ROUTE CONTEXT (BE-010) ──
+    if (previousRouteStops && previousRouteStops.length > 0) {
+      lines.push('');
+      lines.push('PREVIOUS ROUTE (remaining stops from partially completed route):');
+      for (const stop of previousRouteStops) {
+        const paymentStr = stop.payment ? ` for ${stop.payment}M` : '';
+        lines.push(`  - ${stop.action} ${stop.loadType} at ${stop.city}${paymentStr}`);
+      }
+      lines.push('Consider continuing this route if the stops are still valid with your current demand cards. You may also extend, modify, or abandon it.');
     }
 
     return lines.join('\n');

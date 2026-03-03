@@ -26,6 +26,7 @@ describe('BotMemory', () => {
         routeHistory: [],
         lastReasoning: null,
         lastPlanHorizon: null,
+        previousRouteStops: null,
       });
     });
 
