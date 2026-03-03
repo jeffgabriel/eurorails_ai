@@ -874,4 +874,115 @@ describe('DebugOverlay', () => {
       expect(container.innerHTML).toContain('(1.3s)');
     });
   });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-003: LLM metadata display (model, latency, tokens, retried)
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('LLM metadata display (FE-003)', () => {
+    const llmPayload = {
+      botPlayerId: 'BotAlpha',
+      action: 'BuildTrack',
+      durationMs: 800,
+      turnNumber: 5,
+      model: 'claude-sonnet-4-20250514',
+      llmLatencyMs: 750,
+      tokenUsage: { input: 4832, output: 671 },
+      retried: false,
+    };
+
+    it('should render model as an inline pill badge', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('claude-sonnet-4-20250514');
+      expect(html).toContain('border-radius:4px');
+      expect(html).toContain('background:rgba(255,255,255,0.1)');
+    });
+
+    it('should render LLM latency distinctly from durationMs', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('LLM: 750ms');
+      // durationMs is also present in the turn completed line
+      expect(html).toContain('(800ms)');
+    });
+
+    it('should render token usage with input and output counts', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('Tokens: 4832\u2193 671\u2191');
+    });
+
+    it('should render retried indicator when retried is true', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { ...llmPayload, retried: true });
+
+      const html = container.innerHTML;
+      expect(html).toContain('\u27F3 Retried');
+      expect(html).toContain('color:#fbbf24');
+    });
+
+    it('should not render retried indicator when retried is false', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      expect(container.innerHTML).not.toContain('\u27F3 Retried');
+    });
+
+    it('should not render LLM metadata when fields are absent', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PassTurn',
+        durationMs: 100,
+        turnNumber: 1,
+      });
+
+      const html = container.innerHTML;
+      expect(html).not.toContain('LLM:');
+      expect(html).not.toContain('Tokens:');
+      expect(html).not.toContain('background:rgba(255,255,255,0.1);padding:2px 8px');
+    });
+
+    it('should render all LLM metadata fields together in a single row', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { ...llmPayload, retried: true });
+
+      const html = container.innerHTML;
+      // All fields present in the same render
+      expect(html).toContain('claude-sonnet-4-20250514');
+      expect(html).toContain('LLM: 750ms');
+      expect(html).toContain('Tokens: 4832\u2193 671\u2191');
+      expect(html).toContain('\u27F3 Retried');
+      // Flex container for layout
+      expect(html).toContain('display:flex');
+      expect(html).toContain('gap:8px');
+    });
+  });
 });

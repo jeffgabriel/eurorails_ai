@@ -454,6 +454,7 @@ export class DebugOverlay {
       latestDetail = `<div style="color:#fbbf24;font-size:15px;">Bot ${latest.name} turn started at ${time}</div>`;
     } else {
       latestDetail = `<div style="color:#34d399;font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
+      latestDetail += this.renderLlmMetadata(latest);
       if (latest.reasoning) {
         latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
       }
@@ -510,6 +511,24 @@ export class DebugOverlay {
         </div>
       </details>
     `;
+  }
+
+  private renderLlmMetadata(entry: BotTurnEntry): string {
+    const parts: string[] = [];
+    if (entry.model) {
+      parts.push(`<span style="background:rgba(255,255,255,0.1);padding:2px 8px;border-radius:4px;font-size:13px;">${entry.model}</span>`);
+    }
+    if (entry.llmLatencyMs != null) {
+      parts.push(`<span style="color:#9ca3af;font-size:13px;">LLM: ${entry.llmLatencyMs}ms</span>`);
+    }
+    if (entry.tokenUsage) {
+      parts.push(`<span style="color:#9ca3af;font-size:13px;">Tokens: ${entry.tokenUsage.input}\u2193 ${entry.tokenUsage.output}\u2191</span>`);
+    }
+    if (entry.retried) {
+      parts.push(`<span style="color:#fbbf24;font-size:13px;">\u27F3 Retried</span>`);
+    }
+    if (parts.length === 0) return '';
+    return `<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${parts.join('')}</div>`;
   }
 
   private renderTurnHistoryRow(entry: BotTurnEntry): string {
