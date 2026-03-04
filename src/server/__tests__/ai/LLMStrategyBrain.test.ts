@@ -343,8 +343,8 @@ describe('LLMStrategyBrain', () => {
   // --- JIRA-17: Structured output schemas and effort levels ---
   describe('Anthropic structured output and thinking (JIRA-17)', () => {
     it.each([
-      [BotSkillLevel.Medium, 'medium'],
-      [BotSkillLevel.Hard, 'high'],
+      [BotSkillLevel.Medium, 'low'],
+      [BotSkillLevel.Hard, 'medium'],
     ])('decideAction — skill %s (4.6 default) should pass schema, thinking, effort=%s', async (skill, expectedEffort) => {
       setupSuccessfulDecision(mockChat);
       const brain = createBrain(skill);
@@ -370,8 +370,8 @@ describe('LLMStrategyBrain', () => {
     });
 
     it.each([
-      [BotSkillLevel.Medium, 'high'],
-      [BotSkillLevel.Hard, 'high'],
+      [BotSkillLevel.Medium, 'medium'],
+      [BotSkillLevel.Hard, 'medium'],
     ])('planRoute — skill %s (4.6 default) should pass ROUTE_SCHEMA and effort=%s', async (skill, expectedEffort) => {
       mockChat.mockResolvedValue({
         text: '{"route":"..."}',
@@ -453,7 +453,7 @@ describe('LLMStrategyBrain', () => {
       const callArgs = mockGoogleChat.mock.calls[0][0];
       expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('medium');
+      expect(callArgs.effort).toBe('low');
     });
 
     it('decideAction — should pass outputSchema and thinking for Google provider at Hard skill', async () => {
@@ -486,7 +486,7 @@ describe('LLMStrategyBrain', () => {
       const callArgs = mockGoogleChat.mock.calls[0][0];
       expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('high');
+      expect(callArgs.effort).toBe('medium');
       expect(callArgs.maxTokens).toBe(8192);
       expect(callArgs.temperature).toBe(0.2);
     });
@@ -557,7 +557,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.outputSchema.properties?.route).toBeDefined();
       expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('high');
+      expect(callArgs.effort).toBe('medium');
       expect(callArgs.timeoutMs).toBe(60000);
       expect(callArgs.maxTokens).toBe(12288);
     });
@@ -593,7 +593,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.outputSchema.properties?.route).toBeDefined();
       expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('high');
+      expect(callArgs.effort).toBe('medium');
       expect(callArgs.timeoutMs).toBe(60000);
       expect(callArgs.maxTokens).toBe(16384);
       expect(callArgs.temperature).toBe(0.2);

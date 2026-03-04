@@ -52,15 +52,15 @@ const ROUTE_MAX_TOKENS: Record<BotSkillLevel, number> = {
 /** Thinking effort for turn action decisions by skill level */
 const ACTION_EFFORT: Record<BotSkillLevel, string> = {
   [BotSkillLevel.Easy]: 'low',
-  [BotSkillLevel.Medium]: 'medium',
-  [BotSkillLevel.Hard]: 'high',
+  [BotSkillLevel.Medium]: 'low',
+  [BotSkillLevel.Hard]: 'medium',
 };
 
 /** Thinking effort for route planning decisions by skill level */
 const ROUTE_EFFORT: Record<BotSkillLevel, string> = {
-  [BotSkillLevel.Easy]: 'medium',
-  [BotSkillLevel.Medium]: 'high',
-  [BotSkillLevel.Hard]: 'high',
+  [BotSkillLevel.Easy]: 'low',
+  [BotSkillLevel.Medium]: 'medium',
+  [BotSkillLevel.Hard]: 'medium',
 };
 
 /** Temperature: lower = more deterministic */
