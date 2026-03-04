@@ -40,7 +40,7 @@ export interface BotTurnEntry {
     currentStopIndex: number;
     phase: string;
   };
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>;
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -285,8 +285,8 @@ export class DebugOverlay {
     this.container.innerHTML = `
       ${this.renderHeader(gameState)}
       ${this.renderPlayersTable(gameState)}
+      ${this.renderBotTurnSection(gameState)}
       ${this.renderSocketLog()}
-      ${this.renderBotTurnSection()}
     `;
   }
 
@@ -375,10 +375,12 @@ export class DebugOverlay {
 
     return `
       <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
-        <div style="color:#f9fafb;font-weight:bold;font-size:18px;margin-bottom:8px;">Socket Events <span style="color:#6b7280;font-weight:normal;">(${this.eventLog.length})</span></div>
-        <div style="max-height:350px;overflow-y:auto;font-size:15px;color:#e5e7eb;">
-          ${entries || '<div style="color:#6b7280;">No events yet</div>'}
-        </div>
+        <details style="margin:0;">
+          <summary style="cursor:pointer;color:#6b7280;font-weight:bold;font-size:16px;padding:4px 0;">Socket Events <span style="font-weight:normal;">(${this.eventLog.length})</span></summary>
+          <div style="max-height:350px;overflow-y:auto;font-size:15px;color:#e5e7eb;margin-top:8px;">
+            ${entries || '<div style="color:#6b7280;">No events yet</div>'}
+          </div>
+        </details>
       </div>
     `;
   }
@@ -397,7 +399,7 @@ export class DebugOverlay {
     return this.botTurnHistory;
   }
 
-  private renderBotTurnSection(): string {
+  private renderBotTurnSection(gameState: GameState): string {
     if (this.botTurnHistory.size === 0) {
       return `
         <div style="padding:14px 20px;border-top:1px solid rgba(255,255,255,0.15);">
@@ -407,17 +409,22 @@ export class DebugOverlay {
       `;
     }
 
-    // Sort bots: most recently active first
+    // Sort bots by player order (matching gameState.players array order)
+    const playerOrder = new Map<string, number>();
+    const playerColorMap = new Map<string, string>();
+    gameState.players?.forEach((p, i) => {
+      playerOrder.set(p.id, i);
+      playerColorMap.set(p.id, DebugOverlay.ensureReadable(p.color));
+    });
+
     const sortedBots = [...this.botTurnHistory.entries()].sort((a, b) => {
-      if (a[0] === this.lastActiveBotId) return -1;
-      if (b[0] === this.lastActiveBotId) return 1;
-      const aTime = a[1][0]?.startTime || 0;
-      const bTime = b[1][0]?.startTime || 0;
-      return bTime - aTime;
+      const orderA = playerOrder.get(a[0]) ?? Infinity;
+      const orderB = playerOrder.get(b[0]) ?? Infinity;
+      return orderA - orderB;
     });
 
     const sections = sortedBots.map(([botId, entries], i) =>
-      this.renderBotSection(botId, entries, i),
+      this.renderBotSection(botId, entries, playerColorMap.get(botId) || DebugOverlay.BOT_ACCENT_COLORS[i % DebugOverlay.BOT_ACCENT_COLORS.length]),
     ).join('');
 
     return `
@@ -428,8 +435,7 @@ export class DebugOverlay {
     `;
   }
 
-  private renderBotSection(botPlayerId: string, entries: BotTurnEntry[], colorIndex: number): string {
-    const color = DebugOverlay.BOT_ACCENT_COLORS[colorIndex % DebugOverlay.BOT_ACCENT_COLORS.length];
+  private renderBotSection(botPlayerId: string, entries: BotTurnEntry[], color: string): string {
     const isActive = botPlayerId === this.lastActiveBotId;
     const latest = entries[0];
 
@@ -453,7 +459,7 @@ export class DebugOverlay {
       const time = new Date(latest.startTime).toLocaleTimeString('en-US', { hour12: false });
       latestDetail = `<div style="color:#fbbf24;font-size:15px;">Bot ${latest.name} turn started at ${time}</div>`;
     } else {
-      latestDetail = `<div style="color:#34d399;font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
+      latestDetail = `<div style="color:${color};font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
       latestDetail += this.renderLlmMetadata(latest);
       if (latest.reasoning) {
         latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
@@ -476,7 +482,7 @@ export class DebugOverlay {
         latestDetail += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${latest.guardrailReason || 'unknown'}</div>`;
       }
       if (latest.demandRanking && latest.demandRanking.length > 0) {
-        latestDetail += this.renderDemandRanking(latest.demandRanking);
+        latestDetail += this.renderDemandRanking(latest.demandRanking, color);
       }
       if (latest.loadsPickedUp || latest.loadsDelivered) {
         latestDetail += this.renderLoadDetails(latest.loadsPickedUp, latest.loadsDelivered);
@@ -541,15 +547,17 @@ export class DebugOverlay {
     return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}</div>`;
   }
 
-  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>): string {
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>, playerColor: string): string {
     const rows = ranking.map(d => {
-      const color = d.rank === 1 ? '#34d399' : d.score < 0 ? '#f87171' : '#e5e7eb';
+      const rowColor = d.rank === 1 ? playerColor : d.score < 0 ? '#f87171' : '#e5e7eb';
       const tag = d.rank === 1 ? ' \u2190 BEST' : '';
-      return `<tr style="color:${color};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
+      const rarityColor = d.supplyRarity === 'UNIQUE' ? '#f472b6' : d.supplyRarity === 'LIMITED' ? '#fbbf24' : '#9ca3af';
+      const rarityTag = d.supplyRarity ? `<span style="color:${rarityColor};font-size:12px;margin-left:4px;">[${d.supplyRarity}]</span>` : '';
+      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}${rarityTag}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
     }).join('');
     return `
-      <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid #34d399;">
-        <div style="color:#34d399;font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
+      <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid ${playerColor};">
+        <div style="color:${playerColor};font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
         <table style="font-size:13px;border-collapse:collapse;width:100%;">
           <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Score</th><th></th></tr>
           ${rows}
@@ -586,6 +594,24 @@ export class DebugOverlay {
       html += `<div style="color:#fbbf24;font-size:15px;">Delivered: ${items}</div>`;
     }
     return html;
+  }
+
+  /** Lighten a hex color if its luminance is too low for dark backgrounds */
+  private static ensureReadable(hex: string): string {
+    const match = hex.match(/^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+    if (!match) return hex;
+    let r = parseInt(match[1], 16);
+    let g = parseInt(match[2], 16);
+    let b = parseInt(match[3], 16);
+    // Relative luminance (simplified sRGB)
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    if (luminance >= 0.35) return hex;
+    // Mix with white until readable (target ~0.5 luminance)
+    const factor = 0.5 / Math.max(luminance, 0.01);
+    r = Math.min(255, Math.round(r * factor + 80));
+    g = Math.min(255, Math.round(g * factor + 80));
+    b = Math.min(255, Math.round(b * factor + 80));
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
   }
 
   private applyContainerStyles(): void {

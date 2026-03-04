@@ -57,7 +57,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>;
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -420,16 +420,27 @@ export class AIStrategyEngine {
       }
 
       // Build demand ranking from context for debug overlay (JIRA-13)
+      // FE-001: Compute supply rarity per load type
+      const supplyCityCounts = new Map<string, Set<string>>();
+      for (const d of context.demands) {
+        if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
+        supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+      }
       const demandRanking = [...context.demands]
         .sort((a, b) => b.demandScore - a.demandScore)
-        .map((d, i) => ({
-          loadType: d.loadType,
-          supplyCity: d.supplyCity,
-          deliveryCity: d.deliveryCity,
-          payout: d.payout,
-          score: d.demandScore,
-          rank: i + 1,
-        }));
+        .map((d, i) => {
+          const cityCount = supplyCityCounts.get(d.loadType)?.size ?? 1;
+          const supplyRarity = cityCount <= 1 ? 'UNIQUE' : cityCount === 2 ? 'LIMITED' : 'COMMON';
+          return {
+            loadType: d.loadType,
+            supplyCity: d.supplyCity,
+            deliveryCity: d.deliveryCity,
+            payout: d.payout,
+            score: d.demandScore,
+            rank: i + 1,
+            supplyRarity,
+          };
+        });
 
       // INF-001: Compute hand quality for audit logging
       const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber);
