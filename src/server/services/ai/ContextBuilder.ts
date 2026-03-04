@@ -1400,11 +1400,6 @@ export class ContextBuilder {
   /** Radius (hex distance) around the corridor line to count cities */
   private static readonly CORRIDOR_RADIUS = 5;
 
-  /** Weight per city near the build corridor (network value) */
-  private static readonly NETWORK_CITY_WEIGHT = 3;
-
-  /** Weight per unconnected major city near the corridor (victory bonus) */
-  private static readonly VICTORY_CITY_WEIGHT = 10;
 
   /**
    * Estimate how many cities lie near the proposed track corridor from
@@ -1521,10 +1516,16 @@ export class ContextBuilder {
   }
 
   /**
-   * Compute a demand score from efficiency (ROI per turn), network value, and victory bonus.
+   * Compute a demand score using payout-relative corridor and victory bonuses.
    * Higher scores mean better demand options for the bot to pursue.
    *
-   * Score = (immediateROI / estimatedTurns) + networkCities * 3 + victoryMajorCities * 10
+   * baseROI = (payout - totalTrackCost) / estimatedTurns
+   * corridorMultiplier = min(networkCities * 0.05, 0.5)
+   * victoryBonus = victoryMajorCities * max(payout * 0.15, 5)
+   * score = baseROI + corridorMultiplier * baseROI + victoryBonus
+   *
+   * The corridor multiplier scales with baseROI so geographical advantages
+   * amplify good deliveries rather than overshadowing economic value.
    */
   private static scoreDemand(
     payout: number,
@@ -1533,10 +1534,10 @@ export class ContextBuilder {
     victoryMajorCities: number,
     estimatedTurns: number,
   ): number {
-    const immediateROI = payout - totalTrackCost;
-    const networkBonus = networkCities * ContextBuilder.NETWORK_CITY_WEIGHT;
-    const victoryBonus = victoryMajorCities * ContextBuilder.VICTORY_CITY_WEIGHT;
-    return (immediateROI / estimatedTurns) + networkBonus + victoryBonus;
+    const baseROI = (payout - totalTrackCost) / estimatedTurns;
+    const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
+    const victoryBonus = victoryMajorCities * Math.max(payout * 0.15, 5);
+    return baseROI + (corridorMultiplier * baseROI) + victoryBonus;
   }
 
   // ── Demand context helpers (BE-005) ─────────────────────────────────────
