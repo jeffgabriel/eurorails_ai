@@ -377,12 +377,59 @@ export class ContextBuilder {
   // ── Demand context (BE-005) ─────────────────────────────────────────────
 
   /**
-   * Pre-compute reachability and cost estimates for a single demand.
-   * Uses the string-based track network and gridPoints for all lookups.
+   * Evaluate ALL supply cities for a demand and return the DemandContext with the
+   * highest demandScore. This ensures the bot considers every possible route for
+   * a load type, not just the geographically nearest supply city.
    */
-  private static computeDemandContext(
+  private static computeBestDemandContext(
     cardIndex: number,
     demand: { city: string; loadType: string; payment: number },
+    snapshot: WorldSnapshot,
+    network: ReturnType<typeof buildTrackNetwork> | null,
+    gridPoints: GridPoint[],
+    reachableCities: string[],
+    citiesOnNetwork: string[],
+    connectedMajorCities: string[],
+  ): DemandContext {
+    // Find all cities that supply this load type
+    const supplyCityNames = new Set<string>();
+    for (const gp of gridPoints) {
+      if (gp.city && gp.city.availableLoads.includes(demand.loadType)) {
+        supplyCityNames.add(gp.city.name);
+      }
+    }
+
+    // If load is already on train, supply city doesn't matter — evaluate once with null
+    if (snapshot.bot.loads.includes(demand.loadType) || supplyCityNames.size === 0) {
+      return ContextBuilder.computeSingleSupplyDemandContext(
+        cardIndex, demand, null, snapshot, network, gridPoints,
+        reachableCities, citiesOnNetwork, connectedMajorCities,
+      );
+    }
+
+    // Evaluate each supply city and pick the one with the best demandScore
+    let bestContext: DemandContext | null = null;
+    for (const supplyCity of supplyCityNames) {
+      const ctx = ContextBuilder.computeSingleSupplyDemandContext(
+        cardIndex, demand, supplyCity, snapshot, network, gridPoints,
+        reachableCities, citiesOnNetwork, connectedMajorCities,
+      );
+      if (!bestContext || ctx.demandScore > bestContext.demandScore) {
+        bestContext = ctx;
+      }
+    }
+
+    return bestContext!;
+  }
+
+  /**
+   * Pre-compute reachability and cost estimates for a single demand with a specific supply city.
+   * Uses the string-based track network and gridPoints for all lookups.
+   */
+  private static computeSingleSupplyDemandContext(
+    cardIndex: number,
+    demand: { city: string; loadType: string; payment: number },
+    supplyCity: string | null,
     snapshot: WorldSnapshot,
     network: ReturnType<typeof buildTrackNetwork> | null,
     gridPoints: GridPoint[],
@@ -393,12 +440,7 @@ export class ContextBuilder {
     const deliveryCity = demand.city;
     const loadType = demand.loadType;
 
-    // 1. Find the best supply city for this load type from gridPoints
-    const supplyCity = ContextBuilder.findBestSupplyCity(
-      loadType, network, gridPoints, snapshot.bot.existingSegments,
-    );
-
-    // 2. Check if the load is already on the bot's train
+    // 1. Check if the load is already on the bot's train
     const isLoadOnTrain = snapshot.bot.loads.includes(loadType);
 
     // 3. Check reachability — is the city in the reachable cities list?
@@ -1135,7 +1177,7 @@ export class ContextBuilder {
     for (const resolved of snapshot.bot.resolvedDemands) {
       for (const demand of resolved.demands) {
         contexts.push(
-          ContextBuilder.computeDemandContext(
+          ContextBuilder.computeBestDemandContext(
             resolved.cardId, demand, snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
           ),
         );
