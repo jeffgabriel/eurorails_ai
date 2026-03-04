@@ -497,6 +497,15 @@ export interface TurnDecisionLog {
     phases: PhaseDecisionLog[];
 }
 
+/** A single LLM API call attempt — used for debug overlay logging */
+export interface LlmAttempt {
+    attemptNumber: number;
+    status: 'success' | 'parse_error' | 'validation_error' | 'api_error';
+    responseText: string;
+    error?: string;
+    latencyMs: number;
+}
+
 // ─── LLM Strategy Brain Types ───────────────────────────────────────────────
 
 /** Configuration for constructing an LLMStrategyBrain instance */
