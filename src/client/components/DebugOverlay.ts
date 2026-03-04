@@ -477,6 +477,9 @@ export class DebugOverlay {
     } else {
       latestDetail = `<div style="color:${color};font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
       latestDetail += this.renderLlmMetadata(latest);
+      if (latest.llmLog && latest.llmLog.length > 0) {
+        latestDetail += this.renderLlmLog(latest.llmLog);
+      }
       if (latest.reasoning) {
         latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
       }
@@ -568,7 +571,8 @@ export class DebugOverlay {
       : '';
     const duration = `${(entry.durationMs / 1000).toFixed(1)}s`;
     const grTag = entry.guardrailOverride ? ' <span style="color:#f87171;">[GR]</span>' : '';
-    return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}</div>`;
+    const llmTag = DebugOverlay.llmLogSummary(entry.llmLog);
+    return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}${llmTag}</div>`;
   }
 
   private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>, playerColor: string): string {
@@ -619,6 +623,68 @@ export class DebugOverlay {
       html += `<div style="color:#fbbf24;font-size:15px;">Delivered: ${items}</div>`;
     }
     return html;
+  }
+
+  /** Escape HTML special characters for safe innerHTML insertion */
+  private static escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  /** Render collapsible LLM Attempts panel for a bot turn */
+  private renderLlmLog(log: LlmAttempt[]): string {
+    const failed = log.filter(a => a.status !== 'success').length;
+    const summaryLabel = failed > 0
+      ? `LLM Attempts (${log.length}) — ${failed} failed`
+      : `LLM Attempts (${log.length})`;
+
+    const STATUS_COLORS: Record<string, string> = {
+      success: '#34d399',
+      parse_error: '#f87171',
+      validation_error: '#fbbf24',
+      api_error: '#f87171',
+    };
+
+    const attempts = log.map(a => {
+      const badgeColor = STATUS_COLORS[a.status] || '#9ca3af';
+      const badge = `<span style="background:${badgeColor};color:#000;padding:1px 6px;border-radius:3px;font-size:12px;font-weight:bold;">${a.status}</span>`;
+      const latency = `<span style="color:#9ca3af;font-size:13px;">${a.latencyMs}ms</span>`;
+
+      let detail = '';
+      if (a.error) {
+        detail += `<div style="color:#f87171;font-size:13px;margin-top:2px;">Error: ${DebugOverlay.escapeHtml(a.error)}</div>`;
+      }
+      if (a.responseText) {
+        const truncated = a.responseText.length > 500 ? a.responseText.slice(0, 500) + '...' : a.responseText;
+        detail += `<pre style="color:#9ca3af;font-size:12px;margin:4px 0 0 0;padding:4px 8px;background:rgba(255,255,255,0.05);border-radius:3px;white-space:pre-wrap;word-break:break-all;max-height:100px;overflow-y:auto;">${DebugOverlay.escapeHtml(truncated)}</pre>`;
+      }
+
+      return `<div style="padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05);">
+        <div style="display:flex;gap:8px;align-items:center;">#${a.attemptNumber} ${badge} ${latency}</div>
+        ${detail}
+      </div>`;
+    }).join('');
+
+    return `
+      <details style="margin-top:8px;padding:6px 10px;background:rgba(139,92,246,0.06);border-radius:4px;border-left:3px solid #8b5cf6;">
+        <summary style="cursor:pointer;color:#8b5cf6;font-size:14px;font-weight:bold;">${summaryLabel}</summary>
+        <div style="margin-top:4px;">${attempts}</div>
+      </details>
+    `;
+  }
+
+  /** Compact LLM log summary for past turn history rows */
+  private static llmLogSummary(log?: LlmAttempt[]): string {
+    if (!log || log.length === 0) return '';
+    const failed = log.filter(a => a.status !== 'success').length;
+    if (failed > 0) {
+      return ` <span style="color:#8b5cf6;font-size:12px;">[LLM: ${log.length} attempts, ${failed} failed]</span>`;
+    }
+    return ` <span style="color:#8b5cf6;font-size:12px;">[LLM: ${log.length} attempt${log.length > 1 ? 's' : ''}]</span>`;
   }
 
   /** Lighten a hex color if its luminance is too low for dark backgrounds */
