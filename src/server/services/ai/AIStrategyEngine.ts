@@ -117,6 +117,10 @@ export class AIStrategyEngine {
       }
 
       console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canPickup=${context.canPickup.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities, onNetwork=${context.citiesOnNetwork.length} cities`);
+
+      // INF-002: Zero-money gate — warn when bot has no funds
+      AIStrategyEngine.zeroMoneyGate(tag, snapshot, context);
+
       if (context.phase) {
         const uc = context.unconnectedMajorCities ?? [];
         const ucStr = uc.length > 0 ? uc.map(u => `${u.cityName}~${u.estimatedCost}M`).join(', ') : 'none';
@@ -429,6 +433,10 @@ export class AIStrategyEngine {
 
       // INF-001: Compute hand quality for audit logging
       const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber);
+      const bestDemandTurns = context.demands.length > 0
+        ? Math.min(...context.demands.map(d => d.estimatedTurns))
+        : 0;
+      console.log(`${tag} [Hand Quality] score=${handQuality.score} (threshold=3.0), stale cards: ${handQuality.staleCards}, best demand: ${bestDemandTurns} turns`);
 
       return {
         action: result.action,
@@ -530,6 +538,27 @@ export class AIStrategyEngine {
       staleCards,
       assessment,
     };
+  }
+
+  /**
+   * INF-002: Zero-money gate — log when the bot has no money and determine
+   * the likely recovery path. Advisory only — does not alter the pipeline flow.
+   */
+  private static zeroMoneyGate(
+    tag: string,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): void {
+    if (snapshot.bot.money > 0) return;
+    const hasLoads = snapshot.bot.loads.length;
+    const deliverables = context.canDeliver;
+    if (deliverables.length > 0) {
+      console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=${hasLoads}. Found deliverable: ${deliverables[0].loadType} → ${deliverables[0].city}`);
+    } else if (hasLoads > 0) {
+      console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=${hasLoads}. No delivery match — must move toward delivery city`);
+    } else {
+      console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=0. Discarding hand`);
+    }
   }
 
   /**

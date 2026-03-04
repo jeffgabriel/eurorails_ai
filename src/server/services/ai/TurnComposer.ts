@@ -280,11 +280,23 @@ export class TurnComposer {
     // ── Phase B: Build/Upgrade ──
     if (!skipBuildPhase) {
       try {
+        // INF-002: Log when upgrade would be preferred over building
+        const canAffordUpgrade = simContext.canUpgrade && simSnapshot.bot.money >= 20;
+        if (canAffordUpgrade) {
+          const buildBudget = Math.min(20 - simContext.turnBuildCost, simSnapshot.bot.money);
+          // Upgrade is preferred when no meaningful build target exists or budget is too low for useful track
+          if (buildBudget < 5) {
+            console.log(`[TurnComposer] Phase B: upgrade preferred over build (cash=${simSnapshot.bot.money}, buildBudget=${buildBudget}, train=${simSnapshot.bot.trainType})`);
+          }
+        }
+
         const buildPlan = await TurnComposer.tryAppendBuild(
           simSnapshot, simContext, activeRoute,
         );
         if (buildPlan) {
           steps.push(buildPlan);
+        } else if (canAffordUpgrade) {
+          console.log(`[TurnComposer] Phase B: upgrade preferred over build (cash=${simSnapshot.bot.money}, no build target found, train=${simSnapshot.bot.trainType})`);
         }
       } catch (err) {
         // Phase B errors are non-fatal
