@@ -73,6 +73,33 @@ function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: num
   };
 }
 
+function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
+  return {
+    cardIndex: 0,
+    loadType: 'Wine',
+    supplyCity: 'Bordeaux',
+    deliveryCity: 'Berlin',
+    payout: 20,
+    isSupplyReachable: false,
+    isDeliveryReachable: false,
+    isSupplyOnNetwork: false,
+    isDeliveryOnNetwork: false,
+    estimatedTrackCostToSupply: 10,
+    estimatedTrackCostToDelivery: 10,
+    isLoadAvailable: true,
+    isLoadOnTrain: false,
+    ferryRequired: false,
+    loadChipTotal: 4,
+    loadChipCarried: 0,
+    estimatedTurns: 5,
+    demandScore: 0,
+    efficiencyPerTurn: 0,
+    networkCitiesUnlocked: 0,
+    victoryMajorCitiesEnRoute: 0,
+    ...overrides,
+  };
+}
+
 describe('GuardrailEnforcer', () => {
   const mockResolveMove = ActionResolver.resolveMove as jest.MockedFunction<typeof ActionResolver.resolveMove>;
 
@@ -203,7 +230,10 @@ describe('GuardrailEnforcer', () => {
       };
 
       it('should force PICKUP when canPickup has opportunities and LLM chose PASS', async () => {
-        const ctx = makeContext({ canPickup: [pickup] });
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Cars', deliveryCity: 'Berlin', isDeliveryOnNetwork: true })],
+        });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
         const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
@@ -218,7 +248,10 @@ describe('GuardrailEnforcer', () => {
       });
 
       it('should inject PICKUP before BUILD when LLM chose BUILD', async () => {
-        const ctx = makeContext({ canPickup: [pickup] });
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Cars', deliveryCity: 'Berlin', isDeliveryOnNetwork: true })],
+        });
         const plan: TurnPlan = {
           type: AIActionType.BuildTrack,
           segments: [makeSegment(10, 10, 10, 11)],
@@ -305,7 +338,14 @@ describe('GuardrailEnforcer', () => {
           { loadType: 'Wine', supplyCity: 'Stuttgart', bestPayout: 35, bestDeliveryCity: 'London' },
           { loadType: 'Iron', supplyCity: 'Stuttgart', bestPayout: 15, bestDeliveryCity: 'Paris' },
         ];
-        const ctx = makeContext({ canPickup: pickups });
+        const ctx = makeContext({
+          canPickup: pickups,
+          demands: [
+            makeDemand({ loadType: 'Cars', deliveryCity: 'Berlin', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Wine', deliveryCity: 'London', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Iron', deliveryCity: 'Paris', isDeliveryOnNetwork: true }),
+          ],
+        });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
         const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
@@ -414,32 +454,6 @@ describe('GuardrailEnforcer', () => {
     });
 
     describe('Guardrail 4: No passing while carrying loads', () => {
-      function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
-        return {
-          cardIndex: 0,
-          loadType: 'Wine',
-          supplyCity: 'Bordeaux',
-          deliveryCity: 'Berlin',
-          payout: 20,
-          isSupplyReachable: false,
-          isDeliveryReachable: false,
-          isSupplyOnNetwork: false,
-          isDeliveryOnNetwork: false,
-          estimatedTrackCostToSupply: 10,
-          estimatedTrackCostToDelivery: 10,
-          isLoadAvailable: true,
-          isLoadOnTrain: false,
-          ferryRequired: false,
-          loadChipTotal: 4,
-          loadChipCarried: 0,
-          estimatedTurns: 5,
-          demandScore: 0,
-          efficiencyPerTurn: 0,
-          networkCitiesUnlocked: 0,
-          victoryMajorCitiesEnRoute: 0,
-          ...overrides,
-        };
-      }
 
       it('should override PassTurn to MoveTrain when bot has loads and delivery is on network', async () => {
         const movePlan = {
@@ -812,6 +826,11 @@ describe('GuardrailEnforcer', () => {
           canPickup: [pickup1, pickup2, pickup3],
           capacity: 2,
           loads: [],
+          demands: [
+            makeDemand({ loadType: 'Coal', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Steel', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Wine', isDeliveryOnNetwork: true }),
+          ],
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
@@ -839,6 +858,10 @@ describe('GuardrailEnforcer', () => {
           canPickup: [pickup1, pickup2],
           capacity: 2,
           loads: ['Wine'], // Already carrying 1 of 2
+          demands: [
+            makeDemand({ loadType: 'Coal', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Steel', isDeliveryOnNetwork: true }),
+          ],
         });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
@@ -866,6 +889,155 @@ describe('GuardrailEnforcer', () => {
         // G2 won't fire (capacity full), G4 will fire because loads > 0
         // But G4 needs demands with delivery/supply on network
         expect(result.plan.type).not.toBe(AIActionType.PickupLoad);
+      });
+    });
+
+    describe('Guardrail 2: Pickup feasibility filtering (G2-G5 loop prevention)', () => {
+      it('should include pickup with feasible delivery (on network)', async () => {
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'Hamburg' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Coal', deliveryCity: 'Hamburg', isDeliveryOnNetwork: true })],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+        if (result.plan.type === AIActionType.PickupLoad) {
+          expect(result.plan.load).toBe('Coal');
+        }
+      });
+
+      it('should include pickup with feasible delivery (build cost within budget)', async () => {
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'Hamburg' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Coal', deliveryCity: 'Hamburg', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 10 })],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // Bot has 50M, delivery build cost is 10M → feasible
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+      });
+
+      it('should exclude pickup when delivery is infeasible (off network and too expensive)', async () => {
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'London' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Coal', deliveryCity: 'London', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 100 })],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // Bot has 50M, delivery costs 100M → infeasible, G2 should NOT fire
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should exclude pickup with no matching demands', async () => {
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'Hamburg' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [makeDemand({ loadType: 'Wine', isDeliveryOnNetwork: true })], // Different load type
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should filter mixed pickups: only feasible ones included', async () => {
+        const feasiblePickup: PickupOpportunity = { loadType: 'Wine', supplyCity: 'Berlin', bestPayout: 30, bestDeliveryCity: 'Paris' };
+        const infeasiblePickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 40, bestDeliveryCity: 'London' };
+        const ctx = makeContext({
+          canPickup: [feasiblePickup, infeasiblePickup],
+          demands: [
+            makeDemand({ loadType: 'Wine', deliveryCity: 'Paris', isDeliveryOnNetwork: true }),
+            makeDemand({ loadType: 'Coal', deliveryCity: 'London', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 200 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // Coal has higher bestPayout but is infeasible → only Wine should be picked up
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(50));
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.PickupLoad);
+        if (result.plan.type === AIActionType.PickupLoad) {
+          expect(result.plan.load).toBe('Wine');
+        }
+      });
+
+      it('should return empty when all pickups are infeasible (G2 does not fire)', async () => {
+        const pickup1: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'London' };
+        const pickup2: PickupOpportunity = { loadType: 'Iron', supplyCity: 'Berlin', bestPayout: 15, bestDeliveryCity: 'Madrid' };
+        const ctx = makeContext({
+          canPickup: [pickup1, pickup2],
+          demands: [
+            makeDemand({ loadType: 'Coal', deliveryCity: 'London', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 100 }),
+            makeDemand({ loadType: 'Iron', deliveryCity: 'Madrid', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 80 }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // Bot has 0M → neither delivery is affordable
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(0));
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should not count demands where load is already on train', async () => {
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 20, bestDeliveryCity: 'Hamburg' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          demands: [
+            // This demand already has Coal on the train, so picking up more Coal
+            // should look for OTHER demand entries for Coal
+            makeDemand({ loadType: 'Coal', deliveryCity: 'Hamburg', isDeliveryOnNetwork: true, isLoadOnTrain: true }),
+          ],
+        });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // Only demand for Coal already has isLoadOnTrain: true → no unfulfilled demand
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should break the G2→G5 cycle: infeasible pickup not forced, then not dropped', async () => {
+        // Scenario: Bot is at a city with available Coal, has a demand for Coal
+        // delivery to London (off-network, costs 100M), but only has 10M.
+        // G2 should NOT force the pickup because G5 would immediately drop it.
+        const pickup: PickupOpportunity = { loadType: 'Coal', supplyCity: 'Berlin', bestPayout: 25, bestDeliveryCity: 'London' };
+        const ctx = makeContext({
+          canPickup: [pickup],
+          loads: [], // Bot is empty
+          demands: [
+            makeDemand({
+              loadType: 'Coal',
+              deliveryCity: 'London',
+              isDeliveryOnNetwork: false,
+              estimatedTrackCostToDelivery: 100,
+            }),
+          ],
+        });
+        const plan: TurnPlan = {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(10, 10, 10, 11)],
+        };
+
+        // Bot has only 10M → cannot afford 100M track to London
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(10));
+
+        // G2 should NOT fire because the only pickup is infeasible
+        expect(result.overridden).toBe(false);
+        expect(result.plan.type).toBe(AIActionType.BuildTrack);
       });
     });
 

@@ -97,7 +97,7 @@ export class GuardrailEnforcer {
       planType !== AIActionType.DeliverLoad &&
       planType !== AIActionType.DiscardHand
     ) {
-      const pickups = GuardrailEnforcer.bestPickups(context);
+      const pickups = GuardrailEnforcer.bestPickups(context, snapshot);
       if (pickups.length === 0) {
         // Capacity full — let the original plan proceed
       } else {
@@ -297,11 +297,26 @@ export class GuardrailEnforcer {
   /**
    * Pick the highest-payout pickup opportunities, up to remaining cargo capacity.
    * Returns a sorted array (highest payout first), limited by what the bot can carry.
+   *
+   * Filters out pickups where no matching demand has a feasible delivery route,
+   * preventing the G2→G5 loop (pickup forced by G2, then immediately dropped by G5).
    */
-  private static bestPickups(context: GameContext): typeof context.canPickup {
+  private static bestPickups(context: GameContext, snapshot: WorldSnapshot): typeof context.canPickup {
     const remainingCapacity = context.capacity - context.loads.length;
     if (remainingCapacity <= 0) return [];
-    return [...context.canPickup]
+
+    // Filter to only pickups with at least one feasible delivery demand
+    const deliverablePickups = context.canPickup.filter(pickup => {
+      const matchingDemands = context.demands.filter(
+        d => d.loadType === pickup.loadType && !d.isLoadOnTrain,
+      );
+      if (matchingDemands.length === 0) return false;
+      return matchingDemands.some(
+        d => d.isDeliveryOnNetwork || d.estimatedTrackCostToDelivery <= snapshot.bot.money,
+      );
+    });
+
+    return [...deliverablePickups]
       .sort((a, b) => b.bestPayout - a.bestPayout)
       .slice(0, remainingCapacity);
   }
