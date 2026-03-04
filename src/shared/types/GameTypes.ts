@@ -670,6 +670,8 @@ export interface GameContext {
     turnNumber: number;
     /** Summary of previous turn's action/reasoning for LLM context continuity */
     previousTurnSummary?: string;
+    /** Dynamic upgrade advice based on current train, cash, and game state */
+    upgradeAdvice?: string;
 }
 
 /** A single action within an LLM multi-action response */

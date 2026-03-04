@@ -91,8 +91,9 @@ export class ContextBuilder {
     // Compute pickup opportunities at current position
     const canPickup = ContextBuilder.computeCanPickup(snapshot, gridPoints);
 
-    // Determine if the bot can upgrade
+    // Determine if the bot can upgrade and generate advice
     const canUpgrade = ContextBuilder.checkCanUpgrade(snapshot);
+    const upgradeAdvice = ContextBuilder.computeUpgradeAdvice(snapshot);
 
     // turnBuildCost is not yet on WorldSnapshot — will be added in BE-021.
     // Default to 0 since ContextBuilder runs at the start of the bot's turn.
@@ -151,6 +152,7 @@ export class ContextBuilder {
       opponents,
       phase,
       turnNumber: snapshot.turnNumber,
+      upgradeAdvice,
     };
   }
 
@@ -781,7 +783,9 @@ export class ContextBuilder {
     }
 
     // ── UPGRADE OPTIONS ──
-    if (context.canUpgrade) {
+    if (context.upgradeAdvice) {
+      lines.push(`UPGRADE ADVICE: ${context.upgradeAdvice}`);
+    } else if (context.canUpgrade) {
       lines.push('YOU CAN UPGRADE: Check available train types (20M for upgrade, 5M for crossgrade).');
     }
 
@@ -1267,6 +1271,39 @@ export class ContextBuilder {
     }
 
     return opportunities;
+  }
+
+  /** Generate dynamic upgrade advice based on current train, cash, turn, and game phase */
+  private static computeUpgradeAdvice(snapshot: WorldSnapshot): string | undefined {
+    if (snapshot.gameStatus === 'initialBuild') return undefined;
+    const trainType = snapshot.bot.trainType as TrainType;
+    const money = snapshot.bot.money;
+    const turn = snapshot.turnNumber;
+
+    if (trainType === TrainType.Superfreight) return undefined;
+
+    const parts: string[] = [];
+
+    if (trainType === TrainType.Freight) {
+      if (turn >= 15 && money >= 20) {
+        parts.push(`URGENT: Still on Freight at turn ${turn}. Upgrade NOW — every turn without Fast Freight or Heavy Freight costs you efficiency.`);
+      }
+      if (money >= 60) {
+        parts.push('Fast Freight (20M): +3 speed saves 1 turn on routes over 15 mileposts. Heavy Freight (20M): +1 cargo slot for corridor deliveries.');
+      } else if (money >= 20) {
+        parts.push('You can afford an upgrade (20M). Fast Freight for speed, Heavy Freight for cargo — choose based on your route lengths.');
+      }
+    } else if (trainType === TrainType.FastFreight || trainType === TrainType.HeavyFreight) {
+      if (money >= 20) {
+        parts.push(`Superfreight available (20M): 12 speed + 3 cargo. The endgame train — upgrade when no high-value build target exists.`);
+      }
+      if (money >= 5 && money < 20) {
+        const other = trainType === TrainType.FastFreight ? 'Heavy Freight (3 cargo)' : 'Fast Freight (12 speed)';
+        parts.push(`Crossgrade to ${other} for only 5M (and still build up to 15M this turn).`);
+      }
+    }
+
+    return parts.length > 0 ? parts.join(' ') : undefined;
   }
 
   /** Check whether the bot can afford and is eligible for a train upgrade */
