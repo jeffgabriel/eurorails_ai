@@ -55,6 +55,13 @@ CRITICAL RULES — ALWAYS FOLLOW:
 13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
 14. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
 
+SUPPLY RARITY STRATEGY:
+Each load type is sourced from a limited number of cities. When the demand context shows supply availability, consider rarity:
+- UNIQUE SOURCE (1 supply city): High-value opportunity if the supply city is on or near your network. Prioritize these — no alternative pickup location exists. If far from your network, the build cost may outweigh the benefit.
+- LIMITED (2 supply cities): Moderate scarcity. Prefer the supply city closer to your existing track. If one is on-network, it's a strong pickup candidate.
+- COMMON (3-4 supply cities): Flexible — choose whichever supply city best fits your current route.
+Rare supply loads near your network deserve priority because competitors may also target them, and building toward a unique source you're already close to is highly efficient.
+
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:
 {
@@ -109,6 +116,7 @@ ROUTE PLANNING CRITERIA:
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
 8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
 9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
+9b. SUPPLY RARITY: Loads with only 1 supply city (UNIQUE SOURCE) are high-value targets when near your network — no alternative pickup exists. Loads with 2 supply cities (LIMITED) offer moderate flexibility. Loads with 3-4 supply cities (COMMON) let you choose the most convenient source. Prioritize rare-source demands that are accessible over common-source demands that require major track investment.
 10. CORRIDORS: When a DEMAND CORRIDORS section is shown, prefer corridor routes over standalone demands. Combined routes earn more per turn of building.
 11. ON THE WAY: Demands marked "ON THE WAY" can be added to a corridor route at near-zero extra cost. Always include them if your train has capacity.
 
