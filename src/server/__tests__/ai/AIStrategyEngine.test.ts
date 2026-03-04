@@ -1845,4 +1845,144 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
   });
+
+  describe('JIRA-31: llmLog threading in BotTurnResult', () => {
+    it('should thread llmLog from planRoute into BotTurnResult', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Build toward Berlin',
+        createdAtTurn: 5,
+      };
+      const mockLlmLog = [
+        { attemptNumber: 1, status: 'validation_error' as const, responseText: 'bad route', error: 'Route infeasible', latencyMs: 200 },
+        { attemptNumber: 2, status: 'success' as const, responseText: '{"stops":[...]}', latencyMs: 350 },
+      ];
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 550,
+        tokenUsage: { input: 200, output: 80 },
+        llmLog: mockLlmLog,
+      });
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.llmLog).toBeDefined();
+      expect(result.llmLog).toHaveLength(2);
+      expect(result.llmLog![0].status).toBe('validation_error');
+      expect(result.llmLog![0].error).toBe('Route infeasible');
+      expect(result.llmLog![1].status).toBe('success');
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should thread llmLog from decideAction into BotTurnResult', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'move' as const,
+        createdAtTurn: 3,
+        reasoning: 'Test route',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, targetCity: 'Berlin', path: [{ row: 10, col: 11 }] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving toward Berlin',
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Active route path doesn't call LLM, so llmLog should be undefined
+      expect(result.llmLog).toBeUndefined();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should have no llmLog when no API key configured', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      delete process.env.GOOGLE_AI_API_KEY;
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        consecutivePassTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({ botConfig: null } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.llmLog).toBeUndefined();
+    });
+  });
 });
