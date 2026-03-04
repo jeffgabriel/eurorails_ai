@@ -569,7 +569,7 @@ export class AIStrategyEngine {
     const hasLoads = snapshot.bot.loads.length;
     const deliverables = context.canDeliver;
     if (deliverables.length > 0) {
-      console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=${hasLoads}. Found deliverable: ${deliverables[0].loadType} → ${deliverables[0].city}`);
+      console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=${hasLoads}. Found deliverable: ${deliverables[0].loadType} → ${deliverables[0].deliveryCity}`);
     } else if (hasLoads > 0) {
       console.warn(`${tag} [ZeroMoneyGate] Activated: money=0, loads=${hasLoads}. No delivery match — must move toward delivery city`);
     } else {
