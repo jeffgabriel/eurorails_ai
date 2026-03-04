@@ -172,6 +172,8 @@ export async function onTurnChange(
       llmLatencyMs: result.llmLatencyMs,
       tokenUsage: result.tokenUsage,
       retried: result.retried,
+      // JIRA-31: LLM attempt log for debug overlay
+      llmLog: result.llmLog,
     });
 
     // Advance to next player
