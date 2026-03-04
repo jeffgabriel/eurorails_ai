@@ -1633,8 +1633,10 @@ describe('ActionResolver', () => {
       expect(plan.load).toBe('Steel');
     });
 
-    it('should reject pickup when delivery is infeasible (FR-6)', async () => {
+    it('should log advisory warning but allow pickup when delivery is infeasible (FR-6)', async () => {
       // Bot has 10M, delivery city costs 50M to build to and is not on network
+      // Previously this blocked — now it's advisory only (LLM may plan to build track)
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const snapshot = makeWorldSnapshot({
         bot: {
           position: { row: 5, col: 5 },
@@ -1675,8 +1677,70 @@ describe('ActionResolver', () => {
         context,
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('not reachable within budget');
+      // Pickup should succeed — advisory only, not blocking
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanPickupLoad;
+      expect(plan.load).toBe('Steel');
+
+      // Advisory warning should have been logged
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[Pickup Advisory]'),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('London'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('should NOT log advisory when delivery is feasible', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          loads: [],
+          money: 50,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] },
+          ],
+        } as any,
+        loadAvailability: { Ruhr: ['Steel'] },
+      });
+
+      const context = makeGameContext({
+        money: 50,
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Steel',
+          supplyCity: 'Ruhr',
+          deliveryCity: 'Berlin',
+          payout: 20,
+          isSupplyReachable: true,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        makePickupIntent('Steel', 'Ruhr'),
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      // No advisory warning should be logged
+      const advisoryCalls = warnSpy.mock.calls.filter(
+        call => typeof call[0] === 'string' && call[0].includes('[Pickup Advisory]'),
+      );
+      expect(advisoryCalls).toHaveLength(0);
+      warnSpy.mockRestore();
     });
 
     it('should allow pickup when delivery city is on network even if build cost is high (FR-6)', async () => {

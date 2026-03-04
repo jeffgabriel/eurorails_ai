@@ -454,8 +454,10 @@ export class ActionResolver {
       return { success: false, error: `No demand card matches "${loadType}". Only pick up loads you have a demand for.` };
     }
 
-    // Delivery must be feasible — city on network or affordable to build to (FR-6)
-    const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+    // Advisory: warn when no matching demand has a feasible delivery route.
+    // Does NOT block the pickup — the LLM may be executing a multi-turn build plan.
+    // Hard blocking is handled upstream by GuardrailEnforcer.bestPickups (G2 feasibility filter).
+    const matchingDemands = context.demands.filter(d => d.loadType === loadType && !d.isLoadOnTrain);
     if (matchingDemands.length > 0) {
       const hasFeasibleDelivery = matchingDemands.some(
         d => d.isDeliveryOnNetwork || d.estimatedTrackCostToDelivery <= snapshot.bot.money,
@@ -463,14 +465,10 @@ export class ActionResolver {
       if (!hasFeasibleDelivery) {
         const bestDemand = matchingDemands[0];
         console.warn(
-          `[Pickup] Rejected infeasible pickup: "${loadType}" at "${cityName}" — delivery to "${bestDemand.deliveryCity}" ` +
-          `costs ~${bestDemand.estimatedTrackCostToDelivery}M but bot has ${snapshot.bot.money}M`,
+          `[Pickup Advisory] No immediately feasible delivery for "${loadType}" at "${cityName}" — ` +
+          `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M, ` +
+          `bot has ${snapshot.bot.money}M. LLM may have a multi-turn build plan.`,
         );
-        return {
-          success: false,
-          error: `Delivery city "${bestDemand.deliveryCity}" not reachable within budget. ` +
-            `Estimated build cost: ${bestDemand.estimatedTrackCostToDelivery}M, available: ${snapshot.bot.money}M.`,
-        };
       }
     }
 
