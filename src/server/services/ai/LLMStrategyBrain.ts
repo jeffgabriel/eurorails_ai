@@ -23,6 +23,7 @@ import {
   StrategicRoute,
   GridPoint,
   RouteStop,
+  LlmAttempt,
 } from '../../../shared/types/GameTypes';
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
@@ -111,6 +112,7 @@ export class LLMStrategyBrain {
     let totalLatencyMs = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    const llmLog: LlmAttempt[] = [];
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
       let userPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
@@ -136,7 +138,8 @@ export class LLMStrategyBrain {
             effort: ACTION_EFFORT[this.config.skillLevel],
           }),
         });
-        totalLatencyMs += (Date.now() - startTime);
+        const attemptLatency = Date.now() - startTime;
+        totalLatencyMs += attemptLatency;
         totalInputTokens += response.usage?.input ?? 0;
         totalOutputTokens += response.usage?.output ?? 0;
 
@@ -144,25 +147,54 @@ export class LLMStrategyBrain {
         const resolved = await ActionResolver.resolve(intent, snapshot, context);
 
         if (resolved.success && resolved.plan) {
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'success',
+            responseText: response.text.slice(0, 500),
+            latencyMs: attemptLatency,
+          });
           finalPlan = resolved.plan;
           finalReasoning = intent.reasoning || '';
           finalPlanHorizon = intent.planHorizon || '';
           break;
         } else {
           lastError = resolved.error || 'Action resolution failed without specific error.';
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'validation_error',
+            responseText: response.text.slice(0, 500),
+            error: lastError,
+            latencyMs: attemptLatency,
+          });
           console.warn(
             `[LLMStrategyBrain] Action resolution failed (attempt ${attempt + 1}): ${lastError}`,
           );
         }
       } catch (e: unknown) {
-        totalLatencyMs += (Date.now() - startTime);
+        const attemptLatency = Date.now() - startTime;
+        totalLatencyMs += attemptLatency;
         if (e instanceof ProviderAuthError) {
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'api_error',
+            responseText: '',
+            error: `Auth error: ${e.message}`,
+            latencyMs: attemptLatency,
+          });
           console.error('[LLMStrategyBrain] Auth error — using heuristic fallback');
           break; // Don't retry auth errors
         }
-        lastError = e instanceof ParseError
+        const isParse = e instanceof ParseError;
+        lastError = isParse
           ? `Parsing error: ${e.message}`
           : `LLM call error: ${e instanceof Error ? e.message : String(e)}`;
+        llmLog.push({
+          attemptNumber: attempt + 1,
+          status: isParse ? 'parse_error' : 'api_error',
+          responseText: '',
+          error: lastError,
+          latencyMs: attemptLatency,
+        });
         console.warn(
           `[LLMStrategyBrain] LLM/Parsing failed (attempt ${attempt + 1}): ${lastError}`,
         );
@@ -193,6 +225,7 @@ export class LLMStrategyBrain {
       latencyMs: totalLatencyMs,
       tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
       retried: attempt > 0,
+      llmLog,
     };
   }
 
@@ -209,13 +242,14 @@ export class LLMStrategyBrain {
     gridPoints: GridPoint[],
     lastAbandonedRouteKey?: string | null,
     previousRouteStops?: RouteStop[] | null, // BE-010
-  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number } } | null> {
+  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | null> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
     let lastError: string | undefined;
     let totalLatencyMs = 0;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    const llmLog: LlmAttempt[] = [];
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
       let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
@@ -241,7 +275,8 @@ export class LLMStrategyBrain {
             effort: ROUTE_EFFORT[this.config.skillLevel],
           }),
         });
-        totalLatencyMs += (Date.now() - startTime);
+        const attemptLatency = Date.now() - startTime;
+        totalLatencyMs += attemptLatency;
         totalInputTokens += response.usage?.input ?? 0;
         totalOutputTokens += response.usage?.output ?? 0;
 
@@ -250,6 +285,13 @@ export class LLMStrategyBrain {
         // Basic validation: at least one stop
         if (route.stops.length === 0) {
           lastError = 'Route must contain at least one stop.';
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'validation_error',
+            responseText: response.text.slice(0, 500),
+            error: lastError,
+            latencyMs: attemptLatency,
+          });
           console.warn(`[LLMStrategyBrain] Empty route (attempt ${attempt + 1})`);
           attempt++;
           continue;
@@ -260,6 +302,13 @@ export class LLMStrategyBrain {
 
         if (!validation.valid) {
           lastError = `Route infeasible: ${validation.errors.join('; ')}`;
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'validation_error',
+            responseText: response.text.slice(0, 500),
+            error: lastError,
+            latencyMs: attemptLatency,
+          });
           console.warn(`[LLMStrategyBrain] Route rejected (attempt ${attempt + 1}): ${lastError}`);
           attempt++;
           continue;
@@ -275,27 +324,58 @@ export class LLMStrategyBrain {
           const proposedKey = `${firstStop.loadType}:${firstStop.city}`;
           if (proposedKey === lastAbandonedRouteKey) {
             lastError = `Route rejected: first stop "${proposedKey}" matches recently abandoned route. Choose a different route.`;
+            llmLog.push({
+              attemptNumber: attempt + 1,
+              status: 'validation_error',
+              responseText: response.text.slice(0, 500),
+              error: lastError,
+              latencyMs: attemptLatency,
+            });
             console.warn(`[LLMStrategyBrain] Abandoned route re-proposed (attempt ${attempt + 1}): ${proposedKey}`);
             attempt++;
             continue;
           }
         }
 
+        llmLog.push({
+          attemptNumber: attempt + 1,
+          status: 'success',
+          responseText: response.text.slice(0, 500),
+          latencyMs: attemptLatency,
+        });
+
         return {
           route: validatedRoute,
           model: this.model,
           latencyMs: totalLatencyMs,
           tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
+          llmLog,
         };
       } catch (e: unknown) {
-        totalLatencyMs += (Date.now() - startTime);
+        const attemptLatency = Date.now() - startTime;
+        totalLatencyMs += attemptLatency;
         if (e instanceof ProviderAuthError) {
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'api_error',
+            responseText: '',
+            error: `Auth error: ${e.message}`,
+            latencyMs: attemptLatency,
+          });
           console.error('[LLMStrategyBrain] Auth error during route planning — giving up');
           return null;
         }
-        lastError = e instanceof ParseError
+        const isParse = e instanceof ParseError;
+        lastError = isParse
           ? `Parsing error: ${e.message}`
           : `LLM call error: ${e instanceof Error ? e.message : String(e)}`;
+        llmLog.push({
+          attemptNumber: attempt + 1,
+          status: isParse ? 'parse_error' : 'api_error',
+          responseText: '',
+          error: lastError,
+          latencyMs: attemptLatency,
+        });
         console.warn(`[LLMStrategyBrain] Route planning failed (attempt ${attempt + 1}): ${lastError}`);
       }
       attempt++;

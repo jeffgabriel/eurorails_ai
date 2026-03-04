@@ -784,4 +784,5 @@ export interface LLMDecisionResult {
     tokenUsage?: { input: number; output: number };
     retried: boolean;
     guardrailOverride?: boolean;
+    llmLog?: LlmAttempt[];
 }

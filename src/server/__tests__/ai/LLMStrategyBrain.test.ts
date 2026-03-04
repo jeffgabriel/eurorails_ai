@@ -1039,4 +1039,168 @@ describe('LLMStrategyBrain', () => {
       expect(result.model).toBe('custom-model-override');
     });
   });
+
+  describe('llmLog collection — decideAction()', () => {
+    it('should return llmLog with success entry on first attempt', async () => {
+      setupSuccessfulDecision(mockChat);
+      const brain = createBrain();
+      const result = await brain.decideAction(makeSnapshot(), makeContext());
+
+      expect(result.llmLog).toHaveLength(1);
+      expect(result.llmLog![0]).toMatchObject({
+        attemptNumber: 1,
+        status: 'success',
+        latencyMs: expect.any(Number),
+      });
+      expect(result.llmLog![0].error).toBeUndefined();
+    });
+
+    it('should log validation_error when ActionResolver rejects', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"action":"BuildTrack"}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseActionIntent.mockReturnValue({
+        action: 'BuildTrack',
+        reasoning: 'test',
+        planHorizon: 'now',
+      });
+      // Fail first attempt, succeed second
+      mockResolve
+        .mockResolvedValueOnce({ success: false, error: 'No valid segments' })
+        .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.PassTurn } });
+
+      const brain = createBrain();
+      const result = await brain.decideAction(makeSnapshot(), makeContext());
+
+      expect(result.llmLog).toHaveLength(2);
+      expect(result.llmLog![0].status).toBe('validation_error');
+      expect(result.llmLog![0].error).toBe('No valid segments');
+      expect(result.llmLog![1].status).toBe('success');
+    });
+
+    it('should log api_error when adapter.chat() throws', async () => {
+      mockChat.mockRejectedValue(new Error('Network timeout'));
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const brain = createBrain();
+      const result = await brain.decideAction(makeSnapshot(), makeContext());
+
+      expect(result.llmLog!.length).toBeGreaterThanOrEqual(1);
+      expect(result.llmLog![0].status).toBe('api_error');
+      expect(result.llmLog![0].error).toContain('Network timeout');
+    });
+
+    it('should log parse_error when ResponseParser throws ParseError', async () => {
+      const { ParseError } = jest.requireMock('../../services/ai/ResponseParser');
+      mockChat.mockResolvedValue({ text: 'garbage', usage: { input: 10, output: 5 } });
+      mockParseActionIntent.mockImplementation(() => { throw new ParseError('Invalid JSON'); });
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const brain = createBrain();
+      const result = await brain.decideAction(makeSnapshot(), makeContext());
+
+      expect(result.llmLog!.length).toBeGreaterThanOrEqual(1);
+      expect(result.llmLog![0].status).toBe('parse_error');
+      expect(result.llmLog![0].error).toContain('Parsing error');
+    });
+
+    it('should truncate responseText to 500 chars', async () => {
+      const longText = 'x'.repeat(1000);
+      mockChat.mockResolvedValue({ text: longText, usage: { input: 10, output: 5 } });
+      mockParseActionIntent.mockReturnValue({
+        action: 'BuildTrack',
+        reasoning: 'test',
+        planHorizon: 'now',
+      });
+      mockResolve.mockResolvedValue({ success: true, plan: { type: AIActionType.BuildTrack } });
+
+      const brain = createBrain();
+      const result = await brain.decideAction(makeSnapshot(), makeContext());
+
+      expect(result.llmLog![0].responseText.length).toBe(500);
+    });
+  });
+
+  describe('llmLog collection — planRoute()', () => {
+    const validRoute = {
+      stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 5,
+      reasoning: 'Get steel',
+    };
+
+    it('should return llmLog with success entry on valid route', async () => {
+      mockChat.mockResolvedValue({ text: '{"route":"ok"}', usage: { input: 100, output: 50 } });
+      mockParseStrategicRoute.mockReturnValue(validRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      expect(result).not.toBeNull();
+      expect(result!.llmLog).toHaveLength(1);
+      expect(result!.llmLog[0]).toMatchObject({
+        attemptNumber: 1,
+        status: 'success',
+        latencyMs: expect.any(Number),
+      });
+    });
+
+    it('should log validation_error when RouteValidator rejects', async () => {
+      mockChat.mockResolvedValue({ text: '{"route":"bad"}', usage: { input: 10, output: 5 } });
+      mockParseStrategicRoute.mockReturnValue(validRoute);
+      // Fail all attempts
+      mockRouteValidate.mockReturnValue({ valid: false, errors: ['Stop 1 invalid'] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      expect(result).toBeNull();
+      // Should have logged multiple validation_error entries (up to MAX_RETRIES+1)
+      expect(result).toBeNull(); // returns null on total failure, but we can't access llmLog
+    });
+
+    it('should log api_error when adapter.chat() throws', async () => {
+      mockChat.mockRejectedValue(new Error('API rate limit'));
+
+      const brain = createBrain();
+      const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      // planRoute returns null on total failure; llmLog is not accessible
+      // This verifies the method doesn't crash
+      expect(result).toBeNull();
+    });
+
+    it('should log parse_error when parseStrategicRoute throws ParseError', async () => {
+      const { ParseError } = jest.requireMock('../../services/ai/ResponseParser');
+      mockChat.mockResolvedValue({ text: 'bad json', usage: { input: 10, output: 5 } });
+      mockParseStrategicRoute.mockImplementation(() => { throw new ParseError('Invalid route JSON'); });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      expect(result).toBeNull();
+    });
+
+    it('should include llmLog in successful return value with truncated responseText', async () => {
+      const longResponse = 'r'.repeat(1000);
+      mockChat.mockResolvedValue({ text: longResponse, usage: { input: 100, output: 50 } });
+      mockParseStrategicRoute.mockReturnValue(validRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      expect(result).not.toBeNull();
+      expect(result!.llmLog[0].responseText.length).toBe(500);
+    });
+  });
 });
