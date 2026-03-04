@@ -1513,6 +1513,8 @@ describe('ContextBuilder proximity computation methods', () => {
       efficiencyPerTurn: 0,
       networkCitiesUnlocked: 0,
       victoryMajorCitiesEnRoute: 0,
+      isAffordable: true,
+      projectedFundsAfterDelivery: 50,
       ...overrides,
     };
   }
@@ -2040,6 +2042,8 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
       efficiencyPerTurn: 0,
       networkCitiesUnlocked: 0,
       victoryMajorCitiesEnRoute: 0,
+      isAffordable: true,
+      projectedFundsAfterDelivery: 50,
       ...overrides,
     };
   }
@@ -2176,6 +2180,8 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
       efficiencyPerTurn: 0,
       networkCitiesUnlocked: 0,
       victoryMajorCitiesEnRoute: 0,
+      isAffordable: true,
+      projectedFundsAfterDelivery: 50,
       ...overrides,
     };
   }
@@ -2512,5 +2518,88 @@ describe('PREVIOUS ROUTE CONTEXT section in serializeRoutePlanningPrompt (BE-010
     expect(output).toContain('- pickup Coal at Essen');
     expect(output).not.toContain('for undefined');
     expect(output).not.toContain('for null');
+  });
+});
+
+// ── BE-001: isBuildAffordable ──────────────────────────────────────────────
+
+describe('ContextBuilder.isBuildAffordable', () => {
+  const makeResolvedDemands = (
+    demands: Array<{ city: string; loadType: string; payment: number }>,
+  ) => [{ cardId: 1, demands }];
+
+  it('should return affordable when cash alone covers the build cost', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      15, // estimated track cost
+      30, // bot money
+      [],  // no carried loads
+      [],  // no demands
+      20,  // payout
+    );
+    expect(result.affordable).toBe(true);
+    expect(result.projectedFunds).toBe(30);
+  });
+
+  it('should return affordable when cash + projected delivery income covers cost', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      25, // estimated track cost
+      10, // bot money (not enough alone)
+      ['Coal'], // carrying Coal
+      makeResolvedDemands([{ city: 'Berlin', loadType: 'Coal', payment: 20 }]),
+      30, // payout
+    );
+    expect(result.affordable).toBe(true);
+    expect(result.projectedFunds).toBe(30); // 10 + 20
+  });
+
+  it('should return unaffordable when funds are insufficient', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      32, // estimated track cost
+      30, // bot money
+      [],  // no carried loads
+      [],  // no demands
+      40,  // payout
+    );
+    expect(result.affordable).toBe(false);
+    expect(result.projectedFunds).toBe(30);
+  });
+
+  it('should return unaffordable for negative ROI (track cost > payout)', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      60, // estimated track cost
+      50, // bot money (enough to pay)
+      [],
+      [],
+      55, // payout is less than track cost
+    );
+    expect(result.affordable).toBe(false);
+    expect(result.projectedFunds).toBe(50);
+  });
+
+  it('should project income from multiple carried loads', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      40, // estimated track cost
+      5,  // bot money
+      ['Coal', 'Oil'], // carrying two loads
+      makeResolvedDemands([
+        { city: 'Berlin', loadType: 'Coal', payment: 20 },
+        { city: 'Paris', loadType: 'Oil', payment: 25 },
+      ]),
+      50, // payout
+    );
+    expect(result.affordable).toBe(true);
+    expect(result.projectedFunds).toBe(50); // 5 + 20 + 25
+  });
+
+  it('should return affordable when track cost is zero', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      0, // no build needed
+      5,
+      [],
+      [],
+      20,
+    );
+    expect(result.affordable).toBe(true);
+    expect(result.projectedFunds).toBe(5);
   });
 });

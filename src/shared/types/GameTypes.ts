@@ -609,6 +609,10 @@ export interface DemandContext {
     networkCitiesUnlocked: number;
     /** Count of unconnected major cities reachable via the track corridor */
     victoryMajorCitiesEnRoute: number;
+    /** Whether the bot can afford to build track for this demand (cash + projected delivery income >= cost) */
+    isAffordable: boolean;
+    /** Bot's projected funds after delivering all currently carried loads (cash + carried load payouts) */
+    projectedFundsAfterDelivery: number;
 }
 
 /** An immediately completable delivery at the bot's current position */

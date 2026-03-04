@@ -49,6 +49,8 @@ function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
     efficiencyPerTurn: 0,
     networkCitiesUnlocked: 0,
     victoryMajorCitiesEnRoute: 0,
+    isAffordable: true,
+    projectedFundsAfterDelivery: 50,
     ...overrides,
   };
 }

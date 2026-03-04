@@ -335,6 +335,45 @@ export class ContextBuilder {
     return fourCopyLoads.includes(loadType) ? 4 : 3;
   }
 
+  // ── Build affordability (BE-001) ────────────────────────────────────────
+
+  /**
+   * Check if a build target is achievable with current cash plus projected
+   * delivery income from carried loads. Also flags negative ROI builds
+   * where track cost exceeds payout.
+   */
+  static isBuildAffordable(
+    estimatedTrackCost: number,
+    botMoney: number,
+    carriedLoads: string[],
+    resolvedDemands: WorldSnapshot['bot']['resolvedDemands'],
+    payout: number,
+  ): { affordable: boolean; projectedFunds: number } {
+    // Calculate projected income from currently carried loads
+    let projectedIncome = 0;
+    for (const loadType of carriedLoads) {
+      // Find matching demand for this carried load
+      for (const resolved of resolvedDemands) {
+        for (const demand of resolved.demands) {
+          if (demand.loadType === loadType) {
+            projectedIncome += demand.payment;
+            break; // Only count one demand per carried load instance
+          }
+        }
+      }
+    }
+    const projectedFunds = botMoney + projectedIncome;
+
+    // Negative ROI check: track cost exceeds payout
+    if (estimatedTrackCost > payout) {
+      return { affordable: false, projectedFunds };
+    }
+
+    // Affordability check: can bot afford the build with projected funds?
+    const affordable = estimatedTrackCost <= projectedFunds;
+    return { affordable, projectedFunds };
+  }
+
   // ── Demand context (BE-005) ─────────────────────────────────────────────
 
   /**
@@ -437,6 +476,13 @@ export class ContextBuilder {
     );
     const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
 
+    // 11. Build affordability check (BE-001)
+    const affordability = ContextBuilder.isBuildAffordable(
+      totalTrackCost, snapshot.bot.money,
+      snapshot.bot.loads, snapshot.bot.resolvedDemands,
+      demand.payment,
+    );
+
     return {
       cardIndex,
       loadType,
@@ -459,6 +505,8 @@ export class ContextBuilder {
       efficiencyPerTurn,
       networkCitiesUnlocked: corridorValue.networkCities,
       victoryMajorCitiesEnRoute: corridorValue.victoryMajorCities,
+      isAffordable: affordability.affordable,
+      projectedFundsAfterDelivery: affordability.projectedFunds,
     };
   }
 
