@@ -62,6 +62,13 @@ Each load type is sourced from a limited number of cities. When the demand conte
 - COMMON (3-4 supply cities): Flexible — choose whichever supply city best fits your current route.
 Rare supply loads near your network deserve priority because competitors may also target them, and building toward a unique source you're already close to is highly efficient.
 
+HAND QUALITY ASSESSMENT:
+Your hand quality is evaluated each turn based on the average best demand score across your 3 cards. Assessments:
+- GOOD: Strong hand — at least one high-value, affordable demand near your network. Execute your best delivery chain.
+- FAIR: Acceptable hand — demands are achievable but may require significant track investment. Proceed unless a cheaper option exists.
+- POOR: Weak hand — all demands are expensive, distant, or unprofitable. If your best demand takes 8+ estimated turns, strongly consider DISCARD_HAND to draw 3 fresh cards (costs 1 turn but saves 5-10 turns of bad execution).
+Cards held for 12+ turns without fulfillment are STALE — they drag down hand quality and signal a stuck strategy. Discard stale hands aggressively.
+
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:
 {
