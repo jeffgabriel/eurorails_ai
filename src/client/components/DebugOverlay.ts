@@ -41,6 +41,8 @@ export interface BotTurnEntry {
     phase: string;
   };
   demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>;
+  // FE-002: Dynamic upgrade advice
+  upgradeAdvice?: string;
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -254,6 +256,9 @@ export class DebugOverlay {
       }
       if (payload?.demandRanking?.length) {
         entry.demandRanking = payload.demandRanking;
+      }
+      if (payload?.upgradeAdvice) {
+        entry.upgradeAdvice = payload.upgradeAdvice;
       }
       // JIRA-19: LLM decision metadata
       entry.model = payload?.model;
@@ -483,6 +488,9 @@ export class DebugOverlay {
       }
       if (latest.demandRanking && latest.demandRanking.length > 0) {
         latestDetail += this.renderDemandRanking(latest.demandRanking, color);
+      }
+      if (latest.upgradeAdvice) {
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.08);border-radius:4px;border-left:3px solid #fbbf24;"><div style="color:#fbbf24;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Path</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeAdvice}</div></div>`;
       }
       if (latest.loadsPickedUp || latest.loadsDelivered) {
         latestDetail += this.renderLoadDetails(latest.loadsPickedUp, latest.loadsDelivered);

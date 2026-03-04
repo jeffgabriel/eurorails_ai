@@ -65,6 +65,8 @@ export interface BotTurnResult {
   retried?: boolean;
   // Hand quality metrics for audit logging
   handQuality?: { score: number; staleCards: number; assessment: string };
+  // FE-002: Dynamic upgrade advice for debug overlay
+  upgradeAdvice?: string;
 }
 
 export class AIStrategyEngine {
@@ -468,6 +470,7 @@ export class AIStrategyEngine {
         tokenUsage: decision.tokenUsage,
         retried: decision.retried,
         handQuality,
+        upgradeAdvice: context.upgradeAdvice,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

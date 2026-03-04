@@ -165,6 +165,7 @@ export async function onTurnChange(
       guardrailOverride: result.guardrailOverride,
       guardrailReason: result.guardrailReason,
       demandRanking: result.demandRanking,
+      upgradeAdvice: result.upgradeAdvice,
       // JIRA-19: LLM decision metadata
       model: result.model,
       llmLatencyMs: result.llmLatencyMs,
