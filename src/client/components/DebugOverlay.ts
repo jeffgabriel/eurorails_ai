@@ -40,9 +40,11 @@ export interface BotTurnEntry {
     currentStopIndex: number;
     phase: string;
   };
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>;
   // FE-002: Dynamic upgrade advice
   upgradeAdvice?: string;
+  // FE-003: Hand quality metrics
+  handQuality?: { score: number; staleCards: number; assessment: string };
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -259,6 +261,9 @@ export class DebugOverlay {
       }
       if (payload?.upgradeAdvice) {
         entry.upgradeAdvice = payload.upgradeAdvice;
+      }
+      if (payload?.handQuality) {
+        entry.handQuality = payload.handQuality;
       }
       // JIRA-19: LLM decision metadata
       entry.model = payload?.model;
@@ -489,6 +494,11 @@ export class DebugOverlay {
       if (latest.demandRanking && latest.demandRanking.length > 0) {
         latestDetail += this.renderDemandRanking(latest.demandRanking, color);
       }
+      if (latest.handQuality) {
+        const hq = latest.handQuality;
+        const assessColor = hq.assessment === 'Good' ? '#34d399' : hq.assessment === 'Fair' ? '#fbbf24' : '#f87171';
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(96,165,250,0.08);border-radius:4px;border-left:3px solid #60a5fa;"><div style="color:#60a5fa;font-size:14px;font-weight:bold;margin-bottom:2px;">Hand Quality</div><div style="color:#e5e7eb;font-size:13px;">Score: ${hq.score} (threshold=3.0) | Assessment: <span style="color:${assessColor};font-weight:bold;">${hq.assessment}</span> | Stale: ${hq.staleCards} card(s)</div></div>`;
+      }
       if (latest.upgradeAdvice) {
         latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.08);border-radius:4px;border-left:3px solid #fbbf24;"><div style="color:#fbbf24;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Path</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeAdvice}</div></div>`;
       }
@@ -555,13 +565,14 @@ export class DebugOverlay {
     return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}</div>`;
   }
 
-  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>, playerColor: string): string {
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>, playerColor: string): string {
     const rows = ranking.map(d => {
       const rowColor = d.rank === 1 ? playerColor : d.score < 0 ? '#f87171' : '#e5e7eb';
       const tag = d.rank === 1 ? ' \u2190 BEST' : '';
       const rarityColor = d.supplyRarity === 'UNIQUE' ? '#f472b6' : d.supplyRarity === 'LIMITED' ? '#fbbf24' : '#9ca3af';
       const rarityTag = d.supplyRarity ? `<span style="color:${rarityColor};font-size:12px;margin-left:4px;">[${d.supplyRarity}]</span>` : '';
-      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}${rarityTag}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
+      const staleTag = d.isStale ? '<span style="color:#f87171;font-size:12px;margin-left:4px;">\u26A0STALE</span>' : '';
+      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}${rarityTag}${staleTag}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
     }).join('');
     return `
       <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid ${playerColor};">

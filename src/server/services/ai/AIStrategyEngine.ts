@@ -57,7 +57,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>;
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -441,6 +441,7 @@ export class AIStrategyEngine {
             score: d.demandScore,
             rank: i + 1,
             supplyRarity,
+            isStale: d.estimatedTurns >= 12,
           };
         });
 
