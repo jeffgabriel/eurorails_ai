@@ -30,6 +30,7 @@ import {
   TurnPlan,
   StrategicRoute,
   RouteStop,
+  DemandContext,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -62,6 +63,8 @@ export interface BotTurnResult {
   llmLatencyMs?: number;
   tokenUsage?: { input: number; output: number };
   retried?: boolean;
+  // Hand quality metrics for audit logging
+  handQuality?: { score: number; staleCards: number; assessment: string };
 }
 
 export class AIStrategyEngine {
@@ -424,6 +427,9 @@ export class AIStrategyEngine {
           rank: i + 1,
         }));
 
+      // INF-001: Compute hand quality for audit logging
+      const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber);
+
       return {
         action: result.action,
         segmentsBuilt: result.segmentsBuilt,
@@ -442,6 +448,7 @@ export class AIStrategyEngine {
         llmLatencyMs: decision.latencyMs,
         tokenUsage: decision.tokenUsage,
         retried: decision.retried,
+        handQuality,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -485,6 +492,44 @@ export class AIStrategyEngine {
         retried: false,
       };
     }
+  }
+
+  /**
+   * INF-001: Compute hand quality metrics from demand contexts.
+   * Groups demands by card, picks the best demand per card, then averages scores.
+   */
+  private static computeHandQuality(
+    demands: DemandContext[],
+    turnNumber: number,
+  ): { score: number; staleCards: number; assessment: string } {
+    if (demands.length === 0) {
+      return { score: 0, staleCards: 0, assessment: 'Poor' };
+    }
+
+    // Group by cardIndex, pick best demand per card
+    const cardGroups = new Map<number, DemandContext[]>();
+    for (const d of demands) {
+      if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
+      cardGroups.get(d.cardIndex)!.push(d);
+    }
+
+    let totalBestScore = 0;
+    let staleCards = 0;
+    for (const [, cardDemands] of cardGroups) {
+      const best = cardDemands.reduce((a, b) => a.demandScore > b.demandScore ? a : b);
+      totalBestScore += best.demandScore;
+      // Cards held for 12+ turns are stale
+      if (best.estimatedTurns >= 12) staleCards++;
+    }
+
+    const avgScore = totalBestScore / cardGroups.size;
+    const assessment = avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
+
+    return {
+      score: Math.round(avgScore * 100) / 100,
+      staleCards,
+      assessment,
+    };
   }
 
   /**

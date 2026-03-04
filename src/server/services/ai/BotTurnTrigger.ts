@@ -133,6 +133,7 @@ export async function onTurnChange(
         retried: result.retried ?? false,
         guardrailOverride: result.guardrailOverride ?? false,
         guardrailReason: result.guardrailReason ?? null,
+        handQuality: result.handQuality ?? null,
       };
       await db.query(
         'UPDATE bot_turn_audits SET details = $1 WHERE game_id = $2 AND player_id = $3 AND turn_number = $4',
