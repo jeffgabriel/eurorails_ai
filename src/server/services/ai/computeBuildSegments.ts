@@ -295,6 +295,16 @@ export function computeBuildSegments(
     onNetwork.add(makeKey(seg.to.row, seg.to.col));
   }
 
+  // Build target key set for dead-end pruning (O(1) lookup).
+  // Dead-end mileposts (≤1 non-water hex neighbor) are skipped during expansion
+  // unless they are a target city — this avoids wasting budget on ocean peninsulas.
+  const targetKeys = new Set<string>();
+  if (targetPositions) {
+    for (const tp of targetPositions) {
+      targetKeys.add(makeKey(tp.row, tp.col));
+    }
+  }
+
   // Multi-source Dijkstra
   const heap = new MinHeap();
   const minCost = new Map<string, number>();
@@ -327,6 +337,14 @@ export function computeBuildSegments(
       const nbKey = makeKey(nb.row, nb.col);
       const nbData = grid.get(nbKey);
       if (!nbData) continue;
+
+      // Dead-end pruning: skip mileposts with ≤1 non-water neighbor unless
+      // they are a target city. Prevents Dijkstra from wasting budget exploring
+      // ocean peninsulas and coastal dead-ends.
+      if (!targetKeys.has(nbKey) && !onNetwork.has(nbKey)) {
+        const nbNeighborCount = getHexNeighbors(nb.row, nb.col).length;
+        if (nbNeighborCount <= 1) continue;
+      }
 
       // Intra-city edge: free traversal through major city red area (no track built).
       // The red area connects all mileposts within a major city at zero cost.

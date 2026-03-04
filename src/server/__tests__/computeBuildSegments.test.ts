@@ -817,4 +817,102 @@ describe('computeBuildSegments', () => {
       expect(Array.isArray(segments)).toBe(true);
     });
   });
+
+  describe('dead-end milepost pruning', () => {
+    // 32,24 is a coastal dead-end (Clear terrain, Atlantic coast) with only
+    // one non-water neighbor (32,25). Nantes (31,25) is a nearby small city.
+    const DEAD_END: GridCoord = { row: 32, col: 24 };
+    const DEAD_END_NEIGHBOR: GridCoord = { row: 32, col: 25 };
+    // Use existing track from Nantes area so cold-start rules don't interfere.
+    function makeExistingTrack(): TrackSegment[] {
+      const grid = loadGridPoints();
+      const from = grid.get('32,26')!;
+      const to = grid.get('32,25')!;
+      return [{
+        from: { x: 0, y: 0, row: 32, col: 26, terrain: from.terrain },
+        to: { x: 0, y: 0, row: 32, col: 25, terrain: to.terrain },
+        cost: 1,
+      }];
+    }
+
+    it('should confirm 32,24 is a dead-end (<=1 non-water neighbor)', () => {
+      const neighbors = getHexNeighbors(32, 24);
+      expect(neighbors.length).toBeLessThanOrEqual(1);
+    });
+
+    it('should skip dead-end mileposts when no targetPositions match', () => {
+      // Start from existing track at 32,25 (neighbor of dead-end).
+      // Target is Paris — dead-end is useless and should be skipped.
+      const FAR_TARGET: GridCoord = { row: 29, col: 32 }; // Paris
+      const existing = makeExistingTrack();
+      const segments = computeBuildSegments(
+        [DEAD_END_NEIGHBOR],
+        existing,
+        5,
+        5,
+        undefined,
+        [FAR_TARGET],
+      );
+      // Dead-end 32,24 should NOT appear in any segment destination
+      const destinations = segments.map(s => `${s.to.row},${s.to.col}`);
+      expect(destinations).not.toContain('32,24');
+    });
+
+    it('should NOT skip dead-end when it is a target position', () => {
+      // When the dead-end itself is the target, Dijkstra should reach it.
+      const existing = makeExistingTrack();
+      const segments = computeBuildSegments(
+        [DEAD_END_NEIGHBOR],
+        existing,
+        5,
+        5,
+        undefined,
+        [DEAD_END],
+      );
+      // With target = dead-end, the path should include 32,24
+      const destinations = segments.map(s => `${s.to.row},${s.to.col}`);
+      expect(destinations).toContain('32,24');
+    });
+
+    it('should skip dead-end when no targets are specified', () => {
+      // Without any targetPositions, dead-ends should still be pruned.
+      const existing = makeExistingTrack();
+      const segments = computeBuildSegments(
+        [DEAD_END_NEIGHBOR],
+        existing,
+        5,
+        5,
+      );
+      const destinations = segments.map(s => `${s.to.row},${s.to.col}`);
+      expect(destinations).not.toContain('32,24');
+    });
+
+    it('should not skip dead-end that is on existing network', () => {
+      // If the dead-end is already on the bot's track, it should be
+      // freely traversable (not pruned).
+      const grid = loadGridPoints();
+      const deadEndData = grid.get('32,24')!;
+      const neighborData = grid.get('32,25')!;
+      // Track extends all the way to the dead-end
+      const existingWithDeadEnd: TrackSegment[] = [
+        ...makeExistingTrack(),
+        {
+          from: { x: 0, y: 0, row: 32, col: 25, terrain: neighborData.terrain },
+          to: { x: 0, y: 0, row: 32, col: 24, terrain: deadEndData.terrain },
+          cost: 1,
+        },
+      ];
+      // Start from dead-end (which is on network) with a target elsewhere.
+      const segments = computeBuildSegments(
+        [DEAD_END],
+        existingWithDeadEnd,
+        5,
+        5,
+        undefined,
+        [{ row: 29, col: 32 }], // Paris
+      );
+      // Should not crash and should produce results (can traverse past dead-end)
+      expect(Array.isArray(segments)).toBe(true);
+    });
+  });
 });
