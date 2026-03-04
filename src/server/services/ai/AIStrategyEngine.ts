@@ -32,6 +32,7 @@ import {
   RouteStop,
   DemandContext,
   GameContext,
+  LlmAttempt,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -68,6 +69,8 @@ export interface BotTurnResult {
   handQuality?: { score: number; staleCards: number; assessment: string };
   // FE-002: Dynamic upgrade advice for debug overlay
   upgradeAdvice?: string;
+  // JIRA-31: LLM attempt log for debug overlay
+  llmLog?: LlmAttempt[];
 }
 
 export class AIStrategyEngine {
@@ -185,6 +188,7 @@ export class AIStrategyEngine {
             latencyMs: routeResult.latencyMs,
             tokenUsage: routeResult.tokenUsage,
             retried: false,
+            llmLog: routeResult.llmLog,
           };
 
           if (execResult.routeComplete) {
@@ -473,6 +477,8 @@ export class AIStrategyEngine {
         retried: decision.retried,
         handQuality,
         upgradeAdvice: context.upgradeAdvice,
+        // JIRA-31: LLM attempt log for debug overlay
+        llmLog: decision.llmLog,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
