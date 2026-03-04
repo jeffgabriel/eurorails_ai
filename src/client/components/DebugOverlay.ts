@@ -1,5 +1,5 @@
 import "phaser";
-import { GameState, Player, GameStatus, AIActionType } from '../../shared/types/GameTypes';
+import { GameState, Player, GameStatus, AIActionType, LlmAttempt } from '../../shared/types/GameTypes';
 import { GameStateService } from '../services/GameStateService';
 
 /** Captured socket event for the debug log ring buffer */
@@ -50,6 +50,8 @@ export interface BotTurnEntry {
   llmLatencyMs?: number;
   tokenUsage?: { input: number; output: number };
   retried?: boolean;
+  // JIRA-31: LLM attempt log
+  llmLog?: LlmAttempt[];
 }
 
 /**
@@ -270,6 +272,10 @@ export class DebugOverlay {
       entry.llmLatencyMs = payload?.llmLatencyMs;
       entry.tokenUsage = payload?.tokenUsage;
       entry.retried = payload?.retried;
+      // JIRA-31: LLM attempt log
+      if (payload?.llmLog?.length) {
+        entry.llmLog = payload.llmLog;
+      }
 
       this.botTurnHistory.set(botId, history);
     } else if (eventName === 'bot:demandRankingUpdate') {
