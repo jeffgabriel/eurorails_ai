@@ -1573,7 +1573,7 @@ export class ContextBuilder {
   ): number {
     const baseROI = (payout - totalTrackCost) / estimatedTurns;
     const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-    const victoryBonus = victoryMajorCities * Math.max(payout * 0.15, 5);
+    const victoryBonus = (victoryMajorCities * Math.max(payout * 0.15, 5)) / estimatedTurns;
     return baseROI + (corridorMultiplier * baseROI) + victoryBonus;
   }
 
