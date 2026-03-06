@@ -13,6 +13,7 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
+import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -47,6 +48,8 @@ export class GameScene extends Phaser.Scene {
   private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
+  private botTrainAnimator?: BotTrainAnimator;
+  private socketUnsubBotTurnComplete?: () => void;
   private socketUnsubDebugAny?: () => void;
 
   // Game state
@@ -370,11 +373,16 @@ export class GameScene extends Phaser.Scene {
                     // For other players: use server data (authoritative)
                     const oldPosition = existingPlayer.trainState?.position;
                     const newPosition = updatedPlayer.trainState?.position;
-                    
+
                     this.gameState.players[index] = { ...existingPlayer, ...updatedPlayer };
-                    
+
+                    // JIRA-36: Skip instant position update if animation is in progress
+                    if (this.botTrainAnimator?.isAnimating(updatedPlayer.id)) {
+                      return;
+                    }
+
                     // If position changed, update visual sprite
-                    if (newPosition && 
+                    if (newPosition &&
                         (oldPosition?.row !== newPosition.row || oldPosition?.col !== newPosition.col)) {
                       const gridPoint = this.mapRenderer.gridPoints[newPosition.row]?.[newPosition.col];
                       if (gridPoint) {
@@ -612,12 +620,54 @@ export class GameScene extends Phaser.Scene {
 
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
+
+    // JIRA-36: Bot train animation system
+    this.botTrainAnimator = new BotTrainAnimator(this);
+
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
+        });
+
+        // JIRA-36: Listen for bot:turn-complete to animate movement path
+        this.socketUnsubBotTurnComplete = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          if (eventName !== 'bot:turn-complete') return;
+          const data = args[0];
+          if (!data?.movementPath || data.movementPath.length < 2) return;
+          if (!data.botPlayerId) return;
+
+          const animator = this.botTrainAnimator;
+          if (!animator) return;
+
+          // Cancel any existing animation for this bot (rapid turns)
+          if (animator.isAnimating(data.botPlayerId)) {
+            animator.cancelAnimation(data.botPlayerId);
+          }
+
+          // Animate asynchronously
+          animator.animateAlongPath(
+            data.botPlayerId,
+            data.movementPath,
+            this.mapRenderer.gridPoints,
+            () => this.uiManager.getTrainSprite(data.botPlayerId),
+          ).then((finalPos) => {
+            // Authoritative final position sync after animation
+            if (finalPos) {
+              this.uiManager.updateTrainPosition(
+                data.botPlayerId,
+                finalPos.x,
+                finalPos.y,
+                finalPos.row,
+                finalPos.col,
+                { persist: false }
+              );
+            }
+          }).catch(() => {
+            // Animation error — position will be corrected on next game:patch
+          });
         });
       }
     } catch { /* socket not available */ }
@@ -1163,6 +1213,9 @@ export class GameScene extends Phaser.Scene {
 
     // Clean up static overlays
     this.loadsReferencePanel?.destroy();
+    this.socketUnsubBotTurnComplete?.();
+    this.socketUnsubBotTurnComplete = undefined;
+    this.botTrainAnimator?.destroy();
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();

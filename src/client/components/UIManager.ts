@@ -396,6 +396,11 @@ export class UIManager {
     this.trainInteractionManager.setDrawingMode(isDrawing);
   }
 
+  /** Get a train sprite by player ID (for animation targeting). */
+  public getTrainSprite(playerId: string): Phaser.GameObjects.Image | undefined {
+    return this.trainInteractionManager.getTrainSprite(playerId);
+  }
+
   public async updateTrainPosition(
     playerId: string,
     x: number,
