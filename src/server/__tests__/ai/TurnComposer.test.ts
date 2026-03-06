@@ -162,7 +162,7 @@ describe('TurnComposer', () => {
   describe('exclusive actions', () => {
     it('DISCARD_HAND returns unchanged', async () => {
       const plan: TurnPlan = { type: AIActionType.DiscardHand };
-      const result = await TurnComposer.compose(plan, makeSnapshot(), makeContext());
+      const { plan: result } = await TurnComposer.compose(plan, makeSnapshot(), makeContext());
 
       expect(result).toBe(plan);
       expect(result.type).toBe(AIActionType.DiscardHand);
@@ -173,7 +173,7 @@ describe('TurnComposer', () => {
 
     it('PassTurn returns unchanged', async () => {
       const plan: TurnPlan = { type: AIActionType.PassTurn };
-      const result = await TurnComposer.compose(plan, makeSnapshot(), makeContext());
+      const { plan: result } = await TurnComposer.compose(plan, makeSnapshot(), makeContext());
 
       expect(result).toBe(plan);
       expect(result.type).toBe(AIActionType.PassTurn);
@@ -189,7 +189,7 @@ describe('TurnComposer', () => {
       // Even if findDemandBuildTarget returns a target, build should be skipped
       mockFindDemandBuildTarget.mockReturnValue('München');
 
-      const result = await TurnComposer.compose(plan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(plan, snapshot, context);
 
       // UPGRADE should be returned without BUILD appended
       // Since it's the only step, it returns the primary plan unchanged
@@ -261,7 +261,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Paris', cardId: 1, payout: 25 },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -314,7 +314,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -363,7 +363,7 @@ describe('TurnComposer', () => {
         }
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // Bot at capacity, no deliver match either -> MOVE only (no MultiAction)
       // resolve should NOT have been called for PICKUP
@@ -467,7 +467,7 @@ describe('TurnComposer', () => {
           },
         });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -567,7 +567,7 @@ describe('TurnComposer', () => {
         },
       });
 
-      const result = await TurnComposer.compose(primaryPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(primaryPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -617,7 +617,7 @@ describe('TurnComposer', () => {
         },
       });
 
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -668,7 +668,7 @@ describe('TurnComposer', () => {
           plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
         });
 
-      const result = await TurnComposer.compose(deliverPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -723,7 +723,7 @@ describe('TurnComposer', () => {
           plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
         });
 
-      const result = await TurnComposer.compose(deliverPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -749,7 +749,7 @@ describe('TurnComposer', () => {
         targetCity: 'Berlin',
       };
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       // Build is already present -> skipBuildPhase=true, no second build appended
       // No MOVE in primary, and primary is not PICKUP/DELIVER, so no A2 chaining
@@ -781,7 +781,7 @@ describe('TurnComposer', () => {
         // Phase B: BUILD resolve also fails
         .mockResolvedValueOnce({ success: false, error: 'No build path found' });
 
-      const result = await TurnComposer.compose(deliverPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context);
 
       // Only the primary DELIVER is returned
       expect(result.type).toBe(AIActionType.DeliverLoad);
@@ -823,7 +823,7 @@ describe('TurnComposer', () => {
         }
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // Phase A error caught — primary plan returned unchanged
       expect(result.type).toBe(AIActionType.MoveTrain);
@@ -870,7 +870,7 @@ describe('TurnComposer', () => {
         },
       });
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -892,7 +892,7 @@ describe('TurnComposer', () => {
         targetCity: 'München',
       };
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       // No move target found, plan unchanged
       expect(result.type).toBe(AIActionType.BuildTrack);
@@ -932,7 +932,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -983,7 +983,7 @@ describe('TurnComposer', () => {
         phase: 'travel',
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       // Should NOT append a build step — bot is mid-route
       expect(result.type).toBe(AIActionType.MoveTrain);
@@ -1014,7 +1014,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       // findDemandBuildTarget should have been called as fallback
@@ -1066,7 +1066,7 @@ describe('TurnComposer', () => {
         },
       });
 
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       // Verify findMoveTarget skipped Berlin (deliver without load) and targeted Baku
       const moveCall = mockResolve.mock.calls.find(
@@ -1074,6 +1074,110 @@ describe('TurnComposer', () => {
       );
       expect(moveCall).toBeDefined();
       expect(moveCall![0].details.to).toBe('Baku');
+    });
+
+    it('uses live context.loads instead of stale demand.isLoadOnTrain for move targets', async () => {
+      // Bug: After delivering a load via TurnComposer (A1 split), demand.isLoadOnTrain
+      // remains true (stale) even though context.loads was updated. This caused
+      // Priority 2 to add the delivery city (bot already there) and Priority 3 to
+      // skip supply cities for the delivered load type.
+      //
+      // Scenario: Bot delivered Steel at Torino (last route stop). No more route stops.
+      // context.loads is empty (Steel delivered), but demand for Steel still has
+      // isLoadOnTrain=true (stale from ContextBuilder). Priority 3 should use
+      // context.loads to find supply targets, not the stale flag.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [], // Steel already delivered during composition
+        },
+      });
+      const context = makeContext({
+        loads: [], // Updated during composition
+        demands: [
+          // Stale demand: isLoadOnTrain=true even though Steel was already delivered
+          {
+            cardIndex: 1,
+            loadType: 'Steel',
+            supplyCity: 'Ruhr',
+            deliveryCity: 'Torino',
+            payout: 16,
+            isSupplyReachable: true,
+            isDeliveryReachable: true,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true,
+            isLoadOnTrain: true, // STALE — Steel was already delivered
+            ferryRequired: false,
+            loadChipTotal: 4,
+            loadChipCarried: 0,
+            estimatedTurns: 2,
+            demandScore: 8,
+          },
+          // Another demand from remaining card — supply on network
+          {
+            cardIndex: 2,
+            loadType: 'Wine',
+            supplyCity: 'Bordeaux',
+            deliveryCity: 'Berlin',
+            payout: 20,
+            isSupplyReachable: false,
+            isDeliveryReachable: false,
+            isSupplyOnNetwork: true,
+            isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0,
+            estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true,
+            isLoadOnTrain: false,
+            ferryRequired: false,
+            loadChipTotal: 4,
+            loadChipCarried: 0,
+            estimatedTurns: 5,
+            demandScore: 4,
+          },
+        ],
+      });
+      // Route has only the delivery stop (already completed)
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Steel', city: 'Torino', demandCardId: 1, payment: 16 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      // Use DELIVER as primary to trigger A2 (last step is DeliverLoad)
+      const deliverPlan: TurnPlan = {
+        type: AIActionType.DeliverLoad,
+        load: 'Steel',
+        city: 'Torino',
+        cardId: 1,
+        payout: 16,
+      };
+
+      // A2: MOVE toward supply city (should be Ruhr or Bordeaux, not Torino)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 10, col: 10 }, { row: 14, col: 14 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        },
+      });
+
+      const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context, route);
+
+      // A2 should have tried to chain a continuation MOVE using live loads state
+      const moveCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCall).toBeDefined();
+      // The target should NOT be Torino (where bot already is) — it should be
+      // a supply city (Ruhr or Bordeaux) found via Priority 3 using live context.loads
+      expect(moveCall![0].details.to).not.toBe('Torino');
     });
   });
 
@@ -1102,7 +1206,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       const buildCall = mockResolve.mock.calls.find(
@@ -1134,7 +1238,7 @@ describe('TurnComposer', () => {
       // findDemandBuildTarget returns null — no fallback either
       mockFindDemandBuildTarget.mockReturnValue(null);
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // No BUILD should be appended — victory threshold not met, no demand fallback
       expect(result.type).toBe(AIActionType.MoveTrain);
@@ -1170,7 +1274,7 @@ describe('TurnComposer', () => {
         totalFee: 0,
       };
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       // No BUILD appended — all stops on network, no unconnected cities, no demand target
       expect(result.type).toBe(AIActionType.MoveTrain);
@@ -1225,7 +1329,7 @@ describe('TurnComposer', () => {
         },
       });
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1253,7 +1357,7 @@ describe('TurnComposer', () => {
         targetCity: 'Berlin',
       };
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context, route);
 
       // initialBuild returns primary unchanged — no enrichment
       expect(result).toBe(buildPlan);
@@ -1297,7 +1401,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Lyon' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       expect(mockFindDemandBuildTarget).toHaveBeenCalled();
@@ -1387,7 +1491,7 @@ describe('TurnComposer', () => {
           },
         });
 
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1446,7 +1550,7 @@ describe('TurnComposer', () => {
       // All MOVE attempts fail — no valid path to anything
       mockResolve.mockResolvedValue({ success: false, error: 'No path' });
 
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       // Only PICKUP returned — no MOVE could be resolved
       expect(result.type).toBe(AIActionType.PickupLoad);
@@ -1523,7 +1627,7 @@ describe('TurnComposer', () => {
           },
         });
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1592,7 +1696,7 @@ describe('TurnComposer', () => {
           plan: { type: AIActionType.PickupLoad, load: 'Steel', city: 'Berlin' },
         });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1643,7 +1747,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1704,7 +1808,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1765,7 +1869,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -1813,7 +1917,7 @@ describe('TurnComposer', () => {
 
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // No pickup should be proposed — only the original MOVE remains
       if (result.type === 'MultiAction') {
@@ -1869,7 +1973,7 @@ describe('TurnComposer', () => {
 
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // No pickup should be proposed
       if (result.type === 'MultiAction') {
@@ -1935,7 +2039,7 @@ describe('TurnComposer', () => {
       ]));
 
       // No resolve calls should happen — pickup should be blocked before calling ActionResolver
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       // Only MOVE should remain — no opportunistic pickup
       if (result.type === 'MultiAction') {
@@ -2007,7 +2111,7 @@ describe('TurnComposer', () => {
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
       });
 
-      const result = await TurnComposer.compose(movePlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2070,7 +2174,7 @@ describe('TurnComposer', () => {
       });
 
       // No activeRoute passed
-      const result = await TurnComposer.compose(movePlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2129,7 +2233,7 @@ describe('TurnComposer', () => {
           plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Paris', cardId: 1, payout: 25 },
         });
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2154,7 +2258,7 @@ describe('TurnComposer', () => {
         targetCity: 'Hamburg',
       };
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       // Should still contain BUILD, but no DELIVER
       if (result.type === 'MultiAction') {
@@ -2196,7 +2300,7 @@ describe('TurnComposer', () => {
         targetCity: 'Hamburg',
       };
 
-      const result = await TurnComposer.compose(buildPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
 
       // No DELIVER should be prepended
       if (result.type === 'MultiAction') {
@@ -2235,7 +2339,7 @@ describe('TurnComposer', () => {
 
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const result = await TurnComposer.compose(plan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(plan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2279,7 +2383,7 @@ describe('TurnComposer', () => {
 
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const result = await TurnComposer.compose(plan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(plan, snapshot, context);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2306,7 +2410,7 @@ describe('TurnComposer', () => {
         path: Array.from({ length: 6 }, (_, i) => ({ row: 10, col: 10 + i })), // 5mp
       } as TurnPlan;
 
-      const result = await TurnComposer.compose(plan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(plan, snapshot, context);
 
       // The plan should pass through unmodified (enrichment may add steps, but the MOVE shouldn't be truncated)
       if (result.type === 'MultiAction') {
@@ -2337,7 +2441,7 @@ describe('TurnComposer', () => {
         ],
       };
 
-      const result = await TurnComposer.compose(plan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(plan, snapshot, context);
 
       // The second MOVE (2mp excess) should be removed entirely since 2 - 2 = 0 < 1
       if (result.type === 'MultiAction') {
@@ -2438,7 +2542,7 @@ describe('TurnComposer', () => {
         });
 
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2537,7 +2641,7 @@ describe('TurnComposer', () => {
         });
 
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2643,7 +2747,7 @@ describe('TurnComposer', () => {
           },
         });
 
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2707,7 +2811,7 @@ describe('TurnComposer', () => {
       });
 
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2799,7 +2903,7 @@ describe('TurnComposer', () => {
         .mockResolvedValue({ success: false, error: 'No path' });
 
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -2927,7 +3031,7 @@ describe('TurnComposer', () => {
       }
 
       const logSpy = jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
       if (result.type === 'MultiAction') {
@@ -3055,7 +3159,7 @@ describe('TurnComposer', () => {
         });
 
       jest.spyOn(console, 'log').mockImplementation();
-      const result = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
       (console.log as jest.Mock).mockRestore();
 
       expect(result.type).toBe('MultiAction');
@@ -3120,7 +3224,7 @@ describe('TurnComposer', () => {
 
       // Primary PICKUP triggers A2 which calls resolve() → throws
       const pickupPlan = { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' };
-      const result = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
 
       // Should still return the primary plan (error is non-fatal)
       expect(result).toBeDefined();
@@ -3157,13 +3261,402 @@ describe('TurnComposer', () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ speed: 9 });
 
-      const result = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
+      const { plan: result } = await TurnComposer.compose(pickupPlan as TurnPlan, snapshot, context);
 
       // Should fall back to returning just the primary plan
       expect(result).toBeDefined();
 
       errorSpy.mockRestore();
       logSpy.mockRestore();
+    });
+  });
+
+  // ── JIRA-39: DropLoad prefix composition ──────────────────────────────────
+
+  describe('JIRA-39: DropLoad prefix composition', () => {
+    it('composes DropLoad + PickupLoad when load is available at same city', async () => {
+      const dropPlan: TurnPlan = {
+        type: AIActionType.DropLoad,
+        load: 'Cheese',
+        city: 'Holland',
+      };
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Cheese', 'Ham'],
+          position: { row: 5, col: 5 },
+          resolvedDemands: [{
+            cardId: 1,
+            demands: [{ loadType: 'Flowers', city: 'Oslo', payout: 20 }],
+          }],
+        },
+        loadAvailability: { Holland: ['Flowers'] },
+      });
+
+      const context = makeContext({ loads: ['Cheese', 'Ham'] });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Flowers',
+        city: 'Holland',
+      };
+
+      // applyPlanToState must simulate the drop (remove load from bot)
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.DropLoad) {
+          snap.bot.loads = snap.bot.loads.filter((l: string) => l !== (plan as any).load);
+        }
+      });
+
+      // Pickup resolves successfully
+      mockResolve.mockResolvedValue({ success: true, plan: pickupPlan });
+
+      const { plan: result, trace } = await TurnComposer.compose(
+        dropPlan, snapshot, context,
+      );
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps[0].type).toBe(AIActionType.DropLoad);
+        expect(result.steps[1].type).toBe(AIActionType.PickupLoad);
+      }
+      expect(trace.inputPlan).toEqual([AIActionType.DropLoad]);
+    });
+
+    it('composes DropLoad + PickupLoad + MoveTrain via A2 continuation', async () => {
+      const dropPlan: TurnPlan = {
+        type: AIActionType.DropLoad,
+        load: 'Cheese',
+        city: 'Holland',
+      };
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Cheese', 'Ham'],
+          position: { row: 5, col: 5 },
+          resolvedDemands: [{
+            cardId: 1,
+            demands: [{ loadType: 'Flowers', city: 'Oslo', payout: 20 }],
+          }],
+        },
+        loadAvailability: { Holland: ['Flowers'] },
+      });
+
+      const context = makeContext({
+        loads: ['Cheese', 'Ham'],
+        demands: [{
+          loadType: 'Flowers',
+          deliveryCity: 'Oslo',
+          supplyCity: 'Holland',
+          payout: 20,
+          isLoadOnTrain: false,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          estimatedTrackCostToDelivery: 0,
+          estimatedTurns: 2,
+        }],
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Flowers',
+        city: 'Holland',
+      };
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [
+          { row: 5, col: 5 },
+          { row: 5, col: 6 },
+          { row: 5, col: 7 },
+        ],
+      };
+
+      // applyPlanToState must simulate the drop
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.DropLoad) {
+          snap.bot.loads = snap.bot.loads.filter((l: string) => l !== (plan as any).load);
+        }
+      });
+
+      // First call: pickup after drop. Second call: A2 continuation MOVE.
+      mockResolve
+        .mockResolvedValueOnce({ success: true, plan: pickupPlan })
+        .mockResolvedValueOnce({ success: true, plan: movePlan });
+
+      const { plan: result } = await TurnComposer.compose(
+        dropPlan, snapshot, context,
+      );
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps[0].type).toBe(AIActionType.DropLoad);
+        expect(result.steps[1].type).toBe(AIActionType.PickupLoad);
+        expect(result.steps[2].type).toBe(AIActionType.MoveTrain);
+      }
+    });
+
+    it('returns DropLoad only when no pickup is possible at the city', async () => {
+      const dropPlan: TurnPlan = {
+        type: AIActionType.DropLoad,
+        load: 'Cheese',
+        city: 'Holland',
+      };
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Cheese'],
+          position: { row: 5, col: 5 },
+          resolvedDemands: [],
+        },
+        loadAvailability: {},
+      });
+
+      const context = makeContext({ loads: ['Cheese'] });
+
+      const { plan: result } = await TurnComposer.compose(
+        dropPlan, snapshot, context,
+      );
+
+      // No pickup available — DropLoad is the only step
+      expect(result.type).toBe(AIActionType.DropLoad);
+      expect(mockResolve).not.toHaveBeenCalled();
+    });
+
+    it('uses route stop for pickup when no demand-matched load found', async () => {
+      const dropPlan: TurnPlan = {
+        type: AIActionType.DropLoad,
+        load: 'Cheese',
+        city: 'Berlin',
+      };
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Cheese', 'Ham'],
+          position: { row: 5, col: 5 },
+          resolvedDemands: [],
+        },
+        loadAvailability: {},
+      });
+
+      const context = makeContext({ loads: ['Cheese', 'Ham'] });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Coal',
+        city: 'Berlin',
+      };
+
+      // applyPlanToState must simulate the drop
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.DropLoad) {
+          snap.bot.loads = snap.bot.loads.filter((l: string) => l !== (plan as any).load);
+        }
+      });
+
+      mockResolve.mockResolvedValueOnce({ success: true, plan: pickupPlan });
+
+      const { plan: result } = await TurnComposer.compose(
+        dropPlan, snapshot, context, route,
+      );
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        expect(result.steps[0].type).toBe(AIActionType.DropLoad);
+        expect(result.steps[1].type).toBe(AIActionType.PickupLoad);
+        expect((result.steps[1] as any).load).toBe('Coal');
+      }
+    });
+
+    it('DropLoad does not consume movement budget', async () => {
+      const dropPlan: TurnPlan = {
+        type: AIActionType.DropLoad,
+        load: 'Cheese',
+        city: 'Holland',
+      };
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Cheese'],
+          position: { row: 5, col: 5 },
+          resolvedDemands: [],
+        },
+        loadAvailability: {},
+      });
+
+      const context = makeContext({ loads: ['Cheese'], speed: 9 });
+
+      const { trace } = await TurnComposer.compose(
+        dropPlan, snapshot, context,
+      );
+
+      expect(trace.moveBudget.used).toBe(0);
+      expect(trace.moveBudget.wasted).toBe(9);
+    });
+  });
+
+  describe('JIRA-38: Same-city multi-pickup', () => {
+    it('chains second pickup at same city without issuing a MOVE', async () => {
+      // Setup: bot is at Birmingham (10,10), primary plan is PICKUP Iron.
+      // Route has two pickups at Birmingham: Iron (index 0) and Steel (index 1).
+      const gridMap = new Map([
+        ['10,10', { name: 'Birmingham', x: 0, y: 0 }],
+        ['10,15', { name: 'Antwerpen', x: 0, y: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          position: { row: 10, col: 10 },
+          resolvedDemands: [
+            { cardIndex: 1, demands: [{ loadType: 'Iron', city: 'Antwerpen', payout: 15 }] },
+            { cardIndex: 2, demands: [{ loadType: 'Steel', city: 'Budapest', payout: 20 }] },
+          ],
+        },
+        loadAvailability: { Birmingham: ['Iron', 'Steel'] },
+      });
+
+      const context = makeContext({
+        loads: [],
+        speed: 9,
+        citiesOnNetwork: ['Birmingham', 'Antwerpen'],
+        demands: [
+          { loadType: 'Iron', supplyCity: 'Birmingham', deliveryCity: 'Antwerpen', payout: 15, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, isDeliveryReachable: true, estimatedTrackCostToDelivery: 0, cardIndex: 1 },
+          { loadType: 'Steel', supplyCity: 'Birmingham', deliveryCity: 'Budapest', payout: 20, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, isDeliveryReachable: false, estimatedTrackCostToDelivery: 0, cardIndex: 2 },
+        ] as any,
+      });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup' as const, loadType: 'Iron', city: 'Birmingham' },
+          { action: 'pickup' as const, loadType: 'Steel', city: 'Birmingham' },
+          { action: 'deliver' as const, loadType: 'Iron', city: 'Antwerpen', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'act',
+      });
+
+      // Primary plan: PICKUP Iron at Birmingham
+      const pickupIronPlan = { type: AIActionType.PickupLoad, load: 'Iron', city: 'Birmingham' };
+
+      // Mock: cloneSnapshot returns deep copy
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+
+      // Track calls to resolve for assertions
+      let resolveCallCount = 0;
+      mockResolve.mockImplementation(async (action: any) => {
+        resolveCallCount++;
+        if (action.action === 'PICKUP' && action.details.load === 'Steel') {
+          return {
+            success: true,
+            plan: { type: AIActionType.PickupLoad, load: 'Steel', city: 'Birmingham' },
+          };
+        }
+        if (action.action === 'MOVE') {
+          return {
+            success: true,
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [{ row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 }],
+            },
+          };
+        }
+        return { success: false, error: 'not mocked' };
+      });
+
+      // applyPlanToState: simulate adding loads
+      mockApplyPlanToState.mockImplementation((plan: any, snap: any) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, plan.load];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const lastPos = plan.path[plan.path.length - 1];
+          snap.bot.position = { row: lastPos.row, col: lastPos.col };
+        }
+      });
+
+      const { plan } = await TurnComposer.compose(
+        pickupIronPlan as TurnPlan, snapshot, context, route,
+      );
+
+      // Should produce MultiAction with [PickupIron, PickupSteel, Move...]
+      expect(plan.type).toBe('MultiAction');
+      if (plan.type === 'MultiAction') {
+        const types = plan.steps.map((s: any) => s.type);
+        // First step is the primary PickupLoad (Iron)
+        expect(types[0]).toBe(AIActionType.PickupLoad);
+        // Second step should be PickupLoad (Steel) — same city, no MOVE
+        expect(types[1]).toBe(AIActionType.PickupLoad);
+        expect((plan.steps[1] as any).load).toBe('Steel');
+        // Should NOT have a MOVE between the two pickups
+        expect(types.indexOf(AIActionType.MoveTrain)).toBeGreaterThan(1);
+      }
+    });
+
+    it('skips already-completed same-city stops', async () => {
+      // Bot already has Iron on train, route says pickup Iron at Birmingham (already done).
+      // Next stop is pickup Steel at Birmingham — should chain Steel directly.
+      const gridMap = new Map([
+        ['10,10', { name: 'Birmingham', x: 0, y: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Iron'], // Already have Iron
+          position: { row: 10, col: 10 },
+          resolvedDemands: [],
+        },
+      });
+
+      const context = makeContext({
+        loads: ['Iron'],
+        speed: 9,
+      });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup' as const, loadType: 'Iron', city: 'Birmingham' },
+          { action: 'pickup' as const, loadType: 'Steel', city: 'Birmingham' },
+          { action: 'deliver' as const, loadType: 'Iron', city: 'Antwerpen', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 0, // Points to Iron pickup (already done)
+        phase: 'act',
+      });
+
+      // Primary plan: a deliver action (simulating A2 triggered after a deliver)
+      // Actually, let's use a PickupLoad for Steel that would follow from the Iron being done
+      const pickupSteelPlan = { type: AIActionType.PickupLoad, load: 'Steel', city: 'Birmingham' };
+
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+      mockResolve.mockImplementation(async () => ({ success: false, error: 'not needed' }));
+      mockApplyPlanToState.mockImplementation(() => {});
+
+      const { plan } = await TurnComposer.compose(
+        pickupSteelPlan as TurnPlan, snapshot, context, route,
+      );
+
+      // The JIRA-38 code should skip the Iron stop (already on train) and not crash
+      // Plan should at minimum contain the original PickupSteel
+      const steps = plan.type === 'MultiAction' ? plan.steps : [plan];
+      expect(steps[0].type).toBe(AIActionType.PickupLoad);
     });
   });
 });

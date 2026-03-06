@@ -27,6 +27,34 @@ import { PlanExecutor } from './PlanExecutor';
 import { loadGridPoints } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
+/** JIRA-32: Structured trace of what TurnComposer did during composition. */
+export interface CompositionTrace {
+  /** Action types in the primary plan before composition */
+  inputPlan: string[];
+  /** Action types in the final composed plan */
+  outputPlan: string[];
+  /** Movement budget: total available, used, wasted */
+  moveBudget: { total: number; used: number; wasted: number };
+  /** A1: How many intermediate cities had opportunities, how many were accepted */
+  a1: { citiesScanned: number; opportunitiesFound: number };
+  /** A2: Continuation chaining iterations and termination reason */
+  a2: { iterations: number; terminationReason: string };
+  /** A3: Whether a MOVE was prepended before BUILD */
+  a3: { movePreprended: boolean };
+  /** Phase B: Build/upgrade target and cost, or why skipped */
+  build: { target: string | null; cost: number; skipped: boolean; upgradeConsidered: boolean };
+  /** Pickups added during composition */
+  pickups: Array<{ load: string; city: string }>;
+  /** Deliveries added during composition */
+  deliveries: Array<{ load: string; city: string }>;
+}
+
+/** Result from TurnComposer.compose() — the plan plus a trace of what happened. */
+export interface CompositionResult {
+  plan: TurnPlan;
+  trace: CompositionTrace;
+}
+
 export class TurnComposer {
   /**
    * Given a primary TurnPlan, attempt to fill in missing turn phases.
@@ -42,13 +70,36 @@ export class TurnComposer {
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
-  ): Promise<TurnPlan> {
+  ): Promise<CompositionResult> {
+    // JIRA-32: Initialize composition trace
+    const trace: CompositionTrace = {
+      inputPlan: TurnComposer.planActionTypes(primaryPlan),
+      outputPlan: [],
+      moveBudget: { total: context.speed, used: 0, wasted: 0 },
+      a1: { citiesScanned: 0, opportunitiesFound: 0 },
+      a2: { iterations: 0, terminationReason: '' },
+      a3: { movePreprended: false },
+      build: { target: null, cost: 0, skipped: false, upgradeConsidered: false },
+      pickups: [],
+      deliveries: [],
+    };
+
+    const wrapResult = (plan: TurnPlan): CompositionResult => {
+      trace.outputPlan = TurnComposer.planActionTypes(plan);
+      const used = TurnComposer.countMovementUsed(
+        plan.type === 'MultiAction' ? plan.steps : [plan],
+      );
+      trace.moveBudget.used = used;
+      trace.moveBudget.wasted = Math.max(0, context.speed - used);
+      return { plan, trace };
+    };
+
     // ── Exclusive actions: return unchanged ──
-    if (primaryPlan.type === AIActionType.DiscardHand) return primaryPlan;
-    if (primaryPlan.type === AIActionType.PassTurn) return primaryPlan;
+    if (primaryPlan.type === AIActionType.DiscardHand) return wrapResult(primaryPlan);
+    if (primaryPlan.type === AIActionType.PassTurn) return wrapResult(primaryPlan);
 
     // During initialBuild, no operational enrichment is possible (no train movement)
-    if (context.isInitialBuild) return primaryPlan;
+    if (context.isInitialBuild) return wrapResult(primaryPlan);
 
     // ── Extract existing steps ──
     const steps: TurnPlan[] = primaryPlan.type === 'MultiAction'
@@ -93,6 +144,59 @@ export class TurnComposer {
       ActionResolver.applyPlanToState(step, simSnapshot, simContext);
     }
 
+    // ── JIRA-39: DropLoad prefix composition ──
+    // Per game rules, dropping a load is free — it doesn't consume movement or end the turn.
+    // When the primary plan is DropLoad (PlanExecutor couldn't pick up due to full train),
+    // attempt a PICKUP at the same city to compose [DropLoad, PickupLoad].
+    // The A2 continuation loop will then chain a MOVE with remaining movement budget.
+    if (steps.length === 1 && steps[0].type === AIActionType.DropLoad) {
+      const dropPlan = steps[0] as import('../../../shared/types/GameTypes').TurnPlanDropLoad;
+      const cityName = dropPlan.city;
+
+      // Try to pick up loads at the same city after the drop freed a cargo slot
+      const availableLoads = simSnapshot.loadAvailability[cityName] ?? [];
+      for (const loadType of availableLoads) {
+        if (simSnapshot.bot.loads.length >= TurnComposer.getBotCapacity(simSnapshot)) break;
+        if (simSnapshot.bot.loads.includes(loadType)) continue;
+
+        const hasDemand = simSnapshot.bot.resolvedDemands.some(rd =>
+          rd.demands.some(d => d.loadType === loadType),
+        );
+        if (!hasDemand) continue;
+
+        const pickupResult = await ActionResolver.resolve(
+          { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
+          simSnapshot, simContext,
+        );
+        if (pickupResult.success && pickupResult.plan) {
+          steps.push(pickupResult.plan);
+          ActionResolver.applyPlanToState(pickupResult.plan, simSnapshot, simContext);
+          console.log(
+            `[TurnComposer] JIRA-39: DropLoad prefix — picked up "${loadType}" at "${cityName}" after dropping "${dropPlan.load}"`,
+          );
+          break;
+        }
+      }
+
+      // Also try route-based pickup if no demand-matched load was found above
+      if (steps.length === 1 && activeRoute) {
+        const currentStop = activeRoute.stops[activeRoute.currentStopIndex];
+        if (currentStop?.action === 'pickup' && currentStop.city === cityName) {
+          const pickupResult = await ActionResolver.resolve(
+            { action: 'PICKUP', details: { load: currentStop.loadType, at: cityName }, reasoning: '', planHorizon: '' },
+            simSnapshot, simContext,
+          );
+          if (pickupResult.success && pickupResult.plan) {
+            steps.push(pickupResult.plan);
+            ActionResolver.applyPlanToState(pickupResult.plan, simSnapshot, simContext);
+            console.log(
+              `[TurnComposer] JIRA-39: DropLoad prefix — picked up route load "${currentStop.loadType}" at "${cityName}" after dropping "${dropPlan.load}"`,
+            );
+          }
+        }
+      }
+    }
+
     // ── Phase A: Operational enrichment ──
     try {
       // A0: Deliver-before-build — if primary plan is BUILD but bot carries a load
@@ -126,9 +230,13 @@ export class TurnComposer {
       const moveIdx = steps.findIndex(s => s.type === AIActionType.MoveTrain);
       const movePlan = moveIdx >= 0 ? steps[moveIdx] as TurnPlanMoveTrain : undefined;
       if (movePlan && movePlan.path.length > 0) {
+        // JIRA-32: Track A1 stats — count intermediate cities (path nodes excluding start/end)
+        trace.a1.citiesScanned = Math.max(0, movePlan.path.length - 2);
         const splitPlans = await TurnComposer.splitMoveForOpportunities(
           movePlan, simSnapshot, simContext, activeRoute,
         );
+        // Count non-MOVE plans as opportunities found
+        trace.a1.opportunitiesFound = splitPlans.filter(s => s.type !== AIActionType.MoveTrain).length;
         // Replace the original MOVE with the interleaved sequence
         if (splitPlans.length > 1) {
           steps.splice(moveIdx, 1, ...splitPlans);
@@ -159,6 +267,61 @@ export class TurnComposer {
         if (lastStepType !== AIActionType.PickupLoad && lastStepType !== AIActionType.DeliverLoad) {
           if (a2Iterations > 0) a2TerminationReason = 'last step is MOVE';
           break;
+        }
+
+        // JIRA-38: Before chaining a MOVE, check if the next route stop is at the
+        // bot's current city. If so, resolve the action directly (no movement needed).
+        // This handles multi-pickup at the same city (e.g., Iron + Steel at Birmingham).
+        if (activeRoute) {
+          const gridPoints = loadGridPoints();
+          const botPos = simSnapshot.bot.position;
+          const botCity = botPos ? gridPoints.get(`${botPos.row},${botPos.col}`)?.name : null;
+          if (botCity) {
+            let sameCityChained = false;
+            while (activeRoute.currentStopIndex < activeRoute.stops.length) {
+              const nextStop = activeRoute.stops[activeRoute.currentStopIndex];
+              if (nextStop.city !== botCity) break;
+
+              // Check if this stop's action is still needed
+              if (nextStop.action === 'pickup' && simSnapshot.bot.loads.includes(nextStop.loadType)) {
+                activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+                continue; // Already picked up — skip
+              }
+              if (nextStop.action === 'deliver' && !simSnapshot.bot.loads.includes(nextStop.loadType)) {
+                activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+                continue; // Already delivered — skip
+              }
+
+              // Check capacity for pickups
+              if (nextStop.action === 'pickup' && simSnapshot.bot.loads.length >= TurnComposer.getBotCapacity(simSnapshot)) {
+                break; // No room — can't pick up more
+              }
+
+              const actionType = nextStop.action === 'pickup' ? 'PICKUP' : 'DELIVER';
+              const details = nextStop.action === 'pickup'
+                ? { load: nextStop.loadType, at: botCity }
+                : { load: nextStop.loadType, at: botCity };
+              const actionResult = await ActionResolver.resolve(
+                { action: actionType, details, reasoning: '', planHorizon: '' },
+                simSnapshot, simContext,
+              );
+              if (actionResult.success && actionResult.plan) {
+                steps.push(actionResult.plan);
+                ActionResolver.applyPlanToState(actionResult.plan, simSnapshot, simContext);
+                activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+                sameCityChained = true;
+                console.log(
+                  `[TurnComposer] JIRA-38: Same-city chain — ${actionType} "${nextStop.loadType}" at "${botCity}" (no movement needed)`,
+                );
+              } else {
+                break; // Action failed — stop chaining
+              }
+            }
+            if (sameCityChained) {
+              a2Iterations++;
+              continue; // Re-enter the A2 loop to potentially chain a MOVE after the same-city actions
+            }
+          }
         }
 
         const movementUsed = TurnComposer.countMovementUsed(steps);
@@ -214,6 +377,7 @@ export class TurnComposer {
       if (a2Iterations >= A2_MAX_ITERATIONS) {
         a2TerminationReason = 'iteration cap';
       }
+      trace.a2 = { iterations: a2Iterations, terminationReason: a2TerminationReason };
       if (a2Iterations > 0) {
         const totalMovement = TurnComposer.countMovementUsed(steps);
         console.log(
@@ -259,6 +423,7 @@ export class TurnComposer {
                 // Insert move steps before the build step
                 const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
                 steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitPlans);
+                trace.a3 = { movePreprended: true };
               }
               break; // Successfully prepended a MOVE — stop trying targets
             } else {
@@ -283,6 +448,7 @@ export class TurnComposer {
         // INF-002: Log when upgrade would be preferred over building
         const canAffordUpgrade = simContext.canUpgrade && simSnapshot.bot.money >= 20;
         if (canAffordUpgrade) {
+          trace.build.upgradeConsidered = true;
           const buildBudget = Math.min(20 - simContext.turnBuildCost, simSnapshot.bot.money);
           // Upgrade is preferred when no meaningful build target exists or budget is too low for useful track
           if (buildBudget < 5) {
@@ -295,6 +461,10 @@ export class TurnComposer {
         );
         if (buildPlan) {
           steps.push(buildPlan);
+          if (buildPlan.type === AIActionType.BuildTrack) {
+            trace.build.target = buildPlan.targetCity ?? null;
+            trace.build.cost = buildPlan.segments.reduce((s, seg) => s + seg.cost, 0);
+          }
         } else if (canAffordUpgrade) {
           console.log(`[TurnComposer] Phase B: upgrade preferred over build (cash=${simSnapshot.bot.money}, no build target found, train=${simSnapshot.bot.trainType})`);
         }
@@ -302,13 +472,26 @@ export class TurnComposer {
         // Phase B errors are non-fatal
         console.error('[TurnComposer] Phase B error:', err instanceof Error ? err.message : err);
       }
+    } else {
+      trace.build.skipped = true;
+    }
+
+    // ── Collect pickups/deliveries added during composition ──
+    const inputTypes = new Set(trace.inputPlan);
+    for (const step of steps) {
+      if (step.type === AIActionType.PickupLoad && !inputTypes.has(AIActionType.PickupLoad)) {
+        trace.pickups.push({ load: step.load, city: step.city });
+      }
+      if (step.type === AIActionType.DeliverLoad && !inputTypes.has(AIActionType.DeliverLoad)) {
+        trace.deliveries.push({ load: step.load, city: step.city });
+      }
     }
 
     // ── Return result ──
     if (steps.length > 1) {
-      return { type: 'MultiAction' as const, steps };
+      return wrapResult({ type: 'MultiAction' as const, steps });
     }
-    return steps[0] ?? primaryPlan;
+    return wrapResult(steps[0] ?? primaryPlan);
   }
 
   /**
@@ -546,17 +729,30 @@ export class TurnComposer {
     }
 
     // Priority 2: Demand delivery cities on network (bot has the load)
+    // Use live context.loads instead of stale demand.isLoadOnTrain — loads change
+    // during turn composition (deliveries remove loads, pickups add them).
     const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
     for (const demand of sorted) {
-      if (demand.isLoadOnTrain && demand.isDeliveryOnNetwork) {
+      if (context.loads.includes(demand.loadType) && demand.isDeliveryOnNetwork) {
         add(demand.deliveryCity);
       }
     }
 
     // Priority 3: Demand supply cities on network (bot can pick up)
+    // Use live context.loads instead of stale demand.isLoadOnTrain.
     for (const demand of sorted) {
-      if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork) {
+      if (!context.loads.includes(demand.loadType) && demand.isSupplyOnNetwork) {
         add(demand.supplyCity);
+      }
+    }
+
+    // Priority 4: Reachable cities (fallback when no demand-based targets exist)
+    // After delivering all loads, the bot should still use remaining movement
+    // to position itself closer to future supply/delivery cities.
+    if (targets.length === 0) {
+      for (const city of context.reachableCities) {
+        add(city);
+        if (targets.length >= 3) break; // Limit to avoid excessive resolution attempts
       }
     }
 
@@ -584,6 +780,14 @@ export class TurnComposer {
       }
     }
     return used;
+  }
+
+  /** Extract action type strings from a plan (for trace logging). */
+  private static planActionTypes(plan: TurnPlan): string[] {
+    if (plan.type === 'MultiAction') {
+      return plan.steps.map(s => s.type);
+    }
+    return [plan.type];
   }
 
   /**
