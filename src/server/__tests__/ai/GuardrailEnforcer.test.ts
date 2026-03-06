@@ -419,7 +419,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('Forced DELIVER');
       });
 
-      it('Stuck detection takes priority over G3 (block UPGRADE)', async () => {
+      it('Stuck detection takes priority over G3 (block UPGRADE) when no loads carried', async () => {
         const ctx = makeContext({ isInitialBuild: true, canDeliver: [] });
         const plan: TurnPlan = {
           type: AIActionType.UpgradeTrain,
@@ -432,6 +432,49 @@ describe('GuardrailEnforcer', () => {
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
         expect(result.reason).toContain('stuck detection');
+      });
+
+      it('JIRA-47: G1 fires BEFORE stuck detection — bot delivers even when noProgressTurns >= 3', async () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({ canDeliver: [delivery] });
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+        expect(result.reason).toContain('Forced DELIVER');
+        // Must NOT be DiscardHand from stuck detection
+        expect(result.plan.type).not.toBe(AIActionType.DiscardHand);
+      });
+
+      it('JIRA-47: Stuck detection skipped when bot is carrying loads', async () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const snap = makeSnapshot();
+        snap.bot.loads = ['Coal', 'Wine'];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 4);
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('JIRA-47: Stuck detection still fires for loadless bot after 3 no-progress turns', async () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const snap = makeSnapshot();
+        snap.bot.loads = [];
+        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 3);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
       });
     });
 

@@ -1,13 +1,11 @@
 /**
  * GuardrailEnforcer — Applies hard safety guardrails to LLM action plans.
  *
- * `checkPlan()` enforces hard rules on TurnPlan:
- *   1. Force DELIVER when canDeliver has opportunities
- *   3. Block UPGRADE during initialBuild phase
- *   8. Movement budget enforcement (silent truncation)
- *
- * Progress-based stuck detection:
- *   When noProgressTurns >= 3, force DiscardHand to break deadlocks.
+ * `checkPlan()` enforces hard rules on TurnPlan (checked in priority order):
+ *   G1. Force DELIVER when canDeliver has opportunities (highest priority)
+ *   Stuck. Force DiscardHand when noProgressTurns >= 3 AND no loads carried
+ *   G3. Block UPGRADE during initialBuild phase
+ *   G8. Movement budget enforcement (silent truncation)
  *
  * These are NOT strategic overrides — they enforce game rules and mathematical
  * feasibility the LLM must not violate. Strategic decisions remain the LLM's.
@@ -30,8 +28,8 @@ export class GuardrailEnforcer {
    * returns a corrected plan with `overridden: true` and a reason string.
    *
    * Guardrails (checked in priority order):
-   *   Stuck: Force DiscardHand when noProgressTurns >= 3
-   *   G1: Force DELIVER when bot can deliver but LLM chose something else
+   *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
+   *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried
    *   G3: Block UPGRADE during initialBuild phase
    *   G8: Movement budget enforcement (silent truncation)
    */
@@ -43,18 +41,8 @@ export class GuardrailEnforcer {
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
-    // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
-    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand) {
-      console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
-      return {
-        plan: { type: AIActionType.DiscardHand },
-        overridden: true,
-        reason: `Progress-based stuck detection: ${noProgressTurns} turns with no deliveries, cash increase, or new cities — forcing DiscardHand`,
-      };
-    }
-
     // Guardrail 1: Force DELIVER when canDeliver has opportunities
-    // If the bot is sitting on a completable delivery and the LLM didn't choose DELIVER
+    // Checked FIRST — delivery opportunities must never be blocked by stuck detection (JIRA-47)
     if (context.canDeliver.length > 0 && planType !== AIActionType.DeliverLoad) {
       const best = GuardrailEnforcer.bestDelivery(context);
       console.warn(`[Guardrail 1] Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`);
@@ -68,6 +56,17 @@ export class GuardrailEnforcer {
         },
         overridden: true,
         reason: `Forced DELIVER: ${best.loadType} at ${best.deliveryCity} for ${best.payout}M (LLM chose ${planType})`,
+      };
+    }
+
+    // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
+    // JIRA-47: Skip when bot is carrying loads — traveling with cargo is not "stuck"
+    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && snapshot.bot.loads.length === 0) {
+      console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
+      return {
+        plan: { type: AIActionType.DiscardHand },
+        overridden: true,
+        reason: `Progress-based stuck detection: ${noProgressTurns} turns with no deliveries, cash increase, or new cities — forcing DiscardHand`,
       };
     }
 
