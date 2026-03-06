@@ -353,11 +353,13 @@ export class AIStrategyEngine {
 
       // Update bot memory (including reasoning for next-turn context continuity)
       // Progress-based stuck detection: increment noProgressTurns when turn had
-      // zero deliveries AND zero net cash increase AND no new cities connected.
+      // zero deliveries AND zero net cash increase AND no new cities connected
+      // AND bot is NOT actively traveling with loads toward a delivery (JIRA-45).
       const hadDelivery = (result.payment ?? 0) > 0;
       const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
       const hadNewTrack = result.segmentsBuilt > 0;
-      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack;
+      const isActivelyTraveling = snapshot.bot.loads.length > 0 && activeRoute != null;
+      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling;
 
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
