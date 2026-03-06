@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TerrainType } from '../../../shared/types/GameTypes';
+import type { FerryEdge } from '../../../shared/services/majorCityGroups';
 
 /** Parsed grid point from gridPoints.json */
 export interface GridPointData {
@@ -32,7 +33,7 @@ const GRID_MARGIN = 120;
 // ── Cache ──────────────────────────────────────────────────────────────
 let gridPointsCache: Map<string, GridPointData> | null = null;
 
-function makeKey(row: number, col: number): string {
+export function makeKey(row: number, col: number): string {
   return `${row},${col}`;
 }
 
@@ -180,6 +181,95 @@ export function getFerryPairPort(
     }
   }
   return null;
+}
+
+// ── Ferry route info ──────────────────────────────────────────────────
+
+export interface FerryRouteInfo {
+  /** Whether the bot has track at a departure ferry port and can cross for free */
+  canCrossFerry: boolean;
+  /** Departure-side ferry ports on the source landmass */
+  departurePorts: GridCoord[];
+  /** Arrival-side ferry ports (partners of departure ports) */
+  arrivalPorts: GridCoord[];
+  /** Cheapest ferry connection cost (ECU millions) */
+  cheapestFerryCost: number;
+}
+
+/**
+ * BFS flood-fill from source positions across non-water tiles.
+ * Returns the set of "row,col" keys reachable from sources without crossing water.
+ */
+export function computeLandmass(
+  sources: GridCoord[],
+  grid: Map<string, GridPointData>,
+): Set<string> {
+  const landmass = new Set<string>();
+  const queue: GridCoord[] = [];
+  for (const src of sources) {
+    const key = makeKey(src.row, src.col);
+    if (!landmass.has(key)) {
+      landmass.add(key);
+      queue.push(src);
+    }
+  }
+  while (queue.length > 0) {
+    const node = queue.pop()!;
+    for (const nb of getHexNeighbors(node.row, node.col)) {
+      const nbKey = makeKey(nb.row, nb.col);
+      if (landmass.has(nbKey)) continue;
+      const nbData = grid.get(nbKey);
+      if (!nbData || nbData.terrain === TerrainType.Water) continue;
+      landmass.add(nbKey);
+      queue.push(nb);
+    }
+  }
+  return landmass;
+}
+
+/**
+ * Analyze ferry crossing state for a bot on a given landmass.
+ * Returns whether the bot can cross a ferry, the departure/arrival ports,
+ * and the cheapest ferry cost.
+ */
+export function computeFerryRouteInfo(
+  sourceLandmass: Set<string>,
+  onNetwork: Set<string>,
+  ferryEdges: FerryEdge[],
+): FerryRouteInfo {
+  let canCrossFerry = false;
+  const departurePorts: GridCoord[] = [];
+  const arrivalPorts: GridCoord[] = [];
+  let cheapestFerryCost = Infinity;
+  const seen = new Set<string>();
+
+  for (const ferry of ferryEdges) {
+    const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
+    const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
+    const aOnSource = sourceLandmass.has(aKey);
+    const bOnSource = sourceLandmass.has(bKey);
+
+    if (aOnSource && !bOnSource) {
+      if (onNetwork.has(aKey)) canCrossFerry = true;
+      if (!seen.has(aKey)) {
+        seen.add(aKey);
+        departurePorts.push({ row: ferry.pointA.row, col: ferry.pointA.col });
+        arrivalPorts.push({ row: ferry.pointB.row, col: ferry.pointB.col });
+        if (ferry.cost < cheapestFerryCost) cheapestFerryCost = ferry.cost;
+      }
+    } else if (bOnSource && !aOnSource) {
+      if (onNetwork.has(bKey)) canCrossFerry = true;
+      if (!seen.has(bKey)) {
+        seen.add(bKey);
+        departurePorts.push({ row: ferry.pointB.row, col: ferry.pointB.col });
+        arrivalPorts.push({ row: ferry.pointA.row, col: ferry.pointA.col });
+        if (ferry.cost < cheapestFerryCost) cheapestFerryCost = ferry.cost;
+      }
+    }
+    // If both on same landmass, this ferry is irrelevant for crossing
+  }
+
+  return { canCrossFerry, departurePorts, arrivalPorts, cheapestFerryCost };
 }
 
 /** Reset the cache (for testing). */

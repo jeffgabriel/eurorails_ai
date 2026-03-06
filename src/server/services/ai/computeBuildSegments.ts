@@ -13,6 +13,8 @@ import {
   gridToPixel,
   loadGridPoints,
   hexDistance,
+  computeLandmass,
+  computeFerryRouteInfo,
   GridCoord,
   GridPointData,
 } from './MapTopology';
@@ -452,69 +454,22 @@ export function computeBuildSegments(
     // point may appear "close" but requires a ferry crossing.  Detect such targets
     // and replace them with the departure-side ferry port so path selection builds
     // toward the ferry, not just the nearest coast.
-    const sourceLandmass = new Set<string>();
-    const landQueue: GridCoord[] = [];
-    for (const src of sources) {
-      const key = makeKey(src.row, src.col);
-      if (!sourceLandmass.has(key)) {
-        sourceLandmass.add(key);
-        landQueue.push(src);
-      }
-    }
-    while (landQueue.length > 0) {
-      const node = landQueue.pop()!;
-      for (const nb of getHexNeighbors(node.row, node.col)) {
-        const nbKey = makeKey(nb.row, nb.col);
-        if (sourceLandmass.has(nbKey)) continue;
-        const nbData = grid.get(nbKey);
-        if (!nbData || nbData.terrain === TerrainType.Water) continue;
-        sourceLandmass.add(nbKey);
-        landQueue.push(nb);
-      }
-    }
+    const sourceLandmass = computeLandmass(sources, grid);
 
     const crossWaterTargets = effectiveTargets.filter(
       t => !sourceLandmass.has(makeKey(t.row, t.col))
     );
 
     if (crossWaterTargets.length > 0) {
-      // Check if bot already has track to a departure ferry port — if so,
-      // it can cross the ferry and build on the far side (keep original targets).
-      let botCanCrossFerry = false;
-      for (const ferry of ferryEdges) {
-        const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
-        const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
-        const aOnSource = sourceLandmass.has(aKey);
-        const bOnSource = sourceLandmass.has(bKey);
-        if ((aOnSource && !bOnSource && onNetwork.has(aKey)) ||
-            (bOnSource && !aOnSource && onNetwork.has(bKey))) {
-          botCanCrossFerry = true;
-          break;
-        }
-      }
+      const ferryInfo = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
 
-      if (!botCanCrossFerry) {
-        // Bot can't cross yet — redirect to departure ferry ports
-        const departurePorts: GridCoord[] = [];
-        const seen = new Set<string>();
-        for (const ferry of ferryEdges) {
-          const aKey = makeKey(ferry.pointA.row, ferry.pointA.col);
-          const bKey = makeKey(ferry.pointB.row, ferry.pointB.col);
-          if (sourceLandmass.has(aKey) && !sourceLandmass.has(bKey) && !seen.has(aKey)) {
-            seen.add(aKey);
-            departurePorts.push({ row: ferry.pointA.row, col: ferry.pointA.col });
-          } else if (sourceLandmass.has(bKey) && !sourceLandmass.has(aKey) && !seen.has(bKey)) {
-            seen.add(bKey);
-            departurePorts.push({ row: ferry.pointB.row, col: ferry.pointB.col });
-          }
-        }
-
-        if (departurePorts.length > 0) {
+      if (!ferryInfo.canCrossFerry) {
+        if (ferryInfo.departurePorts.length > 0) {
           const localTargets = effectiveTargets.filter(
             t => sourceLandmass.has(makeKey(t.row, t.col))
           );
-          effectiveTargets = [...localTargets, ...departurePorts];
-          console.log(`${tag} ferry waypoint: ${crossWaterTargets.length} cross-water target(s) → ${departurePorts.length} departure port(s)`);
+          effectiveTargets = [...localTargets, ...ferryInfo.departurePorts];
+          console.log(`${tag} ferry waypoint: ${crossWaterTargets.length} cross-water target(s) → ${ferryInfo.departurePorts.length} departure port(s)`);
         }
       }
     }

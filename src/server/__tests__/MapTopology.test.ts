@@ -7,7 +7,11 @@ import {
   isWater,
   hexDistance,
   getFerryPairPort,
+  computeLandmass,
+  computeFerryRouteInfo,
+  makeKey,
   _resetCache,
+  GridPointData,
 } from '../services/ai/MapTopology';
 
 describe('MapTopology', () => {
@@ -261,6 +265,127 @@ describe('MapTopology', () => {
     it('should return null when row matches but col does not', () => {
       const result = getFerryPairPort(10, 99, ferryEdges);
       expect(result).toBeNull();
+    });
+  });
+
+  describe('computeLandmass', () => {
+    beforeEach(() => _resetCache());
+
+    it('should return connected non-water tiles from source positions', () => {
+      const grid = loadGridPoints();
+      // Pick a known inland position (row 30, col 30 — used in getHexNeighbors tests)
+      const sources = [{ row: 30, col: 30 }];
+      const landmass = computeLandmass(sources, grid);
+
+      expect(landmass.size).toBeGreaterThan(1);
+      expect(landmass.has(makeKey(30, 30))).toBe(true);
+
+      // All tiles in the landmass should be non-water
+      for (const key of landmass) {
+        const point = grid.get(key);
+        expect(point).toBeDefined();
+        expect(point!.terrain).not.toBe(TerrainType.Water);
+      }
+    });
+
+    it('should stop at water tile boundaries', () => {
+      // Build a small synthetic grid: land - water - land
+      const grid = new Map<string, GridPointData>();
+      grid.set('0,0', { row: 0, col: 0, terrain: TerrainType.Clear });
+      grid.set('0,1', { row: 0, col: 1, terrain: TerrainType.Water });
+      grid.set('0,2', { row: 0, col: 2, terrain: TerrainType.Clear });
+
+      const landmass = computeLandmass([{ row: 0, col: 0 }], grid);
+      expect(landmass.has(makeKey(0, 0))).toBe(true);
+      // Water tile and tile beyond it should not be in the landmass
+      expect(landmass.has(makeKey(0, 1))).toBe(false);
+    });
+
+    it('should merge multiple sources on the same landmass', () => {
+      const grid = loadGridPoints();
+      const sources = [{ row: 30, col: 30 }, { row: 30, col: 31 }];
+      const landmass = computeLandmass(sources, grid);
+
+      // Both sources should be present
+      expect(landmass.has(makeKey(30, 30))).toBe(true);
+      expect(landmass.has(makeKey(30, 31))).toBe(true);
+      expect(landmass.size).toBeGreaterThan(2);
+    });
+
+    it('should return only source tile for isolated position', () => {
+      // Synthetic grid: single land tile surrounded by nothing
+      const grid = new Map<string, GridPointData>();
+      grid.set('50,50', { row: 50, col: 50, terrain: TerrainType.Clear });
+
+      const landmass = computeLandmass([{ row: 50, col: 50 }], grid);
+      expect(landmass.size).toBe(1);
+      expect(landmass.has(makeKey(50, 50))).toBe(true);
+    });
+  });
+
+  describe('computeFerryRouteInfo', () => {
+    const ferryEdges = [
+      { name: 'Dover-Calais', pointA: { row: 10, col: 5 }, pointB: { row: 12, col: 8 }, cost: 8 },
+      { name: 'Harwich-Hook', pointA: { row: 6, col: 15 }, pointB: { row: 8, col: 20 }, cost: 12 },
+    ];
+
+    it('should return canCrossFerry=true when bot has track at departure port', () => {
+      // Source landmass includes pointA of Dover-Calais
+      const sourceLandmass = new Set([makeKey(10, 5), makeKey(10, 6), makeKey(9, 5)]);
+      const onNetwork = new Set([makeKey(10, 5)]); // bot has track at Dover
+
+      const info = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
+      expect(info.canCrossFerry).toBe(true);
+      expect(info.departurePorts).toEqual([{ row: 10, col: 5 }]);
+      expect(info.arrivalPorts).toEqual([{ row: 12, col: 8 }]);
+    });
+
+    it('should return canCrossFerry=false when no track at departure port', () => {
+      const sourceLandmass = new Set([makeKey(10, 5), makeKey(10, 6), makeKey(9, 5)]);
+      const onNetwork = new Set([makeKey(10, 6)]); // track nearby but NOT at port
+
+      const info = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
+      expect(info.canCrossFerry).toBe(false);
+      expect(info.departurePorts.length).toBeGreaterThan(0);
+    });
+
+    it('should return cheapest ferry cost', () => {
+      // Both ferries connect from source landmass
+      const sourceLandmass = new Set([
+        makeKey(10, 5), makeKey(10, 6), makeKey(6, 15), makeKey(6, 16),
+      ]);
+      const onNetwork = new Set<string>();
+
+      const info = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
+      expect(info.cheapestFerryCost).toBe(8); // Dover-Calais is cheapest
+      expect(info.departurePorts.length).toBe(2);
+      expect(info.arrivalPorts.length).toBe(2);
+    });
+
+    it('should ignore ferry where both ports are on the same landmass', () => {
+      // Both pointA and pointB on source landmass — not a cross-water ferry
+      const sourceLandmass = new Set([
+        makeKey(10, 5), makeKey(12, 8), // both Dover and Calais on same landmass
+      ]);
+      const onNetwork = new Set<string>();
+
+      const info = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
+      // Dover-Calais should not appear since both ends are on source landmass
+      const doverInDeparture = info.departurePorts.some(p => p.row === 10 && p.col === 5);
+      const calaisInDeparture = info.departurePorts.some(p => p.row === 12 && p.col === 8);
+      expect(doverInDeparture).toBe(false);
+      expect(calaisInDeparture).toBe(false);
+    });
+
+    it('should return empty ports when no ferry connects to another landmass', () => {
+      const sourceLandmass = new Set([makeKey(99, 99)]); // isolated, no ferry nearby
+      const onNetwork = new Set<string>();
+
+      const info = computeFerryRouteInfo(sourceLandmass, onNetwork, ferryEdges);
+      expect(info.departurePorts).toEqual([]);
+      expect(info.arrivalPorts).toEqual([]);
+      expect(info.cheapestFerryCost).toBe(Infinity);
+      expect(info.canCrossFerry).toBe(false);
     });
   });
 });
