@@ -49,7 +49,7 @@ CRITICAL RULES — ALWAYS FOLLOW:
 7. CHECK YOUR CARDS: Before building track, verify the destination city appears on one of your demand cards. Do not build toward a city just because a load exists there.
 8. COMMIT TO YOUR PLAN: Pick ONE delivery chain (pickup city → delivery city). Build track toward it. Pick up the load. Deliver it. Do NOT change your mind mid-execution. Only reassess AFTER completing a delivery.
 9. Consider discarding your hand when no demand card has a profitable, reachable delivery. Do not cling to bad cards — fresh cards may unlock better routes.
-10. STARTING LOCATION: In the first 2 build turns, prefer starting from central Europe (Ruhr, Berlin, Paris, Holland) over peripheral cities.
+10. STARTING LOCATION: In the first 2 build turns, start at the SUPPLY city of your first planned pickup — this enables immediate pickup when the train is placed, saving 1-2 turns vs starting at the delivery end. Among supply cities, prefer central Europe (Ruhr, Berlin, Paris, Holland) over peripheral cities.
 11. DROP USELESS LOADS: If carrying a load with no matching demand card, DROP it at the next city you pass through. Do not waste cargo capacity on undeliverable loads.
 12. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
 13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
@@ -119,7 +119,7 @@ ROUTE PLANNING CRITERIA:
 3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out.
 4. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
 5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
-6. STARTING CITY: For initial builds with no track, specify which major city to start building from (prefer central Europe).
+6. STARTING CITY: For initial builds with no track, start from the SUPPLY city of your first planned pickup. Starting at the supply end lets you pick up immediately when the train is placed, saving turns. If multiple supply cities exist, prefer the one in central Europe. Only start at a delivery city if it is also a supply city for another pickup on your route.
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
 8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
 9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
