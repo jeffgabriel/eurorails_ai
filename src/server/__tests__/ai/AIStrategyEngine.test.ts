@@ -99,7 +99,7 @@ jest.mock('../../services/playerService', () => ({
 jest.mock('../../services/ai/BotMemory', () => ({
   getMemory: jest.fn(() => ({
     turnNumber: 0,
-    consecutivePassTurns: 0,
+    noProgressTurns: 0,
     consecutiveDiscards: 0,
     lastAction: null,
     activeRoute: null,
@@ -133,7 +133,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 // Mock TurnComposer — passthrough (TurnComposer has its own test suite)
 jest.mock('../../services/ai/TurnComposer', () => ({
   TurnComposer: {
-    compose: jest.fn((plan: any) => Promise.resolve(plan)),
+    compose: jest.fn((plan: any) => Promise.resolve({ plan, trace: {} })),
   },
 }));
 
@@ -575,7 +575,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -666,7 +666,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Set memory with active route
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -710,7 +710,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -770,7 +770,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -886,7 +886,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 5,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -926,7 +926,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 5,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -966,7 +966,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 5,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1022,7 +1022,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 7,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1052,13 +1052,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // TurnComposer enriches with a delivery step (scanPathOpportunities detected opportunity)
-      mockTurnComposerCompose.mockResolvedValue({
+      mockTurnComposerCompose.mockResolvedValue({ plan: {
         type: 'MultiAction' as const,
         steps: [
           { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
           { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Paris', cardId: 10, payout: 15 },
         ],
-      });
+      }, trace: {} } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1088,7 +1088,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 6,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1118,13 +1118,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // TurnComposer enriches with a delivery for a DIFFERENT load (not on route)
-      mockTurnComposerCompose.mockResolvedValue({
+      mockTurnComposerCompose.mockResolvedValue({ plan: {
         type: 'MultiAction' as const,
         steps: [
           { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
           { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
         ],
-      });
+      }, trace: {} } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1150,7 +1150,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1207,7 +1207,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1260,7 +1260,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1308,7 +1308,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1370,7 +1370,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1411,7 +1411,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1441,7 +1441,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 5,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1493,7 +1493,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset getMemory to default since other tests may set mockReturnValue
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1575,7 +1575,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     beforeEach(() => {
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1587,7 +1587,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 0,
       } as any);
       // Reset TurnComposer to passthrough (clearAllMocks doesn't reset mockResolvedValue)
-      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve(plan));
+      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({ plan, trace: {} }));
     });
 
     it('should store remaining route stops in memory when delivery clears active route', async () => {
@@ -1608,7 +1608,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 7,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1639,13 +1639,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // TurnComposer enriches with a delivery that does NOT match the current route stop
       // (non-route delivery, e.g., an opportunistic one)
-      mockTurnComposerCompose.mockResolvedValue({
+      mockTurnComposerCompose.mockResolvedValue({ plan: {
         type: 'MultiAction' as const,
         steps: [
           { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
           { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
         ],
-      });
+      }, trace: {} } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1673,7 +1673,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 8,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null, // No active route — will consult LLM
@@ -1756,7 +1756,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 6,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1804,7 +1804,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 10,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1852,7 +1852,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1922,7 +1922,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 4,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1963,7 +1963,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockReturnValue({
         turnNumber: 0,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,

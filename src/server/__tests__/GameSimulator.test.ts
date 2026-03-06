@@ -114,7 +114,7 @@ describe('GameSimulator', () => {
       expect(metrics.turnCount).toBe(0);
       expect(metrics.deliveryCount).toBe(0);
       expect(metrics.totalEarnings).toBe(0);
-      expect(metrics.consecutivePassTurns).toBe(0);
+      expect(metrics.noProgressTurns).toBe(0);
       expect(metrics.actionHistory).toEqual([]);
     });
 
@@ -338,13 +338,13 @@ describe('GameSimulator', () => {
       sim.initialize(createMockSnapshot());
 
       await sim.runTurn(); // pass
-      expect(sim.getMetrics().consecutivePassTurns).toBe(1);
+      expect(sim.getMetrics().noProgressTurns).toBe(1);
       await sim.runTurn(); // pass
-      expect(sim.getMetrics().consecutivePassTurns).toBe(2);
+      expect(sim.getMetrics().noProgressTurns).toBe(2);
       await sim.runTurn(); // pass
-      expect(sim.getMetrics().consecutivePassTurns).toBe(3);
+      expect(sim.getMetrics().noProgressTurns).toBe(3);
       await sim.runTurn(); // build
-      expect(sim.getMetrics().consecutivePassTurns).toBe(0);
+      expect(sim.getMetrics().noProgressTurns).toBe(0);
     });
 
     it('should track action history', async () => {

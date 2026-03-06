@@ -19,7 +19,7 @@ import { GuardrailEnforcer } from './GuardrailEnforcer';
 import { TurnExecutor } from './TurnExecutor';
 import { ActionResolver } from './ActionResolver';
 import { PlanExecutor } from './PlanExecutor';
-import { TurnComposer } from './TurnComposer';
+import { TurnComposer, CompositionTrace } from './TurnComposer';
 import {
   WorldSnapshot,
   AIActionType,
@@ -59,7 +59,12 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>;
+  // JIRA-32: Strategic context and composition trace for NDJSON game log
+  gamePhase?: string;
+  cash?: number;
+  trainType?: string;
+  compositionTrace?: CompositionTrace;
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -241,7 +246,9 @@ export class AIStrategyEngine {
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
 
       // ── Stage 3b: Compose full turn (fill missing phases) ──
-      decision.plan = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
+      const compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
+      decision.plan = compositionResult.plan;
+      const compositionTrace = compositionResult.trace;
 
       // ── Stage 3c: Sync route after TurnComposer delivery ──
       // TurnComposer.scanPathOpportunities may deliver loads along a MOVE path.
@@ -306,34 +313,12 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 4: Apply guardrails ──
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.consecutivePassTurns);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns);
       let finalPlan: TurnPlan = guardrailResult.plan;
 
       if (guardrailResult.overridden) {
         console.log(`${tag} Guardrail override: ${guardrailResult.reason}`);
         decision.guardrailOverride = true;
-      }
-
-      // Post-guardrail safety: never PassTurn while carrying loads
-      if (
-        finalPlan.type === AIActionType.PassTurn &&
-        snapshot.bot.loads.length > 0 &&
-        !context.isInitialBuild
-      ) {
-        console.log(`${tag} Post-guardrail: PassTurn while carrying [${snapshot.bot.loads.join(',')}], trying heuristic fallback`);
-        const loadsFallback = await ActionResolver.heuristicFallback(context, snapshot);
-        if (loadsFallback.success && loadsFallback.plan && loadsFallback.plan.type !== AIActionType.PassTurn) {
-          finalPlan = loadsFallback.plan;
-          guardrailResult = {
-            ...guardrailResult,
-            plan: finalPlan,
-            overridden: true,
-            reason: (guardrailResult.reason ? guardrailResult.reason + '; ' : '') +
-              `Forced ${finalPlan.type} instead of PassTurn while carrying loads [${snapshot.bot.loads.join(',')}]`,
-          };
-          decision.guardrailOverride = true;
-          console.log(`${tag} Loads safety: forced ${finalPlan.type}`);
-        }
       }
 
       // Log LLM decision phase
@@ -365,10 +350,16 @@ export class AIStrategyEngine {
       console.log(`${tag} Turn complete: ${finalPlan.type}${finalPlan.type === AIActionType.BuildTrack ? ` (${result.segmentsBuilt}seg/$${result.cost}M)` : ''} | success=${result.success} | money=${result.remainingMoney} | ${durationMs}ms`);
 
       // Update bot memory (including reasoning for next-turn context continuity)
+      // Progress-based stuck detection: increment noProgressTurns when turn had
+      // zero deliveries AND zero net cash increase AND no new cities connected.
+      const hadDelivery = (result.payment ?? 0) > 0;
+      const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
+      const hadNewTrack = result.segmentsBuilt > 0;
+      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack;
+
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
-        consecutivePassTurns: executedAction === AIActionType.PassTurn
-          ? memory.consecutivePassTurns + 1 : 0,
+        noProgressTurns: madeProgress ? 0 : (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
         turnNumber: snapshot.turnNumber,
@@ -447,6 +438,10 @@ export class AIStrategyEngine {
             rank: i + 1,
             supplyRarity,
             isStale: d.estimatedTurns >= 12,
+            efficiencyPerTurn: d.efficiencyPerTurn,
+            estimatedTurns: d.estimatedTurns,
+            trackCostToSupply: d.estimatedTrackCostToSupply,
+            trackCostToDelivery: d.estimatedTrackCostToDelivery,
           };
         });
 
@@ -456,6 +451,17 @@ export class AIStrategyEngine {
         ? Math.min(...context.demands.map(d => d.estimatedTurns))
         : 0;
       console.log(`${tag} [Hand Quality] score=${handQuality.score} (threshold=3.0), stale cards: ${handQuality.staleCards}, best demand: ${bestDemandTurns} turns`);
+
+      // JIRA-32: Extract movement data from composed plan for game log
+      let milepostsMoved: number | undefined;
+      let trackUsageFee: number | undefined;
+      const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
+      for (const step of allSteps) {
+        if (step.type === AIActionType.MoveTrain) {
+          milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? step.path.length - 1 : 0);
+          trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
+        }
+      }
 
       return {
         action: result.action,
@@ -479,6 +485,13 @@ export class AIStrategyEngine {
         upgradeAdvice: context.upgradeAdvice,
         // JIRA-31: LLM attempt log for debug overlay
         llmLog: decision.llmLog,
+        // JIRA-32: Strategic context and composition trace for game log
+        gamePhase: context.phase || undefined,
+        cash: result.remainingMoney,
+        trainType: context.trainType,
+        milepostsMoved,
+        trackUsageFee,
+        compositionTrace,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -487,7 +500,7 @@ export class AIStrategyEngine {
       // Update bot memory even on pipeline error
       updateMemory(gameId, botPlayerId, {
         lastAction: AIActionType.PassTurn,
-        consecutivePassTurns: memory.consecutivePassTurns + 1,
+        noProgressTurns: (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: 0,
         turnNumber: memory.turnNumber + 1,
       });

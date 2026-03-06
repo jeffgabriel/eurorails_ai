@@ -214,7 +214,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       currentBuildTarget: null,
       turnsOnTarget: 0,
       lastAction: null,
-      consecutivePassTurns: 0,
+      noProgressTurns: 0,
       consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
@@ -353,7 +353,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → no LLM key → PassTurn
       mockGetMemory.mockReturnValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
       });
@@ -455,7 +455,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → PassTurn
       mockGetMemory.mockReturnValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
       });
@@ -495,7 +495,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → PassTurn (simplest path for timing test)
       mockGetMemory.mockReturnValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        consecutivePassTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
       });

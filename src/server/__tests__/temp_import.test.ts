@@ -26,20 +26,21 @@ describe('BotMemory and DecisionLogger module imports', () => {
       activeRoute: null,
       routeHistory: [],
       lastAction: null,
-      consecutivePassTurns: 0,
+      noProgressTurns: 0,
       consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
       turnNumber: 0,
       lastReasoning: null,
       lastPlanHorizon: null,
+      previousRouteStops: null,
     });
   });
 
   it('updateMemory merges partial state', () => {
-    updateMemory('test-game', 'test-bot', { consecutivePassTurns: 3 });
+    updateMemory('test-game', 'test-bot', { noProgressTurns: 3 });
     const state = getMemory('test-game', 'test-bot');
-    expect(state.consecutivePassTurns).toBe(3);
+    expect(state.noProgressTurns).toBe(3);
     expect(state.currentBuildTarget).toBeNull();
 
     // Clean up

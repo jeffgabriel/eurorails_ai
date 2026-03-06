@@ -16,7 +16,7 @@ describe('BotMemory', () => {
         currentBuildTarget: null,
         turnsOnTarget: 0,
         lastAction: null,
-        consecutivePassTurns: 0,
+        noProgressTurns: 0,
         consecutiveDiscards: 0,
         deliveryCount: 0,
         totalEarnings: 0,
@@ -49,21 +49,21 @@ describe('BotMemory', () => {
 
   describe('updateMemory', () => {
     it('merges partial state with defaults', () => {
-      updateMemory(gameId, playerId, { consecutivePassTurns: 2 });
+      updateMemory(gameId, playerId, { noProgressTurns: 2 });
       const state = getMemory(gameId, playerId);
-      expect(state.consecutivePassTurns).toBe(2);
+      expect(state.noProgressTurns).toBe(2);
       expect(state.currentBuildTarget).toBeNull();
       expect(state.deliveryCount).toBe(0);
     });
 
     it('overwrites specific fields without affecting others', () => {
       updateMemory(gameId, playerId, { deliveryCount: 1, totalEarnings: 43 });
-      updateMemory(gameId, playerId, { consecutivePassTurns: 1 });
+      updateMemory(gameId, playerId, { noProgressTurns: 1 });
 
       const state = getMemory(gameId, playerId);
       expect(state.deliveryCount).toBe(1);
       expect(state.totalEarnings).toBe(43);
-      expect(state.consecutivePassTurns).toBe(1);
+      expect(state.noProgressTurns).toBe(1);
     });
 
     it('tracks build target and turns on target', () => {
