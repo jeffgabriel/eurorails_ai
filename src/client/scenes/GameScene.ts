@@ -14,6 +14,7 @@ import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
+import { GameToastManager } from "../components/GameToastManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -49,7 +50,9 @@ export class GameScene extends Phaser.Scene {
   private loadsReferencePanel?: LoadsReferencePanel;
   private debugOverlay?: DebugOverlay;
   private botTrainAnimator?: BotTrainAnimator;
+  private gameToastManager?: GameToastManager;
   private socketUnsubBotTurnComplete?: () => void;
+  private socketUnsubBotToast?: () => void;
   private socketUnsubDebugAny?: () => void;
 
   // Game state
@@ -624,12 +627,60 @@ export class GameScene extends Phaser.Scene {
     // JIRA-36: Bot train animation system
     this.botTrainAnimator = new BotTrainAnimator(this);
 
+    // Game event toast notifications
+    this.gameToastManager = new GameToastManager(this);
+
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
+        });
+
+        // Game event toast notifications from bot:turn-complete
+        this.socketUnsubBotToast = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          if (eventName !== 'bot:turn-complete') return;
+          const data = args[0];
+          if (!data?.botPlayerId) return;
+          const toast = this.gameToastManager;
+          if (!toast) return;
+
+          const botName = this.getPlayerName(data.botPlayerId);
+
+          // LLM strategy announcement
+          if (data.reasoning) {
+            toast.show(`${botName} (AI): ${data.reasoning}`, { color: 0x2d1b69 });
+          }
+
+          // Delivery announcements
+          if (data.loadsDelivered?.length > 0) {
+            for (const d of data.loadsDelivered) {
+              toast.show(
+                `${botName} delivered ${d.loadType} to ${d.city} for ${d.payment}M ECU`,
+                { color: 0x1b5e20 },
+              );
+            }
+          }
+
+          // Track build announcement
+          if (data.segmentsBuilt > 0 && data.buildTargetCity) {
+            toast.show(
+              `${botName} built ${data.segmentsBuilt} track segment${data.segmentsBuilt > 1 ? 's' : ''} toward ${data.buildTargetCity} (${data.cost}M ECU)`,
+              { color: 0x0d47a1 },
+            );
+          }
+
+          // Train upgrade announcement
+          if (data.action === 'UpgradeTrain') {
+            toast.show(`${botName} upgraded their train`, { color: 0xe65100 });
+          }
+
+          // Pickup announcement
+          if (data.loadsPickedUp?.length > 0) {
+            const loads = data.loadsPickedUp.map((p: any) => `${p.loadType} at ${p.city}`).join(', ');
+            toast.show(`${botName} picked up ${loads}`, { color: 0x4a148c });
+          }
         });
 
         // JIRA-36: Listen for bot:turn-complete to animate movement path
@@ -1176,6 +1227,11 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private getPlayerName(playerId: string): string {
+    const player = this.gameState.players.find(p => p.id === playerId);
+    return player?.name ?? 'Unknown Player';
+  }
+
   // Clean up resources when scene is destroyed
   destroy(fromScene?: boolean): void {
     // Stop polling for turn changes
@@ -1215,7 +1271,10 @@ export class GameScene extends Phaser.Scene {
     this.loadsReferencePanel?.destroy();
     this.socketUnsubBotTurnComplete?.();
     this.socketUnsubBotTurnComplete = undefined;
+    this.socketUnsubBotToast?.();
+    this.socketUnsubBotToast = undefined;
     this.botTrainAnimator?.destroy();
+    this.gameToastManager?.destroy();
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
