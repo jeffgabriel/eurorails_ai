@@ -76,6 +76,8 @@ export interface BotTurnResult {
   upgradeAdvice?: string;
   // JIRA-31: LLM attempt log for debug overlay
   llmLog?: LlmAttempt[];
+  // JIRA-36: Movement path for animated bot train movement
+  movementPath?: { row: number; col: number }[];
 }
 
 export class AIStrategyEngine {
@@ -453,13 +455,21 @@ export class AIStrategyEngine {
       console.log(`${tag} [Hand Quality] score=${handQuality.score} (threshold=3.0), stale cards: ${handQuality.staleCards}, best demand: ${bestDemandTurns} turns`);
 
       // JIRA-32: Extract movement data from composed plan for game log
+      // JIRA-36: Also extract concatenated movement path for client animation
       let milepostsMoved: number | undefined;
       let trackUsageFee: number | undefined;
+      const movementPath: { row: number; col: number }[] = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       for (const step of allSteps) {
         if (step.type === AIActionType.MoveTrain) {
           milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? step.path.length - 1 : 0);
           trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
+          if (step.path.length > 0) {
+            const last = movementPath[movementPath.length - 1];
+            const first = step.path[0];
+            const startIndex = (last && last.row === first.row && last.col === first.col) ? 1 : 0;
+            movementPath.push(...step.path.slice(startIndex));
+          }
         }
       }
 
@@ -492,6 +502,7 @@ export class AIStrategyEngine {
         milepostsMoved,
         trackUsageFee,
         compositionTrace,
+        movementPath: movementPath.length > 0 ? movementPath : undefined,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

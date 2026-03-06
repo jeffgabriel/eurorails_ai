@@ -11,6 +11,7 @@ import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
 import { AIStrategyEngine } from './AIStrategyEngine';
 import { clearMemory } from './BotMemory';
+import { appendTurn } from './GameLogger';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -175,7 +176,46 @@ export async function onTurnChange(
       retried: result.retried,
       // JIRA-31: LLM attempt log for debug overlay
       llmLog: result.llmLog,
+      // JIRA-36: Movement path for animated bot train movement
+      movementPath: result.movementPath,
     });
+
+    // JIRA-32: Append structured turn log to NDJSON game file
+    try {
+      appendTurn(gameId, {
+        turn: turnNumber + 1,
+        playerId: currentPlayerId,
+        timestamp: new Date().toISOString(),
+        action: result.action,
+        reasoning: result.reasoning,
+        planHorizon: result.planHorizon,
+        model: result.model,
+        llmLatencyMs: result.llmLatencyMs,
+        tokenUsage: result.tokenUsage,
+        llmLog: result.llmLog,
+        composition: result.compositionTrace,
+        demandRanking: result.demandRanking,
+        handQuality: result.handQuality,
+        gamePhase: result.gamePhase,
+        cash: result.cash,
+        train: result.trainType,
+        upgradeAdvice: result.upgradeAdvice,
+        guardrailOverride: result.guardrailOverride,
+        guardrailReason: result.guardrailReason,
+        success: result.success ?? true,
+        error: result.error,
+        segmentsBuilt: result.segmentsBuilt,
+        cost: result.cost,
+        durationMs: result.durationMs,
+        buildTargetCity: result.buildTargetCity,
+        loadsPickedUp: result.loadsPickedUp,
+        loadsDelivered: result.loadsDelivered,
+        milepostsMoved: result.milepostsMoved,
+        trackUsageFee: result.trackUsageFee,
+      });
+    } catch (logError) {
+      console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
+    }
 
     // Advance to next player
     await advanceTurnAfterBot(gameId);

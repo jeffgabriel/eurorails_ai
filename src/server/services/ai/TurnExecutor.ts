@@ -31,6 +31,7 @@ export interface ExecutionResult {
   error?: string;
   payment?: number;
   newCardId?: number;
+  movementPath?: { row: number; col: number }[];
 }
 
 export class TurnExecutor {
@@ -186,6 +187,7 @@ export class TurnExecutor {
     let totalSegments = 0;
     let lastAction = AIActionType.PassTurn;
     let lastResult: ExecutionResult | null = null;
+    const concatenatedPath: { row: number; col: number }[] = [];
 
     for (const step of steps) {
       const option = TurnExecutor.planToOption(step);
@@ -224,6 +226,14 @@ export class TurnExecutor {
       snapshot.bot.money = result.remainingMoney;
       lastResult = result;
 
+      // Collect movement path for animation (deduplicate shared endpoints)
+      if (result.movementPath && result.movementPath.length > 0) {
+        const last = concatenatedPath[concatenatedPath.length - 1];
+        const first = result.movementPath[0];
+        const startIndex = (last && last.row === first.row && last.col === first.col) ? 1 : 0;
+        concatenatedPath.push(...result.movementPath.slice(startIndex));
+      }
+
       // Update snapshot state so subsequent steps see correct position/loads
       if (step.type === AIActionType.MoveTrain && step.path.length > 0) {
         const dest = step.path[step.path.length - 1];
@@ -246,6 +256,7 @@ export class TurnExecutor {
       durationMs: Date.now() - startTime,
       payment: lastResult?.payment,
       newCardId: lastResult?.newCardId,
+      movementPath: concatenatedPath.length > 0 ? concatenatedPath : undefined,
     };
   }
 
@@ -419,6 +430,7 @@ export class TurnExecutor {
       segmentsBuilt: 0,
       remainingMoney,
       durationMs,
+      movementPath: movePath,
     };
   }
 
