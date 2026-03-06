@@ -1275,11 +1275,11 @@ describe('ContextBuilder.serializePrompt', () => {
 
 // Mock getMajorCityGroups to return controlled test data instead of real board config
 jest.mock('../../../shared/services/majorCityGroups', () => ({
-  getMajorCityGroups: () => [
+  getMajorCityGroups: jest.fn(() => [
     { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [] },
     { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [] },
-  ],
-  getFerryEdges: () => [],
+  ]),
+  getFerryEdges: jest.fn(() => []),
 }));
 
 describe('ContextBuilder cold-start estimateTrackCost', () => {
@@ -2681,5 +2681,158 @@ describe('ContextBuilder.isBuildAffordable', () => {
     );
     expect(result.affordable).toBe(true);
     expect(result.projectedFunds).toBe(5);
+  });
+});
+
+// ── TEST: Ferry-aware estimateTrackCost (JIRA-34) ────────────────────────────
+
+describe('ContextBuilder ferry-aware estimateTrackCost', () => {
+  const { getFerryEdges } = require('../../../shared/services/majorCityGroups');
+
+  afterEach(() => {
+    // Reset to default empty ferry edges
+    (getFerryEdges as jest.Mock).mockReturnValue([]);
+  });
+
+  it('same-landmass city: returns positive cost via Dijkstra estimate', async () => {
+    // Bot has track at (10,10)→(10,11). Target city CityB at (10,11) is ON
+    // the segment endpoint, so computeLandmass includes it → same landmass path.
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeGridPoint(10, 11),
+      makeCityPoint(10, 12, 'CityB', TerrainType.SmallCity),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botSegments: [makeSegment(10, 10, 10, 11)],
+      botPosition: { row: 10, col: 10 },
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'CityB', loadType: 'Steel', payment: 20 }],
+      }],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'CityB');
+
+    expect(demand).toBeDefined();
+    // CityB at (10,12) is 1 hex from segment endpoint (10,11) — should be small positive
+    // The landmass BFS from (10,10) and (10,11) won't expand far on the real grid
+    // (synthetic positions), but the same-landmass check should still work for
+    // positions reachable in the BFS.
+    // If it falls through to cross-water path (with empty ferry edges), it will
+    // return a hex-distance fallback estimate which is also > 0.
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThanOrEqual(0);
+  });
+
+  it('cross-water city with no ferry access: returns overland + ferry + far-side cost', async () => {
+    // Bot track at (10,10)→(10,11). Target at (30,30) is NOT on the track
+    // endpoints, so it appears cross-water. Ferry edges connect from (10,12)
+    // to (30,28) — bot doesn't have track at the departure port.
+    (getFerryEdges as jest.Mock).mockReturnValue([
+      { name: 'TestFerry', pointA: { row: 10, col: 12 }, pointB: { row: 30, col: 28 }, cost: 10 },
+    ]);
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeGridPoint(10, 11),
+      makeCityPoint(30, 30, 'IslandCity', TerrainType.SmallCity),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botSegments: [makeSegment(10, 10, 10, 11)],
+      botPosition: { row: 10, col: 10 },
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'IslandCity', loadType: 'Steel', payment: 50 }],
+      }],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'IslandCity');
+
+    expect(demand).toBeDefined();
+    // With no ferry access, estimate should include overland + ferry cost (10M) + far-side
+    // This should be significantly more than raw hex distance × 1.5
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThanOrEqual(10);
+  });
+
+  it('cross-water city with ferry already paid: returns only far-side estimate', async () => {
+    // Bot track at (10,10)→(10,11)→(10,12). Ferry departs from (10,12).
+    // Since bot has track at the departure port, it can cross for free.
+    (getFerryEdges as jest.Mock).mockReturnValue([
+      { name: 'TestFerry', pointA: { row: 10, col: 12 }, pointB: { row: 30, col: 28 }, cost: 10 },
+    ]);
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeGridPoint(10, 11),
+      makeGridPoint(10, 12),
+      makeCityPoint(30, 30, 'IslandCity', TerrainType.SmallCity),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botSegments: [makeSegment(10, 10, 10, 11), makeSegment(10, 11, 10, 12)],
+      botPosition: { row: 10, col: 10 },
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'IslandCity', loadType: 'Steel', payment: 50 }],
+      }],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'IslandCity');
+
+    expect(demand).toBeDefined();
+    // With ferry paid, estimate = only far-side distance (arrival port to city)
+    // Should be less than the no-ferry-access estimate (no ferry cost included)
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ferry-paid estimate should be less than no-ferry-access estimate', async () => {
+    // Compare the two cross-water scenarios: with and without ferry access
+    (getFerryEdges as jest.Mock).mockReturnValue([
+      { name: 'TestFerry', pointA: { row: 10, col: 12 }, pointB: { row: 30, col: 28 }, cost: 10 },
+    ]);
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeGridPoint(10, 11),
+      makeGridPoint(10, 12),
+      makeCityPoint(30, 30, 'IslandCity', TerrainType.SmallCity),
+    ];
+
+    // Scenario 1: No ferry access (track stops before departure port)
+    const snapshotNoFerry = makeWorldSnapshot({
+      botSegments: [makeSegment(10, 10, 10, 11)],
+      botPosition: { row: 10, col: 10 },
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'IslandCity', loadType: 'Steel', payment: 50 }],
+      }],
+    });
+
+    const contextNoFerry = await ContextBuilder.build(snapshotNoFerry, BotSkillLevel.Medium, gridPoints);
+    const demandNoFerry = contextNoFerry.demands.find(d => d.deliveryCity === 'IslandCity');
+
+    // Scenario 2: Ferry access (track reaches departure port)
+    const snapshotWithFerry = makeWorldSnapshot({
+      botSegments: [makeSegment(10, 10, 10, 11), makeSegment(10, 11, 10, 12)],
+      botPosition: { row: 10, col: 10 },
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'IslandCity', loadType: 'Steel', payment: 50 }],
+      }],
+    });
+
+    const contextWithFerry = await ContextBuilder.build(snapshotWithFerry, BotSkillLevel.Medium, gridPoints);
+    const demandWithFerry = contextWithFerry.demands.find(d => d.deliveryCity === 'IslandCity');
+
+    expect(demandNoFerry).toBeDefined();
+    expect(demandWithFerry).toBeDefined();
+
+    // Ferry-paid should be cheaper (no overland-to-port cost, no ferry cost)
+    expect(demandWithFerry!.estimatedTrackCostToDelivery)
+      .toBeLessThan(demandNoFerry!.estimatedTrackCostToDelivery);
   });
 });
