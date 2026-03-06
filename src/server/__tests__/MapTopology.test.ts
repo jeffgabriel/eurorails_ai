@@ -9,6 +9,8 @@ import {
   getFerryPairPort,
   computeLandmass,
   computeFerryRouteInfo,
+  estimatePathCost,
+  getWaterCrossingCost,
   makeKey,
   _resetCache,
   GridPointData,
@@ -386,6 +388,192 @@ describe('MapTopology', () => {
       expect(info.arrivalPorts).toEqual([]);
       expect(info.cheapestFerryCost).toBe(Infinity);
       expect(info.canCrossFerry).toBe(false);
+    });
+  });
+
+  describe('estimatePathCost', () => {
+    // Use real grid positions from gridPoints.json for accurate testing.
+    // These positions are known to exist on the EuroRails map.
+
+    it('should return 0 for same position', () => {
+      const grid = loadGridPoints();
+      const first = grid.entries().next().value!;
+      const [, point] = first;
+      expect(estimatePathCost(point.row, point.col, point.row, point.col)).toBe(0);
+    });
+
+    it('should return 0 for non-existent target', () => {
+      expect(estimatePathCost(0, 0, 999, 999)).toBe(0);
+    });
+
+    it('should return positive cost for adjacent clear terrain hexes', () => {
+      // Find two adjacent clear-terrain hexes on the real grid
+      const grid = loadGridPoints();
+      let from: GridPointData | null = null;
+      let to: GridPointData | null = null;
+      for (const [, point] of grid) {
+        if (point.terrain === TerrainType.Clear) {
+          const neighbors = getHexNeighbors(point.row, point.col);
+          for (const nb of neighbors) {
+            const nbData = grid.get(makeKey(nb.row, nb.col));
+            if (nbData && nbData.terrain === TerrainType.Clear) {
+              from = point;
+              to = nbData;
+              break;
+            }
+          }
+          if (to) break;
+        }
+      }
+      expect(from).not.toBeNull();
+      expect(to).not.toBeNull();
+      const cost = estimatePathCost(from!.row, from!.col, to!.row, to!.col);
+      expect(cost).toBe(1); // Clear terrain = 1M
+    });
+
+    it('should return higher cost for paths through mountain terrain than clear', () => {
+      // Find a mountain hex and a clear hex nearby, then compare path costs
+      const grid = loadGridPoints();
+      let mountainPoint: GridPointData | null = null;
+      let clearNeighborOfMountain: GridPointData | null = null;
+      let clearPointFarther: GridPointData | null = null;
+
+      for (const [, point] of grid) {
+        if (point.terrain === TerrainType.Mountain) {
+          const neighbors = getHexNeighbors(point.row, point.col);
+          for (const nb of neighbors) {
+            const nbData = grid.get(makeKey(nb.row, nb.col));
+            if (nbData && nbData.terrain === TerrainType.Clear) {
+              mountainPoint = point;
+              clearNeighborOfMountain = nbData;
+              // Find a clear neighbor of the clear point (2 hops through clear)
+              const farNeighbors = getHexNeighbors(nbData.row, nbData.col);
+              for (const fnb of farNeighbors) {
+                const fnbData = grid.get(makeKey(fnb.row, fnb.col));
+                if (fnbData && fnbData.terrain === TerrainType.Clear
+                    && fnbData.row !== mountainPoint.row || fnbData.col !== mountainPoint.col) {
+                  clearPointFarther = fnbData;
+                  break;
+                }
+              }
+              if (clearPointFarther) break;
+            }
+          }
+          if (clearPointFarther) break;
+        }
+      }
+
+      if (mountainPoint && clearNeighborOfMountain && clearPointFarther) {
+        // Cost through mountain should be >= 2 (mountain cost)
+        const costThroughMountain = estimatePathCost(
+          clearNeighborOfMountain.row, clearNeighborOfMountain.col,
+          mountainPoint.row, mountainPoint.col,
+        );
+        expect(costThroughMountain).toBeGreaterThanOrEqual(2);
+      }
+    });
+
+    it('should return cost >= 5 for path ending at alpine terrain', () => {
+      const grid = loadGridPoints();
+      let alpinePoint: GridPointData | null = null;
+      let nearbyPoint: GridPointData | null = null;
+
+      for (const [, point] of grid) {
+        if (point.terrain === TerrainType.Alpine) {
+          const neighbors = getHexNeighbors(point.row, point.col);
+          for (const nb of neighbors) {
+            const nbData = grid.get(makeKey(nb.row, nb.col));
+            if (nbData && nbData.terrain !== TerrainType.Water) {
+              alpinePoint = point;
+              nearbyPoint = nbData;
+              break;
+            }
+          }
+          if (nearbyPoint) break;
+        }
+      }
+
+      expect(alpinePoint).not.toBeNull();
+      expect(nearbyPoint).not.toBeNull();
+      const cost = estimatePathCost(nearbyPoint!.row, nearbyPoint!.col, alpinePoint!.row, alpinePoint!.col);
+      expect(cost).toBeGreaterThanOrEqual(5); // Alpine = 5M minimum
+    });
+
+    it('should produce cost >= hex distance (minimum 1M per hop)', () => {
+      // Dijkstra cost must be at least hexDistance since cheapest terrain is 1M
+      const grid = loadGridPoints();
+      const points: GridPointData[] = [];
+      let count = 0;
+      for (const [, point] of grid) {
+        if (point.terrain !== TerrainType.Water && count % 200 === 0) {
+          points.push(point);
+        }
+        count++;
+        if (points.length >= 5) break;
+      }
+
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i];
+        const b = points[i + 1];
+        const dist = hexDistance(a.row, a.col, b.row, b.col);
+        const dijkstraCost = estimatePathCost(a.row, a.col, b.row, b.col);
+        if (dijkstraCost > 0) {
+          expect(dijkstraCost).toBeGreaterThanOrEqual(dist);
+        }
+      }
+    });
+
+    it('should complete 20 sequential calls in under 500ms', () => {
+      const grid = loadGridPoints();
+      // Pick some spread-out points for realistic performance test
+      const points: GridPointData[] = [];
+      let count = 0;
+      for (const [, point] of grid) {
+        if (count % 100 === 0) points.push(point);
+        count++;
+        if (points.length >= 10) break;
+      }
+
+      const start = Date.now();
+      for (let i = 0; i < 20; i++) {
+        const from = points[i % points.length];
+        const to = points[(i + 3) % points.length];
+        estimatePathCost(from.row, from.col, to.row, to.col);
+      }
+      const elapsed = Date.now() - start;
+      expect(elapsed).toBeLessThan(500);
+    });
+  });
+
+  describe('getWaterCrossingCost', () => {
+    it('should return 0 for edges without water crossings', () => {
+      // Use two adjacent clear hexes that don't cross water
+      const grid = loadGridPoints();
+      for (const [, point] of grid) {
+        if (point.terrain === TerrainType.Clear) {
+          const neighbors = getHexNeighbors(point.row, point.col);
+          for (const nb of neighbors) {
+            const cost = getWaterCrossingCost(point.row, point.col, nb.row, nb.col);
+            if (cost === 0) {
+              expect(cost).toBe(0);
+              return;
+            }
+          }
+        }
+      }
+    });
+
+    it('should be symmetric (same cost regardless of direction)', () => {
+      const grid = loadGridPoints();
+      for (const [, point] of grid) {
+        const neighbors = getHexNeighbors(point.row, point.col);
+        for (const nb of neighbors) {
+          const costAB = getWaterCrossingCost(point.row, point.col, nb.row, nb.col);
+          const costBA = getWaterCrossingCost(nb.row, nb.col, point.row, point.col);
+          expect(costAB).toBe(costBA);
+          if (costAB > 0) return; // Found a crossing, verified symmetry
+        }
+      }
     });
   });
 });

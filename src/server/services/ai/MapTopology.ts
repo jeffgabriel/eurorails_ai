@@ -7,8 +7,9 @@
 
 import fs from 'fs';
 import path from 'path';
-import { TerrainType } from '../../../shared/types/GameTypes';
+import { TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
 import type { FerryEdge } from '../../../shared/services/majorCityGroups';
+import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
 /** Parsed grid point from gridPoints.json */
 export interface GridPointData {
@@ -270,6 +271,122 @@ export function computeFerryRouteInfo(
   }
 
   return { canCrossFerry, departurePorts, arrivalPorts, cheapestFerryCost };
+}
+
+// ── Water crossing cost lookup (shared with computeBuildSegments) ────
+// River = +2M, Lake/Ocean inlet = +3M (additive to terrain cost).
+const _waterCrossingCosts = new Map<string, number>();
+for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).riverEdges ?? []) {
+  _waterCrossingCosts.set(edge, WaterCrossingType.River); // 2
+}
+for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).nonRiverWaterEdges ?? []) {
+  _waterCrossingCosts.set(edge, WaterCrossingType.Lake); // 3
+}
+
+/** Extra cost for building across a river, lake, or ocean inlet. */
+export function getWaterCrossingCost(fromRow: number, fromCol: number, toRow: number, toCol: number): number {
+  const a = `${fromRow},${fromCol}`;
+  const b = `${toRow},${toCol}`;
+  const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+  return _waterCrossingCosts.get(key) ?? 0;
+}
+
+// ── Terrain-aware cost estimation via Dijkstra ──────────────────────
+
+interface CostNode {
+  row: number;
+  col: number;
+  cost: number;
+}
+
+class CostHeap {
+  private data: CostNode[] = [];
+  get size(): number { return this.data.length; }
+
+  push(node: CostNode): void {
+    this.data.push(node);
+    let i = this.data.length - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (this.data[i].cost >= this.data[parent].cost) break;
+      [this.data[i], this.data[parent]] = [this.data[parent], this.data[i]];
+      i = parent;
+    }
+  }
+
+  pop(): CostNode | undefined {
+    if (this.data.length === 0) return undefined;
+    const top = this.data[0];
+    const last = this.data.pop()!;
+    if (this.data.length > 0) {
+      this.data[0] = last;
+      let i = 0;
+      while (true) {
+        let smallest = i;
+        const left = 2 * i + 1;
+        const right = 2 * i + 2;
+        if (left < this.data.length && this.data[left].cost < this.data[smallest].cost) smallest = left;
+        if (right < this.data.length && this.data[right].cost < this.data[smallest].cost) smallest = right;
+        if (smallest === i) break;
+        [this.data[i], this.data[smallest]] = [this.data[smallest], this.data[i]];
+        i = smallest;
+      }
+    }
+    return top;
+  }
+}
+
+/**
+ * Estimate the minimum terrain-aware build cost between two hex positions.
+ * Uses Dijkstra's algorithm over the actual hex grid with real terrain costs
+ * and water crossing surcharges. Returns cost in ECU millions.
+ *
+ * Returns 0 if source equals target or target is unreachable.
+ */
+export function estimatePathCost(
+  fromRow: number, fromCol: number,
+  toRow: number, toCol: number,
+): number {
+  if (fromRow === toRow && fromCol === toCol) return 0;
+
+  const grid = loadGridPoints();
+  const targetKey = makeKey(toRow, toCol);
+  if (!grid.has(targetKey)) return 0;
+
+  const visited = new Map<string, number>();
+  const heap = new CostHeap();
+  const startKey = makeKey(fromRow, fromCol);
+  heap.push({ row: fromRow, col: fromCol, cost: 0 });
+  visited.set(startKey, 0);
+
+  while (heap.size > 0) {
+    const current = heap.pop()!;
+    const currentKey = makeKey(current.row, current.col);
+
+    if (currentKey === targetKey) return Math.round(current.cost);
+
+    // Skip if we've already found a cheaper path to this node
+    if (current.cost > (visited.get(currentKey) ?? Infinity)) continue;
+
+    for (const nb of getHexNeighbors(current.row, current.col)) {
+      const nbData = grid.get(makeKey(nb.row, nb.col));
+      if (!nbData) continue;
+
+      const terrainCost = getTerrainCost(nbData.terrain);
+      if (terrainCost === Infinity) continue;
+
+      const waterCost = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
+      const newCost = current.cost + terrainCost + waterCost;
+
+      const nbKey = makeKey(nb.row, nb.col);
+      if (newCost < (visited.get(nbKey) ?? Infinity)) {
+        visited.set(nbKey, newCost);
+        heap.push({ row: nb.row, col: nb.col, cost: newCost });
+      }
+    }
+  }
+
+  return 0; // Target unreachable
 }
 
 /** Reset the cache (for testing). */

@@ -24,7 +24,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance } from './MapTopology';
+import { hexDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -1681,32 +1681,39 @@ export class ContextBuilder {
     const cityPoints = gridPoints.filter(gp => gp.city?.name === cityName);
     if (cityPoints.length === 0) return 0;
 
-    // Average terrain cost is ~1.5M per milepost (mix of clear=1, mountain=2, city=3-5)
-    const AVG_COST_PER_MILEPOST = 1.5;
-
     if (segments.length === 0) {
-      // Cold-start: if fromCity specified, estimate distance from that city
+      // Cold-start: if fromCity specified, estimate cost from that city
       // (used for delivery cost estimation from the supply city)
       if (fromCity) {
         const fromPoints = gridPoints.filter(gp => gp.city?.name === fromCity);
         if (fromPoints.length > 0) {
+          let bestFrom = fromPoints[0];
+          let bestTo = cityPoints[0];
           let minDist = Infinity;
           for (const cityPoint of cityPoints) {
             for (const fp of fromPoints) {
               const dist = hexDistance(
                 cityPoint.row, cityPoint.col, fp.row, fp.col,
               );
-              minDist = Math.min(minDist, dist);
+              if (dist < minDist) {
+                minDist = dist;
+                bestFrom = fp;
+                bestTo = cityPoint;
+              }
             }
           }
           if (minDist === Infinity || minDist <= 1) return 0;
-          return Math.round(minDist * AVG_COST_PER_MILEPOST);
+          const pathCost = estimatePathCost(bestFrom.row, bestFrom.col, bestTo.row, bestTo.col);
+          // Fall back to conservative hex-distance estimate if Dijkstra can't find a path
+          return pathCost > 0 ? pathCost : Math.round(minDist * 2.0);
         }
       }
 
-      // Default cold-start: estimate distance from nearest major city center
+      // Default cold-start: estimate cost from nearest major city center
       // (bot can start building from any major city per game rules)
       const majorCityGroups = getMajorCityGroups();
+      let bestMajor = { row: 0, col: 0 };
+      let bestCity = cityPoints[0];
       let minDist = Infinity;
       for (const cityPoint of cityPoints) {
         for (const group of majorCityGroups) {
@@ -1714,30 +1721,154 @@ export class ContextBuilder {
             cityPoint.row, cityPoint.col,
             group.center.row, group.center.col,
           );
-          minDist = Math.min(minDist, dist);
+          if (dist < minDist) {
+            minDist = dist;
+            bestMajor = { row: group.center.row, col: group.center.col };
+            bestCity = cityPoint;
+          }
         }
       }
       if (minDist === Infinity || minDist <= 1) return 0; // City IS a major city
-      return Math.round(minDist * AVG_COST_PER_MILEPOST);
+      const pathCost2 = estimatePathCost(bestMajor.row, bestMajor.col, bestCity.row, bestCity.col);
+      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 2.0);
     }
 
-    // Find the closest segment endpoint to ANY city milepost
-    let minDist = Infinity;
-    for (const cityPoint of cityPoints) {
-      for (const seg of segments) {
-        const distFrom = hexDistance(
-          cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
-        );
-        const distTo = hexDistance(
-          cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
-        );
-        minDist = Math.min(minDist, distFrom, distTo);
+    // Collect unique track endpoints for landmass detection
+    const endpointSet = new Set<string>();
+    const trackEndpoints: Array<{ row: number; col: number }> = [];
+    for (const seg of segments) {
+      const fk = makeKey(seg.from.row, seg.from.col);
+      if (!endpointSet.has(fk)) {
+        endpointSet.add(fk);
+        trackEndpoints.push({ row: seg.from.row, col: seg.from.col });
+      }
+      const tk = makeKey(seg.to.row, seg.to.col);
+      if (!endpointSet.has(tk)) {
+        endpointSet.add(tk);
+        trackEndpoints.push({ row: seg.to.row, col: seg.to.col });
       }
     }
 
-    if (minDist === Infinity) return 0;
+    // Check if target city is on a different landmass from the bot's track
+    const grid = loadGridPoints();
+    const sourceLandmass = computeLandmass(trackEndpoints, grid);
+    const targetOnSourceLandmass = cityPoints.some(
+      cp => sourceLandmass.has(makeKey(cp.row, cp.col)),
+    );
 
-    return Math.round(minDist * AVG_COST_PER_MILEPOST);
+    if (targetOnSourceLandmass) {
+      // Same landmass — find closest segment endpoint and use Dijkstra estimate
+      let bestSeg = { row: 0, col: 0 };
+      let bestCity = cityPoints[0];
+      let minDist = Infinity;
+      for (const cityPoint of cityPoints) {
+        for (const seg of segments) {
+          const distFrom = hexDistance(
+            cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
+          );
+          if (distFrom < minDist) {
+            minDist = distFrom;
+            bestSeg = { row: seg.from.row, col: seg.from.col };
+            bestCity = cityPoint;
+          }
+          const distTo = hexDistance(
+            cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
+          );
+          if (distTo < minDist) {
+            minDist = distTo;
+            bestSeg = { row: seg.to.row, col: seg.to.col };
+            bestCity = cityPoint;
+          }
+        }
+      }
+      if (minDist === Infinity) return 0;
+      const sameLandCost = estimatePathCost(bestSeg.row, bestSeg.col, bestCity.row, bestCity.col);
+      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 2.0);
+    }
+
+    // Cross-water target — check ferry state
+    const ferryEdges = getFerryEdges();
+    const ferryInfo = computeFerryRouteInfo(sourceLandmass, endpointSet, ferryEdges);
+
+    if (ferryInfo.canCrossFerry) {
+      // Bot already has track at a departure ferry port — crossing is free
+      // Estimate = distance from arrival port to target
+      let minFarDist = Infinity;
+      let bestArrival = ferryInfo.arrivalPorts[0];
+      let bestCity = cityPoints[0];
+      for (const arrival of ferryInfo.arrivalPorts) {
+        for (const cp of cityPoints) {
+          const dist = hexDistance(arrival.row, arrival.col, cp.row, cp.col);
+          if (dist < minFarDist) {
+            minFarDist = dist;
+            bestArrival = arrival;
+            bestCity = cp;
+          }
+        }
+      }
+      if (minFarDist === Infinity) return 0;
+      const ferryCrossCost = estimatePathCost(bestArrival.row, bestArrival.col, bestCity.row, bestCity.col);
+      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 2.0);
+    }
+
+    // Bot has no ferry access — estimate full route via best ferry
+    let bestTotal = Infinity;
+    for (let i = 0; i < ferryInfo.departurePorts.length; i++) {
+      const dep = ferryInfo.departurePorts[i];
+      const arr = ferryInfo.arrivalPorts[i];
+      // Overland cost from nearest track endpoint to departure port (terrain-aware)
+      let bestEp = trackEndpoints[0];
+      let nearestTrackDist = Infinity;
+      for (const ep of trackEndpoints) {
+        const d = hexDistance(ep.row, ep.col, dep.row, dep.col);
+        if (d < nearestTrackDist) {
+          nearestTrackDist = d;
+          bestEp = ep;
+        }
+      }
+      const overlandToDep = estimatePathCost(bestEp.row, bestEp.col, dep.row, dep.col);
+      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 2.0);
+
+      // Far-side cost from arrival port to target city (terrain-aware)
+      let bestCp = cityPoints[0];
+      let nearestTargetDist = Infinity;
+      for (const cp of cityPoints) {
+        const d = hexDistance(arr.row, arr.col, cp.row, cp.col);
+        if (d < nearestTargetDist) {
+          nearestTargetDist = d;
+          bestCp = cp;
+        }
+      }
+      const overlandFromArr = estimatePathCost(arr.row, arr.col, bestCp.row, bestCp.col);
+      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 2.0);
+
+      // Look up the ferry cost for this specific departure port
+      let ferryCost = ferryInfo.cheapestFerryCost;
+      for (const fe of ferryEdges) {
+        const aKey = makeKey(fe.pointA.row, fe.pointA.col);
+        const bKey = makeKey(fe.pointB.row, fe.pointB.col);
+        if (aKey === makeKey(dep.row, dep.col) || bKey === makeKey(dep.row, dep.col)) {
+          ferryCost = fe.cost;
+          break;
+        }
+      }
+      const total = nearSideCost + ferryCost + farSideCost;
+      bestTotal = Math.min(bestTotal, total);
+    }
+
+    if (bestTotal === Infinity) {
+      // No ferry route found — fall back to conservative hex distance estimate
+      let minDist = Infinity;
+      for (const cp of cityPoints) {
+        for (const ep of trackEndpoints) {
+          const d = hexDistance(ep.row, ep.col, cp.row, cp.col);
+          minDist = Math.min(minDist, d);
+        }
+      }
+      return Math.round(minDist * 2.0);
+    }
+
+    return Math.round(bestTotal);
   }
 
   /**
