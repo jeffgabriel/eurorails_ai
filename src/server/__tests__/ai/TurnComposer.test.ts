@@ -1555,6 +1555,72 @@ describe('TurnComposer', () => {
       // Only PICKUP returned — no MOVE could be resolved
       expect(result.type).toBe(AIActionType.PickupLoad);
     });
+
+    it('JIRA-50: uses reachable cities as fallback when demand targets are unreachable', async () => {
+      // Scenario: bot delivers a load, demand supply cities are on-network but
+      // not reachable from current position. reachableCities should provide a
+      // valid fallback target so movement budget isn't wasted.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+        },
+      });
+      const context = makeContext({
+        speed: 9,
+        loads: [],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Iron', supplyCity: 'FarCity', deliveryCity: 'FarDest',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+        reachableCities: ['NearbyCity', 'AnotherCity'],
+      });
+
+      const deliverPlan: TurnPlan = {
+        type: AIActionType.DeliverLoad,
+        load: 'Steel',
+        city: 'Torino',
+        cardId: 1,
+        payout: 16,
+      };
+
+      // A2: MOVE to FarCity (demand supply) — FAILS (unreachable)
+      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path to FarCity' });
+      // A2: MOVE to NearbyCity (reachable fallback) — SUCCEEDS
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 10, col: 10 }, { row: 12, col: 12 }, { row: 14, col: 14 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        },
+      });
+
+      const { plan: result, trace } = await TurnComposer.compose(deliverPlan, snapshot, context, null);
+
+      // Should have composed DELIVER + MOVE (using reachable city fallback)
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const moveStep = result.steps.find(s => s.type === AIActionType.MoveTrain);
+        expect(moveStep).toBeDefined();
+      }
+
+      // Verify: first MOVE tried FarCity (demand), second tried NearbyCity (reachable fallback)
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls.length).toBeGreaterThanOrEqual(2);
+      expect(moveCalls[0][0].details.to).toBe('FarCity');
+      expect(moveCalls[1][0].details.to).toBe('NearbyCity');
+    });
   });
 
   describe('A3 multi-target fallback (GH-Dublin-bug)', () => {
@@ -1745,6 +1811,115 @@ describe('TurnComposer', () => {
       mockResolve.mockResolvedValueOnce({
         success: true,
         plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+    });
+
+    it('picks up multiple copies of same load type when bot has multiple matching demands (JIRA-52)', async () => {
+      // Bot at Valencia which produces Oranges, bot has 2 Orange demands and 2 empty slots
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'München', loadType: 'Oranges', payment: 36 }] },
+            { cardId: 2, demands: [{ city: 'Holland', loadType: 'Oranges', payment: 33 }] },
+          ],
+        },
+        loadAvailability: { Valencia: ['Oranges'] },
+      });
+      const context = makeContext({ capacity: 2 });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Valencia' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      // Two pickup resolves succeed for the same load type
+      mockResolve
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Oranges', city: 'Valencia' },
+        })
+        .mockResolvedValueOnce({
+          success: true,
+          plan: { type: AIActionType.PickupLoad, load: 'Oranges', city: 'Valencia' },
+        });
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(2);
+      }
+    });
+
+    it('does not pick up extra copy when only 1 matching demand exists (JIRA-52)', async () => {
+      // Bot at Valencia, only 1 Orange demand but city has Oranges available
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'München', loadType: 'Oranges', payment: 36 }] },
+            { cardId: 2, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Valencia: ['Oranges'] },
+      });
+      const context = makeContext({ capacity: 2 });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Valencia' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      // Only 1 pickup should happen
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Oranges', city: 'Valencia' },
       });
 
       const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);

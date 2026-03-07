@@ -556,40 +556,43 @@ export class TurnComposer {
       const effectiveCapacity = TurnComposer.getBotCapacity(snapshot) - reservedSlots;
       const availableLoads = snapshot.loadAvailability[cityName] ?? [];
       for (const loadType of availableLoads) {
-        if (snapshot.bot.loads.length >= effectiveCapacity) break;
-        if (snapshot.bot.loads.includes(loadType)) continue;
-        const hasDemand = snapshot.bot.resolvedDemands.some(rd =>
-          rd.demands.some(d => d.loadType === loadType),
-        );
-        if (!hasDemand) continue;
+        // Pick up multiple copies of same type if bot has multiple matching demands (JIRA-52)
+        while (snapshot.bot.loads.length < effectiveCapacity) {
+          const carriedCount = snapshot.bot.loads.filter(l => l === loadType).length;
+          const demandCount = snapshot.bot.resolvedDemands.reduce((count, rd) =>
+            count + rd.demands.filter(d => d.loadType === loadType).length, 0);
+          if (carriedCount >= demandCount) break;
 
-        // Delivery feasibility pre-filter: reject if no demand has an affordable,
-        // profitable delivery path. Prevents picking up "dead weight" loads that
-        // the bot can't profitably deliver (Bug 1 / BE-001).
-        const matchingDemands = context.demands.filter(d => d.loadType === loadType);
-        if (matchingDemands.length > 0) {
-          const hasFeasibleDelivery = matchingDemands.some(
-            d => d.isDeliveryOnNetwork ||
-              (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
-          );
-          if (!hasFeasibleDelivery) {
-            const bestDemand = matchingDemands[0];
-            console.warn(
-              `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
-              `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
-              `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+          // Delivery feasibility pre-filter: reject if no demand has an affordable,
+          // profitable delivery path. Prevents picking up "dead weight" loads that
+          // the bot can't profitably deliver (Bug 1 / BE-001).
+          const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+          if (matchingDemands.length > 0) {
+            const hasFeasibleDelivery = matchingDemands.some(
+              d => d.isDeliveryOnNetwork ||
+                (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
             );
-            continue;
+            if (!hasFeasibleDelivery) {
+              const bestDemand = matchingDemands[0];
+              console.warn(
+                `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
+                `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
+                `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+              );
+              break;
+            }
           }
-        }
 
-        const result = await ActionResolver.resolve(
-          { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
-          snapshot, context,
-        );
-        if (result.success && result.plan) {
-          actionPlans.push(result.plan);
-          ActionResolver.applyPlanToState(result.plan, snapshot, context);
+          const result = await ActionResolver.resolve(
+            { action: 'PICKUP', details: { load: loadType, at: cityName }, reasoning: '', planHorizon: '' },
+            snapshot, context,
+          );
+          if (result?.success && result.plan) {
+            actionPlans.push(result.plan);
+            ActionResolver.applyPlanToState(result.plan, snapshot, context);
+          } else {
+            break;
+          }
         }
       }
 
@@ -746,13 +749,17 @@ export class TurnComposer {
       }
     }
 
-    // Priority 4: Reachable cities (fallback when no demand-based targets exist)
-    // After delivering all loads, the bot should still use remaining movement
-    // to position itself closer to future supply/delivery cities.
-    if (targets.length === 0) {
-      for (const city of context.reachableCities) {
+    // Priority 4: Reachable cities — always appended as fallback targets.
+    // Priorities 1-3 may add cities that are on the network but not reachable
+    // from the bot's current position (e.g., on disconnected track segments).
+    // If all P1-3 targets fail to resolve, these reachable cities ensure the
+    // A2 loop can still chain a continuation MOVE (JIRA-50).
+    let reachableAdded = 0;
+    for (const city of context.reachableCities) {
+      if (!seen.has(city)) {
         add(city);
-        if (targets.length >= 3) break; // Limit to avoid excessive resolution attempts
+        reachableAdded++;
+        if (reachableAdded >= 3) break;
       }
     }
 
