@@ -508,7 +508,14 @@ export class ContextBuilder {
     }
     const estimatedTurns = buildTurns + travelTurns + 1;
 
-    // 10. Compute corridor value and demand score (JIRA-13)
+    // 10. Build affordability check (BE-001) — moved before scoring for JIRA-51
+    const affordability = ContextBuilder.isBuildAffordable(
+      totalTrackCost, snapshot.bot.money,
+      snapshot.bot.loads, snapshot.bot.resolvedDemands,
+      demand.payment,
+    );
+
+    // 11. Compute corridor value and demand score (JIRA-13, JIRA-51)
     const corridorValue = ContextBuilder.computeCorridorValue(
       supplyCity, deliveryCity,
       snapshot.bot.existingSegments, gridPoints, connectedMajorCities,
@@ -517,15 +524,9 @@ export class ContextBuilder {
       demand.payment, totalTrackCost,
       corridorValue.networkCities, corridorValue.victoryMajorCities,
       estimatedTurns,
+      affordability.affordable, affordability.projectedFunds,
     );
     const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
-
-    // 11. Build affordability check (BE-001)
-    const affordability = ContextBuilder.isBuildAffordable(
-      totalTrackCost, snapshot.bot.money,
-      snapshot.bot.loads, snapshot.bot.resolvedDemands,
-      demand.payment,
-    );
 
     return {
       cardIndex,
@@ -1563,6 +1564,10 @@ export class ContextBuilder {
    *
    * The corridor multiplier scales with baseROI so geographical advantages
    * amplify good deliveries rather than overshadowing economic value.
+   *
+   * JIRA-51: When the bot can't afford the required track, the score is
+   * penalized proportionally to the cash shortfall. Slightly unaffordable
+   * demands get a mild penalty; massively unaffordable ones score near zero.
    */
   private static scoreDemand(
     payout: number,
@@ -1570,11 +1575,22 @@ export class ContextBuilder {
     networkCities: number,
     victoryMajorCities: number,
     estimatedTurns: number,
+    isAffordable: boolean = true,
+    projectedFunds: number = Infinity,
   ): number {
     const baseROI = (payout - totalTrackCost) / estimatedTurns;
     const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
     const victoryBonus = (victoryMajorCities * Math.max(payout * 0.15, 5)) / estimatedTurns;
-    return baseROI + (corridorMultiplier * baseROI) + victoryBonus;
+    const rawScore = baseROI + (corridorMultiplier * baseROI) + victoryBonus;
+
+    if (!isAffordable && totalTrackCost > 0) {
+      const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
+      const shortfallRatio = Math.min(shortfall / totalTrackCost, 1);
+      const penalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
+      return rawScore * penalty;
+    }
+
+    return rawScore;
   }
 
   // ── Demand context helpers (BE-005) ─────────────────────────────────────
