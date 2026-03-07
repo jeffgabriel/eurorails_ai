@@ -389,7 +389,8 @@ export class PlanExecutor {
    * delivery or supply city is not yet on the track network.
    */
   static findDemandBuildTarget(context: GameContext): string | null {
-    const sorted = [...context.demands].sort((a, b) => {
+    const affordable = context.demands.filter(d => d.isAffordable !== false);
+    const sorted = [...affordable].sort((a, b) => {
       const aCost = Math.min(a.estimatedTrackCostToSupply || Infinity, a.estimatedTrackCostToDelivery || Infinity);
       const bCost = Math.min(b.estimatedTrackCostToSupply || Infinity, b.estimatedTrackCostToDelivery || Infinity);
       return aCost - bCost;

@@ -1001,4 +1001,50 @@ describe('PlanExecutor', () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe('findDemandBuildTarget affordability filter', () => {
+    const baseDemand = {
+      cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+      payout: 25, isSupplyReachable: true, isDeliveryReachable: true,
+      isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+      isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+      loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+      demandScore: 10, efficiencyPerTurn: 3, networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 40,
+    };
+
+    it('returns null when all demands are unaffordable', () => {
+      const context = makeContext({
+        demands: [
+          { ...baseDemand, isAffordable: false, deliveryCity: 'Paris', isDeliveryOnNetwork: false },
+          { ...baseDemand, cardIndex: 1, isAffordable: false, deliveryCity: 'Roma', isDeliveryOnNetwork: false },
+        ],
+      });
+      expect(PlanExecutor.findDemandBuildTarget(context)).toBeNull();
+    });
+
+    it('selects cheapest affordable demand, skipping unaffordable ones', () => {
+      const context = makeContext({
+        demands: [
+          { ...baseDemand, isAffordable: false, deliveryCity: 'Paris', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 5 },
+          { ...baseDemand, cardIndex: 1, isAffordable: true, deliveryCity: 'Roma', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 15 },
+          { ...baseDemand, cardIndex: 2, isAffordable: true, deliveryCity: 'Wien', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 10 },
+        ],
+      });
+      // Paris is cheapest but unaffordable; Wien (10M) is cheapest affordable
+      expect(PlanExecutor.findDemandBuildTarget(context)).toBe('Wien');
+    });
+
+    it('preserves existing behavior when all demands are affordable', () => {
+      const context = makeContext({
+        demands: [
+          { ...baseDemand, isAffordable: true, deliveryCity: 'Paris', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 15 },
+          { ...baseDemand, cardIndex: 1, isAffordable: true, deliveryCity: 'Roma', isDeliveryOnNetwork: false, estimatedTrackCostToDelivery: 5 },
+        ],
+      });
+      // Roma is cheapest affordable — should be selected
+      expect(PlanExecutor.findDemandBuildTarget(context)).toBe('Roma');
+    });
+  });
 });
