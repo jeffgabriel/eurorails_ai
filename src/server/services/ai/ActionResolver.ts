@@ -901,21 +901,6 @@ export class ActionResolver {
       }
     }
 
-    // 2c. DISCARD HAND if all demands are unachievable within current budget.
-    // Better to draw fresh cards that might match existing track than to
-    // spend remaining money building aimlessly toward unreachable cities.
-    if (!context.isInitialBuild && context.demands.length > 0) {
-      const budget = snapshot.bot.money;
-      const allUnachievable = context.demands.every(d => {
-        const supplyCost = d.isSupplyOnNetwork ? 0 : (d.estimatedTrackCostToSupply || 0);
-        const deliveryCost = d.isDeliveryOnNetwork ? 0 : (d.estimatedTrackCostToDelivery || 0);
-        return (supplyCost + deliveryCost) > budget;
-      });
-      if (allUnachievable) {
-        return ActionResolver.resolveDiscard(snapshot);
-      }
-    }
-
     // 3. Try to BUILD toward the best demand
     if (context.canBuild && context.demands.length > 0) {
       // Sort demands: prefer cheapest track cost (most achievable with limited budget).
@@ -994,7 +979,28 @@ export class ActionResolver {
       }
     }
 
-    // 5. Always fall back to PASS
+    // 5. DISCARD dead hand — if every demand is unplayable, draw fresh cards.
+    // Conditions (all must hold): not initial build, no demand achievable on
+    // existing network, and cheapest demand's track cost exceeds cash (JIRA-54).
+    if (!context.isInitialBuild && context.demands.length > 0) {
+      const hasAchievable = context.demands.some(d =>
+        (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
+      );
+      if (!hasAchievable) {
+        const cheapestCost = Math.min(
+          ...context.demands.map(d => d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery),
+        );
+        if (cheapestCost > snapshot.bot.money) {
+          console.warn(
+            `[heuristicFallback] Dead hand detected — all demands unaffordable ` +
+            `(cheapest=${cheapestCost}M, cash=${snapshot.bot.money}M). Discarding hand.`,
+          );
+          return ActionResolver.resolveDiscard(snapshot);
+        }
+      }
+    }
+
+    // 6. PASS turn — preserve current hand for future turns.
     return ActionResolver.resolvePass();
   }
 

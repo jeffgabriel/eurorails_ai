@@ -2408,7 +2408,7 @@ describe('ActionResolver', () => {
       expect(callTargets[0]).toEqual(expect.objectContaining({ row: 20, col: 20 }));
     });
 
-    it('should discard hand when all demands are unachievable within budget', async () => {
+    it('should discard hand when all demands are unachievable and unaffordable (JIRA-54)', async () => {
       const context = makeGameContext({
         canDeliver: [],
         canPickup: [],
@@ -2439,9 +2439,9 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({ bot: { money: 10 } as any });
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
+      // JIRA-54: Dead hand — all demands off-network and unaffordable → discard
       expect(result.success).toBe(true);
-      const plan = result.plan as TurnPlanDiscardHand;
-      expect(plan.type).toBe(AIActionType.DiscardHand);
+      expect(result.plan.type).toBe(AIActionType.DiscardHand);
     });
 
     it('should NOT discard hand when at least one demand is achievable', async () => {
@@ -2502,6 +2502,70 @@ describe('ActionResolver', () => {
       expect(result.success).toBe(true);
       // Should PASS, not discard (initialBuild blocks discard)
       expect(result.plan!.type).toBe(AIActionType.PassTurn);
+    });
+
+    it('should NOT discard hand when bot can afford cheapest demand track cost (JIRA-54)', async () => {
+      setupGridPoints([
+        { row: 5, col: 5, name: 'HomeCity' },
+        { row: 8, col: 8, name: 'FarCity' },
+      ]);
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 5, 6, 6)]);
+
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: true,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'FarCity', deliveryCity: 'HomeCity',
+            payout: 15, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 8, estimatedTrackCostToDelivery: 5,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+
+      const snapshot = makeWorldSnapshot({ bot: { money: 20 } as any });
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Cheapest track cost (8+5=13) <= money (20) → should BUILD, not discard
+      expect(result.plan!.type).toBe(AIActionType.BuildTrack);
+    });
+
+    it('should discard hand when load on train but delivery not on network and unaffordable (JIRA-54)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
+      const context = makeGameContext({
+        canDeliver: [],
+        canPickup: [],
+        canBuild: false,
+        isInitialBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'A', deliveryCity: 'FarCity',
+            payout: 10, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 50,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ],
+      });
+
+      const snapshot = makeWorldSnapshot({
+        bot: { position: { row: 5, col: 5 }, loads: ['Wine'], money: 1 } as any,
+      });
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      // Load on train but delivery off-network and unaffordable → drop Wine first (BE-004),
+      // but since it's dead weight (score=40), DROP fires before dead-hand check
+      expect(result.plan!.type).toBe(AIActionType.DropLoad);
     });
 
     // ── BE-004: DROP dead-weight loads before PASS ──────────────────────────
