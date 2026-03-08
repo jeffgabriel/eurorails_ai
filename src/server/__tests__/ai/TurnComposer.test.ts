@@ -36,6 +36,7 @@ import { TurnComposer } from '../../services/ai/TurnComposer';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { loadGridPoints } from '../../services/ai/MapTopology';
+import * as majorCityGroups from '../../../shared/services/majorCityGroups';
 import {
   AIActionType,
   WorldSnapshot,
@@ -3022,6 +3023,120 @@ describe('TurnComposer', () => {
         );
         expect(totalMp).toBeLessThanOrEqual(6);
       }
+    });
+  });
+
+  describe('JIRA-62: A2 truncation uses effective mileposts through major cities', () => {
+    it('should use full remaining budget when path passes through major city red area', async () => {
+      // Scenario from game e48b04ec: Flash at Holland picks up Imports at Antwerpen (2 eff mp),
+      // then A2 chains continuation MOVE back through Holland toward Wien.
+      // The path Antwerpen→Wien passes through Holland's red area (intra-city hops = free).
+      // Bug: A2 truncated using raw edge count, wasting budget on free intra-city hops.
+      // Fix: truncate using effective mileposts so free hops don't consume budget.
+
+      // Setup: bot at (10,10) "Antwerpen", just picked up. Speed 9, 2mp already used.
+      // Continuation path: Antwerpen→milepost→Holland_outpost→Holland_center→Holland_outpost_east→east1→east2→east3→east4→east5→east6→east7
+      // Raw edges: 11. Intra-city: 2 (Holland outpost→center, center→east_outpost). Effective: 9mp.
+      // With 7mp remaining, truncation should keep 7 effective mp (9 raw edges including 2 free hops).
+
+      // Mock major city lookup: Holland nodes at (12,10), (12,11), (12,12) all belong to "Holland"
+      const lookupSpy = jest.spyOn(majorCityGroups, 'getMajorCityLookup').mockReturnValue(new Map<string, string>([
+        ['12,10', 'Holland'],  // outpost west
+        ['12,11', 'Holland'],  // center
+        ['12,12', 'Holland'],  // outpost east
+      ]));
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 10, col: 10 },  // At Antwerpen after pickup
+          loads: ['Imports'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Wien', loadType: 'Imports', payment: 19 }] },
+          ],
+        },
+      });
+      const context = makeContext({ speed: 9, loads: ['Imports'] });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Imports', city: 'Antwerpen' },
+          { action: 'deliver', loadType: 'Imports', city: 'Wien', demandCardId: 1, payment: 19 },
+        ],
+        currentStopIndex: 1,  // pickup done, now delivering
+        phase: 'travel',
+      });
+
+      // Primary plan: PICKUP (already happened, simulates post-A1 state)
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Imports',
+        city: 'Antwerpen',
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,10', { row: 10, col: 10, terrain: TerrainType.MajorCity, name: 'Antwerpen' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          if (!snap.bot.loads.includes(load)) snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+      });
+
+      // A2 continuation MOVE: path from Antwerpen through Holland toward Wien
+      // 12 nodes = 11 raw edges. 2 intra-city hops at Holland → 9 effective mp.
+      const continuationPath = [
+        { row: 10, col: 10 },  // Antwerpen
+        { row: 11, col: 10 },  // milepost (1 eff)
+        { row: 12, col: 10 },  // Holland outpost west (2 eff)
+        { row: 12, col: 11 },  // Holland center (FREE - intra-city)
+        { row: 12, col: 12 },  // Holland outpost east (FREE - intra-city)
+        { row: 13, col: 12 },  // milepost east (3 eff)
+        { row: 14, col: 12 },  // milepost (4 eff)
+        { row: 15, col: 12 },  // milepost (5 eff)
+        { row: 16, col: 12 },  // milepost (6 eff)
+        { row: 17, col: 12 },  // milepost (7 eff)
+        { row: 18, col: 12 },  // milepost (8 eff)
+        { row: 19, col: 12 },  // milepost (9 eff)
+      ];
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: continuationPath,
+          fees: new Set<string>(),
+          totalFee: 0,
+        },
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
+        expect(moves.length).toBe(1);
+        const movePath = (moves[0] as any).path;
+        // With 9mp budget (no prior MOVE in steps) and 9 effective mp in the path,
+        // the full path should be kept. Before this fix, the truncation would have
+        // sliced at 9 raw edges, losing 2 effective mp due to intra-city hops.
+        // The path should include all 12 nodes (11 raw edges, 9 effective mp).
+        expect(movePath.length).toBe(12);
+      }
+
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+      lookupSpy.mockRestore();
     });
   });
 

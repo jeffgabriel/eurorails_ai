@@ -343,11 +343,13 @@ export class TurnComposer {
           );
           if (moveResult.success && moveResult.plan) {
             let chainedMove = moveResult.plan as TurnPlanMoveTrain;
-            // Truncate path to remaining movement allowance
-            if (chainedMove.path.length - 1 > remainingMovement) {
+            // Truncate path to remaining movement allowance using effective mileposts
+            // (intra-city hops within major city red areas are free and must not consume budget)
+            const chainEffective = computeEffectivePathLength(chainedMove.path, getMajorCityLookup());
+            if (chainEffective > remainingMovement) {
               chainedMove = {
                 ...chainedMove,
-                path: chainedMove.path.slice(0, remainingMovement + 1),
+                path: TurnComposer.truncatePathToEffectiveBudget(chainedMove.path, remainingMovement),
               };
             }
             if (chainedMove.path.length > 1) {
@@ -407,12 +409,16 @@ export class TurnComposer {
             );
             if (moveResult.success && moveResult.plan) {
               let chainedMove = moveResult.plan as TurnPlanMoveTrain;
-              // Cap movement at remaining allowance
-              if (chainedMove.path && chainedMove.path.length - 1 > remainingMovement) {
-                chainedMove = {
-                  ...chainedMove,
-                  path: chainedMove.path.slice(0, remainingMovement + 1),
-                };
+              // Cap movement at remaining allowance using effective mileposts
+              // (intra-city hops within major city red areas are free and must not consume budget)
+              if (chainedMove.path) {
+                const chainEffective = computeEffectivePathLength(chainedMove.path, getMajorCityLookup());
+                if (chainEffective > remainingMovement) {
+                  chainedMove = {
+                    ...chainedMove,
+                    path: TurnComposer.truncatePathToEffectiveBudget(chainedMove.path, remainingMovement),
+                  };
+                }
               }
               if (chainedMove.path && chainedMove.path.length > 0) {
                 const moveSim = ActionResolver.cloneSnapshot(snapshot);
@@ -798,6 +804,32 @@ export class TurnComposer {
       }
     }
     return used;
+  }
+
+  /**
+   * Truncate a path to a given effective movement budget.
+   * Unlike raw slicing, this correctly skips intra-city hops (which are free)
+   * so the truncated path uses exactly `effectiveBudget` real mileposts.
+   */
+  private static truncatePathToEffectiveBudget(
+    path: Array<{ row: number; col: number }>,
+    effectiveBudget: number,
+  ): Array<{ row: number; col: number }> {
+    const majorCityLookup = getMajorCityLookup();
+    let effectiveCount = 0;
+    for (let i = 0; i < path.length - 1; i++) {
+      const fromKey = `${path[i].row},${path[i].col}`;
+      const toKey = `${path[i + 1].row},${path[i + 1].col}`;
+      const fromCity = majorCityLookup.get(fromKey);
+      const toCity = majorCityLookup.get(toKey);
+      if (!(fromCity && fromCity === toCity)) {
+        effectiveCount++;
+      }
+      if (effectiveCount >= effectiveBudget) {
+        return path.slice(0, i + 2); // include both endpoints of the last edge
+      }
+    }
+    return path; // path fits within budget
   }
 
   /** Extract action type strings from a plan (for trace logging). */
