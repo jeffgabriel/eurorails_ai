@@ -1019,6 +1019,11 @@ export class ContextBuilder {
     if (context.isInitialBuild) {
       lines.push('PHASE: Initial Build \u2014 build track only, no train movement. 20M budget this turn, 40M total over 2 turns.');
       lines.push('Use GEOGRAPHIC STRATEGY and HAND EVALUATION from the system prompt to choose your first demand. Prioritise capital velocity.');
+      lines.push('STARTING CITY: You will place your train at any major city before moving.');
+      lines.push('Choose your starting city AND first delivery together:');
+      lines.push('- Start at or near a supply city so you can pick up immediately on turn 3');
+      lines.push('- Prefer demands where supply\u2192delivery is short and affordable within 40M total budget');
+      lines.push('- A demand with supply at a major city lets you start there and pick up without traveling');
     }
     if (!context.canBuild) {
       lines.push('BUILD: Not available this turn (budget exhausted or no funds).');
