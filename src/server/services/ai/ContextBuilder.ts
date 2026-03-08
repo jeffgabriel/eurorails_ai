@@ -91,16 +91,16 @@ export class ContextBuilder {
     // Compute pickup opportunities at current position
     const canPickup = ContextBuilder.computeCanPickup(snapshot, gridPoints);
 
-    // Determine if the bot can upgrade and generate advice
-    const canUpgrade = ContextBuilder.checkCanUpgrade(snapshot);
-    const upgradeAdvice = ContextBuilder.computeUpgradeAdvice(snapshot);
-
     // turnBuildCost is not yet on WorldSnapshot — will be added in BE-021.
     // Default to 0 since ContextBuilder runs at the start of the bot's turn.
     const turnBuildCost = (snapshot.bot as { turnBuildCost?: number }).turnBuildCost ?? 0;
 
     // Determine if the bot can build
     const canBuild = (20 - turnBuildCost) > 0 && snapshot.bot.money > 0;
+
+    // Determine if the bot can upgrade and generate advice (JIRA-55: pass demands + canBuild for ROI)
+    const canUpgrade = ContextBuilder.checkCanUpgrade(snapshot);
+    const upgradeAdvice = ContextBuilder.computeUpgradeAdvice(snapshot, demands, canBuild);
 
     // Determine game phase
     const isInitialBuild = snapshot.gameStatus === 'initialBuild';
@@ -611,6 +611,17 @@ export class ContextBuilder {
   ): string {
     const lines: string[] = [];
 
+    // ── STRONG UPGRADE NUDGE (extreme cases — JIRA-55 Part D) ──
+    if (
+      context.trainType === 'Freight' &&
+      context.turnNumber >= 15 &&
+      context.money >= 60
+    ) {
+      lines.push(`STRONG RECOMMENDATION: You are still on Freight at turn ${context.turnNumber}. UPGRADE to FastFreight this turn.`);
+      lines.push('Every turn on Freight costs you ~3 mileposts of wasted movement. Output UPGRADE as your Phase B action.');
+      lines.push('');
+    }
+
     // ── TURN/PHASE header ──
     lines.push(`TURN ${context.turnNumber} \u2014 GAME PHASE: ${context.phase}`);
     lines.push('');
@@ -783,9 +794,18 @@ export class ContextBuilder {
       lines.push('');
     }
 
-    // ── UPGRADE OPTIONS ──
+    // ── UPGRADE OPTIONS (JIRA-55 Part B) ──
     if (context.upgradeAdvice) {
-      lines.push(`UPGRADE ADVICE: ${context.upgradeAdvice}`);
+      const strongUpgrade = context.trainType === 'Freight' &&
+        context.turnNumber >= 8 &&
+        context.money >= 30;
+      if (strongUpgrade) {
+        lines.push(`RECOMMENDED PHASE B ACTION: UPGRADE to FastFreight \u2014 {"action": "UPGRADE", "details": {"to": "FastFreight"}}`);
+        lines.push(`You've been on Freight for ${context.turnNumber} turns. +3 speed saves ~1 turn per delivery.`);
+        lines.push(context.upgradeAdvice);
+      } else {
+        lines.push(`UPGRADE ADVICE: ${context.upgradeAdvice}`);
+      }
     } else if (context.canUpgrade) {
       lines.push('YOU CAN UPGRADE: Check available train types (20M for upgrade, 5M for crossgrade).');
     }
@@ -1274,8 +1294,12 @@ export class ContextBuilder {
     return opportunities;
   }
 
-  /** Generate dynamic upgrade advice based on current train, cash, turn, and game phase */
-  private static computeUpgradeAdvice(snapshot: WorldSnapshot): string | undefined {
+  /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
+  private static computeUpgradeAdvice(
+    snapshot: WorldSnapshot,
+    demands: DemandContext[] = [],
+    canBuild: boolean = true,
+  ): string | undefined {
     if (snapshot.gameStatus === 'initialBuild') return undefined;
     const trainType = snapshot.bot.trainType as TrainType;
     const money = snapshot.bot.money;
@@ -1285,22 +1309,41 @@ export class ContextBuilder {
 
     const parts: string[] = [];
 
+    // ROI data: compute avg route length and whether meaningful build exists
+    const avgRouteLength = demands.length > 0
+      ? Math.round(demands.reduce((sum, d) => sum + d.estimatedTurns * 9, 0) / demands.length)
+      : 0;
+    const maxBuildCost = Math.max(0, ...demands.map(d => d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery));
+    const remainingBuildBudget = Math.min(20, money);
+    const hasMeaningfulBuild = canBuild && maxBuildCost > 5 && remainingBuildBudget >= 5;
+
     if (trainType === TrainType.Freight) {
       if (turn >= 15 && money >= 20) {
-        parts.push(`URGENT: Still on Freight at turn ${turn}. Upgrade NOW — every turn without Fast Freight or Heavy Freight costs you efficiency.`);
+        parts.push(`URGENT: Still on Freight at turn ${turn}. Upgrade NOW \u2014 every turn without Fast Freight or Heavy Freight costs you efficiency.`);
       }
       if (money >= 60) {
-        parts.push('Fast Freight (20M): +3 speed saves 1 turn on routes over 15 mileposts. Heavy Freight (20M): +1 cargo slot for corridor deliveries.');
+        parts.push('Fast Freight (20M): +3 speed saves ~1 turn per delivery. Heavy Freight (20M): +1 cargo slot for corridor deliveries.');
       } else if (money >= 20) {
-        parts.push('You can afford an upgrade (20M). Fast Freight for speed, Heavy Freight for cargo — choose based on your route lengths.');
+        parts.push('You can afford an upgrade (20M). Fast Freight for speed, Heavy Freight for cargo \u2014 choose based on your route lengths.');
+      }
+      // ROI enrichment
+      if (avgRouteLength > 15 && money >= 20) {
+        parts.push(`Avg route ~${avgRouteLength} mileposts \u2014 Fast Freight saves ~1 turn per delivery at this distance.`);
+      }
+      if (!hasMeaningfulBuild && money >= 20) {
+        parts.push('No route-critical build target this turn \u2014 upgrade is better value than building.');
       }
     } else if (trainType === TrainType.FastFreight || trainType === TrainType.HeavyFreight) {
       if (money >= 20) {
-        parts.push(`Superfreight available (20M): 12 speed + 3 cargo. The endgame train — upgrade when no high-value build target exists.`);
+        parts.push(`Superfreight available (20M): 12 speed + 3 cargo. The endgame train \u2014 upgrade when no high-value build target exists.`);
       }
       if (money >= 5 && money < 20) {
         const other = trainType === TrainType.FastFreight ? 'Heavy Freight (3 cargo)' : 'Fast Freight (12 speed)';
         parts.push(`Crossgrade to ${other} for only 5M (and still build up to 15M this turn).`);
+      }
+      // ROI for mid-tier: note if no meaningful build
+      if (!hasMeaningfulBuild && money >= 20) {
+        parts.push('No route-critical build target \u2014 consider Superfreight upgrade.');
       }
     }
 

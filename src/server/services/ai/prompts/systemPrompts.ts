@@ -36,8 +36,11 @@ MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize e
 - MOVE to a demand city → DELIVER for payout → BUILD track (up to 20M)
 - MOVE to a supply city → PICKUP → continue MOVE to delivery city → DELIVER (if within speed)
 - PICKUP at current city → MOVE to nearby delivery city → DELIVER
+- MOVE to demand city → DELIVER for payout → UPGRADE train (20M, replaces BUILD this turn)
+- PICKUP at current city → MOVE toward delivery → UPGRADE (when speed/cargo matters more than track)
 The key insight: loading/unloading does NOT cost movement points. You can MOVE partway, PICKUP, then continue MOVE with remaining speed. Always use ALL your movement points — stopping early wastes your turn.
-You CANNOT combine UPGRADE (20M) with BUILD, or DISCARD_HAND with anything.
+UPGRADE replaces BUILD for this turn's Phase B (you still MOVE, PICKUP, DELIVER normally).
+You CANNOT combine UPGRADE + BUILD, or DISCARD_HAND with anything.
 
 CRITICAL RULES — ALWAYS FOLLOW:
 1. NEVER pick PASS if a delivery can be completed this turn (load on train + at city)
