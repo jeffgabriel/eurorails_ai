@@ -10,7 +10,8 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
-  
+  private lastPlayerSectionHeight: number = 0;
+
   constructor(
     scene: Phaser.Scene, 
     gameState: GameState,
@@ -34,9 +35,17 @@ export class LeaderboardManager {
 
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
+    const PLAYER_ROW_HEIGHT = 20;
+    const CARGO_ROW_HEIGHT = 16;
 
-    // Create semi-transparent background for leaderboard
-    const leaderboardHeight = 40 + this.gameState.players.length * 20 + 50;
+    // Calculate dynamic height: each player with loads gets an extra cargo sub-row
+    const cargoRowCount = this.gameState.players.filter(
+      p => p.trainState?.loads && p.trainState.loads.length > 0
+    ).length;
+    const playerSectionHeight = this.gameState.players.length * PLAYER_ROW_HEIGHT
+      + cargoRowCount * CARGO_ROW_HEIGHT;
+    const leaderboardHeight = 40 + playerSectionHeight + 50;
+
     const leaderboardBg = this.scene.add
       .rectangle(
         this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
@@ -66,111 +75,146 @@ export class LeaderboardManager {
       )
       .setOrigin(0.5, 0);
 
-    // Add all player entries
-    const playerEntries = this.gameState.players
-      .map((player, index) => {
-        const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
-        const entryY = LEADERBOARD_PADDING + 30 + index * 20;
-        const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
+    // Add all player entries with dynamic Y offsets for cargo sub-rows
+    let currentY = LEADERBOARD_PADDING + 30;
+    const playerEntries: Phaser.GameObjects.GameObject[] = [];
 
-        const elements: Phaser.GameObjects.GameObject[] = [];
+    this.gameState.players.forEach((player, index) => {
+      const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
+      const entryY = currentY;
+      const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
 
-        // Create subtle background highlight for current player
-        if (isCurrentPlayer) {
-          // Subtle background highlight - light gray with low opacity
-          const entryBg = this.scene.add
-            .rectangle(
-              entryX + 2, // Small inset to keep within bounds
-              entryY + 1, // Small inset to keep within bounds
-              LEADERBOARD_WIDTH - 4, // Reduced width to account for insets
-              18, // Reduced height to account for insets
-              0x888888,
-              0.3 // Lower opacity for subtlety
-            )
-            .setOrigin(0, 0);
-          elements.push(entryBg);
+      // Create subtle background highlight for current player
+      if (isCurrentPlayer) {
+        const entryBg = this.scene.add
+          .rectangle(
+            entryX + 2,
+            entryY + 1,
+            LEADERBOARD_WIDTH - 4,
+            18,
+            0x888888,
+            0.3
+          )
+          .setOrigin(0, 0);
+        playerEntries.push(entryBg);
 
-          // Add smooth transition animation
-          entryBg.setAlpha(0);
-          this.scene.tweens.add({
-            targets: entryBg,
-            alpha: { from: 0, to: 1 },
-            duration: 300,
-            ease: 'Power2'
-          });
-        }
+        entryBg.setAlpha(0);
+        this.scene.tweens.add({
+          targets: entryBg,
+          alpha: { from: 0, to: 1 },
+          duration: 300,
+          ease: 'Power2'
+        });
+      }
 
-        // Create icon for current player (slightly larger but subtle)
-        let iconText;
-        if (isCurrentPlayer) {
-          iconText = this.scene.add
-            .text(
-              entryX + 5,
-              entryY + 2,
-              "►",
-              {
-                color: "#ffffff", // Keep white for subtlety
-                fontSize: "16px", // Slightly larger but not too prominent
-                fontStyle: "bold",
-                fontFamily: UI_FONT_FAMILY,
-              }
-            )
-            .setOrigin(0, 0);
-          elements.push(iconText);
-        }
-
-        // Create player text - keep mostly the same, just bold for active player
-        const playerText = this.scene.add
+      // Create icon for current player
+      if (isCurrentPlayer) {
+        const iconText = this.scene.add
           .text(
-            entryX + (isCurrentPlayer ? 25 : 5),
+            entryX + 5,
             entryY + 2,
-            player.name,
+            "►",
             {
-              color: "#ffffff", // Keep white for all players
-              fontSize: "14px", // Same size for all
-              fontStyle: isCurrentPlayer ? "bold" : "normal",
+              color: "#ffffff",
+              fontSize: "16px",
+              fontStyle: "bold",
               fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(0, 0);
-        elements.push(playerText);
+        playerEntries.push(iconText);
+      }
 
-        // Add [BOT] suffix for AI players
-        if (player.isBot) {
-          const botLabel = this.scene.add
-            .text(
-              entryX + (isCurrentPlayer ? 25 : 5) + playerText.width + 4,
-              entryY + 4,
-              "[BOT]",
-              {
-                color: "#aaaaaa",
-                fontSize: "10px",
-                fontFamily: UI_FONT_FAMILY,
-              }
-            )
-            .setOrigin(0, 0);
-          elements.push(botLabel);
-        }
+      // Color badge (circle) for player color
+      const badgeX = entryX + (isCurrentPlayer ? 25 : 5);
+      const colorBadge = this.scene.add
+        .circle(badgeX + 5, entryY + 10, 5, Phaser.Display.Color.HexStringToColor(player.color).color)
+        .setOrigin(0.5, 0.5);
+      playerEntries.push(colorBadge);
 
-        // Create money text (right-aligned) - keep mostly the same
-        const moneyText = this.scene.add
+      // Create player text
+      const playerText = this.scene.add
+        .text(
+          badgeX + 14,
+          entryY + 2,
+          player.name,
+          {
+            color: "#ffffff",
+            fontSize: "14px",
+            fontStyle: isCurrentPlayer ? "bold" : "normal",
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(0, 0);
+      playerEntries.push(playerText);
+
+      // Add [BOT] suffix for AI players
+      if (player.isBot) {
+        const botLabel = this.scene.add
           .text(
-            this.scene.scale.width - LEADERBOARD_PADDING - 5,
-            entryY + 2,
-            `${player.money}M`,
+            badgeX + 14 + playerText.width + 4,
+            entryY + 4,
+            "[BOT]",
             {
-              color: "#ffffff", // Keep white for all players
-              fontSize: "14px", // Same size for all
-              fontStyle: isCurrentPlayer ? "bold" : "normal",
+              color: "#aaaaaa",
+              fontSize: "10px",
               fontFamily: UI_FONT_FAMILY,
             }
           )
-          .setOrigin(1, 0); // Right-align
-        elements.push(moneyText);
+          .setOrigin(0, 0);
+        playerEntries.push(botLabel);
+      }
 
-        return elements;
-      })
-      .flat(); // Flatten the array of arrays
+      // Create money text (right-aligned)
+      const moneyText = this.scene.add
+        .text(
+          this.scene.scale.width - LEADERBOARD_PADDING - 5,
+          entryY + 2,
+          `${player.money}M`,
+          {
+            color: "#ffffff",
+            fontSize: "14px",
+            fontStyle: isCurrentPlayer ? "bold" : "normal",
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(1, 0);
+      playerEntries.push(moneyText);
+
+      currentY += PLAYER_ROW_HEIGHT;
+
+      // Add cargo sub-row if player is carrying loads
+      const loads = player.trainState?.loads;
+      if (loads && loads.length > 0) {
+        const cargoY = currentY;
+        const iconSize = 7;
+        const iconSpacing = 18;
+        const cargoStartX = entryX + 15;
+
+        loads.forEach((loadType, loadIndex) => {
+          const iconX = cargoStartX + loadIndex * iconSpacing;
+          const iconCenterY = cargoY + CARGO_ROW_HEIGHT / 2;
+
+          // White circular background
+          const bg = this.scene.add.circle(iconX, iconCenterY, iconSize, 0xffffff);
+          bg.setOrigin(0.5, 0.5);
+          playerEntries.push(bg);
+
+          // Load token icon
+          const tokenKey = `loadtoken-${loadType.toLowerCase()}`;
+          if (this.scene.textures.exists(tokenKey)) {
+            const icon = this.scene.add.image(iconX, iconCenterY, tokenKey);
+            icon.setScale(0.1);
+            playerEntries.push(icon);
+          }
+        });
+
+        currentY += CARGO_ROW_HEIGHT;
+      }
+    });
+
+    // Store total player section height for button positioning
+    this.lastPlayerSectionHeight = playerSectionHeight;
 
     // Create and add next player button
     const nextPlayerButton = this.createNextPlayerButton();
@@ -196,7 +240,7 @@ export class LeaderboardManager {
     const nextPlayerButton = this.scene.add
       .rectangle(
         this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
-        LEADERBOARD_PADDING + 40 + this.gameState.players.length * 20,
+        LEADERBOARD_PADDING + 40 + this.lastPlayerSectionHeight,
         LEADERBOARD_WIDTH,
         40,
         isLocalPlayerActive ? 0x00aa00 : 0x666666,
@@ -207,7 +251,7 @@ export class LeaderboardManager {
     const nextPlayerText = this.scene.add
       .text(
         this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
-        LEADERBOARD_PADDING + 60 + this.gameState.players.length * 20,
+        LEADERBOARD_PADDING + 60 + this.lastPlayerSectionHeight,
         isLocalPlayerActive ? "Next Player" : "Wait Your Turn",
         {
           color: "#ffffff",
