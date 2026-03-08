@@ -28,8 +28,8 @@ export class GameToastManager {
    * Show a toast banner at the top of the screen.
    * Duration auto-scales with message length if not provided.
    */
-  show(message: string, options: { color?: number; duration?: number; flourish?: boolean } = {}): void {
-    const { color = 0x1a1a2e, duration, flourish = false } = options;
+  show(message: string, options: { color?: number; duration?: number; flourish?: boolean; shake?: boolean } = {}): void {
+    const { color = 0x1a1a2e, duration, flourish = false, shake = false } = options;
     const displayDuration = duration ?? this.calculateDuration(message);
 
     const paddingX = 20;
@@ -64,7 +64,7 @@ export class GameToastManager {
     if (flourish) {
       container.setScale(0.8);
     }
-    this.scene.tweens.add({
+    const slideIn = this.scene.tweens.add({
       targets: container,
       alpha: 1,
       y: targetY,
@@ -72,6 +72,22 @@ export class GameToastManager {
       duration: flourish ? 400 : this.SLIDE_DURATION,
       ease: flourish ? "Back.easeOut" : "Power2",
     });
+
+    // Shake animation for failure toasts
+    if (shake) {
+      slideIn.on("complete", () => {
+        this.scene.tweens.chain({
+          targets: container,
+          tweens: [
+            { x: container.x - 6, duration: 50, ease: "Sine.inOut" },
+            { x: container.x + 6, duration: 50, ease: "Sine.inOut" },
+            { x: container.x - 4, duration: 50, ease: "Sine.inOut" },
+            { x: container.x + 4, duration: 50, ease: "Sine.inOut" },
+            { x: container.x, duration: 50, ease: "Sine.inOut" },
+          ],
+        });
+      });
+    }
 
     const hideTimer = this.scene.time.delayedCall(displayDuration, () => {
       this.dismiss(entry);

@@ -652,9 +652,14 @@ export class GameScene extends Phaser.Scene {
 
           // LLM strategy announcement — strip internal prefixes, show for 10s
           if (data.reasoning) {
+            const isLlmFailure = /^\[(heuristic[ -]fallback|llm-failed|no-api-key)\]/i.test(data.reasoning);
             const cleanReasoning = data.reasoning
               .replace(/\[[\w\s=\/\-]+\]\s*/g, '');
-            toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
+            if (isLlmFailure) {
+              toast.show(`😵 ${botName} LLM failed — ${cleanReasoning}`, { color: 0x8b0000, shake: true });
+            } else {
+              toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
+            }
           }
 
           // Delivery announcements — with payment flourish
