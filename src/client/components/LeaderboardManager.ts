@@ -11,6 +11,8 @@ export class LeaderboardManager {
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
   private lastPlayerSectionHeight: number = 0;
+  private tooltip: Phaser.GameObjects.Text | null = null;
+  private tooltipBg: Phaser.GameObjects.Rectangle | null = null;
 
   constructor(
     scene: Phaser.Scene, 
@@ -26,7 +28,8 @@ export class LeaderboardManager {
   }
   
   public update(targetContainer: Phaser.GameObjects.Container): void {
-    // Clear existing UI elements
+    // Clear existing UI elements and tooltip
+    this.hideTooltip();
     targetContainer.removeAll(true);
 
     if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
@@ -207,6 +210,15 @@ export class LeaderboardManager {
             icon.setScale(0.1);
             playerEntries.push(icon);
           }
+
+          // Make the circle interactive for tooltip
+          bg.setInteractive({ useHandCursor: true });
+          bg.on("pointerover", (pointer: Phaser.Input.Pointer) => {
+            this.showTooltip(loadType, pointer.x, pointer.y);
+          });
+          bg.on("pointerout", () => {
+            this.hideTooltip();
+          });
         });
 
         currentY += CARGO_ROW_HEIGHT;
@@ -276,5 +288,32 @@ export class LeaderboardManager {
 
     buttonContainer.add([nextPlayerButton, nextPlayerText]);
     return buttonContainer;
+  }
+
+  private showTooltip(loadType: string, x: number, y: number): void {
+    this.hideTooltip();
+
+    const label = loadType.charAt(0).toUpperCase() + loadType.slice(1).toLowerCase();
+    const padding = 4;
+
+    this.tooltip = this.scene.add.text(x, y - 20, label, {
+      color: "#ffffff",
+      fontSize: "11px",
+      fontFamily: UI_FONT_FAMILY,
+    }).setOrigin(0.5, 1).setDepth(1000);
+
+    const bounds = this.tooltip.getBounds();
+    this.tooltipBg = this.scene.add.rectangle(
+      bounds.centerX, bounds.centerY,
+      bounds.width + padding * 2, bounds.height + padding * 2,
+      0x222222, 0.9
+    ).setOrigin(0.5, 0.5).setDepth(999);
+  }
+
+  private hideTooltip(): void {
+    this.tooltip?.destroy();
+    this.tooltip = null;
+    this.tooltipBg?.destroy();
+    this.tooltipBg = null;
   }
 }

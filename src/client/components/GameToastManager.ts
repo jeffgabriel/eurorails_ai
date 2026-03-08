@@ -28,8 +28,8 @@ export class GameToastManager {
    * Show a toast banner at the top of the screen.
    * Duration auto-scales with message length if not provided.
    */
-  show(message: string, options: { color?: number; duration?: number } = {}): void {
-    const { color = 0x1a1a2e, duration } = options;
+  show(message: string, options: { color?: number; duration?: number; flourish?: boolean } = {}): void {
+    const { color = 0x1a1a2e, duration, flourish = false } = options;
     const displayDuration = duration ?? this.calculateDuration(message);
 
     const paddingX = 20;
@@ -60,13 +60,17 @@ export class GameToastManager {
     container.setDepth(this.TOAST_DEPTH);
     container.setAlpha(0);
 
-    // Slide in from top
+    // Slide in from top, with optional scale flourish for celebrations
+    if (flourish) {
+      container.setScale(0.8);
+    }
     this.scene.tweens.add({
       targets: container,
       alpha: 1,
       y: targetY,
-      duration: this.SLIDE_DURATION,
-      ease: "Power2",
+      ...(flourish ? { scale: 1 } : {}),
+      duration: flourish ? 400 : this.SLIDE_DURATION,
+      ease: flourish ? "Back.easeOut" : "Power2",
     });
 
     const hideTimer = this.scene.time.delayedCall(displayDuration, () => {

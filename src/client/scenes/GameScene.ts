@@ -646,19 +646,23 @@ export class GameScene extends Phaser.Scene {
           const toast = this.gameToastManager;
           if (!toast) return;
 
-          const botName = this.getPlayerName(data.botPlayerId);
+          const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+          const botName = botPlayer?.name ?? 'Unknown Player';
+          const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
 
-          // LLM strategy announcement
+          // LLM strategy announcement — strip internal prefixes, show for 10s
           if (data.reasoning) {
-            toast.show(`${botName} (AI): ${data.reasoning}`, { color: 0x2d1b69 });
+            const cleanReasoning = data.reasoning
+              .replace(/^\[(?:route-executor|heuristic[ -]fallback|llm-failed)\]\s*/i, '');
+            toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
           }
 
-          // Delivery announcements
+          // Delivery announcements — with payment flourish
           if (data.loadsDelivered?.length > 0) {
             for (const d of data.loadsDelivered) {
               toast.show(
-                `${botName} delivered ${d.loadType} to ${d.city} for ${d.payment}M ECU`,
-                { color: 0x1b5e20 },
+                `💰 ${botName} delivered ${d.loadType} to ${d.city} — earned ${d.payment}M ECU!`,
+                { color: botColor, flourish: true },
               );
             }
           }
@@ -666,20 +670,20 @@ export class GameScene extends Phaser.Scene {
           // Track build announcement
           if (data.segmentsBuilt > 0 && data.buildTargetCity) {
             toast.show(
-              `${botName} built ${data.segmentsBuilt} track segment${data.segmentsBuilt > 1 ? 's' : ''} toward ${data.buildTargetCity} (${data.cost}M ECU)`,
-              { color: 0x0d47a1 },
+              `${botName} built ${data.segmentsBuilt} track segment${data.segmentsBuilt > 1 ? 's' : ''} toward ${data.buildTargetCity} (${data.cost}M)`,
+              { color: botColor },
             );
           }
 
           // Train upgrade announcement
           if (data.action === 'UpgradeTrain') {
-            toast.show(`${botName} upgraded their train`, { color: 0xe65100 });
+            toast.show(`${botName} upgraded their train`, { color: botColor });
           }
 
           // Pickup announcement
           if (data.loadsPickedUp?.length > 0) {
             const loads = data.loadsPickedUp.map((p: any) => `${p.loadType} at ${p.city}`).join(', ');
-            toast.show(`${botName} picked up ${loads}`, { color: 0x4a148c });
+            toast.show(`${botName} picked up ${loads}`, { color: botColor });
           }
         });
 
