@@ -17,7 +17,7 @@ interface BotConfigPopoverProps {
 
 export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopoverProps) {
   const [open, setOpen] = useState(false);
-  const [skillLevel, setSkillLevel] = useState<string>(BotSkillLevel.Medium);
+  const [skillLevel, setSkillLevel] = useState<string>(BotSkillLevel.Easy);
   const [name, setName] = useState('');
   const [provider, setProvider] = useState<string>(LLMProvider.Anthropic);
   const [model, setModel] = useState('');
@@ -26,7 +26,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
   const defaultModel = LLM_DEFAULT_MODELS[provider as LLMProvider]?.[skillLevel as BotSkillLevel] ?? '';
 
   const resetForm = () => {
-    setSkillLevel(BotSkillLevel.Medium);
+    setSkillLevel(BotSkillLevel.Easy);
     setName('');
     setProvider(LLMProvider.Anthropic);
     setModel('');
