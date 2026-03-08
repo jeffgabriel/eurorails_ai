@@ -563,23 +563,34 @@ export class TurnComposer {
             count + rd.demands.filter(d => d.loadType === loadType).length, 0);
           if (carriedCount >= demandCount) break;
 
+          // JIRA-57: Skip feasibility check for route-planned pickups.
+          // The LLM already evaluated this pickup when planning the route.
+          const isRoutePlannedPickup = activeRoute?.stops.some(
+            (stop, idx) => idx >= (activeRoute?.currentStopIndex ?? 0) &&
+              stop.action === 'pickup' &&
+              stop.loadType === loadType &&
+              stop.city === cityName,
+          );
+
           // Delivery feasibility pre-filter: reject if no demand has an affordable,
           // profitable delivery path. Prevents picking up "dead weight" loads that
           // the bot can't profitably deliver (Bug 1 / BE-001).
-          const matchingDemands = context.demands.filter(d => d.loadType === loadType);
-          if (matchingDemands.length > 0) {
-            const hasFeasibleDelivery = matchingDemands.some(
-              d => d.isDeliveryOnNetwork ||
-                (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
-            );
-            if (!hasFeasibleDelivery) {
-              const bestDemand = matchingDemands[0];
-              console.warn(
-                `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
-                `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
-                `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+          if (!isRoutePlannedPickup) {
+            const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+            if (matchingDemands.length > 0) {
+              const hasFeasibleDelivery = matchingDemands.some(
+                d => d.isDeliveryOnNetwork ||
+                  (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
               );
-              break;
+              if (!hasFeasibleDelivery) {
+                const bestDemand = matchingDemands[0];
+                console.warn(
+                  `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
+                  `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
+                  `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+                );
+                break;
+              }
             }
           }
 

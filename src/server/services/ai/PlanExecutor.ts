@@ -385,19 +385,28 @@ export class PlanExecutor {
   }
 
   /**
-   * Find a build target from demand cards — the cheapest track cost demand whose
+   * Find a build target from demand cards — the cheapest actionable demand whose
    * delivery or supply city is not yet on the track network.
+   * JIRA-58: Considers total supply+delivery cost, not just the cheaper side.
+   * Skips delivery cities when supply is unreachable (>20M track cost).
    */
   static findDemandBuildTarget(context: GameContext): string | null {
     const affordable = context.demands.filter(d => d.isAffordable !== false);
+    // Sort by total track cost to make demand actionable (supply + delivery)
     const sorted = [...affordable].sort((a, b) => {
-      const aCost = Math.min(a.estimatedTrackCostToSupply || Infinity, a.estimatedTrackCostToDelivery || Infinity);
-      const bCost = Math.min(b.estimatedTrackCostToSupply || Infinity, b.estimatedTrackCostToDelivery || Infinity);
-      return aCost - bCost;
+      const aTotalCost = (a.estimatedTrackCostToSupply || 0) + (a.estimatedTrackCostToDelivery || 0);
+      const bTotalCost = (b.estimatedTrackCostToSupply || 0) + (b.estimatedTrackCostToDelivery || 0);
+      return aTotalCost - bTotalCost;
     });
     for (const demand of sorted) {
-      if (!demand.isDeliveryOnNetwork) return demand.deliveryCity;
-      if (!demand.isSupplyOnNetwork) return demand.supplyCity;
+      // Prefer supply city first — bot needs to pick up before delivering
+      if (!demand.isSupplyOnNetwork && (demand.estimatedTrackCostToSupply || 0) <= 20) {
+        return demand.supplyCity;
+      }
+      // Only target delivery city if supply is already reachable
+      if (!demand.isDeliveryOnNetwork && demand.isSupplyOnNetwork) {
+        return demand.deliveryCity;
+      }
     }
     return null;
   }

@@ -381,8 +381,9 @@ describe('PlanExecutor', () => {
 
       expect(result.plan.type).toBe(AIActionType.BuildTrack);
       expect(result.updatedRoute.currentStopIndex).toBe(0);
+      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
       const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'München',
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
       );
       expect(buildCall).toBeDefined();
     });
@@ -541,9 +542,9 @@ describe('PlanExecutor', () => {
 
       expect(result.plan.type).toBe(AIActionType.BuildTrack);
       expect(result.routeComplete).toBe(false);
-      // Should build toward demand city (München — cheapest delivery cost)
+      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
       const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'München',
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
       );
       expect(buildCall).toBeDefined();
     });

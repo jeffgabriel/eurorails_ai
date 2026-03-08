@@ -120,6 +120,9 @@ export class AIStrategyEngine {
       // ── Stage 2: Build game context ──
       const context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
 
+      // JIRA-60: Inject delivery count from memory for upgrade advice gating
+      context.deliveryCount = memory.deliveryCount ?? 0;
+
       // Inject previous turn summary from memory for LLM context continuity
       if (memory.lastReasoning || memory.lastPlanHorizon) {
         const parts: string[] = [];
@@ -359,13 +362,16 @@ export class AIStrategyEngine {
       const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
       const hadNewTrack = result.segmentsBuilt > 0;
       const isActivelyTraveling = snapshot.bot.loads.length > 0 && activeRoute != null;
-      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling;
+      const hadDiscard = executedAction === AIActionType.DiscardHand; // JIRA-59: discard = fresh cards = progress
+      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling || hadDiscard;
 
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
         noProgressTurns: madeProgress ? 0 : (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
+        deliveryCount: (memory.deliveryCount ?? 0) + (hadDelivery ? 1 : 0), // JIRA-60
+        totalEarnings: (memory.totalEarnings ?? 0) + (result.payment ?? 0), // JIRA-60
         turnNumber: snapshot.turnNumber,
         lastReasoning: decision.reasoning ?? null,
         lastPlanHorizon: decision.planHorizon ?? null,
@@ -419,6 +425,12 @@ export class AIStrategyEngine {
         if (buildStep && 'targetCity' in buildStep) {
           buildTargetCity = (buildStep as { targetCity?: string }).targetCity;
         }
+      }
+
+      // JIRA-56: After DiscardHand, refresh context.demands from new cards
+      if (executedAction === AIActionType.DiscardHand) {
+        const freshSnapshot = await capture(gameId, botPlayerId);
+        context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
       }
 
       // Build demand ranking from context for debug overlay (JIRA-13)

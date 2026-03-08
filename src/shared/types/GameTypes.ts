@@ -681,6 +681,8 @@ export interface GameContext {
     previousTurnSummary?: string;
     /** Dynamic upgrade advice based on current train, cash, and game state */
     upgradeAdvice?: string;
+    /** Number of completed deliveries this game (JIRA-60) */
+    deliveryCount?: number;
 }
 
 /** A single action within an LLM multi-action response */

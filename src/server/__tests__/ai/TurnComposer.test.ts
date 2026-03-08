@@ -2164,6 +2164,90 @@ describe('TurnComposer', () => {
 
       warnSpy.mockRestore();
     });
+
+    it('JIRA-57: allows pickup when infeasible by cost but matches active route stop', async () => {
+      // Chocolate→Manchester: payout 17M, track cost 30M — feasibility check would reject.
+      // But the active route's current stop is pickup Chocolate at Berlin → bypass check.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          money: 50,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Manchester', loadType: 'Chocolate', payment: 17 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Chocolate'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        money: 50,
+        demands: [{
+          cardIndex: 1, loadType: 'Chocolate', supplyCity: 'Berlin', deliveryCity: 'Manchester',
+          payout: 17, isDeliveryOnNetwork: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      // Active route says: pickup Chocolate at Berlin
+      const activeRoute: StrategicRoute = {
+        id: 'route-1',
+        currentStopIndex: 0,
+        startingCity: 'Paris',
+        stops: [
+          { action: 'pickup', loadType: 'Chocolate', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Chocolate', city: 'Manchester', demandCardId: 1, payment: 17 },
+        ],
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const endPos = (plan as any).path[(plan as any).path.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Chocolate', city: 'Berlin' },
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, activeRoute);
+
+      // Pickup SHOULD happen — route planned it despite infeasible cost check
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+
+      // No rejection warning should appear
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('Rejected infeasible opportunistic pickup'),
+      );
+
+      warnSpy.mockRestore();
+    });
   });
 
   describe('cargo slot reservation for planned pickups (BE-002)', () => {

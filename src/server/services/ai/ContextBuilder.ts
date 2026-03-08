@@ -156,6 +156,37 @@ export class ContextBuilder {
     };
   }
 
+  /**
+   * Recompute demand contexts from a fresh snapshot (JIRA-56).
+   * Used after DiscardHand to refresh demandRanking with new cards.
+   */
+  static rebuildDemands(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): DemandContext[] {
+    const network = snapshot.bot.existingSegments.length > 0
+      ? buildTrackNetwork(snapshot.bot.existingSegments)
+      : null;
+    const trainType = snapshot.bot.trainType as keyof typeof TRAIN_PROPERTIES;
+    const trainProps = TRAIN_PROPERTIES[trainType];
+    const speed = snapshot.bot.ferryHalfSpeed
+      ? Math.ceil(trainProps.speed / 2)
+      : trainProps.speed;
+    const botPosition = snapshot.bot.position as { row: number; col: number } | null;
+    const reachableCities = botPosition && network
+      ? ContextBuilder.computeReachableCities(botPosition, speed, network, gridPoints)
+      : [];
+    const citiesOnNetwork = network
+      ? ContextBuilder.computeCitiesOnNetwork(network, gridPoints)
+      : [];
+    const connectedMajorCities = ContextBuilder.computeConnectedMajorCities(
+      snapshot.bot.existingSegments, gridPoints,
+    );
+    return ContextBuilder.computeAllDemandContexts(
+      snapshot, network, gridPoints, reachableCities, citiesOnNetwork, connectedMajorCities,
+    );
+  }
+
   // ── Reachable cities (BE-003) ───────────────────────────────────────────
 
   /**
@@ -615,7 +646,8 @@ export class ContextBuilder {
     if (
       context.trainType === 'Freight' &&
       context.turnNumber >= 15 &&
-      context.money >= 60
+      context.money >= 60 &&
+      (context.deliveryCount ?? 0) >= 5 // JIRA-60: only nudge after 5 deliveries
     ) {
       lines.push(`STRONG RECOMMENDATION: You are still on Freight at turn ${context.turnNumber}. UPGRADE to FastFreight this turn.`);
       lines.push('Every turn on Freight costs you ~3 mileposts of wasted movement. Output UPGRADE as your Phase B action.');
@@ -798,7 +830,8 @@ export class ContextBuilder {
     if (context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' &&
         context.turnNumber >= 8 &&
-        context.money >= 30;
+        context.money >= 30 &&
+        (context.deliveryCount ?? 0) >= 3; // JIRA-60: only recommend after 3 deliveries
       if (strongUpgrade) {
         lines.push(`RECOMMENDED PHASE B ACTION: UPGRADE to FastFreight \u2014 {"action": "UPGRADE", "details": {"to": "FastFreight"}}`);
         lines.push(`You've been on Freight for ${context.turnNumber} turns. +3 speed saves ~1 turn per delivery.`);
