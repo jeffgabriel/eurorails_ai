@@ -653,7 +653,7 @@ export class GameScene extends Phaser.Scene {
           // LLM strategy announcement — strip internal prefixes, show for 10s
           if (data.reasoning) {
             const cleanReasoning = data.reasoning
-              .replace(/^\[[\w-]+\]\s*/i, '');
+              .replace(/\[[\w\s=\/\-]+\]\s*/g, '');
             toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
           }
 
