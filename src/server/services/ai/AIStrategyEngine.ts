@@ -431,6 +431,23 @@ export class AIStrategyEngine {
       if (executedAction === AIActionType.DiscardHand) {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
+
+        // JIRA-61: Invalidate active route if it references demand cards no longer in hand
+        if (activeRoute) {
+          const remainingStops = activeRoute.stops.slice(activeRoute.currentStopIndex);
+          const hasOrphanedStop = remainingStops.some(stop =>
+            !context.demands.some(d => d.loadType === stop.loadType),
+          );
+          if (hasOrphanedStop) {
+            console.log(
+              `[AIStrategyEngine] JIRA-61: Clearing stale route after discard — ` +
+              `route references demand cards no longer in hand`,
+            );
+            memoryPatch.activeRoute = null;
+            memoryPatch.turnsOnRoute = 0;
+            activeRoute = null;
+          }
+        }
       }
 
       // Build demand ranking from context for debug overlay (JIRA-13)

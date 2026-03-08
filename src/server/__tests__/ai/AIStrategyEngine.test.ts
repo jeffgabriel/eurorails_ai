@@ -154,6 +154,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
   ContextBuilder: {
     build: jest.fn(),
     serializePrompt: jest.fn(() => 'serialized-prompt'),
+    rebuildDemands: jest.fn(() => []),
   },
 }));
 
@@ -1983,6 +1984,81 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.llmLog).toBeUndefined();
+    });
+  });
+
+  describe('JIRA-61: route invalidation after DiscardHand', () => {
+    it('should clear activeRoute when discard removes demand cards referenced by route', async () => {
+      // Bot has an active route: pickup Flowers at Holland → deliver to Wien
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Wien', demandCardId: 5, payment: 18 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 29,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 31,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({ botConfig: null } as any);
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Flowers', supplyCity: 'Holland', deliveryCity: 'Wien',
+            payout: 18, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+            demandScore: 5, efficiencyPerTurn: 1, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns DiscardHand (heuristic fallback or guardrail)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DiscardHand },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Discarding hand',
+      });
+
+      // After discard, rebuildDemands returns NEW demands WITHOUT Flowers
+      const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+      mockRebuildDemands.mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Sheep', supplyCity: 'Bilbao', deliveryCity: 'Stuttgart',
+          payout: 30, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 15, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 8,
+          demandScore: 4, efficiencyPerTurn: 0.5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ]);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify updateMemory clears the stale route
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.turnsOnRoute).toBe(0);
     });
   });
 });
