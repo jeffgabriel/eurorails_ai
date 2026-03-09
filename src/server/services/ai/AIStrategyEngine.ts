@@ -489,7 +489,7 @@ export class AIStrategyEngine {
 
             if (reEvalResult) {
               console.log(`${tag} JIRA-64: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${reEvalMs}ms)`);
-              logPhase('reeval', { decision: reEvalResult.decision, reasoning: reEvalResult.reasoning, latencyMs: reEvalMs });
+              logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: reEvalMs });
 
               if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
                 activeRoute = {

@@ -370,7 +370,7 @@ export class LLMStrategyBrain {
             latencyMs: attemptLatency,
           });
           console.error('[LLMStrategyBrain] Auth error during route planning — giving up');
-          return null;
+          return { route: null, llmLog };
         }
         const isParse = e instanceof ParseError;
         lastError = isParse
@@ -467,7 +467,7 @@ export class LLMStrategyBrain {
           }));
 
           // Validate amended stops: each load type must exist in demands
-          const validStops = amendedStops.every(s =>
+          const validStops = amendedStops!.every(s =>
             context.demands.some(d => d.loadType === s.loadType),
           );
           if (!validStops) {
