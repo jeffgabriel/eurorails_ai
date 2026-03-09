@@ -17,6 +17,7 @@
 import {
   TurnPlan,
   TurnPlanMoveTrain,
+  TurnPlanDeliverLoad,
   WorldSnapshot,
   GameContext,
   AIActionType,
@@ -232,9 +233,11 @@ export class TurnComposer {
       if (movePlan && movePlan.path.length > 0) {
         // JIRA-32: Track A1 stats — count intermediate cities (path nodes excluding start/end)
         trace.a1.citiesScanned = Math.max(0, movePlan.path.length - 2);
-        const splitPlans = await TurnComposer.splitMoveForOpportunities(
+        const splitResult = await TurnComposer.splitMoveForOpportunities(
           movePlan, simSnapshot, simContext, activeRoute,
         );
+        activeRoute = splitResult.route ?? activeRoute;
+        const splitPlans = splitResult.plans;
         // Count non-MOVE plans as opportunities found
         trace.a1.opportunitiesFound = splitPlans.filter(s => s.type !== AIActionType.MoveTrain).length;
         // Replace the original MOVE with the interleaved sequence
@@ -353,10 +356,11 @@ export class TurnComposer {
               };
             }
             if (chainedMove.path.length > 1) {
-              const splitPlans = await TurnComposer.splitMoveForOpportunities(
+              const splitResult = await TurnComposer.splitMoveForOpportunities(
                 chainedMove, simSnapshot, simContext, activeRoute,
               );
-              for (const plan of splitPlans) {
+              activeRoute = splitResult.route ?? activeRoute;
+              for (const plan of splitResult.plans) {
                 steps.push(plan);
                 ActionResolver.applyPlanToState(plan, simSnapshot, simContext);
               }
@@ -423,12 +427,13 @@ export class TurnComposer {
               if (chainedMove.path && chainedMove.path.length > 0) {
                 const moveSim = ActionResolver.cloneSnapshot(snapshot);
                 const moveCtx = { ...context };
-                const splitPlans = await TurnComposer.splitMoveForOpportunities(
+                const splitResult = await TurnComposer.splitMoveForOpportunities(
                   chainedMove, moveSim, moveCtx, activeRoute,
                 );
+                activeRoute = splitResult.route ?? activeRoute;
                 // Insert move steps before the build step
                 const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
-                steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitPlans);
+                steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitResult.plans);
                 trace.a3 = { movePreprended: true };
               }
               break; // Successfully prepended a MOVE — stop trying targets
@@ -514,11 +519,12 @@ export class TurnComposer {
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
-  ): Promise<TurnPlan[]> {
+  ): Promise<{ plans: TurnPlan[], route: StrategicRoute | null | undefined }> {
     const plans: TurnPlan[] = [];
     const gridPoints = loadGridPoints();
     const path = movePlan.path;
     let lastSplitIndex = 0;
+    let currentRoute = activeRoute;
 
     // Cargo slot reservation: if the active route's next stop is a pickup,
     // reserve one slot so opportunistic pickups don't block the planned pickup (BE-002).
@@ -551,6 +557,16 @@ export class TurnComposer {
             if (result.success && result.plan) {
               actionPlans.push(result.plan);
               ActionResolver.applyPlanToState(result.plan, snapshot, context);
+              // JIRA-69: Advance route index past completed delivery stop
+              if (currentRoute && currentRoute.currentStopIndex < currentRoute.stops.length) {
+                const currentStop = currentRoute.stops[currentRoute.currentStopIndex];
+                if (currentStop.action === 'deliver' && currentStop.loadType === demand.loadType && currentStop.city === cityName) {
+                  currentRoute = { ...currentRoute, currentStopIndex: currentRoute.currentStopIndex + 1 };
+                }
+              }
+              // JIRA-69: Remove fulfilled demand from context.demands
+              const deliverPlan = result.plan as TurnPlanDeliverLoad;
+              context.demands = context.demands.filter(d => d.cardIndex !== deliverPlan.cardId);
             }
           }
         }
@@ -607,6 +623,13 @@ export class TurnComposer {
           if (result?.success && result.plan) {
             actionPlans.push(result.plan);
             ActionResolver.applyPlanToState(result.plan, snapshot, context);
+            // JIRA-69: Advance route index past completed pickup stop
+            if (currentRoute && currentRoute.currentStopIndex < currentRoute.stops.length) {
+              const currentStop = currentRoute.stops[currentRoute.currentStopIndex];
+              if (currentStop.action === 'pickup' && currentStop.loadType === loadType && currentStop.city === cityName) {
+                currentRoute = { ...currentRoute, currentStopIndex: currentRoute.currentStopIndex + 1 };
+              }
+            }
           } else {
             break;
           }
@@ -642,10 +665,10 @@ export class TurnComposer {
 
     // If no actions were found, return the original move unchanged
     if (plans.length === 0) {
-      return [movePlan];
+      return { plans: [movePlan], route: currentRoute };
     }
 
-    return plans;
+    return { plans, route: currentRoute };
   }
 
   /**
