@@ -34,10 +34,17 @@ export class MovementCostCalculator {
   private initializeCityMappings(): void {
     Object.entries(majorCityGroups).forEach(([cityName, group]) => {
       if (!group || group.length === 0) return;
-      
+
       const perimeterNodeSet = new Set<string>();
-      
-      // The first item is the center, the rest are perimeter nodes
+
+      // Index 0 is the center — add it to cityNodeMap so isNodeInMajorCity() works for centers
+      const center = group[0];
+      if (center && typeof center.GridX === 'number' && typeof center.GridY === 'number') {
+        const centerKey = this.getNodeKey({ row: center.GridY, col: center.GridX, x: 0, y: 0 });
+        this.cityNodeMap.set(centerKey, cityName);
+      }
+
+      // Indices 1-6 are perimeter (outpost) nodes
       group.slice(1, 7).forEach(outpost => {
         if (typeof outpost.GridX === 'number' && typeof outpost.GridY === 'number') {
           const nodeKey = this.getNodeKey({ row: outpost.GridY, col: outpost.GridX, x: 0, y: 0 });
@@ -45,7 +52,7 @@ export class MovementCostCalculator {
           perimeterNodeSet.add(nodeKey);
         }
       });
-      
+
       this.cityPerimeterNodes.set(cityName, perimeterNodeSet);
     });
   }
@@ -168,17 +175,36 @@ export class MovementCostCalculator {
   private findPath(from: Point, to: Point, playerTrackState: PlayerTrackState): Point[] | null {
     // Build graph from track segments
     const graph = new Map<string, Set<string>>();
-    
+
     for (const segment of playerTrackState.segments) {
       const fromKey = this.getNodeKey(segment.from);
       const toKey = this.getNodeKey(segment.to);
-      
+
       if (!graph.has(fromKey)) graph.set(fromKey, new Set());
       if (!graph.has(toKey)) graph.set(toKey, new Set());
-      
+
       graph.get(fromKey)!.add(toKey);
       graph.get(toKey)!.add(fromKey);
     }
+
+    // Add major city internal edges (center ↔ outpost) — public/ownerless connections
+    // Mirrors server-side buildUnionTrackGraph in trackUsageFees.ts
+    Object.entries(majorCityGroups).forEach(([, group]) => {
+      if (!group || group.length === 0) return;
+      const center = group[0];
+      if (!center || typeof center.GridX !== 'number' || typeof center.GridY !== 'number') return;
+      const centerKey = this.getNodeKey({ row: center.GridY, col: center.GridX, x: 0, y: 0 });
+
+      group.slice(1, 7).forEach(outpost => {
+        if (typeof outpost.GridX !== 'number' || typeof outpost.GridY !== 'number') return;
+        const outpostKey = this.getNodeKey({ row: outpost.GridY, col: outpost.GridX, x: 0, y: 0 });
+
+        if (!graph.has(centerKey)) graph.set(centerKey, new Set());
+        if (!graph.has(outpostKey)) graph.set(outpostKey, new Set());
+        graph.get(centerKey)!.add(outpostKey);
+        graph.get(outpostKey)!.add(centerKey);
+      });
+    });
 
     const fromKey = this.getNodeKey(from);
     const toKey = this.getNodeKey(to);

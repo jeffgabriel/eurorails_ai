@@ -203,10 +203,10 @@ describe('MovementCostCalculator', () => {
 
     it('should fail when no valid path exists', () => {
       const from: Point = { row: 1, col: 1, x: 0, y: 0 };
-      const to: Point = { row: 10, col: 10, x: 0, y: 0 }; // Not connected to track
-      
+      const to: Point = { row: 50, col: 50, x: 0, y: 0 }; // Not connected to any track or city
+
       const result = calculator.calculateMovementCost(from, to, mockPlayerTrackState, mockAllPoints);
-      
+
       expect(result.isValid).toBe(false);
       expect(result.totalCost).toBe(-1);
       expect(result.errorMessage).toBeDefined();
@@ -324,6 +324,94 @@ describe('MovementCostCalculator', () => {
       expect(result.segments).toHaveLength(1);
       expect(result.segments[0].type).toBe('city_internal');
       expect(result.segments[0].cost).toBe(0);
+    });
+  });
+
+  describe('Major city internal movement (red area free traversal)', () => {
+    it('should recognize city center as part of major city', () => {
+      const berlinCenter: Point = { row: 10, col: 10, x: 0, y: 0 };
+      expect(calculator.isNodeInMajorCity(berlinCenter)).toBe(true);
+      expect(calculator.getCityForNode(berlinCenter)).toBe('Berlin');
+    });
+
+    it('should find path through city via internal edges (no track needed)', () => {
+      // Berlin perimeter 1: GridX=9,GridY=9 → row=9,col=9
+      // Berlin perimeter 3: GridX=12,GridY=10 → row=10,col=12
+      // Path should route through center (row=10,col=10) using city internal edges
+      const berlinPerimeter1: Point = { row: 9, col: 9, x: 0, y: 0 };
+      const berlinPerimeter3: Point = { row: 10, col: 12, x: 0, y: 0 };
+
+      // Minimal track so calculateMovementCost doesn't reject for "no track data"
+      // Track connects to perimeter 1 from outside — city edges handle internal routing
+      const minimalTrack: PlayerTrackState = {
+        gameId: 'test-game',
+        playerId: 'test-player',
+        segments: [
+          {
+            from: { row: 9, col: 9, x: 0, y: 0, terrain: TerrainType.MajorCity },
+            to: { row: 8, col: 8, x: 0, y: 0, terrain: TerrainType.Clear },
+            cost: 1
+          }
+        ],
+        totalCost: 1,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+
+      const result = calculator.calculateMovementCost(
+        berlinPerimeter1,
+        berlinPerimeter3,
+        minimalTrack,
+        mockAllPoints
+      );
+
+      expect(result.isValid).toBe(true);
+      expect(result.totalCost).toBe(0); // All intra-city movement is free
+    });
+
+    it('should cost 0 for traversal from one side of city to the other', () => {
+      // Berlin perimeter 6: GridX=8,GridY=10 → row=10,col=8 (west)
+      // Berlin perimeter 3: GridX=12,GridY=10 → row=10,col=12 (east)
+      // Track enters from west approach, exits east — city internal hops are free
+      const westApproach: Point = { row: 10, col: 7, x: 0, y: 0 };
+      const eastExit: Point = { row: 10, col: 13, x: 0, y: 0 };
+
+      const trackThroughBerlin: PlayerTrackState = {
+        gameId: 'test-game',
+        playerId: 'test-player',
+        segments: [
+          // West approach → Berlin west perimeter (row=10,col=8)
+          {
+            from: { ...westApproach, terrain: TerrainType.Clear },
+            to: { row: 10, col: 8, x: 0, y: 0, terrain: TerrainType.MajorCity },
+            cost: 1
+          },
+          // Berlin east perimeter (row=10,col=12) → east exit
+          {
+            from: { row: 10, col: 12, x: 0, y: 0, terrain: TerrainType.MajorCity },
+            to: { ...eastExit, terrain: TerrainType.Clear },
+            cost: 1
+          }
+        ],
+        totalCost: 2,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date()
+      };
+
+      const result = calculator.calculateMovementCost(
+        westApproach,
+        eastExit,
+        trackThroughBerlin,
+        mockAllPoints
+      );
+
+      expect(result.isValid).toBe(true);
+      // Entry (1) + city_internal hops (0 each) + exit (1) = 2
+      expect(result.totalCost).toBe(2);
+      // Verify city internal segments are free
+      const internalSegments = result.segments.filter(s => s.type === 'city_internal');
+      expect(internalSegments.length).toBeGreaterThan(0);
+      internalSegments.forEach(s => expect(s.cost).toBe(0));
     });
   });
 
