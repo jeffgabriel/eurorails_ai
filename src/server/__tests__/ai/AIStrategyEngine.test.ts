@@ -92,6 +92,8 @@ jest.mock('../../services/playerService', () => ({
   PlayerService: {
     moveTrainForUser: jest.fn(),
     updateCurrentPlayerIndex: jest.fn(),
+    deliverLoadForUser: jest.fn(),
+    getPlayers: jest.fn().mockResolvedValue([]),
   },
 }));
 
@@ -178,6 +180,8 @@ import { TurnComposer } from '../../services/ai/TurnComposer';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
+import { loadGridPoints } from '../../services/ai/MapTopology';
+import { PlayerService } from '../../services/playerService';
 import {
   AIActionType,
   WorldSnapshot,
@@ -2107,6 +2111,238 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const patch = mockUpdateMemory.mock.calls[0][2] as any;
       expect(patch.activeRoute).toBeNull();
       expect(patch.turnsOnRoute).toBe(0);
+    });
+  });
+
+  describe('JIRA-64: demand refresh after delivery', () => {
+    it('should refresh context.demands when delivery occurs', async () => {
+      // Bot has an active route delivering Steel to Berlin
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 19 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        deliveryCount: 1,
+        totalEarnings: 19,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Steel'],
+      } as any);
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin',
+            payout: 19, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 1,
+            demandScore: 19, efficiencyPerTurn: 19, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Set up loadGridPoints to return a city at the bot's position
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      (loadGridPoints as jest.Mock).mockReturnValue(gridMap);
+
+      // Mock PlayerService.deliverLoadForUser to return payment
+      (PlayerService.deliverLoadForUser as jest.Mock).mockResolvedValue({
+        payment: 19,
+        updatedMoney: 69,
+        newCard: { id: 50, demands: [] },
+      });
+
+      // PlanExecutor delivers load (payment > 0 triggers hadDelivery)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Berlin', cardId: 1, payout: 19 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: { ...route, currentStopIndex: 1 },
+        description: 'Delivering Steel to Berlin',
+      });
+
+      // After delivery, rebuildDemands returns NEW demands with the drawn card
+      const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+      mockRebuildDemands.mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Copper', supplyCity: 'Katowice', deliveryCity: 'Manchester',
+          payout: 30, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 20,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 8,
+          demandScore: 4, efficiencyPerTurn: 0.5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ]);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify rebuildDemands was called (for delivery refresh)
+      expect(mockRebuildDemands).toHaveBeenCalled();
+      // Verify capture was called at least twice (initial + post-delivery)
+      expect(mockCapture).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clear activeRoute after delivery when refreshed demands lack route load type', async () => {
+      // Bot has an active route: pickup Wine at Bordeaux → deliver to Praha
+      // After delivering, the new card drawn doesn't include Wine
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Wine', city: 'Praha', demandCardId: 3, payment: 15 },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', loadType: 'Wine', city: 'Berlin', demandCardId: 7, payment: 22 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel' as const,
+        createdAtTurn: 5,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: route,
+        turnsOnRoute: 3,
+        routeHistory: [],
+        deliveryCount: 1,
+        totalEarnings: 15,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Wine'],
+      } as any);
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Praha',
+            payout: 15, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 2,
+            demandScore: 8, efficiencyPerTurn: 4, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Set up loadGridPoints to return a city at the bot's position
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Praha', terrain: 2 });
+      (loadGridPoints as jest.Mock).mockReturnValue(gridMap);
+
+      // Mock PlayerService.deliverLoadForUser to return payment
+      (PlayerService.deliverLoadForUser as jest.Mock).mockResolvedValue({
+        payment: 15,
+        updatedMoney: 65,
+        newCard: { id: 51, demands: [] },
+      });
+
+      // PlanExecutor delivers Wine to Praha (payment > 0 triggers hadDelivery)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Praha', cardId: 3, payout: 15 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivering Wine to Praha',
+      });
+
+      // After delivery, rebuildDemands returns NEW demands WITHOUT Wine
+      const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+      mockRebuildDemands.mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Roma',
+          payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 7,
+          demandScore: 4, efficiencyPerTurn: 0.5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ]);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify route was invalidated because Wine is no longer in demands
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.turnsOnRoute).toBe(0);
+    });
+
+    it('should NOT call rebuildDemands when no delivery occurred', async () => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns BuildTrack (no delivery, payment = 0)
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 3,
+      };
+
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 500,
+      });
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12, 1)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      });
+
+      const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // rebuildDemands should NOT have been called (no delivery, no discard)
+      expect(mockRebuildDemands).not.toHaveBeenCalled();
+      // capture should only be called once (initial)
+      expect(mockCapture).toHaveBeenCalledTimes(1);
+
+      delete process.env.ANTHROPIC_API_KEY;
     });
   });
 });
