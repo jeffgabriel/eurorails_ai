@@ -24,7 +24,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
+import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -519,7 +519,7 @@ export class ContextBuilder {
     const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType].speed;
     const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
 
-    // Travel distance: hex distance from supply city to delivery city
+    // Travel distance: BFS hop count through actual hex grid (JIRA-66)
     let travelTurns = 0;
     if (supplyCity) {
       const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
@@ -528,8 +528,10 @@ export class ContextBuilder {
         let minDist = Infinity;
         for (const sp of supplyPoints) {
           for (const dp of deliveryPoints) {
-            const dist = hexDistance(sp.row, sp.col, dp.row, dp.col);
-            minDist = Math.min(minDist, dist);
+            const dist = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
+            if (dist > 0) {
+              minDist = Math.min(minDist, dist);
+            }
           }
         }
         if (minDist < Infinity) {

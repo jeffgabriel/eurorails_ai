@@ -389,6 +389,51 @@ export function estimatePathCost(
   return 0; // Target unreachable
 }
 
+/**
+ * Estimate the minimum hop count (milepost edges) between two hex positions.
+ * Uses BFS over the actual hex grid — unlike hexDistance() which returns
+ * straight-line Chebyshev distance ignoring map topology.
+ *
+ * Returns 0 if source equals target or target is unreachable.
+ */
+export function estimateHopDistance(
+  fromRow: number, fromCol: number,
+  toRow: number, toCol: number,
+): number {
+  if (fromRow === toRow && fromCol === toCol) return 0;
+
+  const grid = loadGridPoints();
+  const startKey = makeKey(fromRow, fromCol);
+  const targetKey = makeKey(toRow, toCol);
+  if (!grid.has(startKey) || !grid.has(targetKey)) return 0;
+
+  const visited = new Set<string>();
+  visited.add(startKey);
+  const queue: Array<{ key: string; hops: number }> = [{ key: startKey, hops: 0 }];
+
+  while (queue.length > 0) {
+    const { key, hops } = queue.shift()!;
+    const [row, col] = key.split(',').map(Number);
+
+    for (const nb of getHexNeighbors(row, col)) {
+      const nbKey = makeKey(nb.row, nb.col);
+      if (!grid.has(nbKey)) continue;
+
+      const nbData = grid.get(nbKey)!;
+      if (nbData.terrain === TerrainType.Water) continue;
+
+      if (nbKey === targetKey) return hops + 1;
+
+      if (!visited.has(nbKey)) {
+        visited.add(nbKey);
+        queue.push({ key: nbKey, hops: hops + 1 });
+      }
+    }
+  }
+
+  return 0; // Target unreachable
+}
+
 /** Reset the cache (for testing). */
 export function _resetCache(): void {
   gridPointsCache = null;
