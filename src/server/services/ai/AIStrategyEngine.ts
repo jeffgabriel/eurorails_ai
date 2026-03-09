@@ -33,6 +33,7 @@ import {
   DemandContext,
   GameContext,
   LlmAttempt,
+  TimelineStep,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
@@ -78,6 +79,8 @@ export interface BotTurnResult {
   llmLog?: LlmAttempt[];
   // JIRA-36: Movement path for animated bot train movement
   movementPath?: { row: number; col: number }[];
+  // Structured action timeline for animated partial turn movements
+  actionTimeline?: TimelineStep[];
 }
 
 export class AIStrategyEngine {
@@ -552,7 +555,7 @@ export class AIStrategyEngine {
         });
 
       // INF-001: Compute hand quality for audit logging
-      const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber);
+      const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber, snapshot.bot.money);
       const bestDemandTurns = context.demands.length > 0
         ? Math.min(...context.demands.map(d => d.estimatedTurns))
         : 0;
@@ -593,6 +596,9 @@ export class AIStrategyEngine {
         }
       }
 
+      // Build structured action timeline for animated partial turn movements
+      const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
+
       return {
         action: result.action,
         segmentsBuilt: result.segmentsBuilt,
@@ -625,6 +631,7 @@ export class AIStrategyEngine {
         loadsPickedUp: loadsPickedUp.length > 0 ? loadsPickedUp : undefined,
         compositionTrace,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
+        actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -670,6 +677,54 @@ export class AIStrategyEngine {
     }
   }
 
+  /** Build a structured action timeline from composed plan steps. */
+  static buildActionTimeline(allSteps: TurnPlan[]): TimelineStep[] {
+    const timeline: TimelineStep[] = [];
+    for (const step of allSteps) {
+      switch (step.type) {
+        case AIActionType.MoveTrain:
+          if (step.path && step.path.length > 0) {
+            timeline.push({ type: 'move', path: step.path.map(p => ({ row: p.row, col: p.col })) });
+          }
+          break;
+        case AIActionType.DeliverLoad:
+          timeline.push({
+            type: 'deliver',
+            loadType: (step as any).load ?? '',
+            city: (step as any).city ?? '',
+            payment: (step as any).payout ?? 0,
+            cardId: (step as any).cardId ?? 0,
+          });
+          break;
+        case AIActionType.PickupLoad:
+          timeline.push({
+            type: 'pickup',
+            loadType: (step as any).load ?? '',
+            city: (step as any).city ?? '',
+          });
+          break;
+        case AIActionType.BuildTrack:
+          timeline.push({
+            type: 'build',
+            segmentsBuilt: (step as any).segments?.length ?? 0,
+            cost: (step as any).cost ?? 0,
+          });
+          break;
+        case AIActionType.UpgradeTrain:
+          timeline.push({
+            type: 'upgrade',
+            trainType: (step as any).targetTrain ?? '',
+          });
+          break;
+        case AIActionType.DiscardHand:
+          timeline.push({ type: 'discard' });
+          break;
+        // PassTurn and DropLoad don't need timeline entries
+      }
+    }
+    return timeline;
+  }
+
   /**
    * INF-001: Compute hand quality metrics from demand contexts.
    * Groups demands by card, picks the best demand per card, then averages scores.
@@ -677,6 +732,7 @@ export class AIStrategyEngine {
   private static computeHandQuality(
     demands: DemandContext[],
     turnNumber: number,
+    money: number = Infinity,
   ): { score: number; staleCards: number; assessment: string } {
     if (demands.length === 0) {
       return { score: 0, staleCards: 0, assessment: 'Poor' };
@@ -699,10 +755,13 @@ export class AIStrategyEngine {
     }
 
     const avgScore = totalBestScore / cardGroups.size;
-    const assessment = avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
+
+    // JIRA-71: If bot is broke (cash < 5M) and no demand is affordable, clamp to "Poor"
+    const isBroke = money < 5 && demands.every(d => !d.isAffordable);
+    const assessment = isBroke ? 'Poor' : avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
 
     return {
-      score: Math.round(avgScore * 100) / 100,
+      score: isBroke ? 0 : Math.round(avgScore * 100) / 100,
       staleCards,
       assessment,
     };

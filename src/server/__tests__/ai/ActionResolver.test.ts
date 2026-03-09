@@ -2553,6 +2553,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: false, projectedFundsAfterDelivery: 0,
           },
         ],
       });
@@ -2560,12 +2561,14 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: ['Wine'], money: 1 } as any,
       });
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
       expect(result.success).toBe(true);
-      // Load on train but delivery off-network and unaffordable → drop Wine first (BE-004),
-      // but since it's dead weight (score=40), DROP fires before dead-hand check
-      expect(result.plan!.type).toBe(AIActionType.DropLoad);
+      // JIRA-71: Broke bot (money=1, no affordable demands) → discard immediately
+      // instead of dropping load and wasting turns
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      warnSpy.mockRestore();
     });
 
     // ── BE-004: DROP dead-weight loads before PASS ──────────────────────────
@@ -2699,6 +2702,90 @@ describe('ActionResolver', () => {
 
       expect(result.success).toBe(true);
       // Should DELIVER Steel, not DROP Wine
+      expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
+    });
+
+    it('JIRA-71: should discard when broke (cash=0) even with load on train and delivery on network', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'HomeCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 0,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 15 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 0,
+        canDeliver: [],
+        canBuild: false,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen',
+            deliveryCity: 'Berlin', payout: 15,
+            isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 3,
+            demandScore: 5, efficiencyPerTurn: 5, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: false, projectedFundsAfterDelivery: 15,
+          } as any,
+        ],
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('JIRA-71: Broke bot detected'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('JIRA-71: should NOT discard when cash >= 5 and some demand is affordable', async () => {
+      // With cash >= 5 and at least one affordable demand, the broke-bot gate should NOT fire.
+      // Bot has money=10, one affordable demand, and a delivery opportunity at current position.
+      setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 10,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 15 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 10,
+        canDeliver: [
+          { loadType: 'Coal', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
+        ],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen',
+            deliveryCity: 'Berlin', payout: 15,
+            isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 1,
+            demandScore: 15, efficiencyPerTurn: 15, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 25,
+          } as any,
+        ],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      // Should DELIVER, not discard — broke-bot gate doesn't fire (cash >= 5 and demand affordable)
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
     });
   });

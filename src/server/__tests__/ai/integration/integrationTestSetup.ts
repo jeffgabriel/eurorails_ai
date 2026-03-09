@@ -59,6 +59,7 @@ export function scoreDemand(
 
 export function computeHandQuality(
   demands: DemandContext[],
+  money: number = Infinity,
 ): { score: number; staleCards: number; assessment: string } {
   if (demands.length === 0) {
     return { score: 0, staleCards: 0, assessment: 'Poor' };
@@ -79,10 +80,13 @@ export function computeHandQuality(
   }
 
   const avgScore = totalBestScore / cardGroups.size;
-  const assessment = avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
+
+  // JIRA-71: If bot is broke (cash < 5M) and no demand is affordable, clamp to "Poor"
+  const isBroke = money < 5 && demands.every(d => !d.isAffordable);
+  const assessment = isBroke ? 'Poor' : avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
 
   return {
-    score: Math.round(avgScore * 100) / 100,
+    score: isBroke ? 0 : Math.round(avgScore * 100) / 100,
     staleCards,
     assessment,
   };

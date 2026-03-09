@@ -876,6 +876,19 @@ export class ActionResolver {
       if (result.success) return result;
     }
 
+    // 1c. JIRA-71: Broke-bot discard — if cash < 5M and no demand is affordable,
+    // discard immediately instead of cycling through futile move/build/drop actions.
+    // Only skip if bot can deliver right now (step 1 above would have returned).
+    if (!context.isInitialBuild && snapshot.bot.money < 5 && context.demands.length > 0 &&
+        context.demands.every(d => !d.isAffordable) &&
+        (!context.canDeliver || context.canDeliver.length === 0)) {
+      console.warn(
+        `[heuristicFallback] JIRA-71: Broke bot detected — cash=${snapshot.bot.money}M, ` +
+        `no affordable demands. Discarding hand immediately.`,
+      );
+      return ActionResolver.resolveDiscard(snapshot);
+    }
+
     // 2. Try to MOVE toward a pickup or delivery city on the network
     if (snapshot.bot.position && !context.isInitialBuild) {
       // 2a. If carrying a load, move toward the delivery city

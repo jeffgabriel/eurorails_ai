@@ -140,6 +140,47 @@ describe('Behavior 6: Strategic Hand Discard', () => {
     });
   });
 
+  describe('JIRA-71: cash-aware hand quality', () => {
+    it('should assess "Poor" when all demands are unaffordable and cash < 5M', () => {
+      const demands = [
+        makeDemandContext({ cardIndex: 0, demandScore: 5, estimatedTurns: 3, isAffordable: false }),
+        makeDemandContext({ cardIndex: 1, demandScore: 4, estimatedTurns: 4, isAffordable: false }),
+        makeDemandContext({ cardIndex: 2, demandScore: 3, estimatedTurns: 5, isAffordable: false }),
+      ];
+
+      const hq = computeHandQuality(demands, 0);
+
+      expect(hq.assessment).toBe('Poor');
+      expect(hq.score).toBe(0);
+    });
+
+    it('should assess normally when cash >= 5 even if demands are unaffordable', () => {
+      const demands = [
+        makeDemandContext({ cardIndex: 0, demandScore: 5, estimatedTurns: 3, isAffordable: false }),
+        makeDemandContext({ cardIndex: 1, demandScore: 4, estimatedTurns: 4, isAffordable: false }),
+        makeDemandContext({ cardIndex: 2, demandScore: 3, estimatedTurns: 5, isAffordable: false }),
+      ];
+
+      const hq = computeHandQuality(demands, 10);
+
+      expect(hq.assessment).toBe('Good');
+      expect(hq.score).toBe(4); // (5+4+3)/3
+    });
+
+    it('should assess normally when cash < 5 but some demand is affordable', () => {
+      const demands = [
+        makeDemandContext({ cardIndex: 0, demandScore: 5, estimatedTurns: 3, isAffordable: true }),
+        makeDemandContext({ cardIndex: 1, demandScore: 4, estimatedTurns: 4, isAffordable: false }),
+        makeDemandContext({ cardIndex: 2, demandScore: 3, estimatedTurns: 5, isAffordable: false }),
+      ];
+
+      const hq = computeHandQuality(demands, 2);
+
+      expect(hq.assessment).toBe('Good');
+      expect(hq.score).toBe(4);
+    });
+  });
+
   describe('discard decision thresholds', () => {
     it('should recommend discard when all cards are stale and quality is Poor', () => {
       const demands = [
