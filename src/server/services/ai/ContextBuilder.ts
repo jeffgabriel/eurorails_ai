@@ -922,7 +922,8 @@ export class ContextBuilder {
     lines.push('');
 
     // ── YOUR DEMAND CARDS (with turn estimates and scarcity) ──
-    lines.push('YOUR DEMAND CARDS:');
+    lines.push('=== YOUR DEMAND CARDS (cards in your hand) ===');
+    lines.push('You may ONLY plan deliveries for demands listed below. Do not reference loads or cities not shown here.');
     if (context.demands.length === 0) {
       lines.push('  No demand cards.');
     } else {

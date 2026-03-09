@@ -119,7 +119,7 @@ Think carefully about the optimal sequence of pickups and deliveries.
 ROUTE PLANNING CRITERIA:
 1. COMBINE LOADS: Look for 2+ demands that share pickup/delivery corridors. Two 20M deliveries on the same route beat one 40M delivery on a separate route.
 2. PICKUP BEFORE DELIVER: Always pick up a load before you can deliver it. Sequence matters.
-3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out.
+3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out. IMPORTANT: Your current cash is shown in the context. Do NOT plan routes that require building more track than you can afford. If all routes require more track cost than your cash, plan a shorter route or recommend DISCARD_HAND.
 4. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
 5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
 6. STARTING CITY: For initial builds with no track, start from the SUPPLY city of your first planned pickup. Starting at the supply end lets you pick up immediately when the train is placed, saving turns. If multiple supply cities exist, prefer the one in central Europe. Only start at a delivery city if it is also a supply city for another pickup on your route.

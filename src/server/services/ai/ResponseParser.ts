@@ -163,6 +163,13 @@ export class ResponseParser {
     try {
       parsed = JSON.parse(clean);
     } catch {
+      // Attempt truncated JSON recovery before regex fallback
+      const recovered = ResponseParser.recoverTruncatedJson(clean);
+      if (recovered !== null) {
+        console.warn('[ResponseParser] Recovered truncated JSON response');
+        return ResponseParser.validateActionIntent(recovered);
+      }
+
       // Regex fallback: try to extract action and key fields
       const actionMatch = text.match(/"action"\s*:\s*"([^"]+)"/);
       const reasoningMatch = text.match(/"reasoning"\s*:\s*"([^"]*)"/);
@@ -200,6 +207,44 @@ export class ResponseParser {
     }
 
     return ResponseParser.validateActionIntent(parsed);
+  }
+
+  /**
+   * Attempt to recover truncated JSON by closing open brackets/braces.
+   * Returns the parsed object if recovery succeeds, null otherwise.
+   */
+  static recoverTruncatedJson(text: string): Record<string, unknown> | null {
+    let opens = 0;
+    let openBrackets = 0;
+    const stack: ('{' | '[')[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && inString) { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') { stack.push('{'); opens++; }
+      else if (ch === '[') { stack.push('['); openBrackets++; }
+      else if (ch === '}') { if (stack.length > 0 && stack[stack.length - 1] === '{') stack.pop(); opens--; }
+      else if (ch === ']') { if (stack.length > 0 && stack[stack.length - 1] === '[') stack.pop(); openBrackets--; }
+    }
+
+    if (stack.length === 0) return null; // Not a bracket mismatch issue
+
+    // Close open brackets in reverse order (LIFO)
+    let repaired = text;
+    for (let i = stack.length - 1; i >= 0; i--) {
+      repaired += stack[i] === '{' ? '}' : ']';
+    }
+
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -289,7 +334,14 @@ export class ResponseParser {
       try {
         parsed = JSON.parse(clean);
       } catch {
-        throw new ParseError(`Unparseable route planning response: ${text.substring(0, 200)}`);
+        // Attempt truncated JSON recovery: close open brackets
+        const recovered = ResponseParser.recoverTruncatedJson(clean);
+        if (recovered !== null) {
+          console.warn('[ResponseParser] Recovered truncated JSON response');
+          parsed = recovered;
+        } else {
+          throw new ParseError(`Unparseable route planning response: ${text.substring(0, 200)}`);
+        }
       }
     }
 

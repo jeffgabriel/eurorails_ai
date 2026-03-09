@@ -162,7 +162,7 @@ describe('AnthropicAdapter', () => {
 
       const result = await adapter.chat({
         ...makeRequest(),
-        thinking: { type: 'adaptive', effort: 'high' },
+        thinking: { type: 'adaptive' },
       });
 
       expect(result.usage).toEqual({ input: 1500, output: 350 });
@@ -270,22 +270,24 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toBeUndefined();
     });
 
-    it('should include both output_config and thinking when all params provided', async () => {
+    it('should include both output_config (with schema + effort) and thinking when all params provided', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
 
       await adapter.chat({
         ...makeRequest(),
         outputSchema: schema,
-        thinking: { type: 'adaptive', effort: 'high' },
+        thinking: { type: 'adaptive' },
+        effort: 'high',
       });
 
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
       expect(body.output_config).toEqual({
         format: { type: 'json_schema', schema },
+        effort: 'high',
       });
-      expect(body.thinking).toEqual({ type: 'adaptive', effort: 'high' });
+      expect(body.thinking).toEqual({ type: 'adaptive' });
     });
 
     it('should include output_config but not thinking when only outputSchema provided', async () => {
@@ -307,12 +309,28 @@ describe('AnthropicAdapter', () => {
 
       await adapter.chat({
         ...makeRequest(),
-        thinking: { type: 'adaptive', effort: 'high' },
+        thinking: { type: 'adaptive' },
       });
 
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
-      expect(body.thinking).toEqual({ type: 'adaptive', effort: 'high' });
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('should place effort inside output_config (not inside thinking)', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+      expect(body.thinking.effort).toBeUndefined();
+      expect(body.output_config).toEqual({ effort: 'medium' });
     });
 
     it('should use per-request timeoutMs when provided', async () => {
@@ -332,14 +350,15 @@ describe('AnthropicAdapter', () => {
       ).rejects.toThrow(ProviderTimeoutError);
     });
 
-    it('should retry without output_config on schema rejection (400)', async () => {
+    it('should retry without json_schema format on schema rejection (400) and log warning', async () => {
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
       // First call: 400 with schema error
       mockFetch.mockResolvedValueOnce({
         ok: false,
         status: 400,
-        text: async () => 'invalid schema: output_config not supported',
+        text: async () => 'invalid json_schema: output_config format not supported',
       });
       // Retry call: success
       mockFetch.mockResolvedValueOnce(makeSuccessResponse('retry response'));
@@ -349,9 +368,57 @@ describe('AnthropicAdapter', () => {
       expect(result.text).toBe('retry response');
       expect(mockFetch).toHaveBeenCalledTimes(2);
 
-      // Second call should not have output_config
+      // Should log warning about schema fallback
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[AnthropicAdapter] Schema rejected (400)'),
+      );
+
+      // Second call should not have output_config (no effort was set, so it's removed entirely)
       const retryBody = JSON.parse(mockFetch.mock.calls[1][1].body);
       expect(retryBody.output_config).toBeUndefined();
+      warnSpy.mockRestore();
+    });
+
+    it('should NOT log warning or retry on 400 without schema keyword', async () => {
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => 'invalid request: max_tokens too large',
+      });
+
+      await expect(adapter.chat({ ...makeRequest(), outputSchema: schema })).rejects.toThrow(ProviderAPIError);
+      expect(mockFetch).toHaveBeenCalledTimes(1); // No retry
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it('should preserve effort in output_config when retrying without schema', async () => {
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      // First call: 400 with schema error
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        text: async () => 'invalid json_schema format',
+      });
+      // Retry call: success
+      mockFetch.mockResolvedValueOnce(makeSuccessResponse('retry response'));
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        outputSchema: schema,
+        effort: 'high',
+      });
+
+      expect(result.text).toBe('retry response');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Retry should still have effort in output_config, but no format
+      const retryBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(retryBody.output_config).toEqual({ effort: 'high' });
     });
   });
 

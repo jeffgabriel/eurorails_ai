@@ -552,6 +552,90 @@ describe('ResponseParser', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Truncated JSON recovery (JIRA-70)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('parseStrategicRoute — truncated JSON recovery', () => {
+    it('should recover truncated JSON missing closing }', () => {
+      const truncated = '{"route": [{"action": "PICKUP", "load": "Coal", "city": "Essen"}, {"action": "DELIVER", "load": "Coal", "city": "Berlin"}], "reasoning": "test"';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = ResponseParser.parseStrategicRoute(truncated, 5);
+
+      expect(result.stops).toHaveLength(2);
+      expect(result.stops[0].action).toBe('pickup');
+      expect(result.stops[0].loadType).toBe('Coal');
+      expect(warnSpy).toHaveBeenCalledWith('[ResponseParser] Recovered truncated JSON response');
+      warnSpy.mockRestore();
+    });
+
+    it('should recover truncated JSON missing ]}', () => {
+      const truncated = '{"route": [{"action": "PICKUP", "load": "Steel", "city": "Szczecin"}, {"action": "DELIVER", "load": "Steel", "city": "Berlin"}';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = ResponseParser.parseStrategicRoute(truncated, 3);
+
+      expect(result.stops).toHaveLength(2);
+      expect(result.stops[1].city).toBe('Berlin');
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it('should throw ParseError for severely truncated JSON (cut mid-string)', () => {
+      const truncated = '{"route": [{"action": "PICK';
+
+      expect(() => ResponseParser.parseStrategicRoute(truncated, 1)).toThrow(ParseError);
+    });
+
+    it('should recover markdown-fenced truncated JSON', () => {
+      const fenced = '```json\n{"route": [{"action": "PICKUP", "load": "Oil", "city": "Roma"}], "reasoning": "deliver oil"\n```';
+      // This is actually complete — verify it parses normally via fence stripping
+      const result = ResponseParser.parseStrategicRoute(fenced, 1);
+      expect(result.stops).toHaveLength(1);
+      expect(result.stops[0].loadType).toBe('Oil');
+    });
+
+    it('should recover markdown-fenced truncated JSON with missing brackets', () => {
+      const fencedTruncated = '```json\n{"route": [{"action": "PICKUP", "load": "Oil", "city": "Roma"}], "reasoning": "test"\n```';
+      // Strip fences first, then truncate — simulate what Haiku produces
+      const truncated = '{"route": [{"action": "PICKUP", "load": "Oil", "city": "Roma"}], "reasoning": "test"';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      // This one is actually complete JSON, test a truly truncated one
+      const realTruncated = '```json\n{"route": [{"action": "PICKUP", "load": "Oil", "city": "Roma"}\n```';
+
+      const result = ResponseParser.parseStrategicRoute(realTruncated, 1);
+      expect(result.stops).toHaveLength(1);
+      expect(result.stops[0].loadType).toBe('Oil');
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe('parseActionIntent — truncated JSON recovery', () => {
+    it('should recover truncated action intent JSON', () => {
+      const truncated = '{"action": "BUILD", "details": {"toward": "Berlin"}, "reasoning": "connect to Berlin"';
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = ResponseParser.parseActionIntent(truncated);
+
+      expect(result.action).toBe('BUILD');
+      expect(result.details).toEqual({ toward: 'Berlin' });
+      expect(warnSpy).toHaveBeenCalledWith('[ResponseParser] Recovered truncated JSON response');
+      warnSpy.mockRestore();
+    });
+
+    it('should fall through to regex fallback when recovery fails', () => {
+      // Severely truncated — recovery fails, but regex can extract action
+      const truncated = '{"action": "PASS" some garbage that breaks everything';
+
+      const result = ResponseParser.parseActionIntent(truncated);
+
+      expect(result.action).toBe('PASS');
+      expect(result.reasoning).toContain('regex fallback');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // parseStrategicRoute — secondaryBuildTarget parsing
   // ═══════════════════════════════════════════════════════════════════════════
 

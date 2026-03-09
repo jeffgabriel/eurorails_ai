@@ -19,6 +19,7 @@ export class AnthropicAdapter implements ProviderAdapter {
     userPrompt: string;
     outputSchema?: object;
     thinking?: ThinkingConfig;
+    effort?: string;
     timeoutMs?: number;
   }): Promise<ProviderResponse> {
     const effectiveTimeout = request.timeoutMs ?? this.timeoutMs;
@@ -26,11 +27,14 @@ export class AnthropicAdapter implements ProviderAdapter {
     const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
     try {
+      // When adaptive thinking is enabled, Anthropic requires temperature=1
+      const effectiveTemperature = request.thinking ? 1 : request.temperature;
+
       // Build the base request body
       const body: Record<string, unknown> = {
         model: request.model,
         max_tokens: request.maxTokens,
-        temperature: request.temperature,
+        temperature: effectiveTemperature,
         system: [{
           type: 'text',
           text: request.systemPrompt,
@@ -39,14 +43,19 @@ export class AnthropicAdapter implements ProviderAdapter {
         messages: [{ role: 'user', content: request.userPrompt }],
       };
 
-      // Conditionally add structured output config
+      // Build output_config from schema and/or effort
+      const outputConfig: Record<string, unknown> = {};
       if (request.outputSchema) {
-        body.output_config = {
-          format: {
-            type: 'json_schema',
-            schema: request.outputSchema,
-          },
+        outputConfig.format = {
+          type: 'json_schema',
+          schema: request.outputSchema,
         };
+      }
+      if (request.effort) {
+        outputConfig.effort = request.effort;
+      }
+      if (Object.keys(outputConfig).length > 0) {
+        body.output_config = outputConfig;
       }
 
       // Conditionally add thinking config
@@ -56,14 +65,21 @@ export class AnthropicAdapter implements ProviderAdapter {
 
       const result = await this.executeRequest(body, controller.signal);
 
-      // On schema rejection (400), retry without output_config
+      // On schema rejection (400), retry without the json_schema format
       if (result.error && result.error.status === 400 && request.outputSchema) {
         const errorText = result.error.body;
-        if (errorText.includes('schema') || errorText.includes('output_config') || errorText.includes('invalid')) {
+        if (errorText.includes('schema') || errorText.includes('output_config') || errorText.includes('json_schema')) {
           console.warn(
-            `[AnthropicAdapter] Schema rejected (400), retrying without output_config: ${errorText.substring(0, 200)}`,
+            `[AnthropicAdapter] Schema rejected (400), retrying without json_schema format: ${errorText.substring(0, 200)}`,
           );
-          delete body.output_config;
+          // Remove only the schema format; preserve effort if present
+          const oc = body.output_config as Record<string, unknown> | undefined;
+          if (oc) {
+            delete oc.format;
+            if (Object.keys(oc).length === 0) {
+              delete body.output_config;
+            }
+          }
           const retryResult = await this.executeRequest(body, controller.signal);
           if (retryResult.error) {
             this.throwApiError(retryResult.error.status, retryResult.error.body);
