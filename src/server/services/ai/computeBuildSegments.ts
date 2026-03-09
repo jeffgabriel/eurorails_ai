@@ -489,14 +489,18 @@ export function computeBuildSegments(
         if (dist < minDist) minDist = dist;
       }
 
-      // Prefer closer to target; among equal distances, prefer cheapest cost (most direct route);
-      // final tiebreak: most new segments (use full budget).
+      // Prefer closer to target; among equal distances, prefer most new segments (use full budget);
+      // final tiebreak: cheapest cost. JIRA-73: Swapped priorities 2 & 3 so the bot builds as
+      // much useful track as budget allows toward the target, rather than finding the cheapest path.
+      const nodeNewSegs = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
+      const bestNewSegs = bestPath
+        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)
+        : 0;
       if (
         minDist < bestTargetDist ||
-        (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity)) ||
-        (minDist === bestTargetDist && node.cost === (bestPath?.cost ?? Infinity) &&
-          countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup) >
-          countNewSegments(bestPath!.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup))
+        (minDist === bestTargetDist && nodeNewSegs > bestNewSegs) ||
+        (minDist === bestTargetDist && nodeNewSegs === bestNewSegs &&
+          node.cost < (bestPath?.cost ?? Infinity))
       ) {
         bestPath = node;
         bestTargetDist = minDist;

@@ -18,6 +18,12 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   ActionResolver: {
     resolve: jest.fn(),
     heuristicFallback: jest.fn(),
+    cloneSnapshot: jest.fn((s: any) => ({
+      ...s,
+      bot: { ...s.bot, existingSegments: [...s.bot.existingSegments], loads: [...s.bot.loads], demandCards: [...s.bot.demandCards], resolvedDemands: [...(s.bot.resolvedDemands || [])] },
+      allPlayerTracks: (s.allPlayerTracks || []).map((pt: any) => ({ ...pt, segments: [...pt.segments] })),
+    })),
+    applyPlanToState: jest.fn(),
   },
 }));
 
@@ -55,17 +61,27 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 jest.mock('../../../shared/services/TrackNetworkService', () => ({
   buildTrackNetwork: jest.fn(() => ({
     adjacency: new Map(),
-    nodeSet: new Set(),
+    nodes: new Set(),
   })),
+}));
+
+jest.mock('../../services/ai/ContextBuilder', () => ({
+  ContextBuilder: {
+    computeCitiesOnNetwork: jest.fn(() => []),
+  },
 }));
 
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints } from '../../services/ai/MapTopology';
+import { ContextBuilder } from '../../services/ai/ContextBuilder';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;
+const mockApplyPlanToState = ActionResolver.applyPlanToState as jest.Mock;
+const mockCloneSnapshot = ActionResolver.cloneSnapshot as jest.Mock;
 const mockGetMajorCityLookup = getMajorCityLookup as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
+const mockComputeCitiesOnNetwork = ContextBuilder.computeCitiesOnNetwork as jest.Mock;
 
 function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
   return {
@@ -423,6 +439,161 @@ describe('PlanExecutor', () => {
       expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.routeComplete).toBe(false);
       expect(result.routeAbandoned).toBe(false);
+    });
+
+    // ── JIRA-73: Continuation build tests ──────────────────────────────────
+
+    it('should continuation-build toward second stop after primary build (JIRA-73)', async () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        startingCity: 'London',
+        stops: [
+          { action: 'pickup', loadType: 'Iron', city: 'Birmingham' },
+          { action: 'deliver', loadType: 'Iron', city: 'Stuttgart', demandCardId: 5, payment: 20 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: true });
+
+      const primarySegments = [makeSegment(10, 10, 10, 11), makeSegment(10, 11, 10, 12)];
+      const contSegments = [makeSegment(10, 12, 10, 13), makeSegment(10, 13, 10, 14)];
+
+      // Primary build toward Birmingham
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: primarySegments, targetCity: 'Birmingham' },
+      });
+      // Continuation build toward Stuttgart
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: contSegments, targetCity: 'Stuttgart' },
+      });
+
+      // After primary build, Birmingham is now on network
+      mockComputeCitiesOnNetwork
+        .mockReturnValueOnce(['Birmingham'])  // after primary build
+        .mockReturnValueOnce(['Birmingham', 'Stuttgart']); // after continuation
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      const buildPlan = result.plan as any;
+      // Combined plan has segments from both builds
+      expect(buildPlan.segments).toHaveLength(4);
+      expect(buildPlan.segments).toEqual([...primarySegments, ...contSegments]);
+      // applyPlanToState called for primary and continuation builds
+      expect(mockApplyPlanToState).toHaveBeenCalledTimes(2);
+    });
+
+    it('should skip continuation build when primary build exhausts budget (JIRA-73)', async () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        startingCity: 'London',
+        stops: [
+          { action: 'pickup', loadType: 'Iron', city: 'Birmingham' },
+          { action: 'deliver', loadType: 'Iron', city: 'Stuttgart', demandCardId: 5, payment: 20 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: true });
+
+      // Primary build costs 20M (budget fully spent)
+      const expensiveSegments = Array.from({ length: 4 }, (_, i) =>
+        ({ ...makeSegment(10, 10 + i, 10, 11 + i), cost: 5 }),
+      );
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: expensiveSegments, targetCity: 'Birmingham' },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      const buildPlan = result.plan as any;
+      // Only primary segments — no continuation attempted
+      expect(buildPlan.segments).toHaveLength(4);
+      // resolve called only once (no continuation)
+      expect(mockResolve).toHaveBeenCalledTimes(1);
+    });
+
+    it('should skip failed continuation builds and try next stop (JIRA-73)', async () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        startingCity: 'London',
+        stops: [
+          { action: 'pickup', loadType: 'Iron', city: 'Birmingham' },
+          { action: 'deliver', loadType: 'Iron', city: 'Stuttgart', demandCardId: 5, payment: 20 },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 6, payment: 15 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: true });
+
+      const primarySegments = [makeSegment(10, 10, 10, 11)];
+      const parisSegments = [makeSegment(10, 11, 10, 12)];
+
+      // Primary build toward Birmingham
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: primarySegments, targetCity: 'Birmingham' },
+      });
+      // Continuation toward Stuttgart fails
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'No path found',
+      });
+      // Continuation toward Paris succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: parisSegments, targetCity: 'Paris' },
+      });
+
+      // After primary build, Birmingham is on network; Stuttgart and Paris are not
+      mockComputeCitiesOnNetwork.mockReturnValueOnce(['Birmingham']);
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      const buildPlan = result.plan as any;
+      // Primary + Paris (Stuttgart was skipped)
+      expect(buildPlan.segments).toHaveLength(2);
+      expect(buildPlan.segments).toEqual([...primarySegments, ...parisSegments]);
+      // 3 resolve calls: primary + Stuttgart(failed) + Paris
+      expect(mockResolve).toHaveBeenCalledTimes(3);
+    });
+
+    it('should skip starting city in continuation loop (JIRA-73)', async () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        startingCity: 'London',
+        stops: [
+          { action: 'pickup', loadType: 'Iron', city: 'London' },
+          { action: 'pickup', loadType: 'Coal', city: 'Birmingham' },
+          { action: 'deliver', loadType: 'Iron', city: 'Stuttgart', demandCardId: 5, payment: 20 },
+        ],
+      });
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: ['London'], canBuild: true });
+
+      const primarySegments = [makeSegment(10, 10, 10, 11)];
+      const stuttgartSegments = [makeSegment(10, 11, 10, 12)];
+
+      // Primary build toward Birmingham (first unreachable stop)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: primarySegments, targetCity: 'Birmingham' },
+      });
+      // Continuation toward Stuttgart (London skipped as starting city)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: stuttgartSegments, targetCity: 'Stuttgart' },
+      });
+
+      // After primary build, Birmingham on network; London skipped as starting city
+      mockComputeCitiesOnNetwork.mockReturnValue(['Birmingham']);
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      const buildPlan = result.plan as any;
+      expect(buildPlan.segments).toEqual([...primarySegments, ...stuttgartSegments]);
+      // Only 2 resolve calls (London skipped in continuation)
+      expect(mockResolve).toHaveBeenCalledTimes(2);
     });
   });
 

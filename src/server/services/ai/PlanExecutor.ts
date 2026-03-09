@@ -23,11 +23,14 @@ import {
   WorldSnapshot,
   GameContext,
   TurnPlan,
+  TurnPlanBuildTrack,
   AIActionType,
   ResolvedAction,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints } from './MapTopology';
+import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
+import { ContextBuilder } from './ContextBuilder';
 
 export interface PlanExecutorResult {
   plan: TurnPlan;
@@ -119,8 +122,12 @@ export class PlanExecutor {
           snapshot, context, route.startingCity,
         );
         if (buildResult.success && buildResult.plan) {
+          // JIRA-73: Continue building toward remaining route stops with leftover budget
+          const combinedPlan = await PlanExecutor.continuationBuild(
+            buildResult.plan as TurnPlanBuildTrack, route, snapshot, context, tag,
+          );
           return {
-            plan: buildResult.plan,
+            plan: combinedPlan,
             routeComplete: false,
             routeAbandoned: false,
             updatedRoute: { ...route, phase: 'build' },
@@ -176,8 +183,12 @@ export class PlanExecutor {
     );
 
     if (buildResult.success && buildResult.plan) {
+      // JIRA-73: Continue building toward remaining route stops with leftover budget
+      const combinedPlan = await PlanExecutor.continuationBuild(
+        buildResult.plan as TurnPlanBuildTrack, route, snapshot, context, tag,
+      );
       return {
-        plan: buildResult.plan,
+        plan: combinedPlan,
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: { ...route, phase: 'build' },
@@ -425,6 +436,94 @@ export class PlanExecutor {
       }
     }
     return null;
+  }
+
+  // ── JIRA-73: Continuation build loop ─────────────────────────────────────
+
+  private static readonly MAX_BUILD_BUDGET = 20;
+
+  /**
+   * After a primary build during initialBuild, spend remaining budget building
+   * toward subsequent route stops. Returns a combined TurnPlanBuildTrack with
+   * all segments from primary + continuation builds.
+   *
+   * JIRA-73: A human would build the entire delivery route during initial build
+   * turns, not just toward the first unreachable stop. This mirrors that behavior.
+   */
+  private static async continuationBuild(
+    primaryPlan: TurnPlanBuildTrack,
+    route: StrategicRoute,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    tag: string,
+  ): Promise<TurnPlanBuildTrack> {
+    const primaryCost = primaryPlan.segments.reduce((sum, s) => sum + s.cost, 0);
+    if (primaryCost >= PlanExecutor.MAX_BUILD_BUDGET) {
+      return primaryPlan; // Budget fully spent
+    }
+
+    // Clone snapshot and apply primary build so continuation builds see updated frontier
+    const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
+    const simContext: GameContext = {
+      ...context,
+      citiesOnNetwork: [...context.citiesOnNetwork],
+      turnBuildCost: context.turnBuildCost,
+      money: context.money,
+    };
+    ActionResolver.applyPlanToState(primaryPlan, simSnapshot, simContext);
+
+    // Recompute cities on network after primary build
+    const gridPoints = snapshot.hexGrid ?? [];
+    const network = buildTrackNetwork(simSnapshot.bot.existingSegments);
+    simContext.citiesOnNetwork = ContextBuilder.computeCitiesOnNetwork(network, gridPoints);
+
+    let combinedSegments = [...primaryPlan.segments];
+    let spentSoFar = primaryCost;
+
+    for (const stop of route.stops) {
+      if (spentSoFar >= PlanExecutor.MAX_BUILD_BUDGET) break;
+
+      const isStartingCity = route.startingCity &&
+        stop.city.toLowerCase() === route.startingCity.toLowerCase();
+      if (isStartingCity) continue;
+      if (simContext.citiesOnNetwork.includes(stop.city)) continue;
+
+      const remaining = PlanExecutor.MAX_BUILD_BUDGET - spentSoFar;
+      if (remaining <= 0) break;
+
+      console.log(`${tag} JIRA-73: Continuation build toward ${stop.city}, remaining budget ${remaining}M`);
+
+      const contResult = await ActionResolver.resolve(
+        { action: 'BUILD', details: { toward: stop.city }, reasoning: '', planHorizon: '' },
+        simSnapshot, simContext, route.startingCity,
+      );
+
+      if (contResult.success && contResult.plan) {
+        const contPlan = contResult.plan as TurnPlanBuildTrack;
+        const contCost = contPlan.segments.reduce((sum, s) => sum + s.cost, 0);
+
+        if (contCost > 0) {
+          // Apply this build to sim state for next iteration
+          ActionResolver.applyPlanToState(contPlan, simSnapshot, simContext);
+
+          // Recompute cities on network after this continuation build
+          const updatedNetwork = buildTrackNetwork(simSnapshot.bot.existingSegments);
+          simContext.citiesOnNetwork = ContextBuilder.computeCitiesOnNetwork(updatedNetwork, gridPoints);
+
+          combinedSegments.push(...contPlan.segments);
+          spentSoFar += contCost;
+          console.log(`${tag} JIRA-73: Continuation build ${contCost}M toward ${stop.city} (total ${spentSoFar}M/${PlanExecutor.MAX_BUILD_BUDGET}M)`);
+        }
+      } else {
+        console.log(`${tag} JIRA-73: Continuation build toward ${stop.city} failed, skipping`);
+      }
+    }
+
+    return {
+      type: AIActionType.BuildTrack,
+      segments: combinedSegments,
+      targetCity: primaryPlan.targetCity,
+    };
   }
 
   // ── Cargo Evaluation ──────────────────────────────────────────────────────
