@@ -165,6 +165,7 @@ jest.mock('../../services/ai/LLMStrategyBrain', () => ({
   LLMStrategyBrain: jest.fn().mockImplementation(() => ({
     decideAction: jest.fn(),
     planRoute: jest.fn(),
+    reEvaluateRoute: jest.fn(),
   })),
 }));
 
@@ -2343,6 +2344,256 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockCapture).toHaveBeenCalledTimes(1);
 
       delete process.env.ANTHROPIC_API_KEY;
+    });
+  });
+
+  describe('JIRA-64 Part 2: post-delivery LLM re-evaluation', () => {
+    /** Helper: set up a delivery scenario with active route and API key */
+    function setupDeliveryWithRoute() {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 19 },
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Roma', demandCardId: 2, payment: 28 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 7,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: route,
+        turnsOnRoute: 4,
+        routeHistory: [],
+        deliveryCount: 1,
+        totalEarnings: 19,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: ['Steel'],
+      } as any);
+      const context = makeContext({
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Roma',
+            payout: 28, isSupplyReachable: true, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+            demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          },
+        ] as any[],
+      });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Set up delivery execution
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      (loadGridPoints as jest.Mock).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as jest.Mock).mockResolvedValue({
+        payment: 19,
+        updatedMoney: 69,
+        newCard: { id: 50, demands: [] },
+      });
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Berlin', cardId: 1, payout: 19 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivering Steel to Berlin',
+      });
+
+      // Rebuild demands returns refreshed list including Coal
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Roma',
+          payout: 28, isSupplyReachable: true, isDeliveryReachable: false,
+          isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ]);
+
+      return route;
+    }
+
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should continue route when re-evaluation returns "continue"', async () => {
+      setupDeliveryWithRoute();
+
+      const mockReEval = jest.fn().mockResolvedValue({
+        decision: 'continue',
+        reasoning: 'Current route is still optimal',
+      });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: jest.fn(), reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockReEval).toHaveBeenCalled();
+      // Route should NOT be cleared (continue)
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).not.toBeNull();
+    });
+
+    it('should update route when re-evaluation returns "amend"', async () => {
+      setupDeliveryWithRoute();
+
+      const amendedStops = [
+        { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+        { action: 'deliver', loadType: 'Coal', city: 'Wien', demandCardId: 5, payment: 20 },
+      ];
+
+      const mockReEval = jest.fn().mockResolvedValue({
+        decision: 'amend',
+        amendedStops,
+        reasoning: 'New card suggests shorter delivery to Wien',
+      });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: jest.fn(), reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockReEval).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      // Route should be updated with amended stops
+      expect(patch.activeRoute).toBeDefined();
+      expect(patch.activeRoute.stops).toEqual(amendedStops);
+      expect(patch.activeRoute.currentStopIndex).toBe(0);
+    });
+
+    it('should clear route when re-evaluation returns "abandon"', async () => {
+      setupDeliveryWithRoute();
+
+      const mockReEval = jest.fn().mockResolvedValue({
+        decision: 'abandon',
+        reasoning: 'New demand card is much better than current route',
+      });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: jest.fn(), reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockReEval).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+      expect(patch.turnsOnRoute).toBe(0);
+    });
+
+    it('should continue route when re-evaluation returns null (LLM failure)', async () => {
+      setupDeliveryWithRoute();
+
+      const mockReEval = jest.fn().mockResolvedValue(null);
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: jest.fn(), reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockReEval).toHaveBeenCalled();
+      // Route should NOT be cleared (null = continue)
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).not.toBeNull();
+    });
+
+    it('should continue route when re-evaluation throws', async () => {
+      setupDeliveryWithRoute();
+
+      const mockReEval = jest.fn().mockRejectedValue(new Error('LLM timeout'));
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: jest.fn(), reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(mockReEval).toHaveBeenCalled();
+      // Route should NOT be cleared (error = continue)
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).not.toBeNull();
+    });
+
+    it('should NOT call reEvaluateRoute when no active route', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: ['Steel'],
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Set up delivery
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      (loadGridPoints as jest.Mock).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as jest.Mock).mockResolvedValue({
+        payment: 19,
+        updatedMoney: 69,
+        newCard: { id: 50, demands: [] },
+      });
+
+      // Route planning returns a new route (since no active route)
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Essen' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 5,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 500,
+      });
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12, 1)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Essen',
+      });
+
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([]);
+
+      const mockReEval = jest.fn();
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRoute, reEvaluateRoute: mockReEval })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // reEvaluateRoute should NOT have been called (no active route at delivery time)
+      expect(mockReEval).not.toHaveBeenCalled();
     });
   });
 });

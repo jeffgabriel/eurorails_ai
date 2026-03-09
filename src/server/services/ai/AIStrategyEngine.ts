@@ -290,7 +290,10 @@ export class AIStrategyEngine {
       // Clear active route after any delivery — new demand card drawn means
       // LLM should re-evaluate the route on the next turn.
       // BE-010: Preserve remaining stops for LLM context on next turn.
+      // JIRA-64: Save pre-clear route for post-delivery LLM re-evaluation.
+      let preDeliveryRoute: StrategicRoute | null = null;
       if (hasDelivery && activeRoute && !routeWasCompleted && !routeWasAbandoned) {
+        preDeliveryRoute = activeRoute;
         const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
         if (remaining.length > 0) {
           previousRouteStops = remaining;
@@ -471,6 +474,51 @@ export class AIStrategyEngine {
             memoryPatch.activeRoute = null;
             memoryPatch.turnsOnRoute = 0;
             activeRoute = null;
+          }
+        }
+
+        // JIRA-64 Part 2: Post-delivery LLM re-evaluation
+        // Use preDeliveryRoute since activeRoute was cleared at line 301 for next-turn re-planning.
+        const routeForReEval = activeRoute ?? preDeliveryRoute;
+        if (routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
+          try {
+            const brain = AIStrategyEngine.createBrain(botConfig!);
+            const reEvalStart = Date.now();
+            const reEvalResult = await brain.reEvaluateRoute(snapshot, context, routeForReEval, gridPoints);
+            const reEvalMs = Date.now() - reEvalStart;
+
+            if (reEvalResult) {
+              console.log(`${tag} JIRA-64: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${reEvalMs}ms)`);
+              logPhase('reeval', { decision: reEvalResult.decision, reasoning: reEvalResult.reasoning, latencyMs: reEvalMs });
+
+              if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
+                activeRoute = {
+                  ...routeForReEval,
+                  stops: reEvalResult.amendedStops,
+                  currentStopIndex: 0,
+                };
+                memoryPatch.activeRoute = activeRoute;
+              } else if (reEvalResult.decision === 'continue') {
+                // Restore the route that was cleared for next-turn re-planning
+                activeRoute = routeForReEval;
+                memoryPatch.activeRoute = activeRoute;
+              } else if (reEvalResult.decision === 'abandon') {
+                console.log(`${tag} JIRA-64: Abandoning route after re-evaluation`);
+                memoryPatch.activeRoute = null;
+                memoryPatch.turnsOnRoute = 0;
+                activeRoute = null;
+              }
+            } else {
+              console.log(`${tag} JIRA-64: Re-evaluation failed, continuing with current route (${reEvalMs}ms)`);
+              // Restore the route on failure
+              activeRoute = routeForReEval;
+              memoryPatch.activeRoute = activeRoute;
+            }
+          } catch (reEvalError) {
+            console.warn(`${tag} JIRA-64: Re-evaluation error, continuing with current route:`, reEvalError instanceof Error ? reEvalError.message : reEvalError);
+            // Restore the route on error
+            activeRoute = routeForReEval;
+            memoryPatch.activeRoute = activeRoute;
           }
         }
       }

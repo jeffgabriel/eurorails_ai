@@ -28,13 +28,20 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt, getRoutePlanningPrompt } from './prompts/systemPrompts';
+import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
-import { ACTION_SCHEMA, ROUTE_SCHEMA } from './schemas';
+import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA } from './schemas';
+
+/** JIRA-64: Result of post-delivery route re-evaluation */
+export interface ReEvalResult {
+  decision: 'continue' | 'amend' | 'abandon';
+  amendedStops?: RouteStop[];
+  reasoning: string;
+}
 
 /** Token budgets for turn action decisions by skill level */
 const ACTION_MAX_TOKENS: Record<BotSkillLevel, number> = {
@@ -383,6 +390,110 @@ export class LLMStrategyBrain {
 
     console.warn('[LLMStrategyBrain] All route planning attempts failed.');
     return { route: null, llmLog };
+  }
+
+  /**
+   * JIRA-64: Lightweight post-delivery route re-evaluation.
+   *
+   * After a delivery draws a new demand card, ask the LLM whether the
+   * current route should continue, be amended, or be abandoned.
+   * Returns null on failure (treated as "continue" by the caller).
+   */
+  async reEvaluateRoute(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    activeRoute: StrategicRoute,
+    gridPoints: GridPoint[],
+  ): Promise<ReEvalResult | null> {
+    const systemPrompt = getRouteReEvaluationPrompt();
+    const remainingStops = activeRoute.stops.slice(activeRoute.currentStopIndex);
+
+    // Build focused user prompt with route and demand context
+    const lines: string[] = [];
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Cash: ${snapshot.bot.money}M | Train: ${snapshot.bot.trainType} | Loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+    const pos = snapshot.bot.position;
+    lines.push(`Position: ${pos ? `(${pos.row},${pos.col})` : 'unknown'}`);
+    lines.push('');
+    lines.push('CURRENT ROUTE (remaining stops):');
+    for (const stop of remainingStops) {
+      lines.push(`  ${stop.action} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    lines.push('');
+    lines.push('YOUR DEMAND CARDS (refreshed after delivery):');
+    for (const d of context.demands) {
+      lines.push(`  ${d.loadType}: ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns, score=${d.demandScore.toFixed(1)})`);
+    }
+    lines.push('');
+    lines.push('Should the current route continue, be amended, or be abandoned?');
+
+    const userPrompt = lines.join('\n');
+    let lastError: string | undefined;
+    const MAX_RETRIES = 1;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const promptWithError = lastError
+        ? `${userPrompt}\n\nYOUR PREVIOUS RESPONSE FAILED VALIDATION:\n${lastError}\nPlease provide a corrected response.`
+        : userPrompt;
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: 2048,
+          temperature: 0,
+          systemPrompt,
+          userPrompt: promptWithError,
+          outputSchema: RE_EVAL_SCHEMA,
+          timeoutMs: 10000,
+        });
+
+        const parsed = JSON.parse(response.text);
+        const decision = parsed.decision;
+
+        if (!['continue', 'amend', 'abandon'].includes(decision)) {
+          lastError = `Invalid decision: ${decision}. Must be continue, amend, or abandon.`;
+          continue;
+        }
+
+        // Parse amended stops if decision is "amend"
+        let amendedStops: RouteStop[] | undefined;
+        if (decision === 'amend' && Array.isArray(parsed.amendedStops)) {
+          amendedStops = parsed.amendedStops.map((s: any) => ({
+            action: s.action?.toLowerCase() === 'deliver' ? 'deliver' : 'pickup',
+            loadType: s.load,
+            city: s.city,
+            demandCardId: s.demandCardId,
+            payment: s.payment,
+          }));
+
+          // Validate amended stops: each load type must exist in demands
+          const validStops = amendedStops.every(s =>
+            context.demands.some(d => d.loadType === s.loadType),
+          );
+          if (!validStops) {
+            console.warn('[LLMStrategyBrain] reEvaluateRoute: amended stops reference unknown load types, falling back to continue');
+            return { decision: 'continue', reasoning: 'Amended stops referenced unknown load types' };
+          }
+        } else if (decision === 'amend') {
+          // Amend without stops = treat as continue
+          return { decision: 'continue', reasoning: parsed.reasoning ?? 'Amend requested but no stops provided' };
+        }
+
+        return {
+          decision,
+          amendedStops,
+          reasoning: parsed.reasoning ?? '',
+        };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[LLMStrategyBrain] reEvaluateRoute attempt ${attempt + 1} failed: ${errMsg}`);
+        lastError = errMsg;
+      }
+    }
+
+    // All attempts failed — return null (caller treats as "continue")
+    console.warn('[LLMStrategyBrain] reEvaluateRoute: all attempts failed, returning null');
+    return null;
   }
 
   /**

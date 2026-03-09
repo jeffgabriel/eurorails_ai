@@ -292,3 +292,43 @@ export function getRoutePlanningPrompt(skillLevel: BotSkillLevel): string {
 export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
+
+// ── Route Re-evaluation Prompt (JIRA-64) ──
+
+const ROUTE_REEVAL_SYSTEM_SUFFIX = `
+You are evaluating whether a bot's current delivery route should change after a new demand card was drawn (from a mid-turn delivery).
+
+You will receive:
+- The bot's current route (remaining stops)
+- The bot's refreshed demand cards (including the newly drawn card)
+- The bot's position, cash, and train type
+
+Your task: Decide whether the current route is still the best plan, or whether the new demand card changes things.
+
+RESPONSE FORMAT (JSON):
+{
+  "decision": "continue" | "amend" | "abandon",
+  "amendedStops": [{"action": "PICKUP"|"DELIVER", "load": "...", "city": "...", "demandCardId": N, "payment": N}],
+  "reasoning": "Brief explanation"
+}
+
+DECISION GUIDELINES:
+- "continue": The current route is still the best plan. The new card doesn't improve on it.
+- "amend": The new card offers an opportunity that can be incorporated into the current route with minimal detour. Provide the full amended stop list.
+- "abandon": The new card is significantly better than the current route. The bot should drop the current plan entirely and re-plan next turn.
+
+Only choose "amend" if the detour adds fewer turns than the payout justifies.
+Only choose "abandon" if the current route is clearly suboptimal compared to alternatives.
+When in doubt, choose "continue" — stability is better than constant re-planning.
+
+The "amendedStops" field is only required when decision is "amend".
+`;
+
+/**
+ * Get the system prompt for post-delivery route re-evaluation (JIRA-64).
+ *
+ * Lightweight prompt for focused continue/amend/abandon decision.
+ */
+export function getRouteReEvaluationPrompt(): string {
+  return ROUTE_REEVAL_SYSTEM_SUFFIX;
+}
