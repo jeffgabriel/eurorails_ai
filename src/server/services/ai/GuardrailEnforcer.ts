@@ -29,7 +29,7 @@ export class GuardrailEnforcer {
    *
    * Guardrails (checked in priority order):
    *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
-   *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried
+   *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried AND no active route (JIRA-68)
    *   G3: Block UPGRADE during initialBuild phase
    *   G8: Movement budget enforcement (silent truncation)
    */
@@ -38,6 +38,7 @@ export class GuardrailEnforcer {
     context: GameContext,
     snapshot: WorldSnapshot,
     noProgressTurns: number = 0,
+    hasActiveRoute: boolean = false,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
@@ -61,7 +62,8 @@ export class GuardrailEnforcer {
 
     // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
     // JIRA-47: Skip when bot is carrying loads — traveling with cargo is not "stuck"
-    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && snapshot.bot.loads.length === 0) {
+    // JIRA-68: Skip when bot has an active route — traveling toward a pickup is progress
+    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && snapshot.bot.loads.length === 0 && !hasActiveRoute) {
       console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
       return {
         plan: { type: AIActionType.DiscardHand },

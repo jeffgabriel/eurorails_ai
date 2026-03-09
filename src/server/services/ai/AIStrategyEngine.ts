@@ -323,7 +323,7 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 4: Apply guardrails ──
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns, activeRoute != null);
       let finalPlan: TurnPlan = guardrailResult.plan;
 
       if (guardrailResult.overridden) {
@@ -362,11 +362,11 @@ export class AIStrategyEngine {
       // Update bot memory (including reasoning for next-turn context continuity)
       // Progress-based stuck detection: increment noProgressTurns when turn had
       // zero deliveries AND zero net cash increase AND no new cities connected
-      // AND bot is NOT actively traveling with loads toward a delivery (JIRA-45).
+      // AND bot is NOT actively traveling on an active route (JIRA-45, JIRA-68).
       const hadDelivery = (result.payment ?? 0) > 0;
       const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
       const hadNewTrack = result.segmentsBuilt > 0;
-      const isActivelyTraveling = snapshot.bot.loads.length > 0 && activeRoute != null;
+      const isActivelyTraveling = activeRoute != null;
       const hadDiscard = executedAction === AIActionType.DiscardHand; // JIRA-59: discard = fresh cards = progress
       const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling || hadDiscard;
 

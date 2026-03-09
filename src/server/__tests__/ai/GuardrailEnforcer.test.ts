@@ -476,6 +476,33 @@ describe('GuardrailEnforcer', () => {
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
       });
+
+      it('JIRA-68: Stuck detection skips when bot has an active route (empty-handed travel)', async () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const snap = makeSnapshot();
+        snap.bot.loads = [];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        // noProgressTurns=4, hasActiveRoute=true → should NOT fire stuck detection
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 4, true);
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      it('JIRA-68: Stuck detection fires when no active route, no loads, noProgressTurns >= 3', async () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const snap = makeSnapshot();
+        snap.bot.loads = [];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        // noProgressTurns=3, hasActiveRoute=false → SHOULD fire stuck detection
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 3, false);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toContain('stuck detection');
+      });
     });
 
     describe('Guardrail 8: Movement budget enforcement', () => {
