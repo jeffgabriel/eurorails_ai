@@ -242,7 +242,7 @@ export class LLMStrategyBrain {
     gridPoints: GridPoint[],
     lastAbandonedRouteKey?: string | null,
     previousRouteStops?: RouteStop[] | null, // BE-010
-  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | null> {
+  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | { route: null; llmLog: LlmAttempt[] }> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
     let lastError: string | undefined;
@@ -382,7 +382,7 @@ export class LLMStrategyBrain {
     }
 
     console.warn('[LLMStrategyBrain] All route planning attempts failed.');
-    return null;
+    return { route: null, llmLog };
   }
 
   /**

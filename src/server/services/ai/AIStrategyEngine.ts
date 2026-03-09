@@ -183,7 +183,7 @@ export class AIStrategyEngine {
         // Try to plan a route first (BE-010: pass previous route context)
         const routeResult = await brain.planRoute(snapshot, context, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
 
-        if (routeResult) {
+        if (routeResult.route) {
           activeRoute = routeResult.route;
           console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
 
@@ -221,6 +221,7 @@ export class AIStrategyEngine {
               model: 'heuristic-fallback',
               latencyMs: 0,
               retried: false,
+              llmLog: routeResult.llmLog,
             };
           } else {
             // Heuristic also failed — pass turn
@@ -232,6 +233,7 @@ export class AIStrategyEngine {
               model: 'llm-failed',
               latencyMs: 0,
               retried: false,
+              llmLog: routeResult.llmLog,
             };
           }
         }
@@ -490,6 +492,8 @@ export class AIStrategyEngine {
       let milepostsMoved: number | undefined;
       let trackUsageFee: number | undefined;
       const movementPath: { row: number; col: number }[] = [];
+      const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
+      const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       for (const step of allSteps) {
         if (step.type === AIActionType.MoveTrain) {
@@ -501,6 +505,20 @@ export class AIStrategyEngine {
             const startIndex = (last && last.row === first.row && last.col === first.col) ? 1 : 0;
             movementPath.push(...step.path.slice(startIndex));
           }
+        }
+        if (step.type === AIActionType.DeliverLoad && 'load' in step && 'city' in step) {
+          loadsDelivered.push({
+            loadType: step.load as string,
+            city: step.city as string,
+            payment: (step as any).payout ?? 0,
+            cardId: (step as any).cardId ?? 0,
+          });
+        }
+        if (step.type === AIActionType.PickupLoad && 'load' in step && 'city' in step) {
+          loadsPickedUp.push({
+            loadType: step.load as string,
+            city: step.city as string,
+          });
         }
       }
 
@@ -532,6 +550,8 @@ export class AIStrategyEngine {
         trainType: context.trainType,
         milepostsMoved,
         trackUsageFee,
+        loadsDelivered: loadsDelivered.length > 0 ? loadsDelivered : undefined,
+        loadsPickedUp: loadsPickedUp.length > 0 ? loadsPickedUp : undefined,
         compositionTrace,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
       };

@@ -494,7 +494,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // planRoute fails
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
 
       // heuristicFallback also fails → PassTurn
       mockHeuristicFallback.mockResolvedValue({ success: false });
@@ -793,7 +793,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // planRoute returns null (failed)
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
 
       // heuristicFallback also fails → PassTurn
       mockHeuristicFallback.mockResolvedValue({ success: false });
@@ -805,6 +805,54 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockPlanRoute).toHaveBeenCalled();
       // heuristicFallback SHOULD have been called
       expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('JIRA-63: should propagate llmLog into heuristic fallback decision', async () => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // planRoute fails but returns llmLog with attempt details
+      const failedLlmLog = [
+        { attemptNumber: 1, status: 'parse_error' as const, responseText: 'bad json', error: 'Invalid JSON', latencyMs: 150 },
+        { attemptNumber: 2, status: 'api_error' as const, responseText: '', error: 'Rate limited', latencyMs: 200 },
+      ];
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: failedLlmLog });
+
+      // heuristicFallback succeeds with a BuildTrack plan
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [], targetCity: 'Berlin' },
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.reasoning).toContain('heuristic-fallback');
+      expect(result.llmLog).toEqual(failedLlmLog);
+      expect(result.llmLog).toHaveLength(2);
+      expect(result.llmLog![0].status).toBe('parse_error');
+      expect(result.llmLog![1].status).toBe('api_error');
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -907,7 +955,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // LLM planRoute returns null (failure)
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
 
       // heuristicFallback returns a BUILD plan
       const buildPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Berlin' };
@@ -947,7 +995,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // LLM planRoute returns null (failure)
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
 
       // heuristicFallback also fails
       mockHeuristicFallback.mockResolvedValue({ success: false });
@@ -987,7 +1035,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // LLM planRoute returns null
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
 
       // heuristicFallback returns PassTurn (nothing useful to do)
       mockHeuristicFallback.mockResolvedValue({
@@ -1461,7 +1509,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
       mockHeuristicFallback.mockResolvedValue({
         success: true,
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Berlin' },
@@ -1826,7 +1874,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockPlanRoute.mockResolvedValue(null);
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
       mockHeuristicFallback.mockResolvedValue({
         success: true,
         plan: { type: AIActionType.PassTurn },
