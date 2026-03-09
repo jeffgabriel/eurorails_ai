@@ -137,4 +137,75 @@ describe('RouteValidator', () => {
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
   });
+
+  describe('checkCumulativeBudget — delivery payout credit', () => {
+    it('should credit payout from demand.payout when stop.payment is undefined', () => {
+      const demand = makeDemand({ payout: 19, estimatedTrackCostToDelivery: 0 });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1 },
+          // payment intentionally omitted — should fall back to demand.payout
+        ],
+      });
+      const context = makeContext({ demands: [demand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should use stop.payment when provided (existing behavior)', () => {
+      const demand = makeDemand({ payout: 19 });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 },
+        ],
+      });
+      const context = makeContext({ demands: [demand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+      expect(result.valid).toBe(true);
+    });
+
+    it('should keep later stop feasible when earlier delivery payout covers its cost (payment omitted)', () => {
+      // Multi-stop route: pickup Steel, deliver Steel (19M payout), pickup Tourists, deliver Tourists
+      // Bot starts with 10M — not enough for Tourists delivery track (15M) without Steel payout credit
+      const steelDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Steel',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        payout: 19,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 0,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: true,
+      });
+      const touristDemand = makeDemand({
+        cardIndex: 2,
+        loadType: 'Tourists',
+        supplyCity: 'Essen',
+        deliveryCity: 'Napoli',
+        payout: 32,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 15,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Essen' },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1 },
+          // payment omitted — must fall back to steelDemand.payout (19M)
+          { action: 'pickup', loadType: 'Tourists', city: 'Essen' },
+          { action: 'deliver', loadType: 'Tourists', city: 'Napoli', demandCardId: 2 },
+        ],
+      });
+      const context = makeContext({ demands: [steelDemand, touristDemand] });
+      // Bot starts with 10M — after Steel delivery payout (19M), has 29M, enough for Napoli track (15M)
+      const result = RouteValidator.validate(route, context, makeSnapshot(10));
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+  });
 });

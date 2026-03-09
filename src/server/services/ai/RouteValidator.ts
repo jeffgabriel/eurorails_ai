@@ -242,7 +242,7 @@ export class RouteValidator {
           v.error = `Cumulative budget exceeded: need ~${trackCost}M track to reach ${stop.city}, only ~${runningCash}M remaining after prior stops.`;
         }
         runningCash -= trackCost;
-        runningCash += stop.payment ?? 0;
+        runningCash += stop.payment ?? demand?.payout ?? 0;
       }
     }
   }
