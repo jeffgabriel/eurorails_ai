@@ -490,17 +490,37 @@ export class ContextBuilder {
     );
 
     // 5. Estimate track cost to reach cities not on the network
-    const estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity || isLoadOnTrain
-      ? 0
-      : ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
-    // For cold-start (no track), estimate delivery cost from supply city to delivery city
-    // (not from "nearest major city" to delivery, which can be misleading).
-    const estimatedTrackCostToDelivery = isDeliveryOnNetwork
-      ? 0
-      : ContextBuilder.estimateTrackCost(
-          deliveryCity, snapshot.bot.existingSegments, gridPoints,
-          snapshot.bot.existingSegments.length === 0 ? supplyCity ?? undefined : undefined,
-        );
+    // JIRA-72: On cold-start, use hub-aware cost model instead of mismatched estimateTrackCost calls
+    let estimatedTrackCostToSupply = 0;
+    let estimatedTrackCostToDelivery = 0;
+    let optimalStartingCity: string | undefined;
+    let coldStartIsHubModel = false;
+
+    const isColdStart = snapshot.bot.existingSegments.length === 0;
+    if (isColdStart && supplyCity && !isLoadOnTrain) {
+      const coldStartResult = ContextBuilder.estimateColdStartRouteCost(
+        supplyCity, deliveryCity, gridPoints,
+      );
+      if (coldStartResult) {
+        estimatedTrackCostToSupply = coldStartResult.supplyCost;
+        estimatedTrackCostToDelivery = coldStartResult.deliveryCost;
+        optimalStartingCity = coldStartResult.startingCity;
+        coldStartIsHubModel = coldStartResult.isHubModel;
+      } else {
+        // Fallback to existing estimateTrackCost behavior if hub model fails
+        estimatedTrackCostToSupply = ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
+        estimatedTrackCostToDelivery = ContextBuilder.estimateTrackCost(deliveryCity, snapshot.bot.existingSegments, gridPoints, supplyCity);
+      }
+    } else {
+      estimatedTrackCostToSupply = isSupplyOnNetwork || !supplyCity || isLoadOnTrain
+        ? 0
+        : ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
+      estimatedTrackCostToDelivery = isDeliveryOnNetwork
+        ? 0
+        : ContextBuilder.estimateTrackCost(
+            deliveryCity, snapshot.bot.existingSegments, gridPoints,
+          );
+    }
 
     // 6. Check runtime load availability
     const isLoadAvailable = ContextBuilder.isLoadRuntimeAvailable(loadType, snapshot);
@@ -520,11 +540,39 @@ export class ContextBuilder {
     const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
 
     // Travel distance: BFS hop count through actual hex grid (JIRA-66)
+    // JIRA-72: Hub model travel is S→supply→S→delivery (return to hub between pickup and delivery)
     let travelTurns = 0;
     if (supplyCity) {
       const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
       const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
-      if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
+
+      if (isColdStart && coldStartIsHubModel && optimalStartingCity) {
+        // Hub model: travel from starting city to supply, back to starting city, then to delivery
+        const startPoints = gridPoints.filter(gp => gp.city?.name === optimalStartingCity);
+        if (startPoints.length > 0 && supplyPoints.length > 0 && deliveryPoints.length > 0) {
+          let hopToSupply = Infinity;
+          for (const stP of startPoints) {
+            for (const sp of supplyPoints) {
+              const d = estimateHopDistance(stP.row, stP.col, sp.row, sp.col);
+              if (d > 0 && d < hopToSupply) hopToSupply = d;
+            }
+          }
+          let hopToDelivery = Infinity;
+          for (const stP of startPoints) {
+            for (const dp of deliveryPoints) {
+              const d = estimateHopDistance(stP.row, stP.col, dp.row, dp.col);
+              if (d > 0 && d < hopToDelivery) hopToDelivery = d;
+            }
+          }
+          // S→supply + supply→S (same distance) + S→delivery
+          const totalHops = (hopToSupply < Infinity ? hopToSupply * 2 : 0)
+            + (hopToDelivery < Infinity ? hopToDelivery : 0);
+          if (totalHops > 0) {
+            travelTurns = Math.ceil(totalHops / speed);
+          }
+        }
+      } else if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
+        // Linear model or non-cold-start: supply→delivery
         let minDist = Infinity;
         for (const sp of supplyPoints) {
           for (const dp of deliveryPoints) {
@@ -548,10 +596,11 @@ export class ContextBuilder {
       demand.payment,
     );
 
-    // 11. Compute corridor value and demand score (JIRA-13, JIRA-51)
+    // 11. Compute corridor value and demand score (JIRA-13, JIRA-51, JIRA-72)
     const corridorValue = ContextBuilder.computeCorridorValue(
       supplyCity, deliveryCity,
       snapshot.bot.existingSegments, gridPoints, connectedMajorCities,
+      optimalStartingCity,
     );
     const demandScore = ContextBuilder.scoreDemand(
       demand.payment, totalTrackCost,
@@ -585,6 +634,7 @@ export class ContextBuilder {
       victoryMajorCitiesEnRoute: corridorValue.victoryMajorCities,
       isAffordable: affordability.affordable,
       projectedFundsAfterDelivery: affordability.projectedFunds,
+      optimalStartingCity,
     };
   }
 
@@ -1532,12 +1582,126 @@ export class ContextBuilder {
    *
    * Returns { networkCities, victoryMajorCities } counts.
    */
+  /**
+   * On cold-start (no track), evaluate each major city as a potential starting hub.
+   * Compares hub topology (S→supply + S→delivery) vs linear (S→supply + supply→delivery)
+   * and picks the starting city with the cheapest min(hub, linear) total. (JIRA-72)
+   */
+  private static estimateColdStartRouteCost(
+    supplyCity: string,
+    deliveryCity: string,
+    gridPoints: GridPoint[],
+  ): { supplyCost: number; deliveryCost: number; totalCost: number; startingCity: string; isHubModel: boolean } | null {
+    const majorCityGroups = getMajorCityGroups();
+    const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+    const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
+    if (supplyPoints.length === 0 || deliveryPoints.length === 0) return null;
+
+    // Helper: estimatePathCost returns 0 for both "same point" and "unreachable".
+    // Fall back to hexDistance * 2 (conservative estimate) when pathCost is 0 but points differ.
+    const costBetween = (
+      fromRow: number, fromCol: number, toRow: number, toCol: number,
+    ): number => {
+      if (fromRow === toRow && fromCol === toCol) return 0;
+      const pathCost = estimatePathCost(fromRow, fromCol, toRow, toCol);
+      if (pathCost > 0) return pathCost;
+      const dist = hexDistance(fromRow, fromCol, toRow, toCol);
+      return dist <= 1 ? 0 : Math.round(dist * 2.0);
+    };
+
+    // Pre-compute linear delivery cost (supply→delivery) — invariant across starting cities
+    let bestLinearDeliveryCost = Infinity;
+    for (const sp of supplyPoints) {
+      for (const dp of deliveryPoints) {
+        const cost = costBetween(sp.row, sp.col, dp.row, dp.col);
+        if (cost < bestLinearDeliveryCost) bestLinearDeliveryCost = cost;
+      }
+    }
+
+    let bestTotalCost = Infinity;
+    let bestSupplyCost = 0;
+    let bestDeliveryCost = 0;
+    let bestStartingCity = '';
+    let bestIsHub = false;
+
+    // Build a set of supply city major city names for fast lookup
+    const supplyIsMajor = majorCityGroups.some(g => g.cityName === supplyCity);
+    const deliveryIsMajor = majorCityGroups.some(g => g.cityName === deliveryCity);
+
+    for (const group of majorCityGroups) {
+      // Use gridPoints coordinates for the starting city (handles mock tests where
+      // real major city centers don't match mock coordinates)
+      const startPoints = gridPoints.filter(gp => gp.city?.name === group.cityName);
+      const S = startPoints.length > 0
+        ? { row: startPoints[0].row, col: startPoints[0].col }
+        : group.center;
+
+      // Spoke 1: hub → supply city (0 if hub IS the supply city)
+      let supplyCost = Infinity;
+      if (group.cityName === supplyCity) {
+        supplyCost = 0;
+      } else {
+        for (const sp of supplyPoints) {
+          const cost = costBetween(S.row, S.col, sp.row, sp.col);
+          if (cost < supplyCost) supplyCost = cost;
+        }
+      }
+      if (supplyCost === Infinity) continue;
+
+      // Hub model: hub → delivery city (separate spoke from hub, 0 if hub IS delivery city)
+      let hubDeliveryCost = Infinity;
+      if (group.cityName === deliveryCity) {
+        hubDeliveryCost = 0;
+      } else {
+        for (const dp of deliveryPoints) {
+          const cost = costBetween(S.row, S.col, dp.row, dp.col);
+          if (cost < hubDeliveryCost) hubDeliveryCost = cost;
+        }
+      }
+
+      // Compare hub vs linear topology for this starting city
+      const hubTotal = hubDeliveryCost < Infinity
+        ? supplyCost + hubDeliveryCost
+        : Infinity;
+      const linearTotal = bestLinearDeliveryCost < Infinity
+        ? supplyCost + bestLinearDeliveryCost
+        : Infinity;
+
+      const isHub = hubTotal <= linearTotal;
+      const totalForCity = Math.min(hubTotal, linearTotal);
+      const deliveryCostForCity = isHub
+        ? (hubDeliveryCost < Infinity ? hubDeliveryCost : 0)
+        : (bestLinearDeliveryCost < Infinity ? bestLinearDeliveryCost : 0);
+
+      // Break ties by preferring lower supply cost (starting at supply city is ideal)
+      if (totalForCity < bestTotalCost
+        || (totalForCity === bestTotalCost && supplyCost < bestSupplyCost)) {
+        bestTotalCost = totalForCity;
+        bestSupplyCost = supplyCost;
+        bestDeliveryCost = deliveryCostForCity;
+        bestStartingCity = group.cityName;
+        bestIsHub = isHub;
+      }
+    }
+
+    if (bestTotalCost === Infinity || !bestStartingCity) return null;
+
+    return {
+      supplyCost: bestSupplyCost,
+      deliveryCost: bestDeliveryCost,
+      totalCost: bestTotalCost,
+      startingCity: bestStartingCity,
+      isHubModel: bestIsHub,
+    };
+  }
+
   private static computeCorridorValue(
     supplyCity: string | null,
     deliveryCity: string,
     segments: TrackSegment[],
     gridPoints: GridPoint[],
     connectedMajorCities: string[],
+    startingCity?: string,
   ): { networkCities: number; victoryMajorCities: number } {
     if (!supplyCity) return { networkCities: 0, victoryMajorCities: 0 };
 
@@ -1561,15 +1725,24 @@ export class ContextBuilder {
         }
       }
     } else {
-      // No track: use the closest major city as corridor start
-      const majorCityGroups = getMajorCityGroups();
-      let bestDist = Infinity;
-      corridorStart = { row: supplyPt.row, col: supplyPt.col };
-      for (const group of majorCityGroups) {
-        const dist = hexDistance(supplyPt.row, supplyPt.col, group.center.row, group.center.col);
-        if (dist < bestDist) {
-          bestDist = dist;
-          corridorStart = { row: group.center.row, col: group.center.col };
+      // No track: use provided starting city (from JIRA-72 hub model) or closest major city
+      if (startingCity) {
+        const startPoints = gridPoints.filter(gp => gp.city?.name === startingCity);
+        if (startPoints.length > 0) {
+          corridorStart = { row: startPoints[0].row, col: startPoints[0].col };
+        } else {
+          corridorStart = { row: supplyPt.row, col: supplyPt.col };
+        }
+      } else {
+        const majorCityGroups = getMajorCityGroups();
+        let bestDist = Infinity;
+        corridorStart = { row: supplyPt.row, col: supplyPt.col };
+        for (const group of majorCityGroups) {
+          const dist = hexDistance(supplyPt.row, supplyPt.col, group.center.row, group.center.col);
+          if (dist < bestDist) {
+            bestDist = dist;
+            corridorStart = { row: group.center.row, col: group.center.col };
+          }
         }
       }
     }

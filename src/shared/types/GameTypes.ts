@@ -380,6 +380,49 @@ export enum AIActionType {
     DiscardHand = 'DiscardHand',
 }
 
+/** Timeline step types for animated partial turn movements */
+export interface MoveTimelineStep {
+  type: 'move';
+  path: { row: number; col: number }[];
+}
+
+export interface DeliverTimelineStep {
+  type: 'deliver';
+  loadType: string;
+  city: string;
+  payment: number;
+  cardId: number;
+}
+
+export interface PickupTimelineStep {
+  type: 'pickup';
+  loadType: string;
+  city: string;
+}
+
+export interface BuildTimelineStep {
+  type: 'build';
+  segmentsBuilt: number;
+  cost: number;
+}
+
+export interface UpgradeTimelineStep {
+  type: 'upgrade';
+  trainType: string;
+}
+
+export interface DiscardTimelineStep {
+  type: 'discard';
+}
+
+export type TimelineStep =
+  | MoveTimelineStep
+  | DeliverTimelineStep
+  | PickupTimelineStep
+  | BuildTimelineStep
+  | UpgradeTimelineStep
+  | DiscardTimelineStep;
+
 /** Delivery plan representing a committed pickup→delivery chain */
 export interface DeliveryPlan {
   demandCardId: number;       // Which demand card we're fulfilling
@@ -622,6 +665,8 @@ export interface DemandContext {
     isAffordable: boolean;
     /** Bot's projected funds after delivering all currently carried loads (cash + carried load payouts) */
     projectedFundsAfterDelivery: number;
+    /** On cold-start (no track), the major city that minimizes total route cost as a hub (JIRA-72) */
+    optimalStartingCity?: string;
 }
 
 /** An immediately completable delivery at the bot's current position */
