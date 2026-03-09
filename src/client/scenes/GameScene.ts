@@ -685,6 +685,11 @@ export class GameScene extends Phaser.Scene {
             toast.show(`${botName} upgraded their train`, { color: botColor });
           }
 
+          // Discard hand announcement — sad shake
+          if (data.action === 'DiscardHand') {
+            toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
+          }
+
           // Pickup announcement
           if (data.loadsPickedUp?.length > 0) {
             const loads = data.loadsPickedUp.map((p: any) => `${p.loadType} at ${p.city}`).join(', ');
@@ -705,6 +710,17 @@ export class GameScene extends Phaser.Scene {
           // Cancel any existing animation for this bot (rapid turns)
           if (animator.isAnimating(data.botPlayerId)) {
             animator.cancelAnimation(data.botPlayerId);
+          }
+
+          // Snap sprite to the start of the path before animating —
+          // state:patch may have already moved it to the final position
+          const startPos = data.movementPath[0];
+          const startGrid = this.mapRenderer.gridPoints[startPos.row]?.[startPos.col];
+          if (startGrid) {
+            const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
+            if (sprite) {
+              sprite.setPosition(startGrid.x, startGrid.y);
+            }
           }
 
           // Animate asynchronously
