@@ -40,7 +40,7 @@ export interface BotTurnEntry {
     currentStopIndex: number;
     phase: string;
   };
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>;
   // FE-002: Dynamic upgrade advice
   upgradeAdvice?: string;
   // FE-003: Hand quality metrics
@@ -72,6 +72,7 @@ export class DebugOverlay {
   private botTurnCount: number = 0;
   private botTurnHistory: Map<string, BotTurnEntry[]> = new Map();
   private lastActiveBotId: string | null = null;
+  private expandedHistoryEntries = new Set<string>();
 
   private static readonly MAX_EVENTS = 50;
   private static readonly MAX_BOT_TURNS_PER_PLAYER = 10;
@@ -94,6 +95,19 @@ export class DebugOverlay {
     this.container.id = 'debug-overlay';
     this.applyContainerStyles();
     document.body.appendChild(this.container);
+
+    // Track expanded/collapsed state of history entries across re-renders
+    this.container.addEventListener('toggle', (e) => {
+      const target = e.target as HTMLDetailsElement;
+      const key = target.getAttribute('data-history-entry');
+      if (key) {
+        if (target.open) {
+          this.expandedHistoryEntries.add(key);
+        } else {
+          this.expandedHistoryEntries.delete(key);
+        }
+      }
+    }, true);
 
     // Keyboard toggle handler
     this.keydownHandler = (e: KeyboardEvent) => {
@@ -526,11 +540,11 @@ export class DebugOverlay {
     const pastEntries = entries.slice(1);
     let historyHtml = '';
     if (pastEntries.length > 0) {
-      const rows = pastEntries.map(e => this.renderTurnHistoryRow(e)).join('');
+      const rows = pastEntries.map(e => this.renderTurnHistoryRow(e, botPlayerId)).join('');
       historyHtml = `
         <div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.08);padding-top:6px;">
           <div style="color:#6b7280;font-size:13px;margin-bottom:4px;">History (${pastEntries.length})</div>
-          <div style="max-height:150px;overflow-y:auto;">${rows}</div>
+          <div style="max-height:400px;overflow-y:auto;">${rows}</div>
         </div>
       `;
     }
@@ -564,7 +578,7 @@ export class DebugOverlay {
     return `<div style="margin-top:4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">${parts.join('')}</div>`;
   }
 
-  private renderTurnHistoryRow(entry: BotTurnEntry): string {
+  private renderTurnHistoryRow(entry: BotTurnEntry, botId: string): string {
     const turn = entry.turnNumber != null ? `T${entry.turnNumber}` : 'T?';
     const reasoning = entry.reasoning
       ? entry.reasoning.substring(0, 60) + (entry.reasoning.length > 60 ? '...' : '')
@@ -572,23 +586,68 @@ export class DebugOverlay {
     const duration = `${(entry.durationMs / 1000).toFixed(1)}s`;
     const grTag = entry.guardrailOverride ? ' <span style="color:#f87171;">[GR]</span>' : '';
     const llmTag = DebugOverlay.llmLogSummary(entry.llmLog);
-    return `<div style="padding:2px 0;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}${llmTag}</div>`;
+    const summaryLine = `${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}${llmTag}`;
+    const key = `${botId}-${entry.turnNumber ?? entry.startTime}`;
+    const isOpen = this.expandedHistoryEntries.has(key);
+    const expanded = this.renderExpandedHistoryEntry(entry);
+    return `<details data-history-entry="${key}" ${isOpen ? 'open' : ''} style="padding:2px 0;font-size:13px;color:#9ca3af;">
+      <summary style="cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${summaryLine}</summary>
+      <div style="padding:4px 0 8px 12px;border-left:2px solid rgba(255,255,255,0.1);">${expanded}</div>
+    </details>`;
   }
 
-  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean }>, playerColor: string): string {
+  /** Render expanded details for a past turn history entry */
+  private renderExpandedHistoryEntry(entry: BotTurnEntry): string {
+    let html = '';
+    html += this.renderLlmMetadata(entry);
+    if (entry.llmLog && entry.llmLog.length > 0) {
+      html += this.renderLlmLog(entry.llmLog, true);
+    }
+    if (entry.reasoning) {
+      html += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${entry.reasoning}</div>`;
+    }
+    if (entry.planHorizon) {
+      html += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${entry.planHorizon}</div>`;
+    }
+    if (entry.activeRoute) {
+      const route = entry.activeRoute;
+      const stopsHtml = route.stops.map((s, i) => {
+        const isCurrent = i === route.currentStopIndex;
+        const isDone = i < route.currentStopIndex;
+        const c = isDone ? '#6b7280' : isCurrent ? '#fbbf24' : '#9ca3af';
+        const prefix = isDone ? '\u2713' : isCurrent ? '\u25b6' : '\u2022';
+        return `<span style="color:${c};">${prefix} ${s.action.toUpperCase()} ${s.loadType} @ ${s.city}</span>`;
+      }).join(' &rarr; ');
+      html += `<div style="color:#a78bfa;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(167,139,250,0.1);border-radius:4px;border-left:3px solid #a78bfa;"><strong>Route:</strong> ${stopsHtml} <span style="color:#6b7280;margin-left:8px;">[phase: ${route.phase}]</span></div>`;
+    }
+    if (entry.guardrailOverride) {
+      html += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${entry.guardrailReason || 'unknown'}</div>`;
+    }
+    if (entry.loadsPickedUp || entry.loadsDelivered) {
+      html += this.renderLoadDetails(entry.loadsPickedUp, entry.loadsDelivered);
+    }
+    if (entry.buildTrackData) {
+      html += this.renderBuildTrackDetails(entry.buildTrackData);
+    }
+    if (entry.movementData) {
+      html += this.renderMovementDetails(entry.movementData);
+    }
+    return html;
+  }
+
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>, playerColor: string): string {
     const rows = ranking.map(d => {
       const rowColor = d.rank === 1 ? playerColor : d.score < 0 ? '#f87171' : '#e5e7eb';
-      const tag = d.rank === 1 ? ' \u2190 BEST' : '';
-      const rarityColor = d.supplyRarity === 'UNIQUE' ? '#f472b6' : d.supplyRarity === 'LIMITED' ? '#fbbf24' : '#9ca3af';
-      const rarityTag = d.supplyRarity ? `<span style="color:${rarityColor};font-size:12px;margin-left:4px;">[${d.supplyRarity}]</span>` : '';
-      const staleTag = d.isStale ? '<span style="color:#f87171;font-size:12px;margin-left:4px;">\u26A0STALE</span>' : '';
-      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score}${rarityTag}${staleTag}</td><td style="padding:2px 8px;">${tag}</td></tr>`;
+      const turns = d.estimatedTurns != null ? `${d.estimatedTurns}` : '—';
+      const totalBuildCost = (d.trackCostToSupply ?? 0) + (d.trackCostToDelivery ?? 0);
+      const buildDisplay = totalBuildCost > 0 ? `${totalBuildCost}M` : '0';
+      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;">${buildDisplay}</td><td style="padding:2px 8px;text-align:right;">${turns}</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score.toFixed(2)}</td></tr>`;
     }).join('');
     return `
       <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid ${playerColor};">
         <div style="color:${playerColor};font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
         <table style="font-size:13px;border-collapse:collapse;width:100%;">
-          <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Score</th><th></th></tr>
+          <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Build</th><th style="text-align:right;padding:2px 8px;">Turns</th><th style="text-align:right;padding:2px 8px;">Score</th></tr>
           ${rows}
         </table>
       </div>
@@ -636,7 +695,7 @@ export class DebugOverlay {
   }
 
   /** Render collapsible LLM Attempts panel for a bot turn */
-  private renderLlmLog(log: LlmAttempt[]): string {
+  private renderLlmLog(log: LlmAttempt[], autoOpen: boolean = false): string {
     const failed = log.filter(a => a.status !== 'success').length;
     const summaryLabel = failed > 0
       ? `LLM Attempts (${log.length}) — ${failed} failed`
@@ -670,7 +729,7 @@ export class DebugOverlay {
     }).join('');
 
     return `
-      <details style="margin-top:8px;padding:6px 10px;background:rgba(139,92,246,0.06);border-radius:4px;border-left:3px solid #8b5cf6;">
+      <details ${autoOpen ? 'open' : ''} style="margin-top:8px;padding:6px 10px;background:rgba(139,92,246,0.06);border-radius:4px;border-left:3px solid #8b5cf6;">
         <summary style="cursor:pointer;color:#8b5cf6;font-size:14px;font-weight:bold;">${summaryLabel}</summary>
         <div style="margin-top:4px;">${attempts}</div>
       </details>
