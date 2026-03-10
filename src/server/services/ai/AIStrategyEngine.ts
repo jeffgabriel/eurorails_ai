@@ -311,9 +311,82 @@ export class AIStrategyEngine {
         activeRoute = null;
       }
 
+      // ── Stage 3d: JIRA-83 Post-composition LLM re-eval for same-turn A2 movement ──
+      // When A2 terminated with "no valid target" after a delivery, call LLM to re-evaluate
+      // the route. If re-eval provides a new/amended route, re-compose with remaining budget.
+      let reEvalHandled = false;
+      const hasQueuedDelivery = composedSteps.filter(s => s.type === AIActionType.DeliverLoad).length > 1;
+      if (
+        hasDelivery
+        && !hasQueuedDelivery
+        && compositionTrace.a2?.terminationReason === 'no valid target'
+        && compositionTrace.moveBudget?.wasted > 0
+        && AIStrategyEngine.hasLLMApiKey(botConfig)
+      ) {
+        const routeForReEval = preDeliveryRoute ?? activeRoute;
+        if (routeForReEval) {
+          try {
+            // Refresh demands before re-eval (delivery drew a new card)
+            const freshSnap = await capture(gameId, botPlayerId);
+            const freshDemands = ContextBuilder.rebuildDemands(freshSnap, gridPoints);
+            const reEvalContext = { ...context, demands: freshDemands };
+
+            const brain = AIStrategyEngine.createBrain(botConfig!);
+            const reEvalStart = Date.now();
+            const reEvalResult = await brain.reEvaluateRoute(snapshot, reEvalContext, routeForReEval, gridPoints);
+            const reEvalMs = Date.now() - reEvalStart;
+
+            if (reEvalResult) {
+              console.log(`${tag} JIRA-83: Post-composition re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${reEvalMs}ms)`);
+              logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: reEvalMs });
+
+              let newRoute: StrategicRoute | null = null;
+              if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
+                newRoute = { ...routeForReEval, stops: reEvalResult.amendedStops, currentStopIndex: 0 };
+              } else if (reEvalResult.decision === 'continue') {
+                newRoute = routeForReEval;
+              }
+              // abandon or null → keep existing plan as-is
+
+              if (newRoute) {
+                // Simulate current plan to get post-execution state
+                const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
+                const simContext = { ...reEvalContext, speed: compositionTrace.moveBudget.wasted };
+                const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+                for (const step of planSteps) {
+                  ActionResolver.applyPlanToState(step, simSnapshot, simContext);
+                }
+
+                // Execute route step with remaining budget, then compose for A2 enrichment
+                const routeExec = await PlanExecutor.execute(newRoute, simSnapshot, simContext);
+                if (routeExec.plan.type !== AIActionType.PassTurn) {
+                  const reComposition = await TurnComposer.compose(routeExec.plan, simSnapshot, simContext, newRoute);
+                  const reCompSteps = reComposition.plan.type === 'MultiAction'
+                    ? reComposition.plan.steps : [reComposition.plan];
+                  decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, ...reCompSteps] };
+
+                  compositionTrace.a2.terminationReason = `re-eval(${reEvalResult.decision}) → ${reComposition.trace.a2.terminationReason}`;
+                  compositionTrace.moveBudget.wasted = reComposition.trace.moveBudget.wasted;
+
+                  console.log(`${tag} JIRA-83: Re-composed with ${reCompSteps.length} additional steps after re-eval`);
+                }
+
+                activeRoute = newRoute;
+                reEvalHandled = true;
+              }
+            } else {
+              console.log(`${tag} JIRA-83: Re-evaluation returned null, keeping existing plan (${Date.now() - reEvalStart}ms)`);
+            }
+          } catch (err) {
+            console.warn(`${tag} JIRA-83: Post-composition re-eval error, keeping existing plan:`, err instanceof Error ? err.message : err);
+          }
+        }
+      }
+
       // ── Stage 3e: Continuation after route completion ──
       // When the route just completed, fill remaining budget with a heuristic action.
-      if (routeWasCompleted) {
+      // JIRA-83: Skip if re-eval already handled continuation with LLM-guided route.
+      if (routeWasCompleted && !reEvalHandled) {
         // Simulate plan effects so heuristicFallback sees post-route state
         const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
         const simContext = { ...context };
@@ -485,9 +558,10 @@ export class AIStrategyEngine {
         }
 
         // JIRA-64 Part 2: Post-delivery LLM re-evaluation
+        // JIRA-83: Skip if already handled during post-composition re-eval (Stage 3d).
         // Use preDeliveryRoute since activeRoute was cleared at line 301 for next-turn re-planning.
         const routeForReEval = activeRoute ?? preDeliveryRoute;
-        if (routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
+        if (!reEvalHandled && routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
           try {
             const brain = AIStrategyEngine.createBrain(botConfig!);
             const reEvalStart = Date.now();
