@@ -52,6 +52,13 @@ jest.mock('../../services/ai/MapTopology', () => ({
   hexDistance: jest.fn((r1: number, c1: number, r2: number, c2: number) => {
     return Math.abs(r1 - r2) + Math.abs(c1 - c2);
   }),
+  makeKey: jest.fn((row: number, col: number) => `${row},${col}`),
+  isWater: jest.fn(() => false),
+  getFerryPairPort: jest.fn(() => null),
+  estimateHopDistance: jest.fn(() => 10),
+  estimatePathCost: jest.fn(() => 5),
+  computeLandmass: jest.fn(() => new Set<string>()),
+  computeFerryRouteInfo: jest.fn(() => ({ canCrossFerry: false, departurePorts: [], arrivalPorts: [], cheapestFerryCost: Infinity })),
   _resetCache: jest.fn(),
 }));
 

@@ -92,7 +92,7 @@ describe('DebugOverlay', () => {
       const container = document.getElementById('debug-overlay')!;
       expect(container.style.position).toBe('fixed');
       expect(container.style.right).toBe('0px');
-      expect(container.style.width).toBe('400px');
+      expect(container.style.width).toBe('60vw');
       expect(container.style.zIndex).toBe('5000');
     });
 
@@ -444,26 +444,20 @@ describe('DebugOverlay', () => {
       turnNumber: 2,
       action: 'BuildTrack',
       durationMs: 250,
-      segmentsBuilt: [
-        { from: '(5,10)', to: '(5,11)', terrain: 'Clear', cost: 1 },
-        { from: '(5,11)', to: '(6,12)', terrain: 'Mountain', cost: 2 },
-      ],
-      totalCost: 3,
+      segmentsBuilt: 2,
+      cost: 3,
       remainingMoney: 47,
-      targetCity: 'Berlin',
+      buildTargetCity: 'Berlin',
     };
 
-    it('should display segment details for BuildTrack action', () => {
+    it('should display segment count for BuildTrack action', () => {
       (localStorage.getItem as jest.Mock).mockReturnValue('true');
       overlay = new DebugOverlay(mockScene, mockGameStateService);
       const container = document.getElementById('debug-overlay')!;
 
       overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
 
-      expect(container.innerHTML).toContain('(5,10) → (5,11)');
-      expect(container.innerHTML).toContain('Clear');
-      expect(container.innerHTML).toContain('(5,11) → (6,12)');
-      expect(container.innerHTML).toContain('Mountain');
+      expect(container.innerHTML).toContain('Segments: 2');
     });
 
     it('should display total cost and remaining money', () => {
@@ -484,7 +478,7 @@ describe('DebugOverlay', () => {
 
       overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
 
-      expect(container.innerHTML).toContain('Target: Berlin');
+      expect(container.innerHTML).toContain('Building toward: Berlin');
     });
 
     it('should not display target city when not provided', () => {
@@ -492,10 +486,10 @@ describe('DebugOverlay', () => {
       overlay = new DebugOverlay(mockScene, mockGameStateService);
       const container = document.getElementById('debug-overlay')!;
 
-      const { targetCity, ...payloadWithoutCity } = buildTrackPayload;
+      const { buildTargetCity, ...payloadWithoutCity } = buildTrackPayload;
       overlay.logSocketEvent('bot:turn-complete', payloadWithoutCity);
 
-      expect(container.innerHTML).not.toContain('Target:');
+      expect(container.innerHTML).not.toContain('Building toward:');
       expect(container.innerHTML).toContain('Cost: 3M');
     });
 
@@ -507,19 +501,17 @@ describe('DebugOverlay', () => {
       overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
 
       expect(container.innerHTML).not.toContain('Cost:');
-      expect(container.innerHTML).not.toContain('Target:');
-      expect(container.innerHTML).not.toContain('→');
+      expect(container.innerHTML).not.toContain('Building toward:');
     });
 
-    it('should display individual segment costs', () => {
+    it('should display segment count and cost in combined line', () => {
       (localStorage.getItem as jest.Mock).mockReturnValue('true');
       overlay = new DebugOverlay(mockScene, mockGameStateService);
       const container = document.getElementById('debug-overlay')!;
 
       overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
 
-      expect(container.innerHTML).toContain('1M');
-      expect(container.innerHTML).toContain('2M');
+      expect(container.innerHTML).toContain('Segments: 2 | Cost: 3M | Remaining: 47M');
     });
   });
 
@@ -812,7 +804,7 @@ describe('DebugOverlay', () => {
       expect(html).toContain('T1: BuildTrack');
     });
 
-    it('should truncate reasoning to 60 chars in history rows', () => {
+    it('should truncate reasoning to 60 chars in history row summary', () => {
       (localStorage.getItem as jest.Mock).mockReturnValue('true');
       overlay = new DebugOverlay(mockScene, mockGameStateService);
       const container = document.getElementById('debug-overlay')!;
@@ -822,9 +814,10 @@ describe('DebugOverlay', () => {
       overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50, turnNumber: 2 });
 
       const html = container.innerHTML;
-      // History row for T1 should have truncated reasoning
+      // History row summary for T1 should have truncated reasoning with ellipsis
       expect(html).toContain('A'.repeat(60) + '...');
-      expect(html).not.toContain('A'.repeat(80));
+      // The full reasoning still appears in the expanded detail section
+      expect(html).toContain('A'.repeat(80));
     });
 
     it('should show guardrail override tag [GR] in history rows', () => {

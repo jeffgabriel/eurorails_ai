@@ -736,7 +736,8 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.route).toBeNull();
       // 3 attempts total (initial + 2 retries)
       expect(mockChat).toHaveBeenCalledTimes(3);
     });
@@ -866,7 +867,8 @@ describe('LLMStrategyBrain', () => {
         makeSnapshot(), makeContext(), [], 'Coal:Krakow',
       );
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.route).toBeNull();
       // Should exhaust all retries (initial + 2 retries = 3 calls)
       expect(mockChat).toHaveBeenCalledTimes(3);
     });
@@ -1169,9 +1171,13 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.route).toBeNull();
       // Should have logged multiple validation_error entries (up to MAX_RETRIES+1)
-      expect(result).toBeNull(); // returns null on total failure, but we can't access llmLog
+      expect(result!.llmLog.length).toBeGreaterThanOrEqual(1);
+      for (const entry of result!.llmLog) {
+        expect(entry.status).toBe('validation_error');
+      }
     });
 
     it('should log api_error when adapter.chat() throws', async () => {
@@ -1180,9 +1186,12 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
-      // planRoute returns null on total failure; llmLog is not accessible
-      // This verifies the method doesn't crash
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.route).toBeNull();
+      expect(result!.llmLog.length).toBeGreaterThanOrEqual(1);
+      for (const entry of result!.llmLog) {
+        expect(entry.status).toBe('api_error');
+      }
     });
 
     it('should log parse_error when parseStrategicRoute throws ParseError', async () => {
@@ -1193,7 +1202,12 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result!.route).toBeNull();
+      expect(result!.llmLog.length).toBeGreaterThanOrEqual(1);
+      for (const entry of result!.llmLog) {
+        expect(entry.status).toBe('parse_error');
+      }
     });
 
     it('should include llmLog in successful return value with truncated responseText', async () => {

@@ -409,7 +409,7 @@ describe('Lobby API HTTP Integration Tests', () => {
         .get(`/api/lobby/games/${testGame.id}`)
         .expect(200);
 
-      expect(gameResponse.body.data.status).toBe('active');
+      expect(gameResponse.body.data.status).toBe('initialBuild');
     });
 
     it('should handle insufficient players', async () => {

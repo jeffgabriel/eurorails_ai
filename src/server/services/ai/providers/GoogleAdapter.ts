@@ -60,15 +60,14 @@ export class GoogleAdapter implements ProviderAdapter {
         generationConfig,
       };
 
-      // Add thinkingConfig inside generationConfig for models that support it
-      // (Google REST API requires thinkingConfig nested under generationConfig)
+      // Add thinkingConfig as a top-level request body field for models that support it
       if (request.thinking) {
         if (this.isGemini3Model(request.model)) {
-          generationConfig.thinkingConfig = {
+          body.thinkingConfig = {
             thinkingLevel: request.effort ?? 'medium',
           };
         } else if (this.isGemini25Model(request.model)) {
-          generationConfig.thinkingConfig = {
+          body.thinkingConfig = {
             thinkingBudget: -1,
           };
         }
