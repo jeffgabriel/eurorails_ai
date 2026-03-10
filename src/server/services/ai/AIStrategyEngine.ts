@@ -558,10 +558,11 @@ export class AIStrategyEngine {
         }
 
         // JIRA-64 Part 2: Post-delivery LLM re-evaluation
-        // JIRA-83: Skip if already handled during post-composition re-eval (Stage 3d).
+        // JIRA-83: Skip if already handled during post-composition re-eval (Stage 3d),
+        // or if plan has queued deliveries (don't replace productive plans).
         // Use preDeliveryRoute since activeRoute was cleared at line 301 for next-turn re-planning.
         const routeForReEval = activeRoute ?? preDeliveryRoute;
-        if (!reEvalHandled && routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
+        if (!reEvalHandled && !hasQueuedDelivery && routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
           try {
             const brain = AIStrategyEngine.createBrain(botConfig!);
             const reEvalStart = Date.now();

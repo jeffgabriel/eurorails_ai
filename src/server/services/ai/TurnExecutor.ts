@@ -190,6 +190,21 @@ export class TurnExecutor {
     const concatenatedPath: { row: number; col: number }[] = [];
 
     for (const step of steps) {
+      // JIRA-83: Skip DELIVER/DROP steps when bot is not at a named city.
+      // Earlier steps (MOVE) already committed to DB, so failing the entire turn
+      // would misrepresent what happened. Warn and continue instead.
+      if (step.type === AIActionType.DeliverLoad || step.type === AIActionType.DropLoad) {
+        const grid = loadGridPoints();
+        const posKey = snapshot.bot.position
+          ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+          : '';
+        const currentPoint = posKey ? grid.get(posKey) : undefined;
+        if (!currentPoint?.name) {
+          console.warn(`[TurnExecutor] JIRA-83: Skipping ${step.type} — bot not at named city (pos=${posKey})`);
+          continue;
+        }
+      }
+
       const option = TurnExecutor.planToOption(step);
 
       let result: ExecutionResult;

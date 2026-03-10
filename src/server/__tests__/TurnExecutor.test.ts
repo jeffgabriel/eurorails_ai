@@ -867,3 +867,123 @@ describe('TurnExecutor — handleDeliverLoad', () => {
     expect(result.newCardId).toBe(99);
   });
 });
+
+describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
+  it('should skip DELIVER step when bot is not at a named city and continue remaining steps', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    // Empty grid = no city at bot position
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map());
+
+    // Mock DB for build step
+    const mockClient = {
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      release: jest.fn(),
+    };
+    (db.connect as jest.Mock).mockResolvedValue(mockClient);
+    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    mockEmitStatePatch.mockResolvedValue(undefined);
+
+    const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
+
+    const multiPlan = {
+      type: 'MultiAction' as const,
+      steps: [
+        {
+          type: AIActionType.DeliverLoad,
+          load: 'Steel',
+          city: 'Berlin',
+          cardId: 1,
+          payout: 19,
+        },
+        {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(1)],
+          targetCity: 'Berlin',
+        },
+      ],
+    };
+
+    const result = await TurnExecutor.executePlan(multiPlan as any, snapshot);
+
+    // Should succeed — DELIVER skipped, BUILD executed
+    expect(result.success).toBe(true);
+    expect(result.segmentsBuilt).toBe(1);
+  });
+
+  it('should skip DROP step when bot is not at a named city', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map());
+
+    const mockClient = {
+      query: jest.fn().mockResolvedValue({ rows: [] }),
+      release: jest.fn(),
+    };
+    (db.connect as jest.Mock).mockResolvedValue(mockClient);
+    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    mockEmitStatePatch.mockResolvedValue(undefined);
+
+    const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
+
+    const multiPlan = {
+      type: 'MultiAction' as const,
+      steps: [
+        {
+          type: AIActionType.DropLoad,
+          load: 'Steel',
+          city: 'Berlin',
+        },
+        {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(1)],
+          targetCity: 'Berlin',
+        },
+      ],
+    };
+
+    const result = await TurnExecutor.executePlan(multiPlan as any, snapshot);
+
+    // Should succeed — DROP skipped, BUILD executed
+    expect(result.success).toBe(true);
+    expect(result.segmentsBuilt).toBe(1);
+  });
+
+  it('should execute DELIVER normally when bot IS at a named city', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, name: 'Berlin', terrain: 2 }],
+    ]));
+
+    (PlayerService.deliverLoadForUser as jest.Mock).mockResolvedValue({
+      payment: 19,
+      updatedMoney: 69,
+      newCard: { id: 50, demands: [] },
+    });
+    mockEmitStatePatch.mockResolvedValue(undefined);
+    mockEmitToGame.mockImplementation(() => {});
+
+    const snapshot = makeSnapshot({
+      position: { row: 29, col: 32 },
+      money: 50,
+      loads: ['Steel'],
+      demandCards: [1],
+    });
+
+    const multiPlan = {
+      type: 'MultiAction' as const,
+      steps: [
+        {
+          type: AIActionType.DeliverLoad,
+          load: 'Steel',
+          city: 'Berlin',
+          cardId: 1,
+          payout: 19,
+        },
+      ],
+    };
+
+    const result = await TurnExecutor.executePlan(multiPlan as any, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.payment).toBe(19);
+  });
+});
