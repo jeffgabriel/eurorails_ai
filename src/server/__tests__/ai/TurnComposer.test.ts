@@ -4274,4 +4274,83 @@ describe('TurnComposer', () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe('JIRA-76: post-route-completion move targets by demandScore', () => {
+    it('prioritizes demand with higher demandScore over higher payout for supply city targeting', async () => {
+      // Scenario: bot at Dublin, no loads, no active route (route completed).
+      // Two demands: Wine (high payout=40, low demandScore=2) and Coal (low payout=15, high demandScore=8).
+      // Both supply cities are on network. findMoveTargets should try Coal's supply city first
+      // because demandScore is the sort key, not payout.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          position: { row: 10, col: 24 },
+        },
+      });
+      const context = makeContext({
+        speed: 9,
+        loads: [],
+        position: { row: 10, col: 24 },
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Bordeaux',
+            payout: 40, isSupplyReachable: true, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 8,
+            demandScore: 2, efficiencyPerTurn: 0.5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+          {
+            cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 15, isSupplyReachable: true, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 5,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+            demandScore: 8, efficiencyPerTurn: 3.0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+        ],
+      });
+
+      // No active route — simulates post-route-completion state
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 24, 11, 25)],
+        targetCity: 'Paris',
+      };
+
+      mockResolve
+        // A3: MOVE to Berlin (highest demandScore supply city) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 10, col: 24 }, { row: 11, col: 25 }, { row: 12, col: 26 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // Verify: the first MOVE target attempted should be Berlin (demandScore=8),
+      // NOT Lyon (payout=40 but demandScore=2)
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls.length).toBeGreaterThanOrEqual(1);
+      expect(moveCalls[0][0].details.to).toBe('Berlin');
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+  });
 });

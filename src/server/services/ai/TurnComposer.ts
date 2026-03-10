@@ -774,7 +774,7 @@ export class TurnComposer {
     // Priority 2: Demand delivery cities on network (bot has the load)
     // Use live context.loads instead of stale demand.isLoadOnTrain — loads change
     // during turn composition (deliveries remove loads, pickups add them).
-    const sorted = [...context.demands].sort((a, b) => b.payout - a.payout);
+    const sorted = [...context.demands].sort((a, b) => b.demandScore - a.demandScore);
     for (const demand of sorted) {
       if (context.loads.includes(demand.loadType) && demand.isDeliveryOnNetwork) {
         add(demand.deliveryCity);
