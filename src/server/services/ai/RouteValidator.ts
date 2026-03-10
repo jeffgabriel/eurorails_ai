@@ -21,7 +21,7 @@ import {
   DemandContext,
   TerrainType,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints, estimateHopDistance, GridPointData } from './MapTopology';
 
 export interface RouteValidationResult {
   valid: boolean;
@@ -58,6 +58,29 @@ export class RouteValidator {
         ? RouteValidator.checkPickupFeasibility(stop, context, snapshot)
         : RouteValidator.checkDeliverFeasibility(stop, context, snapshot),
     );
+
+    // ── Reorder stops by geographic proximity ──
+    // Greedy nearest-neighbor with pickup-before-delivery constraints.
+    // Must run before cumulative budget check so budget is validated against
+    // the actual execution order.
+    if (validations.length > 1) {
+      const gridPoints = loadGridPoints();
+      const botPos = snapshot.bot.position;
+      const reordered = RouteValidator.reorderStopsByProximity(
+        validations.filter(v => v.feasible).map(v => v.stop),
+        botPos,
+        gridPoints,
+      );
+      // Rebuild validations array in reordered sequence
+      const reorderedValidations: StopValidation[] = reordered.map(stop => {
+        const orig = validations.find(v => v.stop === stop);
+        return orig!;
+      });
+      // Append infeasible stops at the end (order doesn't matter for them)
+      const infeasible = validations.filter(v => !v.feasible);
+      validations.length = 0;
+      validations.push(...reorderedValidations, ...infeasible);
+    }
 
     // ── Cumulative budget check ──
     // Runs on the full stop sequence; marks later stops infeasible if
@@ -110,6 +133,11 @@ export class RouteValidator {
       const totalEstCost = RouteValidator.estimateTotalRouteCost(validations, context);
       if (totalEstCost > 0 && snapshot.bot.money - totalEstCost < 5) {
         console.warn(`${tag} Route feasible but marginal: estimated cost ${totalEstCost}M, cash ${snapshot.bot.money}M`);
+      }
+      // Return reordered route if stop order changed
+      const stopsChanged = feasibleStops.some((s, i) => s !== route.stops[i]);
+      if (stopsChanged) {
+        return { valid: true, prunedRoute: { ...route, stops: feasibleStops }, errors: [] };
       }
       return { valid: true, errors: [] };
     }
@@ -245,6 +273,84 @@ export class RouteValidator {
         runningCash += stop.payment ?? demand?.payout ?? 0;
       }
     }
+  }
+
+  // ── Stop reordering ─────────────────────────────────────────────────────
+
+  /**
+   * Reorder route stops by geographic proximity using greedy nearest-neighbor.
+   * Respects pickup-before-delivery constraints: a deliver(loadType) can only
+   * be selected after its corresponding pickup(loadType) has been placed.
+   */
+  static reorderStopsByProximity(
+    stops: RouteStop[],
+    botPosition: { row: number; col: number },
+    gridPoints: Map<string, GridPointData>,
+  ): RouteStop[] {
+    const tag = '[RouteValidator]';
+    if (stops.length <= 1) return stops;
+
+    // Build city coordinate lookup (first matching grid point per city name)
+    const cityCoords = new Map<string, { row: number; col: number }>();
+    for (const [, gp] of gridPoints) {
+      if (gp.name && !cityCoords.has(gp.name.toLowerCase())) {
+        cityCoords.set(gp.name.toLowerCase(), { row: gp.row, col: gp.col });
+      }
+    }
+
+    // Build dependency map: deliver(loadType) requires pickup(loadType) first
+    const pickupDone = new Set<string>();
+    const remaining = [...stops];
+    const ordered: RouteStop[] = [];
+    let currentPos = { row: botPosition.row, col: botPosition.col };
+
+    while (remaining.length > 0) {
+      // Find eligible stops (pickups are always eligible; delivers need their pickup done)
+      const eligible = remaining.filter(s =>
+        s.action === 'pickup' || pickupDone.has(s.loadType),
+      );
+
+      if (eligible.length === 0) {
+        // Safety: no eligible stops but remaining exist — append in original order
+        ordered.push(...remaining);
+        break;
+      }
+
+      // Pick the nearest eligible stop
+      let nearest = eligible[0];
+      let nearestDist = Infinity;
+      for (const stop of eligible) {
+        const coords = cityCoords.get(stop.city.toLowerCase());
+        if (!coords) continue;
+        const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
+        if (dist >= 0 && dist < nearestDist) {
+          nearestDist = dist;
+          nearest = stop;
+        }
+      }
+
+      ordered.push(nearest);
+      const idx = remaining.indexOf(nearest);
+      remaining.splice(idx, 1);
+
+      // Update state
+      if (nearest.action === 'pickup') {
+        pickupDone.add(nearest.loadType);
+      }
+      const coords = cityCoords.get(nearest.city.toLowerCase());
+      if (coords) {
+        currentPos = { row: coords.row, col: coords.col };
+      }
+    }
+
+    // Log if order changed
+    const originalOrder = stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
+    const newOrder = ordered.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
+    if (originalOrder !== newOrder) {
+      console.log(`${tag} Reordered stops by proximity:\n  was: ${originalOrder}\n  now: ${newOrder}`);
+    }
+
+    return ordered;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

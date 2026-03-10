@@ -14,10 +14,12 @@ import {
 } from '../../../shared/types/GameTypes';
 import { GridPointData } from '../../services/ai/MapTopology';
 
-// Mock MapTopology — loadGridPoints returns a controllable Map
+// Mock MapTopology — loadGridPoints and estimateHopDistance return controllable values
 const mockGridPoints = new Map<string, GridPointData>();
+const mockEstimateHopDistance = jest.fn(() => 10);
 jest.mock('../../services/ai/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGridPoints),
+  estimateHopDistance: (...args: number[]) => mockEstimateHopDistance(...args),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
@@ -136,6 +138,146 @@ describe('RouteValidator', () => {
     const result = RouteValidator.validate(route, makeContext(), makeSnapshot());
     expect(result.valid).toBe(true);
     expect(result.errors).toHaveLength(0);
+  });
+
+  describe('reorderStopsByProximity', () => {
+    beforeEach(() => {
+      // Set up grid points for test cities
+      mockGridPoints.set('10,5', { row: 10, col: 5, terrain: TerrainType.MajorCity, name: 'Essen' });
+      mockGridPoints.set('30,20', { row: 30, col: 20, terrain: TerrainType.MajorCity, name: 'Ruhr' });
+      mockGridPoints.set('12,7', { row: 12, col: 7, terrain: TerrainType.MajorCity, name: 'Valencia' });
+      mockGridPoints.set('25,15', { row: 25, col: 15, terrain: TerrainType.MajorCity, name: 'Berlin' });
+      mockGridPoints.set('40,25', { row: 40, col: 25, terrain: TerrainType.MajorCity, name: 'Praha' });
+    });
+
+    it('should reorder closer pickup before farther pickup', () => {
+      // Bot at Essen (10,5). Valencia (12,7) is closer than Ruhr (30,20).
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, fromCol: number, toRow: number, toCol: number) => {
+          // Essen→Valencia = 3, Essen→Ruhr = 20, Valencia→Ruhr = 18, Ruhr→Berlin = 10, Valencia→Berlin = 15
+          if (fromRow === 10 && toRow === 12) return 3;   // Essen→Valencia
+          if (fromRow === 10 && toRow === 30) return 20;  // Essen→Ruhr
+          if (fromRow === 12 && toRow === 30) return 18;  // Valencia→Ruhr
+          if (fromRow === 12 && toRow === 25) return 15;  // Valencia→Berlin
+          if (fromRow === 30 && toRow === 25) return 10;  // Ruhr→Berlin
+          if (fromRow === 30 && toRow === 12) return 18;  // Ruhr→Valencia
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
+        { action: 'deliver' as const, loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
+        { action: 'pickup' as const, loadType: 'Oranges', city: 'Valencia' },
+        { action: 'deliver' as const, loadType: 'Oranges', city: 'Ruhr', demandCardId: 2, payment: 10 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+      );
+
+      // Valencia (3 hops) should come before Ruhr (20 hops)
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Valencia' }));
+      // Oranges deliver at Ruhr should follow Oranges pickup
+      const orangesPickupIdx = result.findIndex(s => s.action === 'pickup' && s.loadType === 'Oranges');
+      const orangesDeliverIdx = result.findIndex(s => s.action === 'deliver' && s.loadType === 'Oranges');
+      expect(orangesPickupIdx).toBeLessThan(orangesDeliverIdx);
+    });
+
+    it('should maintain pickup-before-delivery constraint', () => {
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          // Make Berlin (deliver city) closer than Essen (pickup city)
+          if (toRow === 25) return 2;  // →Berlin: very close
+          if (toRow === 10) return 15; // →Essen: far
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
+        { action: 'deliver' as const, loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 30, col: 20 }, // bot far from both
+        mockGridPoints,
+      );
+
+      // Even though Berlin is closer, pickup must come before deliver
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Essen' }));
+      expect(result[1]).toEqual(expect.objectContaining({ action: 'deliver', city: 'Berlin' }));
+    });
+
+    it('should return single-stop route unchanged', () => {
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+      );
+
+      expect(result).toEqual(stops);
+      expect(result).toHaveLength(1);
+    });
+
+    it('should not change already-optimal order', () => {
+      mockEstimateHopDistance.mockImplementation(
+        (_fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          if (toRow === 10) return 2;  // Essen: closest
+          if (toRow === 25) return 5;  // Berlin: second
+          return 20;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Coal', city: 'Essen' },
+        { action: 'deliver' as const, loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 8, col: 4 }, // near Essen
+        mockGridPoints,
+      );
+
+      // Order should be unchanged: pickup Essen then deliver Berlin
+      expect(result[0]).toBe(stops[0]);
+      expect(result[1]).toBe(stops[1]);
+    });
+
+    it('should handle same-city pickup and deliver correctly', () => {
+      mockEstimateHopDistance.mockImplementation(
+        (_fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          if (toRow === 30) return 5;  // Ruhr
+          if (toRow === 40) return 20; // Praha
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Steel', city: 'Ruhr' },
+        { action: 'deliver' as const, loadType: 'Oranges', city: 'Ruhr', demandCardId: 2, payment: 10 },
+        { action: 'deliver' as const, loadType: 'Steel', city: 'Praha', demandCardId: 1, payment: 20 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+      );
+
+      // Steel pickup must come before Steel deliver
+      const steelPickupIdx = result.findIndex(s => s.action === 'pickup' && s.loadType === 'Steel');
+      const steelDeliverIdx = result.findIndex(s => s.action === 'deliver' && s.loadType === 'Steel');
+      expect(steelPickupIdx).toBeLessThan(steelDeliverIdx);
+    });
   });
 
   describe('checkCumulativeBudget — delivery payout credit', () => {
