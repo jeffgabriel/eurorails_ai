@@ -9,6 +9,21 @@ import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
 import { Label } from '../../components/ui/label';
 
+/** Derive a friendly bot name from the model identifier, e.g. "claude-haiku-4-5..." → "Haiku" */
+function defaultBotName(provider: string, skillLevel: string): string {
+  const model = LLM_DEFAULT_MODELS[provider as LLMProvider]?.[skillLevel as BotSkillLevel] ?? '';
+  if (provider === LLMProvider.Anthropic) {
+    if (model.includes('haiku')) return 'Haiku';
+    if (model.includes('sonnet')) return 'Sonnet';
+    if (model.includes('opus')) return 'Opus';
+  }
+  if (provider === LLMProvider.Google) {
+    if (model.includes('flash')) return 'Flash';
+    if (model.includes('pro')) return 'Pro';
+  }
+  return '';
+}
+
 interface BotConfigPopoverProps {
   gameId: string;
   onAddBot: (config: { skillLevel: string; name?: string; provider?: string; model?: string }) => Promise<void>;
@@ -24,6 +39,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const defaultModel = LLM_DEFAULT_MODELS[provider as LLMProvider]?.[skillLevel as BotSkillLevel] ?? '';
+  const derivedName = defaultBotName(provider, skillLevel);
 
   const resetForm = () => {
     setSkillLevel(BotSkillLevel.Easy);
@@ -40,7 +56,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
     setOpen(false);
     const config = {
       skillLevel,
-      name: name.trim() || undefined,
+      name: name.trim() || derivedName || undefined,
       provider: provider || undefined,
       model: model.trim() || undefined,
     };
@@ -70,7 +86,12 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
           Add Bot
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-80">
+      <PopoverContent className="w-80" onKeyDown={(e) => {
+        if (e.key === 'Enter' && !isSubmitting && !nameError) {
+          e.preventDefault();
+          handleSubmit();
+        }
+      }}>
         <div className="space-y-4">
           <div className="space-y-1">
             <h4 className="font-medium text-sm">Add AI Bot</h4>
@@ -130,7 +151,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
             <Input
               id="bot-name"
               aria-label="Bot name"
-              placeholder="Auto-generated if empty"
+              placeholder={derivedName || 'Auto-generated if empty'}
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={20}

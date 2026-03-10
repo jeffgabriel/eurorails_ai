@@ -1153,7 +1153,7 @@ describe('ContextBuilder.build — demand context computation', () => {
     expect(context.demands).toEqual([]);
   });
 
-  it('should set supplyCity to "Unknown" when no supply city exists for load', async () => {
+  it('should set supplyCity to "NoSupply" when no supply city exists and load not on train (JIRA-82)', async () => {
     // Create grid with no city that supplies "Uranium"
     const { segments, gridPoints } = makeTestGridWithNetwork();
     const snapshot = makeWorldSnapshot({
@@ -1171,8 +1171,10 @@ describe('ContextBuilder.build — demand context computation', () => {
     const demand = context.demands.find(d => d.loadType === 'Uranium');
 
     expect(demand).toBeDefined();
-    expect(demand!.supplyCity).toBe('Unknown');
+    expect(demand!.supplyCity).toBe('NoSupply');
     expect(demand!.isSupplyReachable).toBe(false);
+    expect(demand!.demandScore).toBe(-999);
+    expect(demand!.estimatedTurns).toBe(99);
   });
 });
 
@@ -2834,5 +2836,71 @@ describe('ContextBuilder ferry-aware estimateTrackCost', () => {
     // Ferry-paid should be cheaper (no overland-to-port cost, no ferry cost)
     expect(demandWithFerry!.estimatedTrackCostToDelivery)
       .toBeLessThan(demandNoFerry!.estimatedTrackCostToDelivery);
+  });
+});
+
+// ── JIRA-82: No supply cities → unfulfillable demand ─────────────────────────
+
+describe('ContextBuilder.build — JIRA-82: no supply cities without load on train', () => {
+  it('should mark demand as unfulfillable when no supply cities have chips and load is NOT on train', async () => {
+    // Grid: Lyon(0,0) - (0,1) - Paris(0,2). No city supplies Coal.
+    const segments = [makeSegment(0, 0, 0, 1), makeSegment(0, 1, 0, 2)];
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(0, 0, 'Lyon', TerrainType.MajorCity, ['Wine']),
+      makeGridPoint(0, 1),
+      makeCityPoint(0, 2, 'Paris', TerrainType.MajorCity, ['Cheese']),
+    ];
+
+    // Bot does NOT carry Coal, and no city has Coal available → supplyCityNames.size === 0
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Paris', loadType: 'Coal', payment: 20 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Coal');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(false);
+    expect(demand!.supplyCity).toBe('NoSupply');
+    expect(demand!.demandScore).toBe(-999);
+    expect(demand!.estimatedTurns).toBe(99);
+    expect(demand!.efficiencyPerTurn).toBe(-999);
+  });
+
+  it('should still treat load-on-train correctly when supply cities are empty', async () => {
+    // Grid: Lyon(0,0) - (0,1) - Paris(0,2). No city supplies Coal.
+    const segments = [makeSegment(0, 0, 0, 1), makeSegment(0, 1, 0, 2)];
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(0, 0, 'Lyon', TerrainType.MajorCity, ['Wine']),
+      makeGridPoint(0, 1),
+      makeCityPoint(0, 2, 'Paris', TerrainType.MajorCity, ['Cheese']),
+    ];
+
+    // Bot carries Coal — should use the "on train" path, NOT unfulfillable
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Coal'],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Paris', loadType: 'Coal', payment: 20 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Coal');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(true);
+    expect(demand!.supplyCity).toBe('Unknown');
+    expect(demand!.demandScore).not.toBe(-999);
   });
 });

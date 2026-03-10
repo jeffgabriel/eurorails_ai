@@ -1,6 +1,7 @@
 import 'phaser';
 import { GameState, CameraState } from '../../shared/types/GameTypes';
 import { config } from '../config/apiConfig';
+import { isWheelBlocked } from '../utils/wheelBlocker';
 
 export class CameraController {
     private scene: Phaser.Scene;
@@ -174,6 +175,9 @@ export class CameraController {
             // But allow zoom if the only interactive object is the mapContainer itself
             const hasUIElements = gameObjects && gameObjects.some((obj: any) => obj !== this.mapContainer);
             if (hasUIElements) {
+                return;
+            }
+            if (isWheelBlocked(pointer)) {
                 return;
             }
 

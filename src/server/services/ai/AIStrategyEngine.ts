@@ -366,7 +366,7 @@ export class AIStrategyEngine {
       // Progress-based stuck detection: increment noProgressTurns when turn had
       // zero deliveries AND zero net cash increase AND no new cities connected
       // AND bot is NOT actively traveling on an active route (JIRA-45, JIRA-68).
-      const hadDelivery = (result.payment ?? 0) > 0;
+      const hadDelivery = (result.payment ?? 0) > 0 || hasDelivery; // JIRA-84: also check pre-execution composed steps
       const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
       const hadNewTrack = result.segmentsBuilt > 0;
       const isActivelyTraveling = activeRoute != null;

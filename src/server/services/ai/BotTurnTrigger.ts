@@ -178,6 +178,8 @@ export async function onTurnChange(
       llmLog: result.llmLog,
       // JIRA-36: Movement path for animated bot train movement
       movementPath: result.movementPath,
+      // Structured action timeline for animated partial turn movements
+      actionTimeline: result.actionTimeline,
     });
 
     // JIRA-32: Append structured turn log to NDJSON game file

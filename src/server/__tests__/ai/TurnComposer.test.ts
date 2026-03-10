@@ -850,6 +850,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1116,6 +1117,8 @@ describe('TurnComposer', () => {
             loadChipCarried: 0,
             estimatedTurns: 2,
             demandScore: 8,
+            efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
           // Another demand from remaining card — supply on network
           {
@@ -1137,6 +1140,8 @@ describe('TurnComposer', () => {
             loadChipCarried: 0,
             estimatedTurns: 5,
             demandScore: 4,
+            efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1303,6 +1308,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1442,6 +1448,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1531,6 +1538,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1579,6 +1587,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
         reachableCities: ['NearbyCity', 'AnotherCity'],
@@ -1651,6 +1660,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
           {
             cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Bordeaux',
@@ -1660,6 +1670,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2203,9 +2214,11 @@ describe('TurnComposer', () => {
 
       // Active route says: pickup Chocolate at Berlin
       const activeRoute: StrategicRoute = {
-        id: 'route-1',
         currentStopIndex: 0,
         startingCity: 'Paris',
+        phase: 'travel',
+        createdAtTurn: 1,
+        reasoning: 'test route',
         stops: [
           { action: 'pickup', loadType: 'Chocolate', city: 'Berlin' },
           { action: 'deliver', loadType: 'Chocolate', city: 'Manchester', demandCardId: 1, payment: 17 },
@@ -3489,7 +3502,7 @@ describe('TurnComposer', () => {
         stateHistory.push({
           type: plan.type,
           loads: [...snap.bot.loads],
-          position: { ...snap.bot.position },
+          position: snap.bot.position ? { ...snap.bot.position } : { row: 0, col: 0 },
         });
       });
 
@@ -3592,6 +3605,7 @@ describe('TurnComposer', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 2,
             demandScore: 10, efficiencyPerTurn: 5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -3662,7 +3676,7 @@ describe('TurnComposer', () => {
           position: { row: 5, col: 5 },
           resolvedDemands: [{
             cardId: 1,
-            demands: [{ loadType: 'Flowers', city: 'Oslo', payout: 20 }],
+            demands: [{ loadType: 'Flowers', city: 'Oslo', payment: 20 }],
           }],
         },
         loadAvailability: { Holland: ['Flowers'] },
@@ -3712,7 +3726,7 @@ describe('TurnComposer', () => {
           position: { row: 5, col: 5 },
           resolvedDemands: [{
             cardId: 1,
-            demands: [{ loadType: 'Flowers', city: 'Oslo', payout: 20 }],
+            demands: [{ loadType: 'Flowers', city: 'Oslo', payment: 20 }],
           }],
         },
         loadAvailability: { Holland: ['Flowers'] },
@@ -3721,6 +3735,7 @@ describe('TurnComposer', () => {
       const context = makeContext({
         loads: ['Cheese', 'Ham'],
         demands: [{
+          cardIndex: 0,
           loadType: 'Flowers',
           deliveryCity: 'Oslo',
           supplyCity: 'Holland',
@@ -3729,8 +3744,20 @@ describe('TurnComposer', () => {
           isDeliveryOnNetwork: true,
           isDeliveryReachable: true,
           isSupplyOnNetwork: true,
+          isSupplyReachable: true,
+          estimatedTrackCostToSupply: 0,
           estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
           estimatedTurns: 2,
+          demandScore: 0,
+          efficiencyPerTurn: 0,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 50,
         }],
       });
 
@@ -3747,6 +3774,8 @@ describe('TurnComposer', () => {
           { row: 5, col: 6 },
           { row: 5, col: 7 },
         ],
+        fees: new Set<string>(),
+        totalFee: 0,
       };
 
       // applyPlanToState must simulate the drop
@@ -3899,8 +3928,8 @@ describe('TurnComposer', () => {
           loads: [],
           position: { row: 10, col: 10 },
           resolvedDemands: [
-            { cardIndex: 1, demands: [{ loadType: 'Iron', city: 'Antwerpen', payout: 15 }] },
-            { cardIndex: 2, demands: [{ loadType: 'Steel', city: 'Budapest', payout: 20 }] },
+            { cardId: 1, demands: [{ loadType: 'Iron', city: 'Antwerpen', payment: 15 }] },
+            { cardId: 2, demands: [{ loadType: 'Steel', city: 'Budapest', payment: 20 }] },
           ],
         },
         loadAvailability: { Birmingham: ['Iron', 'Steel'] },

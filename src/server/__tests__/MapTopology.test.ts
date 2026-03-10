@@ -451,7 +451,7 @@ describe('MapTopology', () => {
               for (const fnb of farNeighbors) {
                 const fnbData = grid.get(makeKey(fnb.row, fnb.col));
                 if (fnbData && fnbData.terrain === TerrainType.Clear
-                    && fnbData.row !== mountainPoint.row || fnbData.col !== mountainPoint.col) {
+                    && (fnbData.row !== mountainPoint.row || fnbData.col !== mountainPoint.col)) {
                   clearPointFarther = fnbData;
                   break;
                 }

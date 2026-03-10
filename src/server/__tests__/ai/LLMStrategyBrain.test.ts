@@ -358,13 +358,13 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.effort).toBe(expectedEffort);
     });
 
-    it('decideAction — Easy (Haiku 4.5) should not pass schema, thinking, or effort', async () => {
+    it('decideAction — Easy (Haiku) should pass schema but not thinking (JIRA-81)', async () => {
       setupSuccessfulDecision(mockChat);
       const brain = createBrain(BotSkillLevel.Easy);
       await brain.decideAction(makeSnapshot(), makeContext());
 
       const callArgs = mockChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toBeUndefined();
       expect(callArgs.effort).toBeUndefined();
     });
@@ -398,7 +398,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.timeoutMs).toBe(60000);
     });
 
-    it('planRoute — Easy (Haiku 4.5) should not pass schema or thinking', async () => {
+    it('planRoute — Easy (Haiku) should pass schema but not thinking (JIRA-81)', async () => {
       mockChat.mockResolvedValue({
         text: '{"route":"..."}',
         usage: { input: 100, output: 50 },
@@ -417,7 +417,7 @@ describe('LLMStrategyBrain', () => {
       await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       const callArgs = mockChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toBeUndefined();
       expect(callArgs.effort).toBeUndefined();
       expect(callArgs.timeoutMs).toBe(60000);
@@ -491,7 +491,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.temperature).toBe(0.2);
     });
 
-    it('decideAction — should NOT pass outputSchema or thinking for Google provider at Easy skill', async () => {
+    it('decideAction — should pass outputSchema but not thinking for Google provider at Easy skill (JIRA-81)', async () => {
       const mockGoogleChat = jest.fn().mockResolvedValue({
         text: '{"action":"PASS","reasoning":"easy bot"}',
         usage: { input: 30, output: 10 },
@@ -519,7 +519,7 @@ describe('LLMStrategyBrain', () => {
       await brain.decideAction(makeSnapshot(), makeContext());
 
       const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toBeUndefined();
       expect(callArgs.effort).toBeUndefined();
       expect(callArgs.maxTokens).toBe(2048);
@@ -599,7 +599,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.temperature).toBe(0.2);
     });
 
-    it('planRoute — should NOT pass outputSchema or thinking for Google provider at Easy skill', async () => {
+    it('planRoute — should pass outputSchema but not thinking for Google provider at Easy skill (JIRA-81)', async () => {
       const mockGoogleChat = jest.fn().mockResolvedValue({
         text: '{"route":"..."}',
         usage: { input: 60, output: 30 },
@@ -627,7 +627,7 @@ describe('LLMStrategyBrain', () => {
       await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeUndefined();
+      expect(callArgs.outputSchema).toBeDefined();
       expect(callArgs.thinking).toBeUndefined();
       expect(callArgs.effort).toBeUndefined();
       expect(callArgs.timeoutMs).toBe(60000);
@@ -714,9 +714,10 @@ describe('LLMStrategyBrain', () => {
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       expect(result).not.toBeNull();
-      expect(result!.route.stops).toHaveLength(2);
-      expect(result!.route.stops[0].loadType).toBe('Flowers');
-      expect(result!.route.stops[1].loadType).toBe('Flowers');
+      const r = result!;
+      expect(r.route!.stops).toHaveLength(2);
+      expect(r.route!.stops[0].loadType).toBe('Flowers');
+      expect(r.route!.stops[1].loadType).toBe('Flowers');
       // Should only call LLM once (route was valid after pruning)
       expect(mockChat).toHaveBeenCalledTimes(1);
     });
@@ -755,7 +756,8 @@ describe('LLMStrategyBrain', () => {
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       expect(result).not.toBeNull();
-      expect(result!.route).toBe(validRoute); // Should use original, not pruned
+      const r = result!;
+      expect(r.route).toBe(validRoute); // Should use original, not pruned
       expect(mockChat).toHaveBeenCalledTimes(1);
     });
   });
@@ -805,7 +807,8 @@ describe('LLMStrategyBrain', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result!.route.stops[0].loadType).toBe('Wine');
+      const r = result!;
+      expect(r.route!.stops[0].loadType).toBe('Wine');
       expect(mockChat).toHaveBeenCalledTimes(2);
       // Second prompt should include rejection feedback
       const secondCallArgs = mockChat.mock.calls[1][0];
@@ -826,7 +829,8 @@ describe('LLMStrategyBrain', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result!.route.stops[0].loadType).toBe('Wine');
+      const r = result!;
+      expect(r.route!.stops[0].loadType).toBe('Wine');
       expect(mockChat).toHaveBeenCalledTimes(1);
     });
 
@@ -844,7 +848,8 @@ describe('LLMStrategyBrain', () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result!.route.stops[0].loadType).toBe('Coal');
+      const r = result!;
+      expect(r.route!.stops[0].loadType).toBe('Coal');
       expect(mockChat).toHaveBeenCalledTimes(1);
     });
 
@@ -1146,8 +1151,9 @@ describe('LLMStrategyBrain', () => {
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       expect(result).not.toBeNull();
-      expect(result!.llmLog).toHaveLength(1);
-      expect(result!.llmLog[0]).toMatchObject({
+      const r = result!;
+      expect(r.llmLog).toHaveLength(1);
+      expect(r.llmLog[0]).toMatchObject({
         attemptNumber: 1,
         status: 'success',
         latencyMs: expect.any(Number),
@@ -1200,7 +1206,8 @@ describe('LLMStrategyBrain', () => {
       const result = await brain.planRoute(makeSnapshot(), makeContext(), []);
 
       expect(result).not.toBeNull();
-      expect(result!.llmLog[0].responseText.length).toBe(500);
+      const r = result!;
+      expect(r.llmLog[0].responseText.length).toBe(500);
     });
   });
 });

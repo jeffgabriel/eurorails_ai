@@ -132,15 +132,15 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
-        const useAdvancedFeatures = this.config.skillLevel !== BotSkillLevel.Easy;
+        const useThinking = this.config.skillLevel !== BotSkillLevel.Easy;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ACTION_MAX_TOKENS[this.config.skillLevel],
           temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
           systemPrompt: this.systemPrompt,
           userPrompt,
-          ...(useAdvancedFeatures && {
-            outputSchema: ACTION_SCHEMA,
+          outputSchema: ACTION_SCHEMA,
+          ...(useThinking && {
             thinking: { type: 'adaptive' },
             effort: ACTION_EFFORT[this.config.skillLevel],
           }),
@@ -268,7 +268,7 @@ export class LLMStrategyBrain {
       const startTime = Date.now();
 
       try {
-        const useAdvancedFeatures = this.config.skillLevel !== BotSkillLevel.Easy;
+        const useThinking = this.config.skillLevel !== BotSkillLevel.Easy;
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ROUTE_MAX_TOKENS[this.config.skillLevel],
@@ -276,8 +276,8 @@ export class LLMStrategyBrain {
           systemPrompt: routePrompt,
           userPrompt,
           timeoutMs: 60000,
-          ...(useAdvancedFeatures && {
-            outputSchema: ROUTE_SCHEMA,
+          outputSchema: ROUTE_SCHEMA,
+          ...(useThinking && {
             thinking: { type: 'adaptive' },
             effort: ROUTE_EFFORT[this.config.skillLevel],
           }),

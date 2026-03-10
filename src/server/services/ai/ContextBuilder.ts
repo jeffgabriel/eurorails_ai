@@ -433,11 +433,28 @@ export class ContextBuilder {
     }
 
     // If load is already on train, supply city doesn't matter — evaluate once with null
-    if (snapshot.bot.loads.includes(demand.loadType) || supplyCityNames.size === 0) {
+    if (snapshot.bot.loads.includes(demand.loadType)) {
       return ContextBuilder.computeSingleSupplyDemandContext(
         cardIndex, demand, null, snapshot, network, gridPoints,
         reachableCities, citiesOnNetwork, connectedMajorCities,
       );
+    }
+
+    // JIRA-82: No supply cities have available chips AND load is NOT on train.
+    // Previously this fell into the "on train" path, producing supplyCity: "Unknown",
+    // estimatedTurns: 1, trackCost: 0 — making the LLM think the load was carried.
+    // Instead, return a context with explicit unfulfillable indicators.
+    if (supplyCityNames.size === 0) {
+      const ctx = ContextBuilder.computeSingleSupplyDemandContext(
+        cardIndex, demand, null, snapshot, network, gridPoints,
+        reachableCities, citiesOnNetwork, connectedMajorCities,
+      );
+      // Override misleading values: supply is not "Unknown" (on train) — it's gone
+      ctx.supplyCity = 'NoSupply';
+      ctx.estimatedTurns = 99;
+      ctx.demandScore = -999;
+      ctx.efficiencyPerTurn = -999;
+      return ctx;
     }
 
     // Evaluate each supply city and pick the one with the best demandScore
@@ -912,11 +929,11 @@ export class ContextBuilder {
     }
 
     // ── UPGRADE OPTIONS (JIRA-55 Part B) ──
-    if (context.upgradeAdvice) {
+    // Gate: don't mention upgrades until bot has 3+ deliveries and >= 50M cash
+    const upgradeEligible = (context.deliveryCount ?? 0) >= 3 && context.money >= 50;
+    if (upgradeEligible && context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' &&
-        context.turnNumber >= 8 &&
-        context.money >= 30 &&
-        (context.deliveryCount ?? 0) >= 3; // JIRA-60: only recommend after 3 deliveries
+        context.turnNumber >= 8;
       if (strongUpgrade) {
         lines.push(`RECOMMENDED PHASE B ACTION: UPGRADE to FastFreight \u2014 {"action": "UPGRADE", "details": {"to": "FastFreight"}}`);
         lines.push(`You've been on Freight for ${context.turnNumber} turns. +3 speed saves ~1 turn per delivery.`);
@@ -924,7 +941,7 @@ export class ContextBuilder {
       } else {
         lines.push(`UPGRADE ADVICE: ${context.upgradeAdvice}`);
       }
-    } else if (context.canUpgrade) {
+    } else if (upgradeEligible && context.canUpgrade) {
       lines.push('YOU CAN UPGRADE: Check available train types (20M for upgrade, 5M for crossgrade).');
     }
 
@@ -1194,6 +1211,11 @@ export class ContextBuilder {
     // Load unavailable overrides everything
     if (!d.isLoadAvailable) {
       return `UNAVAILABLE \u2014 all ${d.loadType} copies on other trains.`;
+    }
+
+    // JIRA-82: No supply cities have available chips (all copies in tray or carried)
+    if (d.supplyCity === 'NoSupply') {
+      return `UNAVAILABLE \u2014 no ${d.loadType} available at any supply city.`;
     }
 
     // Compute scarcity suffix (appended to all return values below)

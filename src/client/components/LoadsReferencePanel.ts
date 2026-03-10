@@ -8,6 +8,7 @@ import {
 } from "../utils/loadDataTransformer";
 import { api } from "../lobby/shared/api";
 import { CameraController } from "./CameraController";
+import { registerWheelBlocker } from "../utils/wheelBlocker";
 
 type LoadsReferencePage = {
   key: string;
@@ -169,8 +170,11 @@ export class LoadsReferencePanel {
     this.cityGridContainer.sendToBack(this.cityGridHitArea);
 
     // Create mask graphics to clip content to panel bounds
-    // The mask is created in world space and positioned in layout()
+    // The mask must be ignored by the main camera so that camera scrolling
+    // (e.g. centerCameraOnCity) doesn't desync the stencil mask position.
+    // It stays as a standalone scene object using world coordinates.
     this.contentMaskGraphics = this.scene.add.graphics();
+    this.scene.cameras.main.ignore(this.contentMaskGraphics);
     this.contentMask = this.contentMaskGraphics.createGeometryMask();
 
     // Apply mask to grid containers and cards container
@@ -257,6 +261,24 @@ export class LoadsReferencePanel {
 
     this.layout();
     this.updateTabStyles();
+
+    // Register with WheelBlocker so CameraController skips zoom
+    // when the pointer is anywhere over this panel
+    registerWheelBlocker('loads-reference-panel', (pointer) => this.isPointerOverPanel(pointer));
+  }
+
+  /**
+   * Check if pointer is anywhere over the open panel (including tabs, background, handle).
+   * Used by WheelBlocker to prevent camera zoom when scrolling over the panel.
+   */
+  private isPointerOverPanel(pointer: { x: number; y: number }): boolean {
+    if (!this.isOpen) return false;
+    return (
+      pointer.x >= this.root.x &&
+      pointer.x <= this.root.x + this.panelWidth &&
+      pointer.y >= this.root.y &&
+      pointer.y <= this.root.y + this.panelHeight
+    );
   }
 
   layout(): void {
@@ -444,7 +466,6 @@ export class LoadsReferencePanel {
     // Update mask to clip content to panel bounds (world coordinates)
     if (this.contentMaskGraphics) {
       this.contentMaskGraphics.clear();
-      // Draw filled rectangle at the content area position in world space
       const maskX = this.root.x + contentPaddingX;
       const maskY = this.root.y + contentTop;
       this.contentMaskGraphics.fillStyle(0xffffff);

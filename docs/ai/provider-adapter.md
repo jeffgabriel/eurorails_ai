@@ -16,13 +16,14 @@ The `ProviderAdapter` interface abstracts LLM provider APIs behind a unified `ch
 | `userPrompt` | `string` | Yes | User/game-state prompt |
 | `outputSchema` | `object` | No | JSON schema for structured output (Anthropic only) |
 | `thinking` | `ThinkingConfig` | No | Adaptive thinking config (Anthropic only) |
+| `effort` | `string` | No | Thinking effort level: `low`, `medium`, or `high` (Anthropic only) |
 | `timeoutMs` | `number` | No | Per-request timeout override in ms |
 
 ## Structured Output (`outputSchema`)
 
 When provided, AnthropicAdapter wraps the schema in `output_config.format.json_schema` in the API request body. The model returns a response conforming to the schema.
 
-If the API rejects the schema (400 error with schema-related keywords), AnthropicAdapter automatically retries without `output_config`.
+If the API rejects the schema (400 error with schema-related keywords), AnthropicAdapter automatically retries without the `json_schema` format, preserving `effort` in `output_config` if set.
 
 GoogleAdapter ignores this parameter.
 
@@ -50,11 +51,13 @@ Two schemas are defined in `src/server/services/ai/schemas.ts`:
 - **ACTION_SCHEMA** — for turn action decisions (single or multi-action)
 - **ROUTE_SCHEMA** — for strategic route planning
 
-## Adaptive Thinking (`thinking`)
+## Adaptive Thinking (`thinking`) and Effort (`effort`)
 
-When provided, AnthropicAdapter includes the `thinking` field in the API request body. This enables the model to perform extended reasoning (visible as `type: "thinking"` blocks in the response) before generating the text response.
+When `thinking` is provided, AnthropicAdapter includes `thinking: { type: "adaptive" }` in the API request body. This enables the model to perform extended reasoning (visible as `type: "thinking"` blocks in the response) before generating the text response.
 
-GoogleAdapter ignores this parameter.
+The `effort` parameter controls how much thinking Claude allocates. It is sent inside `output_config.effort` (NOT inside the `thinking` object). When both `outputSchema` and `effort` are provided, `output_config` contains both `format` and `effort`.
+
+GoogleAdapter ignores both parameters.
 
 ```typescript
 const response = await adapter.chat({
@@ -63,8 +66,10 @@ const response = await adapter.chat({
   temperature: 0.4,
   systemPrompt: 'Plan carefully.',
   userPrompt: routePlanningPrompt,
-  thinking: { type: 'adaptive', effort: 'high' },
+  thinking: { type: 'adaptive' },
+  effort: 'high',
 });
+// API body: { thinking: { type: "adaptive" }, output_config: { effort: "high" } }
 ```
 
 ### Effort Levels
