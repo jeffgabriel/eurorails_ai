@@ -474,11 +474,10 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
     });
   });
 
-  describe('hub-aware travel turns', () => {
-    it('should compute travel turns as S→supply→S→delivery for hub model', async () => {
-      // Hub model: Wien→Warszawa + Warszawa→Wien + Wien→Budapest
-      // Hop distances: 8 + 8 + 4 = 20 hops
-      // Freight speed = 9, so travelTurns = ceil(20/9) = 3
+  describe('cold-start travel turns (JIRA-75)', () => {
+    it('should compute travel as startingCity→supply + supply→delivery', async () => {
+      // JIRA-75: Wien→Warszawa(8 hops) + Warszawa→Budapest(12 hops) = 20 hops
+      // Freight speed = 9, travelTurns = ceil(20/9) = 3
       const gridPoints: GridPoint[] = [
         makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
         makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
@@ -498,8 +497,8 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
       });
 
       setupHopDistances({
-        '37,55->30,60': 8,  // Wien→Warszawa
-        '37,55->42,58': 4,  // Wien→Budapest
+        '37,55->30,60': 8,   // Wien→Warszawa (start→supply)
+        '30,60->42,58': 12,  // Warszawa→Budapest (supply→delivery)
       });
 
       const snapshot = makeWorldSnapshot({
@@ -514,13 +513,68 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
       const demand = context.demands.find(d => d.deliveryCity === 'Budapest' && d.loadType === 'Ham');
 
       expect(demand).toBeDefined();
-      // Hub model travel: 8 (Wien→Warszawa) + 8 (return) + 4 (Wien→Budapest) = 20 hops
+      // Travel: Wien→Warszawa(8) + Warszawa→Budapest(12) = 20 hops
       // buildTurns = ceil(20/20) = 1, travelTurns = ceil(20/9) = 3, + 1 = 5
       expect(demand!.estimatedTurns).toBe(5);
     });
 
-    it('should compute travel turns as supply→delivery for linear model', async () => {
-      // Linear model scenario — Madrid closer and collinear
+    it('should show round-trip travel when starting at delivery city', async () => {
+      // JIRA-75 bug case: Ruhr starts at delivery city, supply is far away
+      // Travel = Ruhr→Firenze(23) + Firenze→Ruhr(23) = 46 hops (round trip)
+      const gridPoints: GridPoint[] = [
+        makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
+        makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
+        makeCityPoint(29, 32, 'Paris', TerrainType.MajorCity, []),
+        makeCityPoint(20, 45, 'Ruhr', TerrainType.MajorCity, []),
+        makeCityPoint(45, 48, 'Firenze', TerrainType.SmallCity, ['Marble']),
+      ];
+
+      const { getMajorCityGroups } = require('../../../shared/services/majorCityGroups');
+      getMajorCityGroups.mockReturnValue([
+        { cityName: 'Wien', center: { row: 37, col: 55 }, outposts: [] },
+        { cityName: 'Berlin', center: { row: 24, col: 52 }, outposts: [] },
+        { cityName: 'Paris', center: { row: 29, col: 32 }, outposts: [] },
+        { cityName: 'Ruhr', center: { row: 20, col: 45 }, outposts: [] },
+      ]);
+
+      setupPathCosts({
+        // Ruhr→Firenze = 40M (build cost for supply), Ruhr→Ruhr = 0 (delivery IS start)
+        '20,45->45,48': 40,
+        // Other candidates are more expensive
+        '37,55->45,48': 14,  // Wien→Firenze
+        '37,55->20,45': 37,  // Wien→Ruhr
+        '24,52->45,48': 30,  // Berlin→Firenze
+        '24,52->20,45': 15,  // Berlin→Ruhr
+        '29,32->45,48': 35,  // Paris→Firenze
+        '29,32->20,45': 20,  // Paris→Ruhr
+      });
+
+      setupHopDistances({
+        '20,45->45,48': 23,  // Ruhr→Firenze (start→supply)
+        '45,48->20,45': 23,  // Firenze→Ruhr (supply→delivery = round trip back)
+      });
+
+      const snapshot = makeWorldSnapshot({
+        botSegments: [],
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Ruhr', loadType: 'Marble', payment: 22 }],
+        }],
+      });
+
+      const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+      const demand = context.demands.find(d => d.deliveryCity === 'Ruhr' && d.loadType === 'Marble');
+
+      expect(demand).toBeDefined();
+      // Ruhr is optimal start (0 delivery cost). Travel = Ruhr→Firenze(23) + Firenze→Ruhr(23) = 46 hops
+      // buildTurns = ceil(40/20) = 2, travelTurns = ceil(46/9) = 6, + 1 = 9
+      expect(demand!.optimalStartingCity).toBe('Ruhr');
+      expect(demand!.estimatedTurns).toBe(9);
+    });
+
+    it('should compute travel as start→supply + supply→delivery for linear model', async () => {
+      // JIRA-75: Even with linear model, travel must include start→supply leg
+      // Madrid→Sevilla(2 hops) + Sevilla→Lisboa(3 hops) = 5 hops
       const gridPoints: GridPoint[] = [
         makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
         makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
@@ -550,9 +604,9 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
         '29,32->41,18': 22,
       });
 
-      // Linear model: travel = supply→delivery hops
       setupHopDistances({
-        '42,22->41,18': 3,  // Sevilla→Lisboa
+        '40,20->42,22': 2,  // Madrid→Sevilla (start→supply)
+        '42,22->41,18': 3,  // Sevilla→Lisboa (supply→delivery)
       });
 
       const snapshot = makeWorldSnapshot({
@@ -568,7 +622,7 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
 
       expect(demand).toBeDefined();
       // Linear model: totalCost = 3+4 = 7, buildTurns = 1
-      // Travel = supply→delivery = 3 hops, travelTurns = ceil(3/9) = 1
+      // Travel = Madrid→Sevilla(2) + Sevilla→Lisboa(3) = 5 hops, travelTurns = ceil(5/9) = 1
       // estimatedTurns = 1 + 1 + 1 = 3
       expect(demand!.estimatedTurns).toBe(3);
     });

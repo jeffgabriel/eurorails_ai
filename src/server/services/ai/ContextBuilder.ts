@@ -494,7 +494,6 @@ export class ContextBuilder {
     let estimatedTrackCostToSupply = 0;
     let estimatedTrackCostToDelivery = 0;
     let optimalStartingCity: string | undefined;
-    let coldStartIsHubModel = false;
 
     const isColdStart = snapshot.bot.existingSegments.length === 0;
     if (isColdStart && supplyCity && !isLoadOnTrain) {
@@ -505,7 +504,6 @@ export class ContextBuilder {
         estimatedTrackCostToSupply = coldStartResult.supplyCost;
         estimatedTrackCostToDelivery = coldStartResult.deliveryCost;
         optimalStartingCity = coldStartResult.startingCity;
-        coldStartIsHubModel = coldStartResult.isHubModel;
       } else {
         // Fallback to existing estimateTrackCost behavior if hub model fails
         estimatedTrackCostToSupply = ContextBuilder.estimateTrackCost(supplyCity, snapshot.bot.existingSegments, gridPoints);
@@ -540,39 +538,40 @@ export class ContextBuilder {
     const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
 
     // Travel distance: BFS hop count through actual hex grid (JIRA-66)
-    // JIRA-72: Hub model travel is S→supply→S→delivery (return to hub between pickup and delivery)
+    // JIRA-75: On cold-start, travel is startingCity→supply + supply→delivery (not just supply→delivery)
     let travelTurns = 0;
     if (supplyCity) {
       const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
       const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
 
-      if (isColdStart && coldStartIsHubModel && optimalStartingCity) {
-        // Hub model: travel from starting city to supply, back to starting city, then to delivery
+      if (isColdStart && optimalStartingCity) {
+        // Cold-start: bot starts at optimalStartingCity, must travel to supply then delivery
         const startPoints = gridPoints.filter(gp => gp.city?.name === optimalStartingCity);
         if (startPoints.length > 0 && supplyPoints.length > 0 && deliveryPoints.length > 0) {
-          let hopToSupply = Infinity;
+          // Leg 1: startingCity → supply
+          let hopStartToSupply = Infinity;
           for (const stP of startPoints) {
             for (const sp of supplyPoints) {
               const d = estimateHopDistance(stP.row, stP.col, sp.row, sp.col);
-              if (d > 0 && d < hopToSupply) hopToSupply = d;
+              if (d >= 0 && d < hopStartToSupply) hopStartToSupply = d;
             }
           }
-          let hopToDelivery = Infinity;
-          for (const stP of startPoints) {
+          // Leg 2: supply → delivery
+          let hopSupplyToDelivery = Infinity;
+          for (const sp of supplyPoints) {
             for (const dp of deliveryPoints) {
-              const d = estimateHopDistance(stP.row, stP.col, dp.row, dp.col);
-              if (d > 0 && d < hopToDelivery) hopToDelivery = d;
+              const d = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
+              if (d >= 0 && d < hopSupplyToDelivery) hopSupplyToDelivery = d;
             }
           }
-          // S→supply + supply→S (same distance) + S→delivery
-          const totalHops = (hopToSupply < Infinity ? hopToSupply * 2 : 0)
-            + (hopToDelivery < Infinity ? hopToDelivery : 0);
+          const totalHops = (hopStartToSupply < Infinity ? hopStartToSupply : 0)
+            + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
           if (totalHops > 0) {
             travelTurns = Math.ceil(totalHops / speed);
           }
         }
       } else if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
-        // Linear model or non-cold-start: supply→delivery
+        // Non-cold-start: supply→delivery (bot is already on network)
         let minDist = Infinity;
         for (const sp of supplyPoints) {
           for (const dp of deliveryPoints) {
