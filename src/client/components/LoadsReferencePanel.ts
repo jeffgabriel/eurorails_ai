@@ -8,7 +8,7 @@ import {
 } from "../utils/loadDataTransformer";
 import { api } from "../lobby/shared/api";
 import { CameraController } from "./CameraController";
-import { registerWheelBlocker } from "../utils/wheelBlocker";
+import { registerWheelBlocker, unregisterWheelBlocker } from "../utils/wheelBlocker";
 
 type LoadsReferencePage = {
   key: string;
@@ -1344,6 +1344,9 @@ export class LoadsReferencePanel {
   }
 
   destroy(): void {
+    // Clean up wheel blocker registration
+    unregisterWheelBlocker('loads-reference-panel');
+
     // Clean up search input
     if (this.searchInput) {
       this.searchInput.remove();

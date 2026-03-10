@@ -5,17 +5,14 @@
  * Designed for fast offline analysis: `Read` the file, `Grep` for fields.
  */
 
-import { mkdirSync, appendFileSync } from 'fs';
+import { mkdirSync, appendFile } from 'fs';
 import { join } from 'path';
 
 const LOGS_DIR = join(process.cwd(), 'logs');
 
-/** Ensure logs directory exists (idempotent). */
-let dirCreated = false;
+/** Ensure logs directory exists (idempotent, sync is fine — runs once). */
 function ensureDir(): void {
-  if (dirCreated) return;
   mkdirSync(LOGS_DIR, { recursive: true });
-  dirCreated = true;
 }
 
 /** Shape of a single turn log entry. */
@@ -99,7 +96,11 @@ export function appendTurn(gameId: string, entry: GameTurnLogEntry): void {
     ensureDir();
     const filePath = join(LOGS_DIR, `game-${gameId}.ndjson`);
     const line = JSON.stringify(entry) + '\n';
-    appendFileSync(filePath, line, 'utf8');
+    appendFile(filePath, line, 'utf8', (err) => {
+      if (err) {
+        console.error(`[GameLogger] Failed to write turn log for game ${gameId}:`, err.message);
+      }
+    });
   } catch (err) {
     console.error(`[GameLogger] Failed to write turn log for game ${gameId}:`, err instanceof Error ? err.message : err);
   }
