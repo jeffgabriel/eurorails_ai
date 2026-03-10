@@ -409,9 +409,11 @@ export class PlanExecutor {
       const bTotalCost = (b.estimatedTrackCostToSupply || 0) + (b.estimatedTrackCostToDelivery || 0);
       return aTotalCost - bTotalCost;
     });
+    // JIRA-80: During initial build, allow 40M threshold (2 turns x 20M)
+    const budgetThreshold = context.isInitialBuild ? 40 : 20;
     for (const demand of sorted) {
       // Prefer supply city first — bot needs to pick up before delivering
-      if (!demand.isSupplyOnNetwork && (demand.estimatedTrackCostToSupply || 0) <= 20) {
+      if (!demand.isSupplyOnNetwork && (demand.estimatedTrackCostToSupply || 0) <= budgetThreshold) {
         return demand.supplyCity;
       }
       // Only target delivery city if supply is already reachable
@@ -433,6 +435,16 @@ export class PlanExecutor {
         stop.city.toLowerCase() === route.startingCity.toLowerCase();
       if (!isStartingCity && !context.citiesOnNetwork.includes(stop.city)) {
         return stop.city;
+      }
+    }
+    // JIRA-80: All stops were skipped (startingCity or on-network).
+    // Check if the supply city needs track even though the delivery city is on-network.
+    for (const demand of context.demands) {
+      if (!demand.isSupplyOnNetwork && demand.isDeliveryOnNetwork) {
+        return demand.supplyCity;
+      }
+      if (!demand.isDeliveryOnNetwork && demand.isSupplyOnNetwork) {
+        return demand.deliveryCity;
       }
     }
     return null;
@@ -483,9 +495,7 @@ export class PlanExecutor {
     for (const stop of route.stops) {
       if (spentSoFar >= PlanExecutor.MAX_BUILD_BUDGET) break;
 
-      const isStartingCity = route.startingCity &&
-        stop.city.toLowerCase() === route.startingCity.toLowerCase();
-      if (isStartingCity) continue;
+      // JIRA-80: Don't skip startingCity — it's a valid build target when it needs track
       if (simContext.citiesOnNetwork.includes(stop.city)) continue;
 
       const remaining = PlanExecutor.MAX_BUILD_BUDGET - spentSoFar;

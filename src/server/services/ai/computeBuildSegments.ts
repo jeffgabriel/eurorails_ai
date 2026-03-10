@@ -540,11 +540,16 @@ export function computeBuildSegments(
 
   console.log(`${tag} best path: ${bestPath.path.length} nodes, cost=${bestPath.cost}, newSegments=${countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)}`);
 
-  // Valid cold-start positions: major cities only (game rule: build from major city when no track).
+  // Valid cold-start positions: major cities + any explicitly provided startPositions.
+  // JIRA-80: When startPositions include non-major city coords (e.g., Small City),
+  // they must be valid cold-start origins.
   const validColdStartKeys = new Set<string>();
   for (const g of majorCityGroups) {
     validColdStartKeys.add(makeKey(g.center.row, g.center.col));
     for (const op of g.outposts) validColdStartKeys.add(makeKey(op.row, op.col));
+  }
+  for (const sp of startPositions) {
+    validColdStartKeys.add(makeKey(sp.row, sp.col));
   }
 
   // Extract up to maxSegments new segments from the path

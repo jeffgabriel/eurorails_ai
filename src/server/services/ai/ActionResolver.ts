@@ -149,8 +149,21 @@ export class ActionResolver {
             ...match.outposts.map(o => ({ row: o.row, col: o.col })),
           ];
         } else {
-          console.warn(`[ActionResolver] Invalid startingCity "${startingCity}" — falling back to all major cities.`);
-          startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+          // JIRA-80: startingCity may be a Small/Medium city — look up in gridPoints
+          const gridPoints = loadGridPoints();
+          const cityPositions: GridCoord[] = [];
+          for (const [, gp] of gridPoints) {
+            if (gp.name && gp.name.toLowerCase() === startingCity.toLowerCase()) {
+              cityPositions.push({ row: gp.row, col: gp.col });
+            }
+          }
+          if (cityPositions.length > 0) {
+            console.log(`[ActionResolver] startingCity "${startingCity}" is non-major — using grid coordinates (${cityPositions.length} positions)`);
+            startPositions = cityPositions;
+          } else {
+            console.warn(`[ActionResolver] startingCity "${startingCity}" not found in gridPoints — falling back to all major cities.`);
+            startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
+          }
         }
       } else {
         startPositions = groups.map(g => ({ row: g.center.row, col: g.center.col }));
