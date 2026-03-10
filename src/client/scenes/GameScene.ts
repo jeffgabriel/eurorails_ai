@@ -650,7 +650,7 @@ export class GameScene extends Phaser.Scene {
           const botName = botPlayer?.name ?? 'Unknown Player';
           const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
 
-          // LLM strategy announcement — strip internal prefixes, show for 10s
+          // LLM strategy announcement — always fires (not timeline-driven)
           if (data.reasoning) {
             const isLlmFailure = /^\[(heuristic[ -]fallback|llm-failed|no-api-key)\]/i.test(data.reasoning);
             const cleanReasoning = data.reasoning
@@ -661,6 +661,10 @@ export class GameScene extends Phaser.Scene {
               toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
             }
           }
+
+          // When actionTimeline is present, action toasts are fired mid-animation
+          // by the animateTimeline onAction callback — skip them here
+          if (data.actionTimeline?.length > 0) return;
 
           // Delivery announcements — with payment flourish
           if (data.loadsDelivered?.length > 0) {
@@ -701,7 +705,6 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubBotTurnComplete = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           if (eventName !== 'bot:turn-complete') return;
           const data = args[0];
-          if (!data?.movementPath || data.movementPath.length < 2) return;
           if (!data.botPlayerId) return;
 
           const animator = this.botTrainAnimator;
@@ -712,8 +715,69 @@ export class GameScene extends Phaser.Scene {
             animator.cancelAnimation(data.botPlayerId);
           }
 
-          // Snap sprite to the start of the path before animating —
-          // state:patch may have already moved it to the final position
+          const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+          const botName = botPlayer?.name ?? 'Unknown Player';
+          const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
+          const toast = this.gameToastManager;
+
+          // Prefer structured timeline over flat path
+          if (data.actionTimeline?.length > 0) {
+            // Snap sprite to start of first move segment
+            const firstMove = data.actionTimeline.find((s: any) => s.type === 'move');
+            if (firstMove?.path?.[0]) {
+              const startGrid = this.mapRenderer.gridPoints[firstMove.path[0].row]?.[firstMove.path[0].col];
+              if (startGrid) {
+                const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
+                if (sprite) sprite.setPosition(startGrid.x, startGrid.y);
+              }
+            }
+
+            animator.animateTimeline(
+              data.botPlayerId,
+              data.actionTimeline,
+              this.mapRenderer.gridPoints,
+              () => this.uiManager.getTrainSprite(data.botPlayerId),
+              (step) => {
+                if (!toast) return;
+                switch (step.type) {
+                  case 'deliver':
+                    toast.show(
+                      `💰 ${botName} delivered ${step.loadType} to ${step.city} — earned ${step.payment}M ECU!`,
+                      { color: botColor, flourish: true },
+                    );
+                    break;
+                  case 'pickup':
+                    toast.show(`${botName} picked up ${step.loadType} at ${step.city}`, { color: botColor });
+                    break;
+                  case 'build':
+                    toast.show(
+                      `${botName} built ${step.segmentsBuilt} track segment${step.segmentsBuilt > 1 ? 's' : ''} (${step.cost}M)`,
+                      { color: botColor },
+                    );
+                    break;
+                  case 'upgrade':
+                    toast.show(`${botName} upgraded their train`, { color: botColor });
+                    break;
+                  case 'discard':
+                    toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
+                    break;
+                }
+              },
+            ).then((finalPos) => {
+              if (finalPos) {
+                this.uiManager.updateTrainPosition(
+                  data.botPlayerId,
+                  finalPos.x, finalPos.y, finalPos.row, finalPos.col,
+                  { persist: false },
+                );
+              }
+            }).catch(() => {});
+            return;
+          }
+
+          // Fallback: flat movementPath animation (backward compat)
+          if (!data.movementPath || data.movementPath.length < 2) return;
+
           const startPos = data.movementPath[0];
           const startGrid = this.mapRenderer.gridPoints[startPos.row]?.[startPos.col];
           if (startGrid) {
@@ -723,27 +787,20 @@ export class GameScene extends Phaser.Scene {
             }
           }
 
-          // Animate asynchronously
           animator.animateAlongPath(
             data.botPlayerId,
             data.movementPath,
             this.mapRenderer.gridPoints,
             () => this.uiManager.getTrainSprite(data.botPlayerId),
           ).then((finalPos) => {
-            // Authoritative final position sync after animation
             if (finalPos) {
               this.uiManager.updateTrainPosition(
                 data.botPlayerId,
-                finalPos.x,
-                finalPos.y,
-                finalPos.row,
-                finalPos.col,
-                { persist: false }
+                finalPos.x, finalPos.y, finalPos.row, finalPos.col,
+                { persist: false },
               );
             }
-          }).catch(() => {
-            // Animation error — position will be corrected on next game:patch
-          });
+          }).catch(() => {});
         });
       }
     } catch { /* socket not available */ }
@@ -1442,7 +1499,15 @@ export class GameScene extends Phaser.Scene {
             } else {
               // For other players: ALWAYS use server position (authoritative)
               localPlayer.trainState = serverPlayer.trainState;
-              
+
+              // JIRA-80: Skip sprite position update if bot animation is in progress
+              // (matches the guard in onPatch handler). Without this, turn:change events
+              // during animation snap the sprite back to server position mid-animation.
+              if (this.botTrainAnimator?.isAnimating(serverPlayer.id)) {
+                // State updated but sprite will be positioned by animation completion
+                return;
+              }
+
               // Always update train sprite for other players if position exists
               // This ensures the sprite is created/updated and visible
               if (serverPlayer.trainState.position) {
