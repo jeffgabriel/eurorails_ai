@@ -1063,6 +1063,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should clear activeRoute when TurnComposer produces a MultiAction with DeliverLoad', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
+      // JIRA-83: preDeliveryRoute is now captured even for route-completing deliveries,
+      // so re-eval will fire. Mock it to abandon (route is done).
+      (LLMStrategyBrain as any).mockImplementation(() => ({
+        decideAction: jest.fn(),
+        planRoute: jest.fn(),
+        reEvaluateRoute: (jest.fn() as jest.Mock<(...args: any[]) => Promise<any>>).mockResolvedValue({ decision: 'abandon', reasoning: 'route completed' }),
+      }));
+
       const route: StrategicRoute = {
         stops: [
           { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },

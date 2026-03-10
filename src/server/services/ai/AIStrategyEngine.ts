@@ -294,9 +294,13 @@ export class AIStrategyEngine {
       // LLM should re-evaluate the route on the next turn.
       // BE-010: Preserve remaining stops for LLM context on next turn.
       // JIRA-64: Save pre-clear route for post-delivery LLM re-evaluation.
+      // JIRA-83: Capture preDeliveryRoute even when routeWasCompleted — the completed
+      // route still has valuable context for LLM re-evaluation (demand strategy, stops served).
       let preDeliveryRoute: StrategicRoute | null = null;
-      if (hasDelivery && activeRoute && !routeWasCompleted && !routeWasAbandoned) {
+      if (hasDelivery && activeRoute && !routeWasAbandoned) {
         preDeliveryRoute = activeRoute;
+      }
+      if (hasDelivery && activeRoute && !routeWasCompleted && !routeWasAbandoned) {
         const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
         if (remaining.length > 0) {
           previousRouteStops = remaining;
