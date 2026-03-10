@@ -374,7 +374,110 @@ describe('ActionResolver', () => {
         ]),
       );
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Invalid startingCity "Atlantis"'),
+        expect.stringContaining('startingCity "Atlantis" not found in gridPoints'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    // ── JIRA-80: Non-major city cold-start ────────────────────────────────────
+
+    it('should use grid coordinates when startingCity is a Small City (non-major)', async () => {
+      // Dortmund is a Small City — not in major city groups but present in gridPoints
+      setupGridPoints([
+        { row: 15, col: 8, name: 'Dortmund', terrain: TerrainType.SmallCity },
+        { row: 10, col: 10, name: 'Berlin', terrain: TerrainType.MajorCity },
+      ]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 } },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(15, 8, 15, 9)]);
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext(), 'Dortmund');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should use Dortmund's grid coordinates, NOT all major cities
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 15, col: 8 }),
+        ]),
+      );
+      expect(startPositions).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 20, col: 5 }), // Paris should NOT be included
+        ]),
+      );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('startingCity "Dortmund" is non-major'),
+      );
+      logSpy.mockRestore();
+    });
+
+    it('should still use major city positions when startingCity IS a major city', async () => {
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Berlin', terrain: TerrainType.MajorCity },
+      ]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [{ row: 10, col: 11 }] },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(10, 10, 10, 11)]);
+
+      await ActionResolver.resolve(makeBuildIntent('Paris'), snapshot, makeGameContext(), 'Berlin');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should use Berlin center + outpost from major city groups (not gridPoints fallback)
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+          expect.objectContaining({ row: 10, col: 11 }),
+        ]),
+      );
+      // Should NOT include Paris
+      expect(startPositions).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 20, col: 5 }),
+        ]),
+      );
+    });
+
+    it('should fall back to all major cities when startingCity not found in gridPoints either', async () => {
+      // "Atlantis" is not in major city groups OR gridPoints
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Berlin', terrain: TerrainType.MajorCity },
+      ]);
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 } },
+        { cityName: 'Paris', center: { row: 20, col: 5 } },
+      ]);
+
+      const snapshot = makeWorldSnapshot({
+        bot: { existingSegments: [] } as any,
+      });
+      mockComputeBuildSegments.mockReturnValue([makeSegment(10, 10, 10, 11)]);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, makeGameContext(), 'Atlantis');
+
+      const startPositions = mockComputeBuildSegments.mock.calls[0][0] as GridCoord[];
+      // Should fall back to all major cities
+      expect(startPositions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ row: 10, col: 10 }),
+          expect.objectContaining({ row: 20, col: 5 }),
+        ]),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('startingCity "Atlantis" not found in gridPoints'),
       );
       warnSpy.mockRestore();
     });
@@ -2262,6 +2365,7 @@ describe('ActionResolver', () => {
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2302,6 +2406,7 @@ describe('ActionResolver', () => {
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2352,6 +2457,7 @@ describe('ActionResolver', () => {
             ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2385,6 +2491,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'B', deliveryCity: 'ExpensiveCity',
@@ -2394,6 +2501,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2423,6 +2531,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
           {
             cardIndex: 1, loadType: 'Gold', supplyCity: 'FarC', deliveryCity: 'FarD',
@@ -2432,6 +2541,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2441,7 +2551,7 @@ describe('ActionResolver', () => {
 
       // JIRA-54: Dead hand — all demands off-network and unaffordable → discard
       expect(result.success).toBe(true);
-      expect(result.plan.type).toBe(AIActionType.DiscardHand);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
     });
 
     it('should NOT discard hand when at least one demand is achievable', async () => {
@@ -2465,6 +2575,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2492,6 +2603,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2525,6 +2637,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2597,6 +2710,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
           {
             cardIndex: 1, loadType: 'Coal', supplyCity: 'B', deliveryCity: 'NearCity',
@@ -2606,6 +2720,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2652,6 +2767,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -2694,6 +2810,7 @@ describe('ActionResolver', () => {
             isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });

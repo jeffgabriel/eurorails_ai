@@ -278,6 +278,7 @@ describe('PlanExecutor', () => {
           isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
           loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 0,
           demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          isAffordable: true, projectedFundsAfterDelivery: 50,
         }],
       });
 
@@ -384,6 +385,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -559,7 +561,7 @@ describe('PlanExecutor', () => {
       expect(mockResolve).toHaveBeenCalledTimes(3);
     });
 
-    it('should skip starting city in continuation loop (JIRA-73)', async () => {
+    it('should skip on-network cities in continuation loop (JIRA-73 + JIRA-80)', async () => {
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'London',
@@ -579,20 +581,21 @@ describe('PlanExecutor', () => {
         success: true,
         plan: { type: AIActionType.BuildTrack, segments: primarySegments, targetCity: 'Birmingham' },
       });
-      // Continuation toward Stuttgart (London skipped as starting city)
+      // Continuation toward Stuttgart (London skipped because it's on-network after JIRA-80)
       mockResolve.mockResolvedValueOnce({
         success: true,
         plan: { type: AIActionType.BuildTrack, segments: stuttgartSegments, targetCity: 'Stuttgart' },
       });
 
-      // After primary build, Birmingham on network; London skipped as starting city
-      mockComputeCitiesOnNetwork.mockReturnValue(['Birmingham']);
+      // After primary build, both Birmingham and London are on network
+      // JIRA-80: continuationBuild now skips by citiesOnNetwork, not startingCity
+      mockComputeCitiesOnNetwork.mockReturnValue(['London', 'Birmingham']);
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
       const buildPlan = result.plan as any;
       expect(buildPlan.segments).toEqual([...primarySegments, ...stuttgartSegments]);
-      // Only 2 resolve calls (London skipped in continuation)
+      // Only 2 resolve calls (London + Birmingham skipped as on-network in continuation)
       expect(mockResolve).toHaveBeenCalledTimes(2);
     });
   });
@@ -700,6 +703,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -803,6 +807,7 @@ describe('PlanExecutor', () => {
           isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
           loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
           demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          isAffordable: true, projectedFundsAfterDelivery: 50,
         }],
       });
 
@@ -871,6 +876,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -908,6 +914,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -940,6 +947,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -969,6 +977,7 @@ describe('PlanExecutor', () => {
             isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
             demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
           },
         ],
       });
@@ -1171,6 +1180,146 @@ describe('PlanExecutor', () => {
       expect(result.routeAbandoned).toBe(true);
 
       warnSpy.mockRestore();
+    });
+  });
+
+  // ── JIRA-80: findInitialBuildTarget fallback when all stops are startingCity or on-network ──
+
+  describe('JIRA-80: findInitialBuildTarget demand fallback', () => {
+    it('returns supply city when startingCity = first stop and supply not on network', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Dortmund' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Dortmund',
+        phase: 'build',
+      });
+
+      const context = makeContext({
+        isInitialBuild: true,
+        canBuild: true,
+        citiesOnNetwork: ['Berlin'], // delivery on-network, Dortmund skipped as startingCity
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin',
+            payout: 25, isSupplyReachable: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+            demandScore: 10, efficiencyPerTurn: 3, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 40,
+          },
+        ],
+      });
+
+      // The resolve mock should be called with BUILD toward 'Essen' (supply city from demand fallback)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Essen',
+      );
+      expect(buildCall).toBeDefined();
+    });
+
+    it('returns delivery city when supply is on network but delivery is not', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Dortmund' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Dortmund',
+        phase: 'build',
+      });
+
+      const context = makeContext({
+        isInitialBuild: true,
+        canBuild: true,
+        // Both route stop cities are either startingCity (Dortmund) or on-network (Berlin)
+        // so findInitialBuildTarget loop finds nothing and falls through to demand check
+        citiesOnNetwork: ['Berlin'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Dortmund', deliveryCity: 'München',
+            payout: 25, isSupplyReachable: true, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+            demandScore: 10, efficiencyPerTurn: 3, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 40,
+          },
+        ],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'München',
+      );
+      expect(buildCall).toBeDefined();
+    });
+  });
+
+  // ── JIRA-80: findDemandBuildTarget initial build budget threshold ──
+
+  describe('JIRA-80: findDemandBuildTarget initial build threshold', () => {
+    const baseDemand80 = {
+      cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+      payout: 25, isSupplyReachable: true, isDeliveryReachable: true,
+      isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+      isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+      loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+      demandScore: 10, efficiencyPerTurn: 3, networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 40,
+    };
+
+    it('allows 40M threshold during initial build (2 turns x 20M)', () => {
+      const context = makeContext({
+        isInitialBuild: true,
+        demands: [
+          {
+            ...baseDemand80,
+            isSupplyOnNetwork: false,
+            estimatedTrackCostToSupply: 35, // > 20M but <= 40M
+            estimatedTrackCostToDelivery: 0,
+          },
+        ],
+      });
+      // With initial build, 35M <= 40M threshold → should return supply city
+      expect(PlanExecutor.findDemandBuildTarget(context)).toBe('Berlin');
+    });
+
+    it('rejects supply cost > 20M during normal (non-initial) build', () => {
+      const context = makeContext({
+        isInitialBuild: false,
+        demands: [
+          {
+            ...baseDemand80,
+            isSupplyOnNetwork: false,
+            estimatedTrackCostToSupply: 35, // > 20M normal threshold
+            estimatedTrackCostToDelivery: 0,
+          },
+        ],
+      });
+      // Without initial build, 35M > 20M threshold → should return null
+      expect(PlanExecutor.findDemandBuildTarget(context)).toBeNull();
     });
   });
 
