@@ -10,6 +10,7 @@ import deckRoutes from './routes/deckRoutes';
 import loadRoutes from './routes/loadRoutes';
 import lobbyRoutes from './routes/lobbyRoutes';
 import authRoutes from './routes/authRoutes';
+import chatRoutes from './routes/chatRoutes';
 import { checkDatabase, db } from './db';
 import { PlayerService } from './services/playerService';
 import { addRequestId } from './middleware/errorHandler';
@@ -104,6 +105,7 @@ app.use('/api/game', gameRoutes);
 app.use('/api/deck', deckRoutes);
 app.use('/api/loads', loadRoutes);
 app.use('/api/lobby', lobbyRoutes);
+app.use('/api/chat', chatRoutes);
 
 // Static file serving
 app.use(express.static(path.join(__dirname, '../../dist/client')));
@@ -289,18 +291,15 @@ async function startServer() {
             process.exit(1);
         }
 
-        // Initialize moderation service (download model from S3 if needed)
-        // Note: This is async and may take 1-2 minutes on first cold start
-        try {
-            console.log('[Startup] Initializing moderation service...');
-            await moderationService.initialize();
+        // Initialize moderation service in background (polls until Ollama is ready)
+        // Server starts immediately; moderation becomes available once Ollama responds
+        console.log('[Startup] Initializing moderation service (background)...');
+        moderationService.initialize().then(() => {
             console.log('[Startup] Moderation service ready');
-        } catch (error) {
+        }).catch((error) => {
             console.error('[Startup] Failed to initialize moderation service:', error);
             console.error('[Startup] Chat moderation will not be available');
-            // Don't exit - allow server to start without moderation
-            // Chat will still work, just without content filtering
-        }
+        });
 
         // Initialize cleanup jobs (cron)
         try {

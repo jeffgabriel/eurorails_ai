@@ -345,7 +345,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         }
 
         socket.emit('chat-joined', { gameId });
-        console.log(`[Chat] User ${userId} joined chat for game ${gameId}`);
       } catch (error) {
         console.error('[Chat] Error joining game chat:', error);
         socket.emit('chat-error', {
@@ -447,7 +446,9 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         // 4. Run content moderation
         if (moderationService.isReady()) {
           const moderationResult = await moderationService.checkMessage(trimmedMessage);
+
           if (!moderationResult.isAppropriate) {
+            console.log(`[Chat] Message rejected by moderation for user ${userId}`);
             socket.emit('message-error', {
               tempId,
               error: 'inappropriate_content',
@@ -455,6 +456,8 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
             });
             return;
           }
+        } else {
+          console.log('[Chat] Moderation service not ready, skipping moderation check');
         }
 
         // 5. Store message
@@ -480,8 +483,9 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           timestamp: new Date().toISOString(),
         });
 
-        // 9. Broadcast to recipients
+        // 9. Broadcast to recipients (include gameId for client routing)
         const messageData = {
+          gameId,
           id: messageId,
           senderUserId: userId,
           senderUsername: senderUsername || 'Unknown',
@@ -492,15 +496,18 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         };
 
         if (recipientType === 'game') {
-          // Broadcast to all players in game (except sender)
+          // Emit to sender (so they get their message and can replace optimistic)
+          socket.emit('new-chat-message', messageData);
+          // Broadcast to other players in game
           socket.to(`game:${gameId}:chat`).emit('new-chat-message', messageData);
         } else {
-          // Send to specific player's DM room
+          // Emit to sender for DM
+          socket.emit('new-chat-message', messageData);
+          // Send to recipient's DM room
           const dmRoom = createDMRoomId(userId, recipientId, gameId);
           socket.to(dmRoom).emit('new-chat-message', messageData);
         }
 
-        console.log(`[Chat] Message sent from ${userId} in game ${gameId} (type: ${recipientType})`);
       } catch (error) {
         console.error('[Chat] Error sending message:', error);
         socket.emit('message-error', {

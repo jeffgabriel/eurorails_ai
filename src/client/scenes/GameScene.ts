@@ -547,6 +547,9 @@ export class GameScene extends Phaser.Scene {
     // Set local player ID for per-player camera state
     const localPlayerId = this.playerStateService.getLocalPlayerId();
     this.cameraController.setLocalPlayerId(localPlayerId);
+    
+    // Set map container for automatic drag state reset
+    this.cameraController.setMapContainer(this.mapContainer);
 
     // Initialize turn notification component
     this.turnNotification = new TurnNotification(this);
@@ -571,7 +574,8 @@ export class GameScene extends Phaser.Scene {
       this.gameStateService,
       this.mapRenderer,
       this.trackManager,
-      this.playerStateService
+      this.playerStateService,
+      this.cameraController
     );
 
     // Reusable pattern: when local, server-authoritative actions mutate game state
@@ -618,7 +622,7 @@ export class GameScene extends Phaser.Scene {
       { key: "by-resource", label: "By Resource", type: "resource" }, // Interactive resource table
       { key: "by-city", label: "By City", type: "city" }, // Interactive city table
       { key: "player-cards", label: "Cards", type: "cards" }, // Dynamic content showing all players' hands
-    ], this.gameState);
+    ], this.gameState, this.cameraController);
     this.loadsReferencePanel.create();
 
     // Debug overlay (toggled with backtick key)
@@ -844,6 +848,38 @@ export class GameScene extends Phaser.Scene {
 
     // Set a low frame rate for the scene
     this.game.loop.targetFps = 30;
+
+    // Initialize ChatScene for this game (use auth userId for chat, not player slot id)
+    const localPlayer = this.playerStateService.getLocalPlayer();
+    if (localPlayer) {
+      const authUserId =
+        localPlayer.userId ??
+        (() => {
+          try {
+            const userJson = localStorage.getItem('eurorails.user');
+            return userJson ? (JSON.parse(userJson) as { id?: string })?.id : undefined;
+          } catch {
+            return undefined;
+          }
+        })();
+      if (authUserId) {
+        const existingChatScene = this.scene.get('ChatScene');
+        
+        // If ChatScene exists but isn't ready, restart it (handles hot reload scenarios)
+        if (existingChatScene && !(existingChatScene as any).isReady) {
+          this.scene.stop('ChatScene');
+          this.scene.launch('ChatScene', {
+            gameId: this.gameState.id,
+            userId: authUserId,
+          });
+        } else if (!existingChatScene) {
+          this.scene.launch('ChatScene', {
+            gameId: this.gameState.id,
+            userId: authUserId,
+          });
+        }
+      }
+    }
 
     // Add event handler for scene resume
     this.events.on("resume", async () => {
@@ -1569,6 +1605,55 @@ export class GameScene extends Phaser.Scene {
       this.uiManager.setupUIOverlay();
     } catch (error) {
       console.error('Error refreshing UI overlay:', error);
+    }
+  }
+
+  /**
+   * Toggle the chat sidebar
+   */
+  public toggleChat(): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    if (chatScene && chatScene.toggle) {
+      chatScene.toggle();
+    }
+  }
+
+  /**
+   * Open the chat sidebar
+   */
+  public openChat(): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    if (chatScene && chatScene.open) {
+      chatScene.open();
+    }
+  }
+
+  /**
+   * Open the chat sidebar in DM mode with a specific player
+   */
+  public openChatDM(recipientUserId: string, recipientName: string): void {
+    const chatScene = this.scene.get('ChatScene') as any;
+    
+    if (!chatScene) {
+      console.warn('[GameScene] ChatScene not available for DM');
+      return;
+    }
+
+    // Check if the scene is ready
+    if (chatScene.isReady && chatScene.openDM) {
+      // Scene is ready, call openDM directly
+      chatScene.openDM(recipientUserId, recipientName);
+    } else {
+      // Scene is still initializing, wait for it to be ready
+      const checkReady = () => {
+        if (chatScene.isReady && chatScene.openDM) {
+          chatScene.openDM(recipientUserId, recipientName);
+        } else {
+          // Check again in 100ms
+          setTimeout(checkReady, 100);
+        }
+      };
+      checkReady();
     }
   }
 }

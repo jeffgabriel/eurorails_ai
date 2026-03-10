@@ -141,12 +141,13 @@ describe('ChatStateService', () => {
 
       await chatService.sendMessage(mockGameId, 'Test message');
 
-      // Should send via socket
+      // Should send via socket (5th arg is optimisticId for server matching)
       expect(socketService.sendChatMessage).toHaveBeenCalledWith(
         mockGameId,
         'Test message',
         'game',
-        mockGameId
+        mockGameId,
+        expect.stringMatching(/^optimistic-\d+-[\d.]+$/)
       );
 
       // Should show optimistic message
@@ -165,7 +166,8 @@ describe('ChatStateService', () => {
         mockGameId,
         'Private message',
         'player',
-        recipientId
+        recipientId,
+        expect.stringMatching(/^optimistic-\d+-[\d.]+$/)
       );
     });
 
@@ -307,7 +309,7 @@ describe('ChatStateService', () => {
       await chatService.markMessagesAsRead([1, 2, 3]);
 
       expect(authenticatedFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/chat/messages/read'),
+        expect.stringContaining('/api/chat/mark-read'),
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ messageIds: [1, 2, 3] }),
@@ -325,7 +327,7 @@ describe('ChatStateService', () => {
 
       // Should not call the mark-as-read endpoint (but may have called join game endpoints)
       const calls = authenticatedFetch.mock.calls;
-      const markAsReadCalls = calls.filter((call: any) => call[0].includes('/messages/read'));
+      const markAsReadCalls = calls.filter((call: any) => call[0].includes('/mark-read'));
       expect(markAsReadCalls.length).toBe(0);
     });
   });

@@ -16,17 +16,23 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
   private message: ChatMessage;
   private isOwnMessage: boolean;
   private maxWidth: number;
+  private bubbleGraphics!: Phaser.GameObjects.Graphics;
+  private bubbleWidth: number = 0;
+  private bubbleHeight: number = 0;
+  private bubbleX: number = 0;
+  private flaggedTooltipText: string | null = null;
 
   // Constants
   private readonly BUBBLE_PADDING = 12;
-  private readonly MAX_MESSAGE_WIDTH = 250;
+  private readonly MIN_BUBBLE_WIDTH = 120;
+  private readonly MAX_BUBBLE_WIDTH = 250;
   private readonly TIMESTAMP_HEIGHT = 18;
 
   constructor(
     scene: Phaser.Scene,
     x: number,
     y: number,
-    maxWidth: number,
+    containerWidth: number,
     message: ChatMessage,
     isOwnMessage: boolean
   ) {
@@ -34,7 +40,7 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
 
     this.message = message;
     this.isOwnMessage = isOwnMessage;
-    this.maxWidth = Math.min(maxWidth, this.MAX_MESSAGE_WIDTH);
+    this.maxWidth = containerWidth;
 
     this.render();
     scene.add.existing(this);
@@ -52,60 +58,44 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
     const messageText = this.createMessageText(sanitizedContent);
     const timestampText = this.createTimestampText();
 
-    // Calculate bubble dimensions
-    const bubbleWidth = Math.min(
-      this.maxWidth,
-      Math.max(messageText.width, senderText.width) + this.BUBBLE_PADDING * 2
-    );
-    const bubbleHeight =
+    // Calculate bubble dimensions - constrain bubble width but not container
+    const contentWidth = Math.max(messageText.width, senderText.width) + this.BUBBLE_PADDING * 2;
+    this.bubbleWidth = Math.max(this.MIN_BUBBLE_WIDTH, Math.min(contentWidth, this.MAX_BUBBLE_WIDTH));
+    this.bubbleHeight =
       messageText.height +
       senderText.height +
       this.TIMESTAMP_HEIGHT +
       this.BUBBLE_PADDING * 2;
 
     // Create bubble background
-    const bubble = this.createBubbleBackground(bubbleWidth, bubbleHeight);
+    const bubble = this.createBubbleBackground(this.bubbleWidth, this.bubbleHeight);
+    this.bubbleGraphics = bubble;
 
-    // Position elements
-    const align = this.isOwnMessage ? 'right' : 'left';
-    const bubbleX = this.isOwnMessage ? this.maxWidth - bubbleWidth : 0;
+    // Position bubble: left-aligned for others, right-aligned for own messages
+    this.bubbleX = this.isOwnMessage ? this.maxWidth - this.bubbleWidth : 0;
+    bubble.setPosition(this.bubbleX, 0);
 
-    bubble.setPosition(bubbleX, 0);
+    // Position text elements inside the bubble (always left-aligned within bubble)
+    senderText.setPosition(this.bubbleX + this.BUBBLE_PADDING, this.BUBBLE_PADDING);
+    senderText.setOrigin(0, 0);
 
-    if (this.isOwnMessage) {
-      senderText.setPosition(bubbleX + bubbleWidth - this.BUBBLE_PADDING, this.BUBBLE_PADDING);
-      senderText.setOrigin(1, 0);
+    messageText.setPosition(
+      this.bubbleX + this.BUBBLE_PADDING,
+      this.BUBBLE_PADDING + senderText.height + 4
+    );
+    messageText.setOrigin(0, 0);
 
-      messageText.setPosition(
-        bubbleX + bubbleWidth - this.BUBBLE_PADDING,
-        this.BUBBLE_PADDING + senderText.height + 4
-      );
-      messageText.setOrigin(1, 0);
-
-      timestampText.setPosition(
-        bubbleX + bubbleWidth - this.BUBBLE_PADDING,
-        bubbleHeight - this.BUBBLE_PADDING - 2
-      );
-      timestampText.setOrigin(1, 1);
-    } else {
-      senderText.setPosition(bubbleX + this.BUBBLE_PADDING, this.BUBBLE_PADDING);
-      senderText.setOrigin(0, 0);
-
-      messageText.setPosition(
-        bubbleX + this.BUBBLE_PADDING,
-        this.BUBBLE_PADDING + senderText.height + 4
-      );
-      messageText.setOrigin(0, 0);
-
-      timestampText.setPosition(
-        bubbleX + this.BUBBLE_PADDING,
-        bubbleHeight - this.BUBBLE_PADDING - 2
-      );
-      timestampText.setOrigin(0, 1);
-    }
+    timestampText.setPosition(
+      this.bubbleX + this.BUBBLE_PADDING,
+      this.bubbleHeight - this.BUBBLE_PADDING - 2
+    );
+    timestampText.setOrigin(0, 1);
 
     // Add to container
     this.add([bubble, senderText, messageText, timestampText]);
+
+    // Set container size explicitly for proper layout calculation
+    this.setSize(this.maxWidth, this.bubbleHeight);
   }
 
   /**
@@ -146,7 +136,7 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
       fontFamily: UI_FONT_FAMILY,
       color: '#ffffff',
       wordWrap: {
-        width: this.maxWidth - this.BUBBLE_PADDING * 2,
+        width: this.MAX_BUBBLE_WIDTH - this.BUBBLE_PADDING * 2,
         useAdvancedWrap: true,
       },
     });
@@ -186,6 +176,56 @@ export class ChatMessageBubble extends Phaser.GameObjects.Container {
     graphics.strokeRoundedRect(0, 0, width, height, 8);
 
     return graphics;
+  }
+
+  /**
+   * Mark this bubble as flagged by moderation with a warning icon.
+   * Tooltip display is handled by ChatScene since the scroll zone captures pointer events.
+   */
+  public markAsFlagged(tooltipText: string): void {
+    this.flaggedTooltipText = tooltipText;
+
+    // Redraw bubble background with red/orange border
+    this.bubbleGraphics.clear();
+    const fillColor = this.isOwnMessage ? 0x0066cc : 0x4a4a4a;
+    const flaggedBorderColor = 0xcc3300;
+
+    this.bubbleGraphics.fillStyle(fillColor, 1);
+    this.bubbleGraphics.lineStyle(2, flaggedBorderColor, 1);
+    this.bubbleGraphics.fillRoundedRect(0, 0, this.bubbleWidth, this.bubbleHeight, 8);
+    this.bubbleGraphics.strokeRoundedRect(0, 0, this.bubbleWidth, this.bubbleHeight, 8);
+
+    // Add warning icon at top-right of the bubble
+    const warningIcon = this.scene.add.text(
+      this.bubbleX + this.bubbleWidth - 8,
+      4,
+      '\u26A0',
+      {
+        fontSize: '14px',
+        fontFamily: UI_FONT_FAMILY,
+        color: '#ff6600',
+      }
+    ).setOrigin(1, 0);
+    this.add(warningIcon);
+  }
+
+  /**
+   * Returns the flagged tooltip text, or null if not flagged.
+   */
+  public getFlaggedTooltipText(): string | null {
+    return this.flaggedTooltipText;
+  }
+
+  /**
+   * Check if a local point (relative to the parent container) is within this bubble's bounds.
+   */
+  public containsPoint(localX: number, localY: number): boolean {
+    return (
+      localX >= this.x + this.bubbleX &&
+      localX <= this.x + this.bubbleX + this.bubbleWidth &&
+      localY >= this.y &&
+      localY <= this.y + this.bubbleHeight
+    );
   }
 
   /**

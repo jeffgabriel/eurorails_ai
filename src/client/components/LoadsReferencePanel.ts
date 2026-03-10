@@ -7,6 +7,7 @@ import {
   CityTableEntry,
 } from "../utils/loadDataTransformer";
 import { api } from "../lobby/shared/api";
+import { CameraController } from "./CameraController";
 
 type LoadsReferencePage = {
   key: string;
@@ -18,6 +19,7 @@ export class LoadsReferencePanel {
   private readonly scene: Phaser.Scene;
   private readonly pages: LoadsReferencePage[];
   private gameState: GameState | null = null;
+  private cameraController?: CameraController;
 
   private root!: Phaser.GameObjects.Container;
   private background!: Phaser.GameObjects.Rectangle;
@@ -75,10 +77,11 @@ export class LoadsReferencePanel {
   private dragStartY: number = 0;
   private dragStartOffset: number = 0;
 
-  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState) {
+  constructor(scene: Phaser.Scene, pages: LoadsReferencePage[], gameState?: GameState, cameraController?: CameraController) {
     this.scene = scene;
     this.pages = pages;
     this.gameState = gameState || null;
+    this.cameraController = cameraController;
   }
 
   getContainer(): Phaser.GameObjects.Container {
@@ -113,7 +116,9 @@ export class LoadsReferencePanel {
       // Invisible click zone covering the full tab header area
       const hit = this.scene.add.rectangle(0, 0, 10, 10, 0x000000, 0.001).setOrigin(0);
       hit.setInteractive({ useHandCursor: true });
-      hit.on("pointerdown", () => this.setActivePage(idx));
+      hit.on("pointerdown", () => {
+        this.setActivePage(idx);
+      });
 
       const tabText = this.scene.add
         .text(0, 0, page.label, {
@@ -185,7 +190,9 @@ export class LoadsReferencePanel {
     this.handleBg = this.scene.add.rectangle(0, 0, this.handleWidth, this.handleHeight, 0x64748b, 1).setOrigin(0);
     this.handleBg.setStrokeStyle(1, 0x475569, 1);
     this.handleBg.setInteractive({ useHandCursor: true });
-    this.handleBg.on("pointerdown", () => this.toggle());
+    this.handleBg.on("pointerdown", () => {
+      this.toggle();
+    });
 
     this.handleText = this.scene.add
       .text(this.handleWidth / 2, this.handleHeight / 2, "LOADS", {
@@ -202,7 +209,9 @@ export class LoadsReferencePanel {
     // Create scrollbar (track and thumb)
     this.scrollbarTrack = this.scene.add.rectangle(0, 0, 8, 100, 0x334155, 1).setOrigin(0);
     this.scrollbarTrack.setInteractive({ useHandCursor: true });
-    this.scrollbarTrack.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.onTrackClick(pointer));
+    this.scrollbarTrack.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      this.onTrackClick(pointer);
+    });
 
     this.scrollbarThumb = this.scene.add.rectangle(0, 0, 8, 50, 0x64748b, 1).setOrigin(0);
     this.scrollbarThumb.setInteractive({ useHandCursor: true, draggable: true });

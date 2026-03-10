@@ -2,7 +2,9 @@ import "phaser";
 import { GameState } from "../../shared/types/GameTypes";
 
 import { GameStateService } from "../services/GameStateService";
+import { PlayerStateService } from "../services/PlayerStateService";
 import { UI_FONT_FAMILY } from "../config/uiFont";
+import { CameraController } from "./CameraController";
 
 export class LeaderboardManager {
   private scene: Phaser.Scene;
@@ -13,20 +15,32 @@ export class LeaderboardManager {
   private lastPlayerSectionHeight: number = 0;
   private tooltip: Phaser.GameObjects.Text | null = null;
   private tooltipBg: Phaser.GameObjects.Rectangle | null = null;
+  private playerStateService: PlayerStateService | null = null;
+  private toggleChatCallback?: () => void;
+  private openDMCallback?: (playerId: string, playerName: string) => void;
+  private cameraController?: CameraController;
 
   constructor(
-    scene: Phaser.Scene, 
+    scene: Phaser.Scene,
     gameState: GameState,
     nextPlayerCallback: () => void,
-    gameStateService?: GameStateService
+    gameStateService?: GameStateService,
+    toggleChatCallback?: () => void,
+    openDMCallback?: (playerId: string, playerName: string) => void,
+    playerStateService?: PlayerStateService,
+    cameraController?: CameraController
   ) {
     this.scene = scene;
     this.gameState = gameState;
     this.nextPlayerCallback = nextPlayerCallback;
     this.gameStateService = gameStateService || null;
+    this.toggleChatCallback = toggleChatCallback;
+    this.openDMCallback = openDMCallback;
+    this.playerStateService = playerStateService || null;
+    this.cameraController = cameraController;
     this.container = this.scene.add.container(0, 0);
   }
-  
+
   public update(targetContainer: Phaser.GameObjects.Container): void {
     // Clear existing UI elements and tooltip
     this.hideTooltip();
@@ -58,7 +72,8 @@ export class LeaderboardManager {
         0x333333,
         0.9
       )
-      .setOrigin(0, 0);
+      .setOrigin(0, 0)
+      .setInteractive(); // Block pointer events from passing through
 
     // Add leaderboard title
     const leaderboardTitle = this.scene.add
@@ -136,6 +151,8 @@ export class LeaderboardManager {
       playerEntries.push(colorBadge);
 
       // Create player text
+      const dmTargetUserId = player.userId;
+      const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
       const playerText = this.scene.add
         .text(
           badgeX + 14,
@@ -150,6 +167,18 @@ export class LeaderboardManager {
         )
         .setOrigin(0, 0);
       playerEntries.push(playerText);
+
+      // Make clickable for DM (except local player; requires userId)
+      if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
+        playerText
+          .setInteractive({ useHandCursor: true })
+          .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            if (pointer.event) {
+              pointer.event.stopPropagation();
+            }
+            this.openDMCallback!(dmTargetUserId, player.name);
+          });
+      }
 
       // Add [BOT] suffix for AI players
       if (player.isBot) {
@@ -231,12 +260,16 @@ export class LeaderboardManager {
     // Create and add next player button
     const nextPlayerButton = this.createNextPlayerButton();
 
+    // Create and add chat button
+    const chatButton = this.createChatButton();
+
     // Add all UI elements to container
     targetContainer.add([
       leaderboardBg,
       leaderboardTitle,
       ...playerEntries,
-      ...nextPlayerButton.getAll()
+      ...nextPlayerButton.getAll(),
+      ...chatButton.getAll()
     ]);
   }
 
@@ -244,7 +277,7 @@ export class LeaderboardManager {
     const buttonContainer = this.scene.add.container(0, 0);
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
-    
+
     // Check if local player is active
     const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive() ?? false;
 
@@ -278,7 +311,12 @@ export class LeaderboardManager {
     if (isLocalPlayerActive) {
       nextPlayerButton
         .setInteractive({ useHandCursor: true })
-        .on("pointerdown", () => this.nextPlayerCallback())
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.nextPlayerCallback();
+        })
         .on("pointerover", () => nextPlayerButton.setFillStyle(0x008800))
         .on("pointerout", () => nextPlayerButton.setFillStyle(0x00aa00));
     } else {
@@ -315,5 +353,57 @@ export class LeaderboardManager {
     this.tooltip = null;
     this.tooltipBg?.destroy();
     this.tooltipBg = null;
+  }
+
+  private createChatButton(): Phaser.GameObjects.Container {
+    const buttonContainer = this.scene.add.container(0, 0);
+    const LEADERBOARD_WIDTH = 150;
+    const LEADERBOARD_PADDING = 10;
+
+    // Chat button goes below the "Next Player" button
+    const buttonY = LEADERBOARD_PADDING + 90 + this.lastPlayerSectionHeight;
+
+    // Add chat button
+    const chatButton = this.scene.add
+      .rectangle(
+        this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
+        buttonY,
+        LEADERBOARD_WIDTH,
+        40,
+        0x0066cc,
+        0.9
+      )
+      .setOrigin(0, 0);
+
+    const chatButtonText = this.scene.add
+      .text(
+        this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
+        buttonY + 20,
+        "💬 Chat",
+        {
+          color: "#ffffff",
+          fontSize: "16px",
+          fontStyle: "bold",
+          fontFamily: UI_FONT_FAMILY,
+        }
+      )
+      .setOrigin(0.5, 0.5);
+
+    // Make the button interactive
+    if (this.toggleChatCallback) {
+      chatButton
+        .setInteractive({ useHandCursor: true })
+        .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+          if (pointer.event) {
+            pointer.event.stopPropagation();
+          }
+          this.toggleChatCallback!();
+        })
+        .on("pointerover", () => chatButton.setFillStyle(0x0055aa))
+        .on("pointerout", () => chatButton.setFillStyle(0x0066cc));
+    }
+
+    buttonContainer.add([chatButton, chatButtonText]);
+    return buttonContainer;
   }
 }
