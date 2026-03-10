@@ -564,6 +564,27 @@ export class ContextBuilder {
               if (d >= 0 && d < hopSupplyToDelivery) hopSupplyToDelivery = d;
             }
           }
+          // JIRA-79: Fallback to Euclidean distance when BFS can't cross water
+          if (hopStartToSupply === Infinity) {
+            let minEuc = Infinity;
+            for (const stP of startPoints) {
+              for (const sp of supplyPoints) {
+                const d = Math.sqrt((sp.row - stP.row) ** 2 + (sp.col - stP.col) ** 2);
+                if (d < minEuc) minEuc = d;
+              }
+            }
+            if (minEuc < Infinity) hopStartToSupply = minEuc;
+          }
+          if (hopSupplyToDelivery === Infinity) {
+            let minEuc = Infinity;
+            for (const sp of supplyPoints) {
+              for (const dp of deliveryPoints) {
+                const d = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
+                if (d < minEuc) minEuc = d;
+              }
+            }
+            if (minEuc < Infinity) hopSupplyToDelivery = minEuc;
+          }
           const totalHops = (hopStartToSupply < Infinity ? hopStartToSupply : 0)
             + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
           if (totalHops > 0) {
@@ -583,6 +604,19 @@ export class ContextBuilder {
         }
         if (minDist < Infinity) {
           travelTurns = Math.ceil(minDist / speed);
+        } else {
+          // JIRA-79: BFS returns 0 for water-separated routes (Ireland, Britain, Scandinavia)
+          // because it skips Water terrain tiles. Use Euclidean hex distance as fallback.
+          let minEuclidean = Infinity;
+          for (const sp of supplyPoints) {
+            for (const dp of deliveryPoints) {
+              const eucDist = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
+              if (eucDist < minEuclidean) minEuclidean = eucDist;
+            }
+          }
+          if (minEuclidean < Infinity) {
+            travelTurns = Math.ceil(minEuclidean / speed);
+          }
         }
       }
     }

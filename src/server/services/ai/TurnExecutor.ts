@@ -675,14 +675,16 @@ export class TurnExecutor {
       console.error('[TurnExecutor] DeliverLoad post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
     }
 
-    // Post-delivery: emit refreshed demand ranking for debug overlay (FE-001)
+    // Post-delivery: emit refreshed demand ranking for debug overlay (FE-001, JIRA-78)
+    // Use fresh player data from DB (same source as emitStatePatch) to stay in sync with Cards tab
     try {
-      const updatedHand = snapshot.bot.demandCards.filter(id => id !== cardId);
-      updatedHand.push(newCardId);
+      const freshPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
+      const freshBot = freshPlayers.find((p: any) => p.id === snapshot.bot.playerId);
+      const freshHand: number[] = freshBot?.hand?.map((c: any) => c.id) ?? [];
       const demandDeck = DemandDeckService.getInstance();
       const loadSvc = LoadService.getInstance();
       const ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number }> = [];
-      for (const cid of updatedHand) {
+      for (const cid of freshHand) {
         const card = demandDeck.getCard(cid);
         if (!card) continue;
         for (const d of card.demands) {

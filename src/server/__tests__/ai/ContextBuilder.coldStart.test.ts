@@ -94,8 +94,8 @@ function makeWorldSnapshot(overrides?: {
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 // Mock MapTopology with controllable estimatePathCost and estimateHopDistance
-const mockEstimatePathCost = jest.fn(() => 0);
-const mockEstimateHopDistance = jest.fn(() => 0);
+const mockEstimatePathCost = jest.fn<number, [number, number, number, number]>(() => 0);
+const mockEstimateHopDistance = jest.fn<number, [number, number, number, number]>(() => 0);
 const mockHexDistance = jest.fn((r1: number, c1: number, r2: number, c2: number): number => {
   // Real hex distance: cube coordinate conversion
   const x1 = c1 - Math.floor(r1 / 2);
@@ -108,9 +108,9 @@ const mockHexDistance = jest.fn((r1: number, c1: number, r2: number, c2: number)
 });
 
 jest.mock('../../services/ai/MapTopology', () => ({
-  estimatePathCost: (...args: unknown[]) => mockEstimatePathCost(...args),
-  estimateHopDistance: (...args: unknown[]) => mockEstimateHopDistance(...args),
-  hexDistance: (...args: unknown[]) => mockHexDistance(...args),
+  estimatePathCost: (r1: number, c1: number, r2: number, c2: number) => mockEstimatePathCost(r1, c1, r2, c2),
+  estimateHopDistance: (r1: number, c1: number, r2: number, c2: number) => mockEstimateHopDistance(r1, c1, r2, c2),
+  hexDistance: (r1: number, c1: number, r2: number, c2: number) => mockHexDistance(r1, c1, r2, c2),
   computeLandmass: jest.fn(() => new Set()),
   computeFerryRouteInfo: jest.fn(() => ({ requiresFerry: false, departurePorts: [], arrivalPorts: [], ferryCost: 0 })),
   makeKey: jest.fn((r: number, c: number) => `${r},${c}`),
@@ -625,6 +625,50 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
       // Travel = Madrid→Sevilla(2) + Sevilla→Lisboa(3) = 5 hops, travelTurns = ceil(5/9) = 1
       // estimatedTurns = 1 + 1 + 1 = 3
       expect(demand!.estimatedTurns).toBe(3);
+    });
+  });
+
+  describe('JIRA-79: water-separated route Euclidean fallback', () => {
+    it('should use Euclidean fallback when BFS returns 0 for water-separated route', async () => {
+      // Cork (row 20, col 10) in Ireland → Beograd (row 50, col 60) in Serbia
+      // BFS returns 0 because it can't cross water — fallback should produce reasonable travel
+      setupHopDistances({}); // All return 0 (default)
+      setupPathCosts({
+        '37,55->20,10': 41, // Wien→Cork supply track cost
+        '20,10->50,60': 10, // Cork→Beograd delivery track cost
+      });
+
+      const gridPoints: GridPoint[] = [
+        makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity),
+        makeCityPoint(20, 10, 'Cork', TerrainType.SmallCity, ['Sheep']),
+        makeCityPoint(50, 60, 'Beograd', TerrainType.MajorCity),
+        // Clear terrain to connect them
+        makeGridPoint(30, 35),
+      ];
+
+      const snapshot = makeWorldSnapshot({
+        botPosition: { row: 37, col: 55 },
+        botSegments: [makeSegment(37, 55, 36, 55)], // non-cold-start
+        gameStatus: 'active',
+        turnNumber: 11,
+        botMoney: 33,
+      });
+      // Override resolved demands to include Sheep→Beograd
+      snapshot.bot.resolvedDemands = [{
+        cardId: 1,
+        demands: [{ city: 'Beograd', loadType: 'Sheep', payment: 51 }],
+      }];
+
+      const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+      const demand = context.demands.find(d => d.deliveryCity === 'Beograd' && d.loadType === 'Sheep');
+
+      expect(demand).toBeDefined();
+      // Euclidean distance Cork(20,10)→Beograd(50,60) = sqrt(30² + 50²) ≈ 58.3
+      // travelTurns = ceil(58.3 / 9) = 7
+      // buildTurns = ceil(51/20) = 3
+      // estimatedTurns = 3 + 7 + 1 = 11
+      // Must be significantly more than 4 (the old buggy value)
+      expect(demand!.estimatedTurns).toBeGreaterThan(6);
     });
   });
 });

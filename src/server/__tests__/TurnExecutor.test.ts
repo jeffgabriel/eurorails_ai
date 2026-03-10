@@ -750,7 +750,14 @@ describe('TurnExecutor — handleDeliverLoad', () => {
       updatedMoney: 60,
     });
     (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
-      { id: 'bot-1', money: 60, trainState: { loads: [] } },
+      {
+        id: 'bot-1', money: 60, trainState: { loads: [] },
+        hand: [
+          { id: 99, demands: [{ city: 'Paris', resource: 'Wine', payment: 12 }] },
+          { id: 50, demands: [{ city: 'Madrid', resource: 'Oil', payment: 8 }] },
+          { id: 51, demands: [{ city: 'Rome', resource: 'Steel', payment: 15 }] },
+        ],
+      },
     ]);
   });
 
