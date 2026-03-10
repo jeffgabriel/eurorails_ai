@@ -16,10 +16,10 @@ import { GridPointData } from '../../services/ai/MapTopology';
 
 // Mock MapTopology — loadGridPoints and estimateHopDistance return controllable values
 const mockGridPoints = new Map<string, GridPointData>();
-const mockEstimateHopDistance = jest.fn(() => 10);
+const mockEstimateHopDistance = jest.fn<number, [number, number, number, number]>(() => 10);
 jest.mock('../../services/ai/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGridPoints),
-  estimateHopDistance: (...args: number[]) => mockEstimateHopDistance(...args),
+  estimateHopDistance: (r1: number, c1: number, r2: number, c2: number) => mockEstimateHopDistance(r1, c1, r2, c2),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
@@ -346,6 +346,25 @@ describe('RouteValidator', () => {
       const context = makeContext({ demands: [steelDemand, touristDemand] });
       // Bot starts with 10M — after Steel delivery payout (19M), has 29M, enough for Napoli track (15M)
       const result = RouteValidator.validate(route, context, makeSnapshot(10));
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+  });
+
+  describe('JIRA-77: null bot position during initial build', () => {
+    it('should validate multi-stop route when bot position is null', () => {
+      // During initial build, bot has no position (train not placed yet).
+      // RouteValidator should skip reorder-by-proximity and keep LLM's original stop order.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.position = null as any;
+
+      const result = RouteValidator.validate(route, makeContext(), snapshot);
       expect(result.valid).toBe(true);
       expect(result.errors).toHaveLength(0);
     });

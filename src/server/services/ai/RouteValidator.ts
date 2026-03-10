@@ -64,22 +64,25 @@ export class RouteValidator {
     // Must run before cumulative budget check so budget is validated against
     // the actual execution order.
     if (validations.length > 1) {
-      const gridPoints = loadGridPoints();
       const botPos = snapshot.bot.position;
-      const reordered = RouteValidator.reorderStopsByProximity(
-        validations.filter(v => v.feasible).map(v => v.stop),
-        botPos,
-        gridPoints,
-      );
-      // Rebuild validations array in reordered sequence
-      const reorderedValidations: StopValidation[] = reordered.map(stop => {
-        const orig = validations.find(v => v.stop === stop);
-        return orig!;
-      });
-      // Append infeasible stops at the end (order doesn't matter for them)
-      const infeasible = validations.filter(v => !v.feasible);
-      validations.length = 0;
-      validations.push(...reorderedValidations, ...infeasible);
+      if (botPos) {
+        const gridPoints = loadGridPoints();
+        const reordered = RouteValidator.reorderStopsByProximity(
+          validations.filter(v => v.feasible).map(v => v.stop),
+          botPos,
+          gridPoints,
+        );
+        // Rebuild validations array in reordered sequence
+        const reorderedValidations: StopValidation[] = reordered.map(stop => {
+          const orig = validations.find(v => v.stop === stop);
+          return orig!;
+        });
+        // Append infeasible stops at the end (order doesn't matter for them)
+        const infeasible = validations.filter(v => !v.feasible);
+        validations.length = 0;
+        validations.push(...reorderedValidations, ...infeasible);
+      }
+      // else: bot position null (initial build) — skip reorder, keep LLM's original stop order
     }
 
     // ── Cumulative budget check ──
