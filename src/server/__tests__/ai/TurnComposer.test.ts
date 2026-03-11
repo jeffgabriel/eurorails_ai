@@ -1240,7 +1240,47 @@ describe('TurnComposer', () => {
     });
   });
 
-  describe('tryAppendBuild no speculative builds', () => {
+  describe('JIRA-93: tryAppendBuild no speculative builds', () => {
+    it('builds toward route stop when active route has unreachable stop', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Paris' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Should build toward Paris (route stop not on network)
+      expect(result.type).toBe('MultiAction');
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCall).toBeDefined();
+      expect(buildCall![0].details.toward).toBe('Paris');
+    });
+
     it('returns null when all route stops are on network and no unconnected cities', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({

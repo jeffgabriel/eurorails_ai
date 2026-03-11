@@ -351,6 +351,66 @@ describe('RouteValidator', () => {
     });
   });
 
+  describe('JIRA-93: delivery-less route rejection after pruning', () => {
+    it('rejects route with only pickup stops (no delivery stops)', () => {
+      // Route has only pickups — no delivery means no payout, no destination
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'pickup', loadType: 'Wine', city: 'Essen' },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen' }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Essen' }),
+        ],
+      });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain('Route has no delivery stops after pruning — not viable');
+    });
+
+    it('accepts route with pickup + delivery after pruning (control case)', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand()],
+      });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(true);
+    });
+
+    it('rejects route where delivery gets budget-pruned, leaving orphaned pickup', () => {
+      // Delivery requires expensive track (50M) but bot only has 10M
+      // Budget pruning removes delivery → paired pruning removes pickup → zero deliveries → rejected
+      const demand = makeDemand({
+        estimatedTrackCostToDelivery: 50,
+        isDeliveryOnNetwork: false,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({ demands: [demand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(10));
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('no delivery stops after pruning') || e.includes('budget'))).toBe(true);
+    });
+  });
+
   describe('JIRA-77: null bot position during initial build', () => {
     it('should validate multi-stop route when bot position is null', () => {
       // During initial build, bot has no position (train not placed yet).
