@@ -126,6 +126,13 @@ export class AIStrategyEngine {
       // JIRA-60: Inject delivery count from memory for upgrade advice gating
       context.deliveryCount = memory.deliveryCount ?? 0;
 
+      // JIRA-87: Inject en-route pickup opportunities from active route
+      if (memory.activeRoute?.stops) {
+        context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
+          snapshot, memory.activeRoute.stops, gridPoints,
+        );
+      }
+
       // Inject previous turn summary from memory for LLM context continuity
       if (memory.lastReasoning || memory.lastPlanHorizon) {
         const parts: string[] = [];
