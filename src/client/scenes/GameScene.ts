@@ -12,6 +12,9 @@ import { LoadType } from "../../shared/types/LoadTypes";
 import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
+import { DebugOverlay } from "../components/DebugOverlay";
+import { BotTrainAnimator } from "../components/BotTrainAnimator";
+import { GameToastManager } from "../components/GameToastManager";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -43,8 +46,14 @@ export class GameScene extends Phaser.Scene {
   private turnChangeListener?: (currentPlayerIndex: number) => void;
   private stateChangeListener?: () => void;
   private previousActivePlayerId: string | null = null;
+  private turnChangeSeq = 0;
   private loadsReferencePanel?: LoadsReferencePanel;
-  
+  private debugOverlay?: DebugOverlay;
+  private botTrainAnimator?: BotTrainAnimator;
+  private gameToastManager?: GameToastManager;
+  private socketUnsubBotTurnComplete?: () => void;
+  private socketUnsubBotToast?: () => void;
+  private socketUnsubDebugAny?: () => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -367,11 +376,16 @@ export class GameScene extends Phaser.Scene {
                     // For other players: use server data (authoritative)
                     const oldPosition = existingPlayer.trainState?.position;
                     const newPosition = updatedPlayer.trainState?.position;
-                    
+
                     this.gameState.players[index] = { ...existingPlayer, ...updatedPlayer };
-                    
+
+                    // JIRA-36: Skip instant position update if animation is in progress
+                    if (this.botTrainAnimator?.isAnimating(updatedPlayer.id)) {
+                      return;
+                    }
+
                     // If position changed, update visual sprite
-                    if (newPosition && 
+                    if (newPosition &&
                         (oldPosition?.row !== newPosition.row || oldPosition?.col !== newPosition.col)) {
                       const gridPoint = this.mapRenderer.gridPoints[newPosition.row]?.[newPosition.col];
                       if (gridPoint) {
@@ -610,6 +624,190 @@ export class GameScene extends Phaser.Scene {
       { key: "player-cards", label: "Cards", type: "cards" }, // Dynamic content showing all players' hands
     ], this.gameState, this.cameraController);
     this.loadsReferencePanel.create();
+
+    // Debug overlay (toggled with backtick key)
+    this.debugOverlay = new DebugOverlay(this, this.gameStateService);
+
+    // JIRA-36: Bot train animation system
+    this.botTrainAnimator = new BotTrainAnimator(this);
+
+    // Game event toast notifications
+    this.gameToastManager = new GameToastManager(this);
+
+    try {
+      const { socketService: svc } = await import('../lobby/shared/socket');
+      if (svc) {
+        const overlay = this.debugOverlay;
+        this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
+        });
+
+        // Game event toast notifications from bot:turn-complete
+        this.socketUnsubBotToast = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          if (eventName !== 'bot:turn-complete') return;
+          const data = args[0];
+          if (!data?.botPlayerId) return;
+          const toast = this.gameToastManager;
+          if (!toast) return;
+
+          const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+          const botName = botPlayer?.name ?? 'Unknown Player';
+          const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
+
+          // LLM strategy announcement — always fires (not timeline-driven)
+          if (data.reasoning) {
+            const isLlmFailure = /^\[(heuristic[ -]fallback|llm-failed|no-api-key)\]/i.test(data.reasoning);
+            const cleanReasoning = data.reasoning
+              .replace(/\[[\w\s=\/\-]+\]\s*/g, '');
+            if (isLlmFailure) {
+              toast.show(`😵 ${botName} LLM failed — ${cleanReasoning}`, { color: 0x8b0000, shake: true });
+            } else {
+              toast.show(`${botName}: ${cleanReasoning}`, { color: botColor, duration: 10000 });
+            }
+          }
+
+          // When actionTimeline is present, action toasts are fired mid-animation
+          // by the animateTimeline onAction callback — skip them here
+          if (data.actionTimeline?.length > 0) return;
+
+          // Delivery announcements — with payment flourish
+          if (data.loadsDelivered?.length > 0) {
+            for (const d of data.loadsDelivered) {
+              toast.show(
+                `💰 ${botName} delivered ${d.loadType} to ${d.city} — earned ${d.payment}M ECU!`,
+                { color: botColor, flourish: true },
+              );
+            }
+          }
+
+          // Track build announcement
+          if (data.segmentsBuilt > 0 && data.buildTargetCity) {
+            toast.show(
+              `${botName} built ${data.segmentsBuilt} track segment${data.segmentsBuilt > 1 ? 's' : ''} toward ${data.buildTargetCity} (${data.cost}M)`,
+              { color: botColor },
+            );
+          }
+
+          // Train upgrade announcement
+          if (data.action === 'UpgradeTrain') {
+            toast.show(`${botName} upgraded their train`, { color: botColor });
+          }
+
+          // Discard hand announcement — sad shake
+          if (data.action === 'DiscardHand') {
+            toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
+          }
+
+          // Pickup announcement
+          if (data.loadsPickedUp?.length > 0) {
+            const loads = data.loadsPickedUp.map((p: any) => `${p.loadType} at ${p.city}`).join(', ');
+            toast.show(`${botName} picked up ${loads}`, { color: botColor });
+          }
+        });
+
+        // JIRA-36: Listen for bot:turn-complete to animate movement path
+        this.socketUnsubBotTurnComplete = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+          if (eventName !== 'bot:turn-complete') return;
+          const data = args[0];
+          if (!data.botPlayerId) return;
+
+          const animator = this.botTrainAnimator;
+          if (!animator) return;
+
+          // Cancel any existing animation for this bot (rapid turns)
+          if (animator.isAnimating(data.botPlayerId)) {
+            animator.cancelAnimation(data.botPlayerId);
+          }
+
+          const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+          const botName = botPlayer?.name ?? 'Unknown Player';
+          const botColor = botPlayer ? parseInt(botPlayer.color.replace('#', '0x')) : 0x1a1a2e;
+          const toast = this.gameToastManager;
+
+          // Prefer structured timeline over flat path
+          if (data.actionTimeline?.length > 0) {
+            // Snap sprite to start of first move segment
+            const firstMove = data.actionTimeline.find((s: any) => s.type === 'move');
+            if (firstMove?.path?.[0]) {
+              const startGrid = this.mapRenderer.gridPoints[firstMove.path[0].row]?.[firstMove.path[0].col];
+              if (startGrid) {
+                const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
+                if (sprite) sprite.setPosition(startGrid.x, startGrid.y);
+              }
+            }
+
+            animator.animateTimeline(
+              data.botPlayerId,
+              data.actionTimeline,
+              this.mapRenderer.gridPoints,
+              () => this.uiManager.getTrainSprite(data.botPlayerId),
+              (step) => {
+                if (!toast) return;
+                switch (step.type) {
+                  case 'deliver':
+                    toast.show(
+                      `💰 ${botName} delivered ${step.loadType} to ${step.city} — earned ${step.payment}M ECU!`,
+                      { color: botColor, flourish: true },
+                    );
+                    break;
+                  case 'pickup':
+                    toast.show(`${botName} picked up ${step.loadType} at ${step.city}`, { color: botColor });
+                    break;
+                  case 'build':
+                    toast.show(
+                      `${botName} built ${step.segmentsBuilt} track segment${step.segmentsBuilt > 1 ? 's' : ''} (${step.cost}M)`,
+                      { color: botColor },
+                    );
+                    break;
+                  case 'upgrade':
+                    toast.show(`${botName} upgraded their train`, { color: botColor });
+                    break;
+                  case 'discard':
+                    toast.show(`😢 ${botName} discarded their hand`, { color: botColor, shake: true });
+                    break;
+                }
+              },
+            ).then((finalPos) => {
+              if (finalPos) {
+                this.uiManager.updateTrainPosition(
+                  data.botPlayerId,
+                  finalPos.x, finalPos.y, finalPos.row, finalPos.col,
+                  { persist: false },
+                );
+              }
+            }).catch(() => {});
+            return;
+          }
+
+          // Fallback: flat movementPath animation (backward compat)
+          if (!data.movementPath || data.movementPath.length < 2) return;
+
+          const startPos = data.movementPath[0];
+          const startGrid = this.mapRenderer.gridPoints[startPos.row]?.[startPos.col];
+          if (startGrid) {
+            const sprite = this.uiManager.getTrainSprite(data.botPlayerId);
+            if (sprite) {
+              sprite.setPosition(startGrid.x, startGrid.y);
+            }
+          }
+
+          animator.animateAlongPath(
+            data.botPlayerId,
+            data.movementPath,
+            this.mapRenderer.gridPoints,
+            () => this.uiManager.getTrainSprite(data.botPlayerId),
+          ).then((finalPos) => {
+            if (finalPos) {
+              this.uiManager.updateTrainPosition(
+                data.botPlayerId,
+                finalPos.x, finalPos.y, finalPos.row, finalPos.col,
+                { persist: false },
+              );
+            }
+          }).catch(() => {});
+        });
+      }
+    } catch { /* socket not available */ }
 
     // Main camera ignores UI elements
     this.cameras.main.ignore([
@@ -1059,8 +1257,11 @@ export class GameScene extends Phaser.Scene {
    * Turn number increment and movement reset are client-side UI state calculations.
    */
   private async handleTurnChange(currentPlayerIndex: number): Promise<void> {
+    const mySeq = ++this.turnChangeSeq;
+
     // Refresh player data from server to get updated money amounts
     await this.refreshPlayerData();
+    if (mySeq !== this.turnChangeSeq) return;
     
     // Get the new current player after the turn change
     const newCurrentPlayer = this.gameState.players[currentPlayerIndex];
@@ -1087,6 +1288,7 @@ export class GameScene extends Phaser.Scene {
       // Handle ferry state transitions and teleportation at turn start FIRST
       // This must happen before movement reset so that justCrossedFerry can be properly set
       await this.handleFerryTurnTransition(newCurrentPlayer);
+      if (mySeq !== this.turnChangeSeq) return;
 
       // Reset movement points for the new player using TRAIN_PROPERTIES
       // This ensures movement is reset when turn changes come from server (polling/socket)
@@ -1127,7 +1329,8 @@ export class GameScene extends Phaser.Scene {
       }
       
       await this.uiManager.setupPlayerHand(this.trackManager.isInDrawingMode, totalCost);
-      
+      if (mySeq !== this.turnChangeSeq) return;
+
       // Do not auto-pan on turn changes.
       // Each client maintains its own per-player camera state via CameraController,
       // and auto-panning to the new active player's train is disorienting for other players.
@@ -1140,6 +1343,11 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  private getPlayerName(playerId: string): string {
+    const player = this.gameState.players.find(p => p.id === playerId);
+    return player?.name ?? 'Unknown Player';
   }
 
   // Clean up resources when scene is destroyed
@@ -1179,6 +1387,15 @@ export class GameScene extends Phaser.Scene {
 
     // Clean up static overlays
     this.loadsReferencePanel?.destroy();
+    this.socketUnsubBotTurnComplete?.();
+    this.socketUnsubBotTurnComplete = undefined;
+    this.socketUnsubBotToast?.();
+    this.socketUnsubBotToast = undefined;
+    this.botTrainAnimator?.destroy();
+    this.gameToastManager?.destroy();
+    this.socketUnsubDebugAny?.();
+    this.socketUnsubDebugAny = undefined;
+    this.debugOverlay?.destroy();
   }
 
   /**
@@ -1318,7 +1535,15 @@ export class GameScene extends Phaser.Scene {
             } else {
               // For other players: ALWAYS use server position (authoritative)
               localPlayer.trainState = serverPlayer.trainState;
-              
+
+              // JIRA-80: Skip sprite position update if bot animation is in progress
+              // (matches the guard in onPatch handler). Without this, turn:change events
+              // during animation snap the sprite back to server position mid-animation.
+              if (this.botTrainAnimator?.isAnimating(serverPlayer.id)) {
+                // State updated but sprite will be positioned by animation completion
+                return;
+              }
+
               // Always update train sprite for other players if position exists
               // This ensures the sprite is created/updated and visible
               if (serverPlayer.trainState.position) {

@@ -1,0 +1,981 @@
+import { DebugOverlay, BotTurnEntry } from '../components/DebugOverlay';
+import { GameStateService } from '../services/GameStateService';
+import { GameState } from '../../shared/types/GameTypes';
+
+// Mock GameStateService
+jest.mock('../services/GameStateService', () => ({
+  GameStateService: jest.fn().mockImplementation(() => ({
+    onStateChange: jest.fn(),
+    offStateChange: jest.fn(),
+    onTurnChange: jest.fn(),
+    offTurnChange: jest.fn(),
+  })),
+}));
+
+function makeGameState(overrides: Partial<GameState> = {}): GameState {
+  return {
+    id: 'test-game-1234-5678',
+    status: 'active',
+    currentPlayerIndex: 0,
+    maxPlayers: 6,
+    players: [
+      {
+        id: 'p1', name: 'Alice', color: '#ff0000', money: 50,
+        trainType: 'Freight' as any, turnNumber: 3,
+        trainState: { position: { row: 5, col: 10 }, remainingMovement: 9, movementHistory: [], loads: [] },
+        hand: [],
+      },
+      {
+        id: 'p2', name: 'BotPlayer', color: '#0000ff', money: 30,
+        trainType: 'FastFreight' as any, turnNumber: 2,
+        trainState: { position: null, remainingMovement: 12, movementHistory: [], loads: ['Coal' as any] },
+        hand: [], isBot: true, botConfig: { skillLevel: 'medium' as any },
+      },
+    ],
+    ...overrides,
+  } as GameState;
+}
+
+describe('DebugOverlay', () => {
+  let overlay: DebugOverlay;
+  let mockScene: any;
+  let mockGameStateService: any;
+  let addEventListenerSpy: jest.SpyInstance;
+  let removeEventListenerSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    // Reset localStorage mock
+    (localStorage.getItem as jest.Mock).mockReturnValue(null);
+    (localStorage.setItem as jest.Mock).mockClear();
+
+    // Clean up any lingering DOM elements
+    const existing = document.getElementById('debug-overlay');
+    if (existing) existing.remove();
+
+    // Spy on window event listeners
+    addEventListenerSpy = jest.spyOn(window, 'addEventListener');
+    removeEventListenerSpy = jest.spyOn(window, 'removeEventListener');
+
+    mockScene = { gameState: makeGameState() };
+
+    mockGameStateService = {
+      onStateChange: jest.fn(),
+      offStateChange: jest.fn(),
+      onTurnChange: jest.fn(),
+      offTurnChange: jest.fn(),
+    };
+  });
+
+  afterEach(() => {
+    // Clean up overlay if it exists
+    try { overlay?.destroy(); } catch { /* already destroyed */ }
+    const el = document.getElementById('debug-overlay');
+    if (el) el.remove();
+    addEventListenerSpy.mockRestore();
+    removeEventListenerSpy.mockRestore();
+  });
+
+  describe('constructor and DOM lifecycle', () => {
+    it('should create and append a container div to document.body', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      const container = document.getElementById('debug-overlay');
+      expect(container).not.toBeNull();
+      expect(container?.parentNode).toBe(document.body);
+    });
+
+    it('should apply correct styles to the container', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.style.position).toBe('fixed');
+      expect(container.style.right).toBe('0px');
+      expect(container.style.width).toBe('60vw');
+      expect(container.style.zIndex).toBe('5000');
+    });
+
+    it('should start hidden when localStorage has no value', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue(null);
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.style.display).toBe('none');
+    });
+
+    it('should start visible when localStorage has "true"', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.style.display).toBe('block');
+    });
+
+    it('should register a keydown listener on window', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      expect(addEventListenerSpy).toHaveBeenCalledWith('keydown', expect.any(Function));
+    });
+
+    it('should register state change and turn change listeners', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      expect(mockGameStateService.onStateChange).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockGameStateService.onTurnChange).toHaveBeenCalledWith(expect.any(Function));
+    });
+  });
+
+  describe('destroy', () => {
+    it('should remove the container from the DOM', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      expect(document.getElementById('debug-overlay')).not.toBeNull();
+
+      overlay.destroy();
+      expect(document.getElementById('debug-overlay')).toBeNull();
+    });
+
+    it('should remove the keydown listener from window', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      overlay.destroy();
+      expect(removeEventListenerSpy).toHaveBeenCalledWith('keydown', expect.any(Function));
+    });
+
+    it('should unregister GameStateService listeners', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      overlay.destroy();
+      expect(mockGameStateService.offStateChange).toHaveBeenCalledWith(expect.any(Function));
+      expect(mockGameStateService.offTurnChange).toHaveBeenCalledWith(expect.any(Function));
+    });
+  });
+
+  describe('toggle, show, hide', () => {
+    it('should toggle from hidden to visible on backtick keydown', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.style.display).toBe('none');
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(container.style.display).toBe('block');
+    });
+
+    it('should toggle from visible to hidden on second backtick keydown', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.style.display).toBe('block');
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(container.style.display).toBe('none');
+    });
+
+    it('should persist open state to localStorage on show', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(localStorage.setItem).toHaveBeenCalledWith('eurorails.debugOverlay.open', 'true');
+    });
+
+    it('should persist closed state to localStorage on hide', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(localStorage.setItem).toHaveBeenCalledWith('eurorails.debugOverlay.open', 'false');
+    });
+  });
+
+  describe('keyboard activeElement guard', () => {
+    it('should not toggle when activeElement is an INPUT', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const input = document.createElement('input');
+      document.body.appendChild(input);
+      input.focus();
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(container.style.display).toBe('none');
+
+      input.remove();
+    });
+
+    it('should not toggle when activeElement is a TEXTAREA', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const textarea = document.createElement('textarea');
+      document.body.appendChild(textarea);
+      textarea.focus();
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      expect(container.style.display).toBe('none');
+
+      textarea.remove();
+    });
+
+    it('should ignore non-backtick keys', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', code: 'KeyA' }));
+      expect(container.style.display).toBe('none');
+    });
+  });
+
+  describe('state change listeners', () => {
+    it('should re-render when stateChangeListener fires and overlay is open', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      // Get the registered listener and invoke it
+      const stateListener = mockGameStateService.onStateChange.mock.calls[0][0];
+
+      // Modify state and fire listener
+      mockScene.gameState.players[0].money = 99;
+      stateListener();
+
+      expect(container.innerHTML).toContain('99');
+    });
+
+    it('should not re-render when stateChangeListener fires and overlay is hidden', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const stateListener = mockGameStateService.onStateChange.mock.calls[0][0];
+      stateListener();
+
+      // Hidden overlay should have empty innerHTML (no render called)
+      expect(container.innerHTML).toBe('');
+    });
+
+    it('should re-render when turnChangeListener fires and overlay is open', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const turnListener = mockGameStateService.onTurnChange.mock.calls[0][0];
+      turnListener(1);
+
+      expect(container.innerHTML).toContain('Debug Overlay');
+    });
+  });
+
+  describe('logSocketEvent and ring buffer', () => {
+    it('should add events to the log', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('state:patch', { some: 'data' });
+
+      expect(container.innerHTML).toContain('state:patch');
+    });
+
+    it('should show newest events first', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('first-event', {});
+      overlay.logSocketEvent('second-event', {});
+
+      const html = container.innerHTML;
+      const firstIdx = html.indexOf('second-event');
+      const secondIdx = html.indexOf('first-event');
+      expect(firstIdx).toBeLessThan(secondIdx);
+    });
+
+    it('should cap the event log at 50 entries', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      for (let i = 0; i < 60; i++) {
+        overlay.logSocketEvent(`event-${i}`, {});
+      }
+
+      // Open overlay to render
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      const container = document.getElementById('debug-overlay')!;
+
+      // Count event entries - should show (50) in header
+      expect(container.innerHTML).toContain('(50)');
+    });
+
+    it('should truncate payload to 100 characters', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const longPayload = { data: 'x'.repeat(200) };
+      overlay.logSocketEvent('big-event', longPayload);
+
+      // The rendered payload should not contain the full 200 chars
+      const html = container.innerHTML;
+      expect(html).toContain('big-event');
+      // JSON.stringify of the payload is truncated to 100 chars
+      const payloadMatch = html.match(/big-event<\/span>\s*<span[^>]*> — ([^<]*)/);
+      expect(payloadMatch).not.toBeNull();
+      expect(payloadMatch![1].length).toBeLessThanOrEqual(100);
+    });
+
+    it('should not re-render on logSocketEvent when overlay is hidden', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('hidden-event', {});
+      expect(container.innerHTML).toBe('');
+    });
+  });
+
+  describe('render output structure', () => {
+    it('should render header with game ID and status', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('Debug Overlay');
+      expect(container.innerHTML).toContain('test-gam'); // first 8 chars
+      expect(container.innerHTML).toContain('active');
+    });
+
+    it('should render player table with correct data', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('Alice');
+      expect(container.innerHTML).toContain('BotPlayer');
+      expect(container.innerHTML).toContain('(5,10)');
+      expect(container.innerHTML).toContain('50'); // Alice's money
+      expect(container.innerHTML).toContain('Coal');
+    });
+
+    it('should render current player name in header', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('#0');
+      expect(container.innerHTML).toContain('Alice');
+    });
+
+    it('should render bot turn placeholder', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('Bot Turn');
+      expect(container.innerHTML).toContain('No bot turn data yet');
+    });
+
+    it('should render socket events section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('Socket Events');
+      expect(container.innerHTML).toContain('No events yet');
+    });
+
+    it('should show "Waiting for game state" when gameState is missing', () => {
+      mockScene.gameState = undefined;
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      expect(container.innerHTML).toContain('Waiting for game state');
+    });
+
+    it('should highlight bot players with blue background', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      // Bot player row should have blue tint
+      expect(container.innerHTML).toContain('rgba(59,130,246,0.2)');
+    });
+
+    it('should highlight current player with green background', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      // Current player (Alice, index 0) should have green tint
+      expect(container.innerHTML).toContain('rgba(34,197,94,0.2)');
+    });
+  });
+
+  describe('bot turn events', () => {
+    it('should display bot turn started on bot:turn-start event', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-start', { botPlayerId: 'BotAlpha', turnNumber: 1 });
+
+      expect(container.innerHTML).toContain('Bot BotAlpha turn started at');
+      expect(container.innerHTML).toContain('turns this game: 0');
+    });
+
+    it('should display bot turn completed and increment count on bot:turn-complete event', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', turnNumber: 1, action: 'PassTurn', durationMs: 1500 });
+
+      expect(container.innerHTML).toContain('Bot BotAlpha turn completed: PassTurn (1500ms)');
+      expect(container.innerHTML).toContain('turns this game: 1');
+    });
+
+    it('should increment count across multiple bot turn completions', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      expect(container.innerHTML).toContain('turns this game: 2');
+      expect(container.innerHTML).toContain('Bot BotBeta turn completed');
+    });
+  });
+
+  describe('BuildTrack details', () => {
+    const buildTrackPayload = {
+      botPlayerId: 'BotAlpha',
+      turnNumber: 2,
+      action: 'BuildTrack',
+      durationMs: 250,
+      segmentsBuilt: 2,
+      cost: 3,
+      remainingMoney: 47,
+      buildTargetCity: 'Berlin',
+    };
+
+    it('should display segment count for BuildTrack action', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Segments: 2');
+    });
+
+    it('should display total cost and remaining money', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Cost: 3M');
+      expect(container.innerHTML).toContain('Remaining: 47M');
+    });
+
+    it('should display target city when provided', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Building toward: Berlin');
+    });
+
+    it('should not display target city when not provided', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const { buildTargetCity, ...payloadWithoutCity } = buildTrackPayload;
+      overlay.logSocketEvent('bot:turn-complete', payloadWithoutCity);
+
+      expect(container.innerHTML).not.toContain('Building toward:');
+      expect(container.innerHTML).toContain('Cost: 3M');
+    });
+
+    it('should not display BuildTrack details for PassTurn action', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+
+      expect(container.innerHTML).not.toContain('Cost:');
+      expect(container.innerHTML).not.toContain('Building toward:');
+    });
+
+    it('should display segment count and cost in combined line', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', buildTrackPayload);
+
+      expect(container.innerHTML).toContain('Segments: 2 | Cost: 3M | Remaining: 47M');
+    });
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * TEST-006: DebugOverlay load pickup/delivery display
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('load pickup and delivery display', () => {
+    it('should display picked up loads in blue when loadsPickedUp is present', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'MoveTrain',
+        durationMs: 300,
+        loadsPickedUp: [
+          { loadType: 'Coal', city: 'Hamburg' },
+          { loadType: 'Iron', city: 'Hamburg' },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Picked up:');
+      expect(container.innerHTML).toContain('Coal at Hamburg');
+      expect(container.innerHTML).toContain('Iron at Hamburg');
+      // Blue color for pickups
+      expect(container.innerHTML).toContain('color:#60a5fa');
+    });
+
+    it('should display delivered loads in amber when loadsDelivered is present', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'DeliverLoad',
+        durationMs: 200,
+        loadsDelivered: [
+          { loadType: 'Wine', city: 'Berlin', payment: 20, cardId: 42 },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Delivered:');
+      expect(container.innerHTML).toContain('Wine to Berlin (+20M)');
+      // Amber color for deliveries
+      expect(container.innerHTML).toContain('color:#fbbf24');
+    });
+
+    it('should display both pickups and deliveries in the same turn', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'MoveTrain',
+        durationMs: 400,
+        loadsPickedUp: [{ loadType: 'Oil', city: 'Bucuresti' }],
+        loadsDelivered: [{ loadType: 'Coal', city: 'Berlin', payment: 10, cardId: 31 }],
+      });
+
+      expect(container.innerHTML).toContain('Picked up: Oil at Bucuresti');
+      expect(container.innerHTML).toContain('Delivered: Coal to Berlin (+10M)');
+    });
+
+    it('should not display load details when loadsPickedUp and loadsDelivered are absent', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'BuildTrack',
+        durationMs: 250,
+      });
+
+      expect(container.innerHTML).not.toContain('Picked up:');
+      expect(container.innerHTML).not.toContain('Delivered:');
+    });
+
+    it('should not display load details when arrays are empty', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PassTurn',
+        durationMs: 100,
+        loadsPickedUp: [],
+        loadsDelivered: [],
+      });
+
+      expect(container.innerHTML).not.toContain('Picked up:');
+      expect(container.innerHTML).not.toContain('Delivered:');
+    });
+
+    it('should store loadsPickedUp in lastBotTurnInfo on bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PickupLoad',
+        durationMs: 150,
+        loadsPickedUp: [{ loadType: 'Coal', city: 'Hamburg' }],
+      });
+
+      // Re-open and verify data persists across renders
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.innerHTML).toContain('Coal at Hamburg');
+    });
+
+    it('should store loadsDelivered in lastBotTurnInfo on bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'DeliverLoad',
+        durationMs: 150,
+        loadsDelivered: [{ loadType: 'Wine', city: 'Paris', payment: 15, cardId: 73 }],
+      });
+
+      // Re-open and verify data persists
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '`', code: 'Backquote' }));
+      const container = document.getElementById('debug-overlay')!;
+      expect(container.innerHTML).toContain('Wine to Paris (+15M)');
+    });
+
+    it('should format multiple pickups as comma-separated list', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PickupLoad',
+        durationMs: 200,
+        loadsPickedUp: [
+          { loadType: 'Coal', city: 'Hamburg' },
+          { loadType: 'Iron', city: 'Hamburg' },
+          { loadType: 'Oil', city: 'Hamburg' },
+        ],
+      });
+
+      expect(container.innerHTML).toContain('Coal at Hamburg, Iron at Hamburg, Oil at Hamburg');
+    });
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-001: Per-bot turn history with ring buffer
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('per-bot turn history (FE-001)', () => {
+    it('should store turns separately for different bots', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      const history = overlay.getBotTurnHistory();
+      expect(history.get('BotAlpha')).toHaveLength(1);
+      expect(history.get('BotBeta')).toHaveLength(1);
+      expect(history.get('BotAlpha')![0].action).toBe('BuildTrack');
+      expect(history.get('BotBeta')![0].action).toBe('PassTurn');
+    });
+
+    it('should accumulate multiple turns per bot', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'MoveTrain', durationMs: 200 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50 });
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      expect(alphaHistory).toHaveLength(3);
+      // Most recent first (ring buffer unshift)
+      expect(alphaHistory[0].action).toBe('PassTurn');
+      expect(alphaHistory[1].action).toBe('MoveTrain');
+      expect(alphaHistory[2].action).toBe('BuildTrack');
+    });
+
+    it('should cap per-bot history at MAX_BOT_TURNS_PER_PLAYER (10)', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      for (let i = 0; i < 15; i++) {
+        overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: `Action${i}`, durationMs: i * 10 });
+      }
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      expect(alphaHistory).toHaveLength(10);
+      // Newest entry should be the last one logged
+      expect(alphaHistory[0].action).toBe('Action14');
+      // Oldest retained entry
+      expect(alphaHistory[9].action).toBe('Action5');
+    });
+
+    it('should link bot:turn-start to subsequent bot:turn-complete for same bot', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-start', { botPlayerId: 'BotAlpha', turnNumber: 5 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 300, turnNumber: 5 });
+
+      const alphaHistory = overlay.getBotTurnHistory().get('BotAlpha')!;
+      // Start and complete should merge into a single entry
+      expect(alphaHistory).toHaveLength(1);
+      expect(alphaHistory[0].completed).toBe(true);
+      expect(alphaHistory[0].action).toBe('BuildTrack');
+    });
+
+    it('should render the most recently active bot in the bot turn section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200 });
+
+      // BotBeta was the last active bot
+      expect(container.innerHTML).toContain('Bot BotBeta turn completed');
+    });
+
+    it('should store LLM metadata in turn entry from bot:turn-complete', () => {
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'BuildTrack',
+        durationMs: 800,
+        model: 'claude-sonnet-4-20250514',
+        llmLatencyMs: 750,
+        tokenUsage: { input: 200, output: 80 },
+        retried: false,
+      });
+
+      const entry = overlay.getBotTurnHistory().get('BotAlpha')![0];
+      expect(entry.model).toBe('claude-sonnet-4-20250514');
+      expect(entry.llmLatencyMs).toBe(750);
+      expect(entry.tokenUsage).toEqual({ input: 200, output: 80 });
+      expect(entry.retried).toBe(false);
+    });
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-002: Per-bot collapsible sections and turn history rendering
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('per-bot collapsible sections (FE-002)', () => {
+    it('should render a separate <details> section for each bot', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200, turnNumber: 1 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('data-bot-section="BotAlpha"');
+      expect(html).toContain('data-bot-section="BotBeta"');
+    });
+
+    it('should assign distinct accent colors to each bot section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 200, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      // Most recently active bot (BotBeta) is sorted first → gets color index 0 (#34d399)
+      // BotAlpha gets color index 1 (#60a5fa)
+      expect(html).toContain('border-left:3px solid #34d399');
+      expect(html).toContain('border-left:3px solid #60a5fa');
+    });
+
+    it('should display condensed history rows for past turns', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 1000, turnNumber: 1, reasoning: 'Build toward Berlin' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'MoveTrain', durationMs: 800, turnNumber: 2, reasoning: 'Moving along route' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 500, turnNumber: 3 });
+
+      const html = container.innerHTML;
+      // Latest turn (T3) is shown as detail, T2 and T1 are history rows
+      expect(html).toContain('History (2)');
+      expect(html).toContain('T2: MoveTrain');
+      expect(html).toContain('T1: BuildTrack');
+    });
+
+    it('should truncate reasoning to 60 chars in history row summary', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      const longReasoning = 'A'.repeat(80);
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 100, turnNumber: 1, reasoning: longReasoning });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      // History row summary for T1 should have truncated reasoning with ellipsis
+      expect(html).toContain('A'.repeat(60) + '...');
+      // The full reasoning still appears in the expanded detail section
+      expect(html).toContain('A'.repeat(80));
+    });
+
+    it('should show guardrail override tag [GR] in history rows', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100, turnNumber: 1, guardrailOverride: true, guardrailReason: 'budget exceeded' });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 200, turnNumber: 2 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('[GR]');
+    });
+
+    it('should show "Bot Turns" header with total count', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 100 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotBeta', action: 'PassTurn', durationMs: 100 });
+
+      expect(container.innerHTML).toContain('Bot Turns');
+      expect(container.innerHTML).toContain('turns this game: 2');
+    });
+
+    it('should display summary line in collapsed bot section', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 250, turnNumber: 7 });
+
+      const html = container.innerHTML;
+      expect(html).toContain('BotAlpha — T7: BuildTrack (250ms)');
+    });
+
+    it('should format duration as seconds in history rows', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'BuildTrack', durationMs: 1300, turnNumber: 1 });
+      overlay.logSocketEvent('bot:turn-complete', { botPlayerId: 'BotAlpha', action: 'PassTurn', durationMs: 50, turnNumber: 2 });
+
+      // T1 should be in history with duration "1.3s"
+      expect(container.innerHTML).toContain('(1.3s)');
+    });
+  });
+
+  /* ────────────────────────────────────────────────────────────────────────
+   * JIRA-19 FE-003: LLM metadata display (model, latency, tokens, retried)
+   * ──────────────────────────────────────────────────────────────────────── */
+  describe('LLM metadata display (FE-003)', () => {
+    const llmPayload = {
+      botPlayerId: 'BotAlpha',
+      action: 'BuildTrack',
+      durationMs: 800,
+      turnNumber: 5,
+      model: 'claude-sonnet-4-20250514',
+      llmLatencyMs: 750,
+      tokenUsage: { input: 4832, output: 671 },
+      retried: false,
+    };
+
+    it('should render model as an inline pill badge', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('claude-sonnet-4-20250514');
+      expect(html).toContain('border-radius:4px');
+      expect(html).toContain('background:rgba(255,255,255,0.1)');
+    });
+
+    it('should render LLM latency distinctly from durationMs', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('LLM: 750ms');
+      // durationMs is also present in the turn completed line
+      expect(html).toContain('(800ms)');
+    });
+
+    it('should render token usage with input and output counts', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      const html = container.innerHTML;
+      expect(html).toContain('Tokens: 4832\u2193 671\u2191');
+    });
+
+    it('should render retried indicator when retried is true', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { ...llmPayload, retried: true });
+
+      const html = container.innerHTML;
+      expect(html).toContain('\u27F3 Retried');
+      expect(html).toContain('color:#fbbf24');
+    });
+
+    it('should not render retried indicator when retried is false', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', llmPayload);
+
+      expect(container.innerHTML).not.toContain('\u27F3 Retried');
+    });
+
+    it('should not render LLM metadata when fields are absent', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', {
+        botPlayerId: 'BotAlpha',
+        action: 'PassTurn',
+        durationMs: 100,
+        turnNumber: 1,
+      });
+
+      const html = container.innerHTML;
+      expect(html).not.toContain('LLM:');
+      expect(html).not.toContain('Tokens:');
+      expect(html).not.toContain('background:rgba(255,255,255,0.1);padding:2px 8px');
+    });
+
+    it('should render all LLM metadata fields together in a single row', () => {
+      (localStorage.getItem as jest.Mock).mockReturnValue('true');
+      overlay = new DebugOverlay(mockScene, mockGameStateService);
+      const container = document.getElementById('debug-overlay')!;
+
+      overlay.logSocketEvent('bot:turn-complete', { ...llmPayload, retried: true });
+
+      const html = container.innerHTML;
+      // All fields present in the same render
+      expect(html).toContain('claude-sonnet-4-20250514');
+      expect(html).toContain('LLM: 750ms');
+      expect(html).toContain('Tokens: 4832\u2193 671\u2191');
+      expect(html).toContain('\u27F3 Retried');
+      // Flex container for layout
+      expect(html).toContain('display:flex');
+      expect(html).toContain('gap:8px');
+    });
+  });
+});

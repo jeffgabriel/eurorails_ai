@@ -358,7 +358,7 @@ describe('LobbyService', () => {
 
       // Verify game status changed
       const updatedGame = await LobbyService.getGame(testGame.id);
-      expect(updatedGame!.status).toBe('active');
+      expect(updatedGame!.status).toBe('initialBuild');
     });
 
     it('should throw error for non-existent game', async () => {

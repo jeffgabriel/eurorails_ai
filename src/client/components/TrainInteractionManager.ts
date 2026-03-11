@@ -447,6 +447,11 @@ export class TrainInteractionManager {
     this.trainSpriteManager.updateInteractivity();
   }
 
+  /** Get a train sprite by player ID (for animation targeting). */
+  public getTrainSprite(playerId: string): Phaser.GameObjects.Image | undefined {
+    return this.trainSpriteManager.getSprite(playerId);
+  }
+
   public updateTrainZOrders(): void {
     this.trainSpriteManager.updateZOrders();
   }

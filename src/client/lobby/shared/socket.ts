@@ -413,6 +413,14 @@ class SocketService {
     };
   }
 
+  onAnyEvent(callback: (eventName: string, ...args: any[]) => void): () => void {
+    if (!this.socket) return () => {};
+    this.socket.onAny(callback);
+    return () => {
+      this.socket?.offAny(callback);
+    };
+  }
+
   // Remove all listeners
   removeAllListeners(): void {
     if (!this.socket) return;

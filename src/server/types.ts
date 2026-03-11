@@ -1,1 +1,1 @@
-export type GameStatus = 'setup' | 'active' | 'completed' | 'abandoned'; 
+export type GameStatus = 'setup' | 'initialBuild' | 'active' | 'completed' | 'abandoned'; 

@@ -12,6 +12,9 @@ export class LeaderboardManager {
   private gameState: GameState;
   private nextPlayerCallback: () => void;
   private gameStateService: GameStateService | null = null;
+  private lastPlayerSectionHeight: number = 0;
+  private tooltip: Phaser.GameObjects.Text | null = null;
+  private tooltipBg: Phaser.GameObjects.Rectangle | null = null;
   private playerStateService: PlayerStateService | null = null;
   private toggleChatCallback?: () => void;
   private openDMCallback?: (playerId: string, playerName: string) => void;
@@ -37,9 +40,10 @@ export class LeaderboardManager {
     this.cameraController = cameraController;
     this.container = this.scene.add.container(0, 0);
   }
-  
+
   public update(targetContainer: Phaser.GameObjects.Container): void {
-    // Clear existing UI elements
+    // Clear existing UI elements and tooltip
+    this.hideTooltip();
     targetContainer.removeAll(true);
 
     if (!this.gameState || !this.gameState.players || this.gameState.players.length === 0) {
@@ -48,9 +52,17 @@ export class LeaderboardManager {
 
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
+    const PLAYER_ROW_HEIGHT = 20;
+    const CARGO_ROW_HEIGHT = 16;
 
-    // Create semi-transparent background for leaderboard
-    const leaderboardHeight = 40 + this.gameState.players.length * 20 + 50;
+    // Calculate dynamic height: each player with loads gets an extra cargo sub-row
+    const cargoRowCount = this.gameState.players.filter(
+      p => p.trainState?.loads && p.trainState.loads.length > 0
+    ).length;
+    const playerSectionHeight = this.gameState.players.length * PLAYER_ROW_HEIGHT
+      + cargoRowCount * CARGO_ROW_HEIGHT;
+    const leaderboardHeight = 40 + playerSectionHeight + 50;
+
     const leaderboardBg = this.scene.add
       .rectangle(
         this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
@@ -81,112 +93,173 @@ export class LeaderboardManager {
       )
       .setOrigin(0.5, 0);
 
-    // Add all player entries
-    const playerEntries = this.gameState.players
-      .map((player, index) => {
-        const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
-        const entryY = LEADERBOARD_PADDING + 30 + index * 20;
-        const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
+    // Add all player entries with dynamic Y offsets for cargo sub-rows
+    let currentY = LEADERBOARD_PADDING + 30;
+    const playerEntries: Phaser.GameObjects.GameObject[] = [];
 
-        const elements: Phaser.GameObjects.GameObject[] = [];
+    this.gameState.players.forEach((player, index) => {
+      const isCurrentPlayer = index === this.gameState.currentPlayerIndex;
+      const entryY = currentY;
+      const entryX = this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING;
 
-        // Create subtle background highlight for current player
-        if (isCurrentPlayer) {
-          // Subtle background highlight - light gray with low opacity
-          const entryBg = this.scene.add
-            .rectangle(
-              entryX + 2, // Small inset to keep within bounds
-              entryY + 1, // Small inset to keep within bounds
-              LEADERBOARD_WIDTH - 4, // Reduced width to account for insets
-              18, // Reduced height to account for insets
-              0x888888,
-              0.3 // Lower opacity for subtlety
-            )
-            .setOrigin(0, 0);
-          elements.push(entryBg);
+      // Create subtle background highlight for current player
+      if (isCurrentPlayer) {
+        const entryBg = this.scene.add
+          .rectangle(
+            entryX + 2,
+            entryY + 1,
+            LEADERBOARD_WIDTH - 4,
+            18,
+            0x888888,
+            0.3
+          )
+          .setOrigin(0, 0);
+        playerEntries.push(entryBg);
 
-          // Add smooth transition animation
-          entryBg.setAlpha(0);
-          this.scene.tweens.add({
-            targets: entryBg,
-            alpha: { from: 0, to: 1 },
-            duration: 300,
-            ease: 'Power2'
-          });
-        }
+        entryBg.setAlpha(0);
+        this.scene.tweens.add({
+          targets: entryBg,
+          alpha: { from: 0, to: 1 },
+          duration: 300,
+          ease: 'Power2'
+        });
+      }
 
-        // Create icon for current player (slightly larger but subtle)
-        let iconText;
-        if (isCurrentPlayer) {
-          iconText = this.scene.add
-            .text(
-              entryX + 5,
-              entryY + 2,
-              "►",
-              {
-                color: "#ffffff", // Keep white for subtlety
-                fontSize: "16px", // Slightly larger but not too prominent
-                fontStyle: "bold",
-                fontFamily: UI_FONT_FAMILY,
-              }
-            )
-            .setOrigin(0, 0);
-          elements.push(iconText);
-        }
-
-        // Create player text - clickable for DM (requires userId for chat API)
-        const dmTargetUserId = player.userId;
-        const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
-        const playerText = this.scene.add
+      // Create icon for current player
+      if (isCurrentPlayer) {
+        const iconText = this.scene.add
           .text(
-            entryX + (isCurrentPlayer ? 25 : 5),
+            entryX + 5,
             entryY + 2,
-            player.name,
+            "►",
             {
               color: "#ffffff",
-              fontSize: "14px",
-              fontStyle: isCurrentPlayer ? "bold" : "normal",
+              fontSize: "16px",
+              fontStyle: "bold",
               fontFamily: UI_FONT_FAMILY,
             }
           )
           .setOrigin(0, 0);
+        playerEntries.push(iconText);
+      }
 
-        // Make clickable for DM (except local player; requires userId)
-        if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
-          playerText
-            .setInteractive({ useHandCursor: true })
-            .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-              if (pointer.event) {
-                pointer.event.stopPropagation();
-              }
-              this.openDMCallback!(dmTargetUserId, player.name);
-            });
-        }
-        elements.push(playerText);
+      // Color badge (circle) for player color
+      const badgeX = entryX + (isCurrentPlayer ? 25 : 5);
+      const colorBadge = this.scene.add
+        .circle(badgeX + 5, entryY + 10, 5, Phaser.Display.Color.HexStringToColor(player.color).color)
+        .setOrigin(0.5, 0.5);
+      playerEntries.push(colorBadge);
 
-        // Create money text (right-aligned) - keep mostly the same
-        const moneyText = this.scene.add
+      // Create player text
+      const dmTargetUserId = player.userId;
+      const isLocalPlayer = this.playerStateService?.isLocalPlayer?.(player.id) ?? false;
+      const playerText = this.scene.add
+        .text(
+          badgeX + 14,
+          entryY + 2,
+          player.name,
+          {
+            color: "#ffffff",
+            fontSize: "14px",
+            fontStyle: isCurrentPlayer ? "bold" : "normal",
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(0, 0);
+      playerEntries.push(playerText);
+
+      // Make clickable for DM (except local player; requires userId)
+      if (this.openDMCallback && !isLocalPlayer && dmTargetUserId) {
+        playerText
+          .setInteractive({ useHandCursor: true })
+          .on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+            if (pointer.event) {
+              pointer.event.stopPropagation();
+            }
+            this.openDMCallback!(dmTargetUserId, player.name);
+          });
+      }
+
+      // Add [BOT] suffix for AI players
+      if (player.isBot) {
+        const botLabel = this.scene.add
           .text(
-            this.scene.scale.width - LEADERBOARD_PADDING - 5,
-            entryY + 2,
-            `${player.money}M`,
+            badgeX + 14 + playerText.width + 4,
+            entryY + 4,
+            "[BOT]",
             {
-              color: "#ffffff", // Keep white for all players
-              fontSize: "14px", // Same size for all
-              fontStyle: isCurrentPlayer ? "bold" : "normal",
+              color: "#aaaaaa",
+              fontSize: "10px",
               fontFamily: UI_FONT_FAMILY,
             }
           )
-          .setOrigin(1, 0); // Right-align
-        elements.push(moneyText);
+          .setOrigin(0, 0);
+        playerEntries.push(botLabel);
+      }
 
-        return elements;
-      })
-      .flat(); // Flatten the array of arrays
+      // Create money text (right-aligned)
+      const moneyText = this.scene.add
+        .text(
+          this.scene.scale.width - LEADERBOARD_PADDING - 5,
+          entryY + 2,
+          `${player.money}M`,
+          {
+            color: "#ffffff",
+            fontSize: "14px",
+            fontStyle: isCurrentPlayer ? "bold" : "normal",
+            fontFamily: UI_FONT_FAMILY,
+          }
+        )
+        .setOrigin(1, 0);
+      playerEntries.push(moneyText);
+
+      currentY += PLAYER_ROW_HEIGHT;
+
+      // Add cargo sub-row if player is carrying loads
+      const loads = player.trainState?.loads;
+      if (loads && loads.length > 0) {
+        const cargoY = currentY;
+        const iconSize = 7;
+        const iconSpacing = 18;
+        const cargoStartX = entryX + 15;
+
+        loads.forEach((loadType, loadIndex) => {
+          const iconX = cargoStartX + loadIndex * iconSpacing;
+          const iconCenterY = cargoY + CARGO_ROW_HEIGHT / 2;
+
+          // White circular background
+          const bg = this.scene.add.circle(iconX, iconCenterY, iconSize, 0xffffff);
+          bg.setOrigin(0.5, 0.5);
+          playerEntries.push(bg);
+
+          // Load token icon
+          const tokenKey = `loadtoken-${loadType.toLowerCase()}`;
+          if (this.scene.textures.exists(tokenKey)) {
+            const icon = this.scene.add.image(iconX, iconCenterY, tokenKey);
+            icon.setScale(0.1);
+            playerEntries.push(icon);
+          }
+
+          // Make the circle interactive for tooltip
+          bg.setInteractive({ useHandCursor: true });
+          bg.on("pointerover", (pointer: Phaser.Input.Pointer) => {
+            this.showTooltip(loadType, pointer.x, pointer.y);
+          });
+          bg.on("pointerout", () => {
+            this.hideTooltip();
+          });
+        });
+
+        currentY += CARGO_ROW_HEIGHT;
+      }
+    });
+
+    // Store total player section height for button positioning
+    this.lastPlayerSectionHeight = playerSectionHeight;
 
     // Create and add next player button
     const nextPlayerButton = this.createNextPlayerButton();
-    
+
     // Create and add chat button
     const chatButton = this.createChatButton();
 
@@ -204,7 +277,7 @@ export class LeaderboardManager {
     const buttonContainer = this.scene.add.container(0, 0);
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
-    
+
     // Check if local player is active
     const isLocalPlayerActive = this.gameStateService?.isLocalPlayerActive() ?? false;
 
@@ -212,7 +285,7 @@ export class LeaderboardManager {
     const nextPlayerButton = this.scene.add
       .rectangle(
         this.scene.scale.width - LEADERBOARD_WIDTH - LEADERBOARD_PADDING,
-        LEADERBOARD_PADDING + 40 + this.gameState.players.length * 20,
+        LEADERBOARD_PADDING + 40 + this.lastPlayerSectionHeight,
         LEADERBOARD_WIDTH,
         40,
         isLocalPlayerActive ? 0x00aa00 : 0x666666,
@@ -223,7 +296,7 @@ export class LeaderboardManager {
     const nextPlayerText = this.scene.add
       .text(
         this.scene.scale.width - LEADERBOARD_WIDTH / 2 - LEADERBOARD_PADDING,
-        LEADERBOARD_PADDING + 60 + this.gameState.players.length * 20,
+        LEADERBOARD_PADDING + 60 + this.lastPlayerSectionHeight,
         isLocalPlayerActive ? "Next Player" : "Wait Your Turn",
         {
           color: "#ffffff",
@@ -255,13 +328,40 @@ export class LeaderboardManager {
     return buttonContainer;
   }
 
+  private showTooltip(loadType: string, x: number, y: number): void {
+    this.hideTooltip();
+
+    const label = loadType.charAt(0).toUpperCase() + loadType.slice(1).toLowerCase();
+    const padding = 4;
+
+    this.tooltip = this.scene.add.text(x, y - 20, label, {
+      color: "#ffffff",
+      fontSize: "11px",
+      fontFamily: UI_FONT_FAMILY,
+    }).setOrigin(0.5, 1).setDepth(1000);
+
+    const bounds = this.tooltip.getBounds();
+    this.tooltipBg = this.scene.add.rectangle(
+      bounds.centerX, bounds.centerY,
+      bounds.width + padding * 2, bounds.height + padding * 2,
+      0x222222, 0.9
+    ).setOrigin(0.5, 0.5).setDepth(999);
+  }
+
+  private hideTooltip(): void {
+    this.tooltip?.destroy();
+    this.tooltip = null;
+    this.tooltipBg?.destroy();
+    this.tooltipBg = null;
+  }
+
   private createChatButton(): Phaser.GameObjects.Container {
     const buttonContainer = this.scene.add.container(0, 0);
     const LEADERBOARD_WIDTH = 150;
     const LEADERBOARD_PADDING = 10;
-    
+
     // Chat button goes below the "Next Player" button
-    const buttonY = LEADERBOARD_PADDING + 90 + this.gameState.players.length * 20;
+    const buttonY = LEADERBOARD_PADDING + 90 + this.lastPlayerSectionHeight;
 
     // Add chat button
     const chatButton = this.scene.add

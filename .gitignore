@@ -36,3 +36,6 @@ coverage/
 test-results/
 
 .npm-cache/
+
+# Compounds local session data
+.compounds/

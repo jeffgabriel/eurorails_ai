@@ -31,6 +31,9 @@ interface LobbyActions {
   refreshGameState: () => Promise<void>;
   // Lobby listings
   loadMyGames: (options?: { silent?: boolean }) => Promise<void>;
+  // Bot management
+  addBot: (gameId: ID, config: { skillLevel: string; name?: string }) => Promise<void>;
+  removeBot: (gameId: ID, playerId: ID) => Promise<void>;
   // Socket methods
   connectToLobbySocket: (gameId: ID, token: string) => void;
   disconnectFromLobbySocket: (gameId: ID) => void;
@@ -566,6 +569,18 @@ export const useLobbyStore = create<LobbyStore>((set, get) => ({
 
   clearError: () => {
     set({ error: null, retryCount: 0 });
+  },
+
+  // Bot management — callers handle their own loading/error UI,
+  // so we don't touch global isLoading or error here.
+  addBot: async (_gameId: ID, config: { skillLevel: string; name?: string; provider?: string; model?: string }) => {
+    await api.addBot(_gameId, config);
+    // Player list update handled by lobby-updated socket event
+  },
+
+  removeBot: async (_gameId: ID, playerId: ID) => {
+    await api.removeBot(_gameId, playerId);
+    // Player list update handled by lobby-updated socket event
   },
 
   // Socket methods

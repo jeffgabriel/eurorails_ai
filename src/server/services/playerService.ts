@@ -1,5 +1,5 @@
 import { db } from "../db/index";
-import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE } from "../../shared/types/GameTypes";
+import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -7,6 +7,8 @@ import { TrackService } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
+import { loadGridPoints } from "./ai/MapTopology";
+import { getFerryEdges } from "../../shared/services/majorCityGroups";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -170,9 +172,10 @@ export class PlayerService {
             INSERT INTO players (
                 id, game_id, user_id, name, color, money, train_type,
                 position_x, position_y, position_row, position_col,
-                current_turn_number, hand, loads, camera_state
+                current_turn_number, hand, loads, camera_state,
+                is_bot, bot_config
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         `;
     const values = [
       player.id,
@@ -189,7 +192,9 @@ export class PlayerService {
       player.turnNumber || 1,
       handCardIds,  // Use the drawn card IDs
       player.trainState.loads || [],
-      player.cameraState || null
+      player.cameraState || null,
+      player.isBot || false,
+      player.botConfig ? JSON.stringify(player.botConfig) : null
     ];
     try {
       await useClient.query(query, values);
@@ -395,7 +400,9 @@ export class PlayerService {
                     ta.actions as "turnActions",
                     hand,
                     loads,
-                    camera_state
+                    camera_state,
+                    is_bot,
+                    bot_config
                 FROM players
                 LEFT JOIN LATERAL (
                     SELECT movement_path
@@ -508,6 +515,8 @@ export class PlayerService {
           },
           hand: handCards,
           cameraState: row.camera_state || undefined,  // Per-player camera state
+          isBot: row.is_bot || false,
+          botConfig: row.bot_config || undefined,
         };
       });
 
@@ -1149,6 +1158,59 @@ export class PlayerService {
         for (const p of ownersPaid) {
           const pid = typeof p?.playerId === "string" ? p.playerId : null;
           if (pid) alreadyPaid.add(pid);
+        }
+      }
+
+      // Reversal validation: trains may only reverse direction at a city or ferry port.
+      if (from && (from.row !== to.row || from.col !== to.col)) {
+        const moveHistoryResult = await client.query(
+          `SELECT movement_path FROM movement_history
+           WHERE player_id = $1 AND game_id = $2 AND turn_number = $3`,
+          [playerId, gameId, turnNumber]
+        );
+        const movePath = moveHistoryResult.rows[0]?.movement_path;
+        if (Array.isArray(movePath) && movePath.length > 0) {
+          const lastSeg = movePath[movePath.length - 1];
+          if (lastSeg?.from && lastSeg?.to) {
+            const lastVecRow = lastSeg.to.row - lastSeg.from.row;
+            const lastVecCol = lastSeg.to.col - lastSeg.from.col;
+            const proposedVecRow = to.row - from.row;
+            const proposedVecCol = to.col - from.col;
+
+            // Only check if last move had a non-zero direction
+            if (lastVecRow !== 0 || lastVecCol !== 0) {
+              const dot = proposedVecRow * lastVecRow + proposedVecCol * lastVecCol;
+              if (dot < 0) {
+                // Reversal detected — check if last segment crossed a ferry (skip check if so)
+                const ferryEdges = getFerryEdges();
+                const lastFromKey = `${lastSeg.from.row},${lastSeg.from.col}`;
+                const lastToKey = `${lastSeg.to.row},${lastSeg.to.col}`;
+                const lastWasFerry = ferryEdges.some(f => {
+                  const aKey = `${f.pointA.row},${f.pointA.col}`;
+                  const bKey = `${f.pointB.row},${f.pointB.col}`;
+                  return (lastFromKey === aKey && lastToKey === bKey) ||
+                         (lastFromKey === bKey && lastToKey === aKey);
+                });
+
+                if (!lastWasFerry) {
+                  // Only allow reversal at city or ferry port terrain
+                  const grid = loadGridPoints();
+                  const currentPoint = grid.get(`${from.row},${from.col}`);
+                  const terrain = currentPoint?.terrain ?? TerrainType.Clear;
+                  const canReverse = [
+                    TerrainType.MajorCity, TerrainType.MediumCity,
+                    TerrainType.SmallCity, TerrainType.FerryPort,
+                  ].includes(terrain);
+
+                  if (!canReverse) {
+                    throw new Error(
+                      "Invalid direction change - can only reverse at cities or ferry ports"
+                    );
+                  }
+                }
+              }
+            }
+          }
         }
       }
 

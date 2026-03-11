@@ -83,6 +83,39 @@ Start the production server:
 npm start
 ```
 
+## AI Bot Players
+
+The game supports AI bot opponents that can play alongside human players. Bots follow the same rules as human players and execute their turns automatically on the server.
+
+### Enabling/Disabling Bot AI
+
+Bot turn execution is controlled by the `ENABLE_AI_BOTS` environment variable:
+
+```bash
+# Enable bot turns (default)
+ENABLE_AI_BOTS=true
+
+# Disable bot turns — bots remain in the game but won't take turns
+ENABLE_AI_BOTS=false
+```
+
+Add this to your `.env` file. When disabled, bot players still appear in the game but their turns are skipped, which is useful for debugging game state without waiting for bot actions.
+
+### Local Testing with Bots
+
+1. Ensure `ENABLE_AI_BOTS=true` is set in your `.env` file.
+2. Start the dev server: `npm run dev`
+3. Create a new game in the lobby.
+4. Use the "Add Bot" button to add 1–5 bot opponents. Each bot can be configured with a skill level and strategy archetype.
+5. Start the game. Bot turns execute automatically after a short delay when it becomes their turn.
+6. Toggle the Debug Overlay (backtick `` ` `` key) during gameplay to see real-time game state, socket events, and bot turn activity.
+
+### Troubleshooting
+
+- **Bots aren't taking turns**: Verify `ENABLE_AI_BOTS=true` in `.env` and restart the server.
+- **Bot turns seem stuck**: Check the server console for errors. The bot turn system has a built-in guard against double execution — if a turn is already in progress for a game, duplicate triggers are ignored.
+- **Debug info**: Use the Debug Overlay (`` ` `` key) to inspect game state, player data, and socket event log during gameplay.
+
 ### Environment Configuration
 
 The application supports configuration via environment variables for both development and production deployments.
@@ -103,6 +136,7 @@ The application supports configuration via environment variables for both develo
 - `PORT` - Server port (default: `3001`)
 - `NODE_ENV` - Environment mode (`development`, `production`, or `test`)
 - `SESSION_SECRET` - Secret key for session encryption (change in production!)
+- `ENABLE_AI_BOTS` - Enable AI bot turn execution (default: `true`). Set to `false` to disable.
 
 #### Client-Side Configuration (Build-Time)
 
