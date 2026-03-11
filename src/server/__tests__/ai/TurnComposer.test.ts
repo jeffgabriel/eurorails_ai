@@ -4500,4 +4500,166 @@ describe('TurnComposer', () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe('JIRA-92: reservedSlots counts consecutive pickup stops', () => {
+    // Helper: build a MOVE plan through a city where an opportunistic pickup is available.
+    // With reservedSlots the bot should skip the pickup; without, it should take it.
+
+    function setupOpportunisticPickupScenario(activeRoute: StrategicRoute | null) {
+      // Bot carries 1 load on a Freight (capacity=2), so 1 free slot.
+      // City "Torino" along the path has Wine available.
+      // If reservedSlots >= 1, effectiveCapacity = 2 - 1 = 1, bot.loads.length (1) >= 1 → skip pickup.
+      // If reservedSlots = 0, effectiveCapacity = 2, bot.loads.length (1) < 2 → take pickup.
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+            { cardId: 2, demands: [{ city: 'Berlin', loadType: 'Wine', payment: 20 }] },
+          ],
+        },
+        loadAvailability: { Torino: ['Wine'] },
+      });
+      const context = makeContext({ speed: 9, loads: ['Coal'] });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [
+          { row: 10, col: 10 }, { row: 11, col: 11 }, { row: 12, col: 12 },
+          { row: 13, col: 13 }, { row: 14, col: 14 },
+        ],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['12,12', { row: 12, col: 12, terrain: TerrainType.MediumCity, name: 'Torino' }],
+      ]));
+
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+        if (plan.type === AIActionType.PickupLoad) {
+          const load = (plan as any).load;
+          snap.bot.loads.push(load);
+          ctx.loads = [...snap.bot.loads];
+        }
+      });
+
+      return { snapshot, context, movePlan, activeRoute };
+    }
+
+    it('route with 2 consecutive pickups → reservedSlots=2, blocks opportunistic pickup', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Hops', city: 'München' },
+          { action: 'pickup', loadType: 'Beer', city: 'Praha' },
+          { action: 'deliver', loadType: 'Hops', city: 'Berlin', demandCardId: 3, payment: 30 },
+        ],
+        currentStopIndex: 0,
+      });
+      const { snapshot, context, movePlan } = setupOpportunisticPickupScenario(route);
+
+      // reservedSlots=2, effectiveCapacity=2-2=0 → no pickup possible
+      // ActionResolver.resolve should NOT be called for PICKUP
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // No pickup calls should have been made
+      const pickupCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'PICKUP',
+      );
+      expect(pickupCalls.length).toBe(0);
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('route with 1 pickup then deliver → reservedSlots=1, blocks opportunistic pickup at capacity-1', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Hops', city: 'München' },
+          { action: 'deliver', loadType: 'Hops', city: 'Berlin', demandCardId: 3, payment: 30 },
+        ],
+        currentStopIndex: 0,
+      });
+      const { snapshot, context, movePlan } = setupOpportunisticPickupScenario(route);
+
+      // reservedSlots=1, effectiveCapacity=2-1=1, bot has 1 load → no pickup
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      const pickupCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'PICKUP',
+      );
+      expect(pickupCalls.length).toBe(0);
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('route with deliver as next stop → reservedSlots=0, allows opportunistic pickup', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+      const { snapshot, context, movePlan } = setupOpportunisticPickupScenario(route);
+
+      // reservedSlots=0, effectiveCapacity=2, bot has 1 load → pickup allowed
+      // Mock ActionResolver.resolve to succeed for the PICKUP
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Wine', city: 'Torino' },
+      });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Should have attempted a PICKUP
+      const pickupCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'PICKUP',
+      );
+      expect(pickupCalls.length).toBeGreaterThanOrEqual(1);
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('no active route → reservedSlots=0, allows opportunistic pickup', async () => {
+      const { snapshot, context, movePlan } = setupOpportunisticPickupScenario(null);
+
+      // reservedSlots=0 (no route), effectiveCapacity=2, bot has 1 load → pickup allowed
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Wine', city: 'Torino' },
+      });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, null);
+
+      const pickupCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'PICKUP',
+      );
+      expect(pickupCalls.length).toBeGreaterThanOrEqual(1);
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+  });
 });

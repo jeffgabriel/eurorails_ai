@@ -1348,6 +1348,161 @@ describe('LLMStrategyBrain', () => {
       expect(result).toBeNull();
     });
   });
+
+  // ── JIRA-92: evaluateCargoConflict ──
+
+  describe('evaluateCargoConflict', () => {
+    function createBrain(): LLMStrategyBrain {
+      return new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'test-key',
+        timeoutMs: 8000,
+        maxRetries: 1,
+      });
+    }
+
+    function makeSnapshotWithCargo(): WorldSnapshot {
+      const snap = makeSnapshot();
+      snap.bot.loads = ['Hops', 'Coal'];
+      snap.bot.resolvedDemands = [
+        { cardId: 1, demands: [{ city: 'Stockholm', loadType: 'Hops', payment: 48 }] },
+        { cardId: 2, demands: [{ city: 'Paris', loadType: 'Coal', payment: 20 }] },
+      ];
+      return snap;
+    }
+
+    it('should return drop with valid dropLoad', async () => {
+      const snap = makeSnapshotWithCargo();
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'drop',
+          dropLoad: 'Hops',
+          reasoning: 'Stockholm delivery too expensive',
+        }),
+        usage: { input: 50, output: 30 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', snap, makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('drop');
+      expect(result!.dropLoad).toBe('Hops');
+      expect(result!.reasoning).toBe('Stockholm delivery too expensive');
+    });
+
+    it('should return keep when LLM says keep', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'keep',
+          reasoning: 'Delivery is imminent',
+        }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', makeSnapshotWithCargo(), makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('keep');
+      expect(result!.dropLoad).toBeUndefined();
+    });
+
+    it('should treat drop without dropLoad as keep', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'drop',
+          reasoning: 'Should drop but forgot to say what',
+        }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', makeSnapshotWithCargo(), makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('keep');
+    });
+
+    it('should treat drop with non-carried dropLoad as keep', async () => {
+      const snap = makeSnapshotWithCargo();
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'drop',
+          dropLoad: 'Wheat', // Not carried
+          reasoning: 'Drop the wheat',
+        }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', snap, makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('keep');
+    });
+
+    it('should retry on invalid action then return null', async () => {
+      mockChat
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ action: 'sell', reasoning: 'bad action' }),
+          usage: { input: 50, output: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ action: 'trade', reasoning: 'still bad' }),
+          usage: { input: 50, output: 20 },
+        });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', makeSnapshotWithCargo(), makeContext());
+
+      expect(result).toBeNull();
+      expect(mockChat).toHaveBeenCalledTimes(2); // Initial + 1 retry
+    });
+
+    it('should return null on LLM timeout', async () => {
+      mockChat.mockRejectedValue(new Error('API timeout'));
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', makeSnapshotWithCargo(), makeContext());
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null on invalid JSON', async () => {
+      mockChat.mockResolvedValue({
+        text: 'not valid json at all',
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateCargoConflict('test prompt', makeSnapshotWithCargo(), makeContext());
+
+      expect(result).toBeNull();
+    });
+  });
+});
+
+// ── JIRA-92: CARGO_CONFLICT_SCHEMA validation ──
+
+describe('CARGO_CONFLICT_SCHEMA', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { CARGO_CONFLICT_SCHEMA } = require('../../services/ai/schemas');
+
+  it('should have drop and keep as valid action values', () => {
+    expect(CARGO_CONFLICT_SCHEMA.properties.action.enum).toEqual(['drop', 'keep']);
+  });
+
+  it('should require action and reasoning', () => {
+    expect(CARGO_CONFLICT_SCHEMA.required).toContain('action');
+    expect(CARGO_CONFLICT_SCHEMA.required).toContain('reasoning');
+  });
+
+  it('should have dropLoad as optional string', () => {
+    expect(CARGO_CONFLICT_SCHEMA.properties.dropLoad.type).toBe('string');
+    expect(CARGO_CONFLICT_SCHEMA.required).not.toContain('dropLoad');
+  });
 });
 
 // ── JIRA-89: findDeadLoads ──
