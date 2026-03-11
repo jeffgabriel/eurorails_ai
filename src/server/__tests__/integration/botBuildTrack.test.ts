@@ -209,6 +209,42 @@ describe('Bot Build Track Flow (Integration)', () => {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.GOOGLE_AI_API_KEY;
 
+    // Default db.query return — returns valid snapshot data so any capture() call
+    // (including the rankingSnapshot at JIRA-85 line 611) gets valid rows.
+    // Audit INSERTs ignore the return value, so this is safe as default.
+    mockQuery.mockResolvedValue(mockResult([
+      {
+        game_status: 'active',
+        player_id: botId,
+        user_id: 'user-bot-paris',
+        money: 50,
+        position_row: 29,
+        position_col: 32,
+        train_type: 'freight',
+        hand: [1],
+        loads: [],
+        is_bot: true,
+        bot_config: JSON.stringify({ skillLevel: 'medium' }),
+        current_turn_number: 3,
+        segments: JSON.stringify([]),
+      },
+      {
+        game_status: 'active',
+        player_id: 'human-1',
+        user_id: 'user-human-1',
+        money: 40,
+        position_row: 20,
+        position_col: 50,
+        train_type: 'freight',
+        hand: [],
+        loads: [],
+        is_bot: false,
+        bot_config: null,
+        current_turn_number: 3,
+        segments: JSON.stringify([]),
+      },
+    ]));
+
     // Set up mock transaction client
     mockClient = {
       query: jest.fn<() => Promise<any>>().mockResolvedValue(mockResult([])),
