@@ -426,12 +426,16 @@ export class AIStrategyEngine {
             console.log(`${tag} JIRA-86: Route completed after delivery — calling planRoute() for fresh strategy`);
             const routeResult = await brain.planRoute(freshSnap, reEvalContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
             const llmMs = Date.now() - llmStart;
+            // Thread llmLog from post-delivery planRoute into decision for NDJSON observability
+            if (routeResult.llmLog?.length) {
+              decision.llmLog = [...(decision.llmLog ?? []), ...routeResult.llmLog];
+            }
             if (routeResult.route) {
               newRoute = routeResult.route;
               console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
               logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
             } else {
-              console.log(`${tag} JIRA-86: Post-delivery planRoute returned no route (${llmMs}ms)`);
+              console.warn(`${tag} JIRA-86: Post-delivery planRoute returned no route (${llmMs}ms) — all attempts rejected`);
             }
           } else {
             // Route still active — ask LLM whether to continue, amend, or abandon

@@ -643,11 +643,15 @@ export class TurnComposer {
       // If actions were found at this intermediate city, split the move here
       if (actionPlans.length > 0) {
         // Emit MOVE segment from lastSplitIndex to this city
+        // Propagate fees from original movePlan on the first segment only (fee is per-turn, not per-segment)
         const moveSegment = path.slice(lastSplitIndex, i + 1);
         if (moveSegment.length > 1) {
+          const isFirstSegment = plans.filter(p => p.type === AIActionType.MoveTrain).length === 0;
           plans.push({
             type: AIActionType.MoveTrain,
             path: moveSegment,
+            fees: isFirstSegment ? movePlan.fees : new Set<string>(),
+            totalFee: isFirstSegment ? movePlan.totalFee : 0,
           } as TurnPlanMoveTrain);
         }
         // Emit the actions at this city
@@ -660,9 +664,12 @@ export class TurnComposer {
     if (lastSplitIndex < path.length - 1) {
       const remainingPath = path.slice(lastSplitIndex);
       if (remainingPath.length > 1) {
+        const isFirstSegment = plans.filter(p => p.type === AIActionType.MoveTrain).length === 0;
         plans.push({
           type: AIActionType.MoveTrain,
           path: remainingPath,
+          fees: isFirstSegment ? movePlan.fees : new Set<string>(),
+          totalFee: isFirstSegment ? movePlan.totalFee : 0,
         } as TurnPlanMoveTrain);
       }
     }
