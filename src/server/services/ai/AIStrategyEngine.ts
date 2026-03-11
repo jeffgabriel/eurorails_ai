@@ -380,7 +380,7 @@ export class AIStrategyEngine {
             const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
             let wastedMovement = compositionTrace.moveBudget?.wasted ?? 0;
 
-            // JIRA-89: When route completed, A2 heuristic continuations consumed movement
+            // JIRA-90: When route completed, A2 heuristic continuations consumed movement
             // that should be redirected toward the new LLM-planned route. Strip post-delivery
             // A2 steps and reclaim their movement budget.
             let coreSteps = planSteps;
@@ -404,7 +404,7 @@ export class AIStrategyEngine {
                 if (reclaimedMovement > 0) {
                   coreSteps = planSteps.slice(0, lastDeliveryIdx + 1);
                   wastedMovement += reclaimedMovement;
-                  console.log(`${tag} JIRA-89: Reclaimed ${reclaimedMovement}mp from ${postDeliverySteps.length} A2 heuristic steps for LLM-guided replanning`);
+                  console.log(`${tag} JIRA-90: Reclaimed ${reclaimedMovement}mp from ${postDeliverySteps.length} A2 heuristic steps for LLM-guided replanning`);
                 }
               }
             }
@@ -435,12 +435,12 @@ export class AIStrategyEngine {
             if (reBuild) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
               decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, reBuild] };
-              console.log(`${tag} JIRA-89: Re-targeted build phase toward ${(reBuild as any).targetCity ?? 'new route'}`);
+              console.log(`${tag} JIRA-90: Re-targeted build phase toward ${(reBuild as any).targetCity ?? 'new route'}`);
             } else if (reCompSteps.length > 0) {
               decision.plan = { type: 'MultiAction' as const, steps: [...coreSteps, ...reCompSteps] };
             }
 
-            console.log(`${tag} JIRA-89: Post-delivery re-composed with ${reCompSteps.length} movement steps + build retarget (reclaimed ${wastedMovement}mp)`);
+            console.log(`${tag} JIRA-90: Post-delivery re-composed with ${reCompSteps.length} movement steps + build retarget (reclaimed ${wastedMovement}mp)`);
             activeRoute = newRoute;
             reEvalHandled = true;
           }

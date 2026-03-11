@@ -2866,7 +2866,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  describe('JIRA-89: Post-delivery A2 movement reclamation', () => {
+  describe('JIRA-90: Post-delivery A2 movement reclamation', () => {
     /**
      * Setup: Route with single deliver stop (last stop) + A2 heuristic moves after delivery.
      * TurnComposer produces: [DELIVER, MOVE(heuristic)] with wasted=0 (A2 used all budget).
