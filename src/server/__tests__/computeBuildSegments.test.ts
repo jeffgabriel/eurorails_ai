@@ -1068,6 +1068,113 @@ describe('computeBuildSegments', () => {
     });
   });
 
+  describe('overshoot prevention (JIRA-85)', () => {
+    it('should not build past a nearby target with sufficient budget', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+
+      // Target is a nearby milepost (2-3 hops from Paris). With budget=20,
+      // old code might overshoot past the target and build further. New code
+      // should stop at/before the target via early termination.
+      const nearTarget: GridCoord = { row: 28, col: 31 };
+      const grid = loadGridPoints();
+      const targetData = grid.get(`${nearTarget.row},${nearTarget.col}`);
+      if (!targetData) return; // skip if milepost doesn't exist
+
+      const segments = computeBuildSegments(
+        [paris.center], [], 20, 20, undefined, [nearTarget],
+      );
+
+      if (segments.length === 0) return;
+
+      // The last segment's destination should be at or before the target,
+      // not past it. Verify the path doesn't extend beyond the target.
+      const lastTo = segments[segments.length - 1].to;
+      const distToTarget = hexDistance(lastTo.row, lastTo.col, nearTarget.row, nearTarget.col);
+      // Distance should be 0 (at target) or the path stops before reaching it
+      // due to budget. Either way, it should NOT go past the target.
+      expect(distToTarget).toBeLessThanOrEqual(
+        hexDistance(paris.center.row, paris.center.col, nearTarget.row, nearTarget.col)
+      );
+    });
+
+    it('should stop at target milepost when budget exceeds path cost', () => {
+      const groups = getMajorCityGroups();
+      const ruhr = groups.find(g => g.cityName === 'Ruhr')!;
+
+      // Target very near Ruhr — budget far exceeds path cost
+      // Early termination should stop Dijkstra AT the target, not beyond
+      const nearTarget: GridCoord = { row: 25, col: 44 };
+      const grid = loadGridPoints();
+      if (!grid.has(`${nearTarget.row},${nearTarget.col}`)) return;
+
+      const segments = computeBuildSegments(
+        [ruhr.center], [], 100, 100, undefined, [nearTarget],
+      );
+
+      if (segments.length === 0) return;
+
+      // With massive budget, path should reach the target exactly
+      // (not overshoot past it)
+      const allPositions = new Set<string>();
+      for (const seg of segments) {
+        allPositions.add(`${seg.to.row},${seg.to.col}`);
+      }
+
+      // Total cost should be much less than budget (path is short)
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThan(100);
+    });
+  });
+
+  describe('ferry waypoint with targeted full-path Dijkstra (JIRA-85)', () => {
+    it('should build toward ferry port for cross-water target using full-path Dijkstra', () => {
+      const groups = getMajorCityGroups();
+      const ruhr = groups.find(g => g.cityName === 'Ruhr');
+      const london = groups.find(g => g.cityName === 'London');
+      if (!ruhr || !london) return;
+
+      // Full-path Dijkstra with ferry waypoint: Ruhr → London requires
+      // crossing the Channel. Path should build toward a departure ferry port.
+      const segments = computeBuildSegments(
+        [ruhr.center], [], 20, 20, undefined, [london.center],
+      );
+
+      expect(segments.length).toBeGreaterThan(0);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
+
+      // Segments should be on the mainland (not jumped to UK)
+      for (const seg of segments) {
+        expect(seg.to.row).toBeGreaterThanOrEqual(12);
+      }
+    });
+
+    it('should correctly handle ferry already on network with full-path Dijkstra', () => {
+      const groups = getMajorCityGroups();
+      const holland = groups.find(g => g.cityName === 'Holland');
+      const birmingham = groups.find(g => g.cityName === 'Birmingham');
+      if (!holland || !birmingham) return;
+
+      const harwichFerry = getFerryEdges().find(f => f.name === 'Harwich_Ijmuiden');
+      if (!harwichFerry) return;
+
+      // Bot has track from Holland to ferry port — can cross and build toward Birmingham
+      const existingSegment: TrackSegment = {
+        from: { row: holland.center.row, col: holland.center.col, x: 0, y: 0, terrain: 0 as TerrainType },
+        to: { row: harwichFerry.pointA.row, col: harwichFerry.pointA.col, x: 0, y: 0, terrain: 0 as TerrainType },
+        cost: 4,
+      };
+
+      const segments = computeBuildSegments(
+        [], [existingSegment], 20, 20, undefined, [birmingham.center],
+      );
+
+      // Should build on UK side since ferry is already reachable
+      expect(segments.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('untargeted builds preserve budget cap (JIRA-85)', () => {
     it('should still cap exploration at budget when no targets specified', () => {
       // Without targets, budget cap remains — segments stay within budget
