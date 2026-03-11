@@ -3448,4 +3448,151 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockContextBuild.mock.calls.length).toBeGreaterThanOrEqual(2);
     });
   });
+
+  // ── JIRA-89 fix: Dead load drop execution ──────────────────────────────
+  describe('JIRA-89: dead load drop execution', () => {
+    const mockFindDeadLoads = PlanExecutor.findDeadLoads as jest.MockedFunction<typeof PlanExecutor.findDeadLoads>;
+
+    function setupWithRoute(snapshotOverrides: any = {}, deadLoads: string[] = []) {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      // Ensure no activeRoute from previous tests — forces the LLM/planRoute branch
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        position: { row: 10, col: 10 },
+        loads: ['Hops', 'Wine'],
+        resolvedDemands: [{ cardId: 1, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] }],
+        ...snapshotOverrides,
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+      mockFindDeadLoads.mockReturnValue(deadLoads);
+
+      // Mock loadGridPointsMap to return a city at bot's position
+      const { loadGridPoints } = require('../../services/ai/MapTopology');
+      (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+        ['10,10', { name: 'TestCity' }],
+      ]));
+
+      const route = {
+        stops: [{ action: 'pickup' as const, loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'test',
+        createdAtTurn: 1,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 100,
+        llmLog: [],
+      });
+
+      // Mock PlanExecutor.execute to return a valid plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving toward Berlin',
+      });
+
+      // Mock TurnExecutor to return successfully
+      mockClient.query.mockResolvedValue(mockResult([]));
+
+      return snapshot;
+    }
+
+    it('should mutate snapshot.bot.loads and log dead load drop at a city', async () => {
+      const snapshot = setupWithRoute({}, ['Hops']);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // snapshot.bot.loads should have Hops removed before downstream code
+      // (splice happens in the dead load block, before PlanExecutor.execute)
+      expect(snapshot.bot.loads).not.toContain('Hops');
+      // secondaryDelivery log should record the dead load drop
+      expect(result.secondaryDelivery).toBeDefined();
+      expect(result.secondaryDelivery!.action).toBe('dead_load_drop');
+      expect(result.secondaryDelivery!.deadLoadsDropped).toEqual(['Hops']);
+    });
+
+    it('should mutate snapshot.bot.loads for multiple dead loads', async () => {
+      const snapshot = setupWithRoute({}, ['Hops', 'Wine']);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Both dead loads should be removed from snapshot
+      expect(snapshot.bot.loads).not.toContain('Hops');
+      expect(snapshot.bot.loads).not.toContain('Wine');
+      expect(result.secondaryDelivery).toBeDefined();
+      expect(result.secondaryDelivery!.deadLoadsDropped).toEqual(['Hops', 'Wine']);
+    });
+
+    it('should not drop loads when bot is not at a city', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        position: { row: 5, col: 5 },
+        loads: ['Hops'],
+        resolvedDemands: [],
+      } as any);
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(makeContext());
+      mockFindDeadLoads.mockReturnValue(['Hops']);
+
+      // loadGridPointsMap returns no city at bot's position
+      const { loadGridPoints } = require('../../services/ai/MapTopology');
+      (loadGridPoints as jest.Mock).mockReturnValue(new Map());
+
+      const route = {
+        stops: [{ action: 'pickup' as const, loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'test',
+        createdAtTurn: 1,
+      };
+      mockPlanRoute.mockResolvedValue({ route, model: 'test', latencyMs: 0, llmLog: [] });
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 5, col: 5 }, { row: 5, col: 6 }], fees: new Set<string>(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving',
+      });
+      mockClient.query.mockResolvedValue(mockResult([]));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Loads should NOT be mutated — bot not at city
+      expect(snapshot.bot.loads).toEqual(['Hops']);
+    });
+
+    it('should not create drop actions when no dead loads exist', async () => {
+      const snapshot = setupWithRoute({}, []);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // No dead load drop should be logged
+      expect(result.secondaryDelivery).toBeUndefined();
+      // Loads should remain unchanged
+      expect(snapshot.bot.loads).toEqual(['Hops', 'Wine']);
+    });
+  });
 });

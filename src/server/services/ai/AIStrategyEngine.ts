@@ -35,6 +35,7 @@ import {
   LlmAttempt,
   TimelineStep,
   TurnPlanMoveTrain,
+  TurnPlanDropLoad,
   TRAIN_PROPERTIES,
   TrainType,
 } from '../../../shared/types/GameTypes';
@@ -175,6 +176,7 @@ export class AIStrategyEngine {
       let routeWasAbandoned = false;
       let previousRouteStops: RouteStop[] | null = null; // BE-010
       let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
+      const deadLoadDropActions: TurnPlanDropLoad[] = [];
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -222,6 +224,19 @@ export class AIStrategyEngine {
             if (botCity) {
               console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
               secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
+
+              // JIRA-89 fix: Create DropLoad actions and mutate snapshot
+              for (const deadLoad of deadLoads) {
+                deadLoadDropActions.push({
+                  type: AIActionType.DropLoad,
+                  load: deadLoad,
+                  city: botCity,
+                });
+                const dropIndex = snapshot.bot.loads.indexOf(deadLoad);
+                if (dropIndex >= 0) {
+                  snapshot.bot.loads.splice(dropIndex, 1);
+                }
+              }
             }
           }
 
@@ -625,6 +640,13 @@ export class AIStrategyEngine {
             ? remainingSteps[0]
             : { type: 'MultiAction' as const, steps: remainingSteps };
         console.log(`${tag} JIRA-91: Stripped ${earlyExecutedSteps.length} early-executed delivery steps from plan, ${remainingSteps.length} steps remain`);
+      }
+
+      // JIRA-89 fix: Prepend dead load drop actions to the plan
+      if (deadLoadDropActions.length > 0) {
+        const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        decision.plan = { type: 'MultiAction' as const, steps: [...deadLoadDropActions, ...existingSteps] };
+        console.log(`${tag} JIRA-89: Prepended ${deadLoadDropActions.length} dead load drop action(s) to plan`);
       }
 
       // ── Stage 4: Apply guardrails ──
