@@ -597,11 +597,15 @@ export class TurnComposer {
           // Delivery feasibility pre-filter: reject if no demand has an affordable,
           // profitable delivery path. Prevents picking up "dead weight" loads that
           // the bot can't profitably deliver (Bug 1 / BE-001).
+          // JIRA-87: Relaxed gate — also accept deliveries achievable within
+          // current movement + 1 turn (estimatedTurns <= 2), allowing multi-turn
+          // pickup detours for en-route opportunities.
           if (!isRoutePlannedPickup) {
             const matchingDemands = context.demands.filter(d => d.loadType === loadType);
             if (matchingDemands.length > 0) {
               const hasFeasibleDelivery = matchingDemands.some(
                 d => d.isDeliveryOnNetwork ||
+                  d.estimatedTurns <= 2 ||
                   (d.estimatedTrackCostToDelivery <= d.payout && d.estimatedTrackCostToDelivery <= snapshot.bot.money),
               );
               if (!hasFeasibleDelivery) {
@@ -609,7 +613,7 @@ export class TurnComposer {
                 console.warn(
                   `[TurnComposer] Rejected infeasible opportunistic pickup: "${loadType}" at "${cityName}" — ` +
                   `delivery to "${bestDemand.deliveryCity}" costs ~${bestDemand.estimatedTrackCostToDelivery}M ` +
-                  `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M)`,
+                  `(payout: ${bestDemand.payout}M, bot has: ${snapshot.bot.money}M, est. turns: ${bestDemand.estimatedTurns})`,
                 );
                 break;
               }
