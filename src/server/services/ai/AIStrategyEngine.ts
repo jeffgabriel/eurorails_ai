@@ -605,14 +605,20 @@ export class AIStrategyEngine {
         }
       }
 
+      // JIRA-85: Always rebuild demands from fresh DB state before ranking.
+      // context.demands may be stale after discard or non-delivery turns where
+      // the hand changed but rebuildDemands (line 541) was not triggered.
+      const rankingSnapshot = await capture(gameId, botPlayerId);
+      const freshDemands = ContextBuilder.rebuildDemands(rankingSnapshot, gridPoints);
+
       // Build demand ranking from context for debug overlay (JIRA-13)
       // FE-001: Compute supply rarity per load type
       const supplyCityCounts = new Map<string, Set<string>>();
-      for (const d of context.demands) {
+      for (const d of freshDemands) {
         if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
         supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
       }
-      const demandRanking = [...context.demands]
+      const demandRanking = [...freshDemands]
         .sort((a, b) => b.demandScore - a.demandScore)
         .map((d, i) => {
           const cityCount = supplyCityCounts.get(d.loadType)?.size ?? 1;
@@ -634,9 +640,9 @@ export class AIStrategyEngine {
         });
 
       // INF-001: Compute hand quality for audit logging
-      const handQuality = AIStrategyEngine.computeHandQuality(context.demands, snapshot.turnNumber, snapshot.bot.money);
-      const bestDemandTurns = context.demands.length > 0
-        ? Math.min(...context.demands.map(d => d.estimatedTurns))
+      const handQuality = AIStrategyEngine.computeHandQuality(freshDemands, snapshot.turnNumber, snapshot.bot.money);
+      const bestDemandTurns = freshDemands.length > 0
+        ? Math.min(...freshDemands.map(d => d.estimatedTurns))
         : 0;
       console.log(`${tag} [Hand Quality] score=${handQuality.score} (threshold=3.0), stale cards: ${handQuality.staleCards}, best demand: ${bestDemandTurns} turns`);
 

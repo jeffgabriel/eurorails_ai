@@ -2226,10 +2226,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Verify rebuildDemands was called (for delivery refresh)
+      // Verify rebuildDemands was called (delivery refresh + JIRA-85 ranking rebuild)
       expect(mockRebuildDemands).toHaveBeenCalled();
-      // Verify capture was called at least twice (initial + post-delivery)
-      expect(mockCapture).toHaveBeenCalledTimes(2);
+      // Verify capture called 3 times: initial + post-delivery + JIRA-85 ranking snapshot
+      expect(mockCapture).toHaveBeenCalledTimes(3);
     });
 
     it('should clear activeRoute after delivery when refreshed demands lack route load type', async () => {
@@ -2374,10 +2374,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // rebuildDemands should NOT have been called (no delivery, no discard)
-      expect(mockRebuildDemands).not.toHaveBeenCalled();
-      // capture should only be called once (initial)
-      expect(mockCapture).toHaveBeenCalledTimes(1);
+      // JIRA-85: rebuildDemands is now always called for final ranking (unconditional rebuild)
+      expect(mockRebuildDemands).toHaveBeenCalledTimes(1);
+      // capture called twice: initial + ranking snapshot
+      expect(mockCapture).toHaveBeenCalledTimes(2);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
