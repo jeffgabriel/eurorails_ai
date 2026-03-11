@@ -60,7 +60,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>;
   // JIRA-32: Strategic context and composition trace for NDJSON game log
   gamePhase?: string;
   cash?: number;
@@ -643,6 +643,7 @@ export class AIStrategyEngine {
             estimatedTurns: d.estimatedTurns,
             trackCostToSupply: d.estimatedTrackCostToSupply,
             trackCostToDelivery: d.estimatedTrackCostToDelivery,
+            ferryRequired: d.ferryRequired,
           };
         });
 
