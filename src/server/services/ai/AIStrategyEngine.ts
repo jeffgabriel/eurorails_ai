@@ -278,6 +278,51 @@ export class AIStrategyEngine {
             }
           }
 
+          // ── JIRA-92: Cargo conflict check — drop carried loads blocking planned pickups ──
+          const routePickupCount = (() => {
+            let count = 0;
+            for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+              if (activeRoute.stops[i].action === 'pickup') count++;
+              else break; // Count consecutive pickups from current index
+            }
+            return count;
+          })();
+          const effectiveFreeSlots = trainCapacity - (snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0));
+
+          if (
+            routePickupCount > effectiveFreeSlots &&
+            botConfig!.skillLevel !== BotSkillLevel.Easy &&
+            AIStrategyEngine.hasLLMApiKey(botConfig)
+          ) {
+            console.log(`${tag} JIRA-92: Cargo conflict — route needs ${routePickupCount} pickup slots, only ${effectiveFreeSlots} free`);
+
+            // Identify carried loads NOT in route's delivery stops
+            const routeDeliveryLoads = new Set(
+              activeRoute.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
+            );
+            const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
+
+            if (conflictingLoads.length > 0) {
+              try {
+                const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
+                const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
+
+                if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
+                  console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
+                  // Remove the load from snapshot so downstream sees updated capacity
+                  const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
+                  if (dropIndex >= 0) {
+                    snapshot.bot.loads.splice(dropIndex, 1);
+                  }
+                } else {
+                  console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
+                }
+              } catch (err) {
+                console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
+              }
+            }
+          }
+
           // Execute the first step of the new route
           const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
 

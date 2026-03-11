@@ -116,6 +116,23 @@ export const SECONDARY_DELIVERY_SCHEMA = {
   required: ['action', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the cargo conflict evaluation response (JIRA-92).
+ * Lightweight schema: should the bot drop a carried load to free slots for a better route?
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const CARGO_CONFLICT_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    action: { type: 'string' as const, enum: ['drop', 'keep'] },
+    dropLoad: { type: 'string' as const },
+    reasoning: { type: 'string' as const },
+  },
+  required: ['action', 'reasoning'],
+};
+
 export const RE_EVAL_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,

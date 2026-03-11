@@ -526,12 +526,15 @@ export class TurnComposer {
     let lastSplitIndex = 0;
     let currentRoute = activeRoute;
 
-    // Cargo slot reservation: if the active route's next stop is a pickup,
-    // reserve one slot so opportunistic pickups don't block the planned pickup (BE-002).
-    const nextRouteStopIsPickup = activeRoute &&
-      activeRoute.currentStopIndex < activeRoute.stops.length &&
-      activeRoute.stops[activeRoute.currentStopIndex]?.action === 'pickup';
-    const reservedSlots = nextRouteStopIsPickup ? 1 : 0;
+    // Cargo slot reservation: count consecutive upcoming pickup stops so
+    // opportunistic pickups don't block planned multi-pickups (BE-002, JIRA-92).
+    let reservedSlots = 0;
+    if (activeRoute && activeRoute.currentStopIndex < activeRoute.stops.length) {
+      for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+        if (activeRoute.stops[i].action === 'pickup') reservedSlots++;
+        else break;
+      }
+    }
 
     // Walk path positions (skip index 0 — that's where the bot started)
     for (let i = 1; i < path.length; i++) {

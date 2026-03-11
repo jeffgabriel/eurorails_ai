@@ -21,6 +21,7 @@ import {
   GridPoint,
   TerrainType,
   RouteStop,
+  StrategicRoute,
   EnRoutePickup,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
@@ -1593,6 +1594,78 @@ export class ContextBuilder {
     }
     lines.push('');
     lines.push('Should you add a secondary pickup to this route?');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * JIRA-92: Serialize context for cargo conflict evaluation.
+   *
+   * Builds a focused prompt showing the planned route value vs carried load delivery details,
+   * so the LLM can decide whether to drop carried cargo to free slots for the better route.
+   */
+  static serializeCargoConflictPrompt(
+    snapshot: WorldSnapshot,
+    plannedRoute: StrategicRoute,
+    conflictingLoads: string[],
+    demands: DemandContext[],
+  ): string {
+    const lines: string[] = [];
+    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const freeSlots = capacity - snapshot.bot.loads.length;
+
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Train: ${snapshot.bot.trainType} (capacity ${capacity}, speed ${TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9})`);
+    lines.push(`Cash: ${snapshot.bot.money}M`);
+    lines.push(`Carried loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+    lines.push(`Free slots: ${freeSlots} of ${capacity}`);
+    lines.push('');
+
+    // Planned route summary
+    const routeStops = plannedRoute.stops;
+    const pickupCount = routeStops.filter(s => s.action === 'pickup').length;
+    const totalPayout = routeStops
+      .filter(s => s.action === 'deliver' && s.payment)
+      .reduce((sum, s) => sum + (s.payment ?? 0), 0);
+
+    lines.push('PLANNED ROUTE:');
+    for (const stop of routeStops) {
+      lines.push(`  ${stop.action.toUpperCase()} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    lines.push(`  Pickups needed: ${pickupCount} | Total payout: ${totalPayout}M`);
+    lines.push('');
+
+    // Conflicting carried loads — loads NOT in the route's delivery plan
+    lines.push('CARRIED LOADS BLOCKING THE ROUTE (not part of planned deliveries):');
+    for (const loadType of conflictingLoads) {
+      // Find the best demand context for this carried load
+      const demandCtx = demands.find(d => d.loadType === loadType && d.isLoadOnTrain);
+      if (demandCtx) {
+        const trackCost = demandCtx.estimatedTrackCostToDelivery;
+        const netProfit = demandCtx.payout - trackCost;
+        const onNetwork = trackCost === 0 ? 'YES — delivery on existing network' : 'NO — requires building track';
+        lines.push(`  ${loadType} → ${demandCtx.deliveryCity}: ${demandCtx.payout}M payout, ~${trackCost}M track cost, ~${demandCtx.estimatedTurns} turns, net profit: ${netProfit}M`);
+        lines.push(`    Delivery on network: ${onNetwork}`);
+        lines.push(`    Efficiency: ${demandCtx.efficiencyPerTurn.toFixed(1)}M/turn`);
+      } else {
+        // No demand context found — load has no matching demand card (shouldn't happen, but be safe)
+        lines.push(`  ${loadType} → no matching demand card found`);
+      }
+    }
+    lines.push('');
+
+    // Full demand ranking for context
+    lines.push('YOUR DEMAND CARDS:');
+    for (let i = 0; i < demands.length; i++) {
+      const d = demands[i];
+      const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+      const tag = d.isLoadOnTrain ? ' [ON TRAIN]' : '';
+      lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: ${d.payout}M, build ~${buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn${tag}`);
+    }
+    lines.push('');
+
+    lines.push(`CARGO CONFLICT: Your planned route needs ${pickupCount} pickup slots but you only have ${freeSlots} free.`);
+    lines.push('Should you DROP any of the carried loads listed above to free slots for the planned route?');
 
     return lines.join('\n');
   }
