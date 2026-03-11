@@ -307,6 +307,12 @@ export function computeBuildSegments(
     }
   }
 
+  // Targeted builds: remove budget cap from Dijkstra to find cheapest full route
+  // to target, then truncate to budget in extractSegments. Early-terminate when
+  // the first target milepost is settled (Dijkstra guarantees cheapest path).
+  const hasTargets = targetKeys.size > 0;
+  let earlyTermPath: DijkstraNode | null = null;
+
   // Multi-source Dijkstra
   const heap = new MinHeap();
   const minCost = new Map<string, number>();
@@ -331,6 +337,13 @@ export function computeBuildSegments(
     // Record this as a reachable destination if cost > 0 (not a start node)
     if (current.cost > 0) {
       bestPaths.set(currentKey, current);
+    }
+
+    // Early termination for targeted builds: when a target milepost is settled,
+    // Dijkstra guarantees this is the cheapest path. No need to explore further.
+    if (hasTargets && current.cost > 0 && targetKeys.has(currentKey)) {
+      earlyTermPath = current;
+      break;
     }
 
     // Expand neighbors
@@ -394,7 +407,7 @@ export function computeBuildSegments(
 
       const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
       const newCost = current.cost + terrainCost + waterExtra;
-      if (newCost > budget) continue; // over budget
+      if (!hasTargets && newCost > budget) continue; // over budget (only for untargeted builds)
 
       const existingCost = minCost.get(nbKey);
       if (existingCost === undefined || newCost < existingCost) {
@@ -415,7 +428,7 @@ export function computeBuildSegments(
       for (const partner of ferryPartners) {
         const partnerKey = makeKey(partner.row, partner.col);
         const newCost = current.cost; // free crossing
-        if (newCost > budget) continue;
+        if (!hasTargets && newCost > budget) continue;
         const existingCost = minCost.get(partnerKey);
         if (existingCost === undefined || newCost < existingCost) {
           minCost.set(partnerKey, newCost);
@@ -435,9 +448,10 @@ export function computeBuildSegments(
   // Without targets: prefer the longest path (most new segments) within budget.
   let bestPath: DijkstraNode | null = null;
 
+  if (earlyTermPath) {
+    console.log(`${tag} early termination: target reached at cost=${earlyTermPath.cost}, path=${earlyTermPath.path.length} nodes`);
+  }
   console.log(`${tag} Dijkstra done: ${bestPaths.size} reachable destinations`);
-
-  const hasTargets = targetPositions && targetPositions.length > 0;
 
   if (hasTargets) {
     // Filter out targets already on the bot's track — building toward an

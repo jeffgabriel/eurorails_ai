@@ -915,4 +915,95 @@ describe('computeBuildSegments', () => {
       expect(Array.isArray(segments)).toBe(true);
     });
   });
+
+  describe('full-path Dijkstra for targeted builds (JIRA-85)', () => {
+    it('should find path to distant target beyond single-turn budget', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+      const berlin = groups.find(g => g.cityName === 'Berlin')!;
+
+      // Paris → Berlin is expensive (>20M). With full-path Dijkstra,
+      // the cheapest route is found and truncated to budget.
+      const segments = computeBuildSegments(
+        [paris.center], [], 20, 20, undefined, [berlin.center],
+      );
+
+      expect(segments.length).toBeGreaterThan(0);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
+    });
+
+    it('should early-terminate at target and not explore beyond', () => {
+      const groups = getMajorCityGroups();
+      const ruhr = groups.find(g => g.cityName === 'Ruhr')!;
+      // Use a nearby milepost as target — should terminate quickly
+      const nearTarget: GridCoord = { row: 25, col: 44 };
+
+      const segments = computeBuildSegments(
+        [ruhr.center], [], 20, 20, undefined, [nearTarget],
+      );
+
+      expect(segments.length).toBeGreaterThan(0);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
+    });
+
+    it('should still respect budget in returned segments even when full path exceeds budget', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+      const berlin = groups.find(g => g.cityName === 'Berlin')!;
+
+      // Budget cap removed from Dijkstra but extractSegments still truncates
+      const segments = computeBuildSegments(
+        [paris.center], [], 10, 10, undefined, [berlin.center],
+      );
+
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(10);
+    });
+
+    it('should produce contiguous segments for targeted builds', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+      const berlin = groups.find(g => g.cityName === 'Berlin')!;
+
+      const segments = computeBuildSegments(
+        [paris.center], [], 20, 20, undefined, [berlin.center],
+      );
+
+      for (let i = 1; i < segments.length; i++) {
+        const prev = segments[i - 1].to;
+        const curr = segments[i].from;
+        expect(curr.row).toBe(prev.row);
+        expect(curr.col).toBe(prev.col);
+      }
+    });
+  });
+
+  describe('untargeted builds preserve budget cap (JIRA-85)', () => {
+    it('should still cap exploration at budget when no targets specified', () => {
+      // Without targets, budget cap remains — segments stay within budget
+      const segments = computeBuildSegments([PARIS], [], 5, 5);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(5);
+      expect(segments.length).toBeLessThanOrEqual(5);
+    });
+
+    it('should still prefer most new segments for untargeted builds', () => {
+      // Untargeted selection picks the path with most new segments
+      const segments = computeBuildSegments([PARIS], [], 10);
+      expect(segments.length).toBeGreaterThan(0);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(10);
+    });
+
+    it('should produce same results as before for untargeted builds', () => {
+      // Budget constraint and maxSegments should behave identically
+      const seg1 = computeBuildSegments([PARIS], [], 20, 1);
+      expect(seg1.length).toBeLessThanOrEqual(1);
+
+      const seg3 = computeBuildSegments([PARIS], [], 20, 3);
+      expect(seg3.length).toBeLessThanOrEqual(3);
+    });
+  });
 });
