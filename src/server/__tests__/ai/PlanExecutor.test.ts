@@ -363,7 +363,7 @@ describe('PlanExecutor', () => {
       expect(buildCall).toBeDefined();
     });
 
-    it('should build toward demand city when all route stops reachable during initialBuild', async () => {
+    it('should pass when all route stops reachable during initialBuild (JIRA-93: no speculative builds)', async () => {
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'Berlin',
@@ -390,20 +390,11 @@ describe('PlanExecutor', () => {
         ],
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      // JIRA-93: No speculative builds — PassTurn when all route stops are reachable
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.updatedRoute.currentStopIndex).toBe(0);
-      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
-      );
-      expect(buildCall).toBeDefined();
     });
 
     it('should build toward target city during initialBuild when not starting city and not on network', async () => {
@@ -679,9 +670,8 @@ describe('PlanExecutor', () => {
     });
   });
 
-  describe('demand fallback when all route stops connected', () => {
-    it('falls back to findDemandBuildTarget when all route stops are on network', async () => {
-      // All route stops are on the network — should build toward demand cities
+  describe('JIRA-93: no speculative demand builds when route stops connected', () => {
+    it('returns PassTurn when all route stops are on network (no speculative builds)', async () => {
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'Berlin',
@@ -708,20 +698,11 @@ describe('PlanExecutor', () => {
         ],
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      // JIRA-93: No speculative builds — PassTurn when all route stops are reachable
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.routeComplete).toBe(false);
-      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
-      );
-      expect(buildCall).toBeDefined();
     });
   });
 
@@ -1216,9 +1197,11 @@ describe('PlanExecutor', () => {
       });
 
       // The resolve mock should be called with BUILD toward 'Essen' (supply city from demand fallback)
+      // Use cost=20 to exhaust build budget so continuationBuild doesn't try more resolve calls
+      const fullBudgetSegment = { ...makeSegment(10, 10, 10, 11), cost: 20 };
       mockResolve.mockResolvedValueOnce({
         success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        plan: { type: AIActionType.BuildTrack, segments: [fullBudgetSegment] },
       });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
@@ -1261,9 +1244,10 @@ describe('PlanExecutor', () => {
         ],
       });
 
+      const fullBudgetSegment = { ...makeSegment(10, 10, 10, 11), cost: 20 };
       mockResolve.mockResolvedValueOnce({
         success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        plan: { type: AIActionType.BuildTrack, segments: [fullBudgetSegment] },
       });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);

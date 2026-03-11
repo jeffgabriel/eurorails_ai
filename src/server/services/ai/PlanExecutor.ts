@@ -135,28 +135,7 @@ export class PlanExecutor {
           };
         }
       }
-      // All route stops reachable — build toward demand cities with remaining budget
-      if (context.canBuild) {
-        // Build toward demand card cities with remaining budget
-        const demandTarget = PlanExecutor.findDemandBuildTarget(context);
-        if (demandTarget) {
-          console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);
-          const buildResult = await ActionResolver.resolve(
-            { action: 'BUILD', details: { toward: demandTarget }, reasoning: '', planHorizon: '' },
-            snapshot, context, route.startingCity,
-          );
-          if (buildResult.success && buildResult.plan) {
-            return {
-              plan: buildResult.plan,
-              routeComplete: false,
-              routeAbandoned: false,
-              updatedRoute: { ...route, phase: 'build' },
-              description: `${tag} Building toward demand city ${demandTarget} (all route stops reachable)`,
-            };
-          }
-        }
-      }
-      // Nothing to build
+      // All route stops reachable — nothing to build
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,

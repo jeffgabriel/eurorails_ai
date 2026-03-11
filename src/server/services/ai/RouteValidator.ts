@@ -121,6 +121,18 @@ export class RouteValidator {
       }
     }
 
+    // ── Post-pruning delivery check ──
+    // A route with only pickup stops (no deliveries) after pruning has no payout
+    // and no destination — reject it so the bot replans with a viable route.
+    const hasDeliveryStop = validations.some(v => v.feasible && v.stop.action === 'deliver');
+    const hasFeasibleStop = validations.some(v => v.feasible);
+    if (hasFeasibleStop && !hasDeliveryStop) {
+      const allErrors = validations.filter(v => !v.feasible).map(v => v.error!);
+      allErrors.push('Route has no delivery stops after pruning — not viable');
+      console.warn(`${tag} Route has no delivery stops after pruning — rejecting`);
+      return { valid: false, errors: allErrors };
+    }
+
     const feasibleStops = validations.filter(v => v.feasible).map(v => v.stop);
     const errors = validations.filter(v => !v.feasible).map(v => v.error!);
 

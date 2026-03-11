@@ -24,7 +24,6 @@ import {
   StrategicRoute,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { PlanExecutor } from './PlanExecutor';
 import { loadGridPoints } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
@@ -728,10 +727,6 @@ export class TurnComposer {
           // Already sorted by estimatedCost in ContextBuilder
           buildTarget = unconnected[0].cityName;
         }
-      }
-      // Priority 3: Build toward demand cities (last resort greedy heuristic)
-      if (!buildTarget) {
-        buildTarget = PlanExecutor.findDemandBuildTarget(context);
       }
     }
 

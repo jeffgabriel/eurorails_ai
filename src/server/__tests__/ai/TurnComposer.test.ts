@@ -993,7 +993,7 @@ describe('TurnComposer', () => {
       expect(mockFindDemandBuildTarget).not.toHaveBeenCalled();
     });
 
-    it('falls back to demand city when no unconnected major cities', async () => {
+    it('does not build speculatively when no unconnected major cities (JIRA-93)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({
         turnBuildCost: 0,
@@ -1008,23 +1008,11 @@ describe('TurnComposer', () => {
         totalFee: 0,
       };
 
-      mockFindDemandBuildTarget.mockReturnValue('Bordeaux');
-
-      // Phase B: BUILD toward Bordeaux succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
-      });
-
       const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
-      expect(result.type).toBe('MultiAction');
-      // findDemandBuildTarget should have been called as fallback
-      expect(mockFindDemandBuildTarget).toHaveBeenCalled();
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall![0].details.toward).toBe('Bordeaux');
+      // JIRA-93: No speculative builds — should NOT fall back to findDemandBuildTarget
+      expect(result.type).toBe(AIActionType.MoveTrain);
+      expect(mockFindDemandBuildTarget).not.toHaveBeenCalled();
     });
   });
 
@@ -1374,9 +1362,8 @@ describe('TurnComposer', () => {
     });
   });
 
-  describe('build fallback when route stops all connected', () => {
-    it('falls back to findDemandBuildTarget when all route stops on network', async () => {
-      // All route stops on network — should fall through to demand build target
+  describe('JIRA-93: no speculative build when route stops all connected', () => {
+    it('skips build when all route stops on network and no victory cities (no speculative builds)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({
         money: 50,
@@ -1393,8 +1380,6 @@ describe('TurnComposer', () => {
         phase: 'build',
       });
 
-      mockFindDemandBuildTarget.mockReturnValue('Lyon');
-
       const movePlan: TurnPlan = {
         type: AIActionType.MoveTrain,
         path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
@@ -1402,21 +1387,11 @@ describe('TurnComposer', () => {
         totalFee: 0,
       };
 
-      // Phase B: BUILD toward Lyon (demand fallback) succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Lyon' },
-      });
-
       const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
-      expect(result.type).toBe('MultiAction');
-      expect(mockFindDemandBuildTarget).toHaveBeenCalled();
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall).toBeDefined();
-      expect(buildCall![0].details.toward).toBe('Lyon');
+      // JIRA-93: No speculative builds — should NOT fall back to findDemandBuildTarget
+      expect(result.type).toBe(AIActionType.MoveTrain);
+      expect(mockFindDemandBuildTarget).not.toHaveBeenCalled();
     });
   });
 
