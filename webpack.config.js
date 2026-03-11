@@ -53,7 +53,12 @@ module.exports = {
       },
       {
         test: /\.css$/,
+        exclude: /lobby\/index\.css$/,
         use: ['style-loader', 'css-loader', 'postcss-loader'],
+      },
+      {
+        test: /lobby\/index\.css$/,
+        use: ['style-loader', 'css-loader'],
       },
       {
         test: /\.(png|svg|jpg|jpeg|gif)$/i,

@@ -405,6 +405,7 @@ export class AIStrategyEngine {
       // JIRA-86: Route completed → call planRoute() for a fresh strategy (not reEvaluateRoute,
       // which asks about a dead route). Route still active → call reEvaluateRoute().
       let reEvalHandled = false;
+      let earlyExecutedSteps: TurnPlan[] = [];
       const hasQueuedDelivery = composedSteps.filter(s => s.type === AIActionType.DeliverLoad).length > 1;
       if (
         hasDelivery
@@ -412,10 +413,24 @@ export class AIStrategyEngine {
         && AIStrategyEngine.hasLLMApiKey(botConfig)
       ) {
         try {
-          // Refresh demands before LLM call (delivery drew a new card)
+          // JIRA-91: Execute delivery steps (everything through last DeliverLoad) against DB
+          // before the LLM call so capture() returns real post-delivery state with new demand card.
+          const lastDelivIdx = (() => {
+            for (let i = composedSteps.length - 1; i >= 0; i--) {
+              if (composedSteps[i].type === AIActionType.DeliverLoad) return i;
+            }
+            return -1;
+          })();
+          earlyExecutedSteps = composedSteps.slice(0, lastDelivIdx + 1);
+          await TurnExecutor.executePlan(
+            { type: 'MultiAction' as const, steps: earlyExecutedSteps },
+            ActionResolver.cloneSnapshot(snapshot),
+          );
+          console.log(`${tag} JIRA-91: Early-executed ${earlyExecutedSteps.length} delivery steps`);
+
+          // Now capture() returns real DB state with new demand card, updated money, correct loads
           const freshSnap = await capture(gameId, botPlayerId);
-          const freshDemands = ContextBuilder.rebuildDemands(freshSnap, gridPoints);
-          const reEvalContext = { ...context, demands: freshDemands };
+          const freshContext = await ContextBuilder.build(freshSnap, skillLevel, gridPoints);
           const brain = AIStrategyEngine.createBrain(botConfig!);
           const llmStart = Date.now();
 
@@ -424,7 +439,7 @@ export class AIStrategyEngine {
           if (routeWasCompleted) {
             // Route is done — ask LLM for a brand new strategic plan
             console.log(`${tag} JIRA-86: Route completed after delivery — calling planRoute() for fresh strategy`);
-            const routeResult = await brain.planRoute(freshSnap, reEvalContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
+            const routeResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
             const llmMs = Date.now() - llmStart;
             // Thread llmLog from post-delivery planRoute into decision for NDJSON observability
             if (routeResult.llmLog?.length) {
@@ -441,7 +456,7 @@ export class AIStrategyEngine {
             // Route still active — ask LLM whether to continue, amend, or abandon
             const routeForReEval = preDeliveryRoute ?? activeRoute;
             if (routeForReEval) {
-              const reEvalResult = await brain.reEvaluateRoute(snapshot, reEvalContext, routeForReEval, gridPoints);
+              const reEvalResult = await brain.reEvaluateRoute(freshSnap, freshContext, routeForReEval, gridPoints);
               const llmMs = Date.now() - llmStart;
 
               if (reEvalResult) {
@@ -493,10 +508,12 @@ export class AIStrategyEngine {
               }
             }
 
-            // Simulate core plan to get post-execution state
-            const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
-            const simContext = { ...reEvalContext, speed: wastedMovement };
-            for (const step of coreSteps) {
+            // JIRA-91: Simulate remaining core steps against fresh post-delivery state.
+            // Delivery steps are already executed against DB, so skip them in simulation.
+            const postDeliveryCoreSteps = coreSteps.slice(earlyExecutedSteps.length);
+            const simSnapshot = ActionResolver.cloneSnapshot(freshSnap);
+            const simContext = { ...freshContext, speed: wastedMovement };
+            for (const step of postDeliveryCoreSteps) {
               ActionResolver.applyPlanToState(step, simSnapshot, simContext);
             }
 
@@ -550,6 +567,19 @@ export class AIStrategyEngine {
           decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
           console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
         }
+      }
+
+      // JIRA-91: Strip delivery steps that were already executed against DB in Stage 3d.
+      // These steps must not be re-executed in Stage 5 or checked by guardrails.
+      if (earlyExecutedSteps.length > 0) {
+        const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        const remainingSteps = planSteps.slice(earlyExecutedSteps.length);
+        decision.plan = remainingSteps.length === 0
+          ? { type: AIActionType.PassTurn as const }
+          : remainingSteps.length === 1
+            ? remainingSteps[0]
+            : { type: 'MultiAction' as const, steps: remainingSteps };
+        console.log(`${tag} JIRA-91: Stripped ${earlyExecutedSteps.length} early-executed delivery steps from plan, ${remainingSteps.length} steps remain`);
       }
 
       // ── Stage 4: Apply guardrails ──
