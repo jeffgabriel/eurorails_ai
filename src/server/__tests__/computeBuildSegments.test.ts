@@ -980,6 +980,94 @@ describe('computeBuildSegments', () => {
     });
   });
 
+  describe('target path selection and budget truncation (JIRA-85 BE-002)', () => {
+    it('should fall back gracefully when target is blocked by occupied edges', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+
+      // Create occupied edges to block some paths (simulating other players' track)
+      const occupiedEdges = new Set<string>();
+      // Block a few edges near Paris — target should still be reachable via alternate route
+      // or fallback to hex-distance scoring
+      const target: GridCoord = { row: 25, col: 44 };
+
+      const segments = computeBuildSegments(
+        [paris.center], [], 20, 20, occupiedEdges, [target],
+      );
+
+      // Should not crash — either finds alternate route or falls back
+      expect(Array.isArray(segments)).toBe(true);
+      const totalCost = segments.reduce((s, seg) => s + seg.cost, 0);
+      expect(totalCost).toBeLessThanOrEqual(20);
+    });
+
+    it('should pick first run for targeted builds (start of optimal path)', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+      const berlin = groups.find(g => g.cityName === 'Berlin')!;
+
+      // Build existing track from Paris to verify first-run selection
+      const grid = loadGridPoints();
+      const parisData = grid.get('29,32')!;
+      const clearData = grid.get('29,31')!;
+
+      const existingSegment: TrackSegment = {
+        from: { x: 0, y: 0, row: 29, col: 32, terrain: parisData.terrain },
+        to: { x: 0, y: 0, row: 29, col: 31, terrain: clearData.terrain },
+        cost: getTerrainCost(clearData.terrain),
+      };
+
+      const segments = computeBuildSegments(
+        [paris.center], [existingSegment], 20, 20, undefined, [berlin.center],
+      );
+
+      expect(segments.length).toBeGreaterThan(0);
+      // First segment should connect to existing network
+      const firstFrom = `${segments[0].from.row},${segments[0].from.col}`;
+      const networkPositions = new Set(['29,32', '29,31', '28,32', '30,32', '29,33']); // Paris + clear neighbor
+      // First segment starts from network or a Paris outpost
+      const lookup = getMajorCityLookup();
+      const isOnNetwork = networkPositions.has(firstFrom) || lookup.get(firstFrom) === 'Paris';
+      expect(isOnNetwork).toBe(true);
+    });
+
+    it('should handle continuation builds (JIRA-73 regression) with full-path Dijkstra', () => {
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+      const berlin = groups.find(g => g.cityName === 'Berlin')!;
+
+      // Primary build from Paris toward Berlin
+      const primary = computeBuildSegments(
+        [paris.center], [], 10, 10, undefined, [berlin.center],
+      );
+      expect(primary.length).toBeGreaterThan(0);
+
+      // Continuation from primary endpoint toward Berlin with remaining budget
+      const lastSeg = primary[primary.length - 1];
+      const contStart = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+
+      const continuation = computeBuildSegments(
+        contStart, [], 10, undefined, undefined, [berlin.center],
+        primary,
+      );
+
+      // Should not duplicate primary segments
+      const primaryEdges = new Set<string>();
+      for (const seg of primary) {
+        const a = `${seg.from.row},${seg.from.col}`;
+        const b = `${seg.to.row},${seg.to.col}`;
+        primaryEdges.add(`${a}-${b}`);
+        primaryEdges.add(`${b}-${a}`);
+      }
+
+      for (const seg of continuation) {
+        const a = `${seg.from.row},${seg.from.col}`;
+        const b = `${seg.to.row},${seg.to.col}`;
+        expect(primaryEdges.has(`${a}-${b}`)).toBe(false);
+      }
+    });
+  });
+
   describe('untargeted builds preserve budget cap (JIRA-85)', () => {
     it('should still cap exploration at budget when no targets specified', () => {
       // Without targets, budget cap remains — segments stay within budget

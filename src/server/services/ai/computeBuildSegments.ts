@@ -488,45 +488,44 @@ export function computeBuildSegments(
       }
     }
 
-    // Target-aware selection: pick the path that gets closest to a demand city
-    let bestTargetDist = Infinity;
-    let bestTargetName = '';
-
-    for (const node of bestPaths.values()) {
-      const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
-      if (newSteps === 0) continue;
-
-      const endpoint = node.path[node.path.length - 1];
-      let minDist = Infinity;
-      for (const target of effectiveTargets) {
-        const dist = hexDistance(endpoint.row, endpoint.col, target.row, target.col);
-        if (dist < minDist) minDist = dist;
-      }
-
-      // Prefer closer to target; among equal distances, prefer most new segments (use full budget);
-      // final tiebreak: cheapest cost. JIRA-73: Swapped priorities 2 & 3 so the bot builds as
-      // much useful track as budget allows toward the target, rather than finding the cheapest path.
-      const nodeNewSegs = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
-      const bestNewSegs = bestPath
-        ? countNewSegments(bestPath.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup)
-        : 0;
-      if (
-        minDist < bestTargetDist ||
-        (minDist === bestTargetDist && nodeNewSegs > bestNewSegs) ||
-        (minDist === bestTargetDist && nodeNewSegs === bestNewSegs &&
-          node.cost < (bestPath?.cost ?? Infinity))
-      ) {
-        bestPath = node;
-        bestTargetDist = minDist;
-      }
-    }
-
-    // Identify which target the path aims at
-    if (bestPath) {
+    if (earlyTermPath) {
+      // Full-path Dijkstra found cheapest route to target — use directly.
+      // No hex-distance scoring needed: the path IS the optimal route.
+      bestPath = earlyTermPath;
       const ep = bestPath.path[bestPath.path.length - 1];
       const gridPt = grid.get(makeKey(ep.row, ep.col));
-      bestTargetName = gridPt?.name ?? `(${ep.row},${ep.col})`;
-      console.log(`${tag} target-aware: aiming for ${bestTargetName}, dist=${bestTargetDist}, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
+      console.log(`${tag} target-aware: direct path to ${gridPt?.name ?? `(${ep.row},${ep.col})`}, cost=${bestPath.cost}, path=${bestPath.path.length} nodes, targets=${effectiveTargets.length} (${targetPositions!.length - effectiveTargets.length} already on network)`);
+    } else {
+      // Fallback: target unreachable via Dijkstra (e.g., blocked by occupied edges).
+      // Use hex-distance scoring against whatever destinations were explored.
+      console.warn(`${tag} target unreachable via Dijkstra, falling back to hex-distance scoring`);
+      let bestTargetDist = Infinity;
+
+      for (const node of bestPaths.values()) {
+        const newSteps = countNewSegments(node.path, onNetwork, builtEdges, ferryEdgeKeys, majorCityLookup);
+        if (newSteps === 0) continue;
+
+        const endpoint = node.path[node.path.length - 1];
+        let minDist = Infinity;
+        for (const target of effectiveTargets) {
+          const dist = hexDistance(endpoint.row, endpoint.col, target.row, target.col);
+          if (dist < minDist) minDist = dist;
+        }
+
+        if (
+          minDist < bestTargetDist ||
+          (minDist === bestTargetDist && node.cost < (bestPath?.cost ?? Infinity))
+        ) {
+          bestPath = node;
+          bestTargetDist = minDist;
+        }
+      }
+
+      if (bestPath) {
+        const ep = bestPath.path[bestPath.path.length - 1];
+        const gridPt = grid.get(makeKey(ep.row, ep.col));
+        console.log(`${tag} target-aware fallback: aiming for ${gridPt?.name ?? `(${ep.row},${ep.col})`}, dist=${bestTargetDist}`);
+      }
     }
   } else {
     // Original untargeted selection: most new segments, then cheapest
@@ -566,8 +565,10 @@ export function computeBuildSegments(
     validColdStartKeys.add(makeKey(sp.row, sp.col));
   }
 
-  // Extract up to maxSegments new segments from the path
-  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup);
+  // Extract up to maxSegments new segments from the path.
+  // For targeted builds with a direct path, pick the first valid run (start of optimal route).
+  const pickFirstRun = hasTargets && earlyTermPath !== null;
+  const segments = extractSegments(bestPath.path, onNetwork, builtEdges, grid, budget, maxSegments, ferryPortCosts, ferryEdgeKeys, validColdStartKeys, majorCityLookup, pickFirstRun);
   console.log(`${tag} extracted ${segments.length} segments, totalCost=${segments.reduce((s, seg) => s + seg.cost, 0)}`);
   return segments;
 }
@@ -602,8 +603,11 @@ function countNewSegments(
  * intra-city hops (public red area, no track built).
  *
  * Collects multiple contiguous runs of new segments (separated by built edges,
- * ferry crossings, or intra-city hops) and returns the longest run that fits
- * within budget.
+ * ferry crossings, or intra-city hops).
+ *
+ * When `pickFirstRun` is true (targeted builds), returns the first valid run
+ * — the start of the optimal path to the target.
+ * When false (untargeted builds), returns the longest valid run.
  */
 function extractSegments(
   path: GridCoord[],
@@ -616,6 +620,7 @@ function extractSegments(
   ferryEdgeKeys: Set<string>,
   validColdStartKeys: Set<string>,
   majorCityLookup: Map<string, string>,
+  pickFirstRun: boolean = false,
 ): TrackSegment[] {
   // Collect all contiguous runs of new (buildable) segments.
   // Each run has a startKey: the grid coord we started building from.
@@ -716,6 +721,12 @@ function extractSegments(
     : runs.filter(r => connectedFromPath.has(r.startKey));
   if (validRuns.length === 0) return [];
 
+  if (pickFirstRun) {
+    // Targeted builds: first valid run is the start of the optimal path to target.
+    return validRuns[0].segments;
+  }
+
+  // Untargeted builds: longest valid run (most new segments within budget).
   let bestRun = validRuns[0];
   for (let i = 1; i < validRuns.length; i++) {
     if (validRuns[i].segments.length > bestRun.segments.length) {
