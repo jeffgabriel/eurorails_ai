@@ -1545,6 +1545,58 @@ export class ContextBuilder {
     return results.slice(0, MAX_RESULTS);
   }
 
+  /**
+   * JIRA-89: Build user prompt for the secondary delivery evaluation LLM call.
+   * Includes planned route, remaining demands (excluding primary), and near-route loads.
+   */
+  static serializeSecondaryDeliveryPrompt(
+    snapshot: WorldSnapshot,
+    routeStops: RouteStop[],
+    demands: DemandContext[],
+    enRoutePickups: EnRoutePickup[],
+  ): string {
+    const lines: string[] = [];
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Cash: ${snapshot.bot.money}M | Train: ${snapshot.bot.trainType} | Loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+
+    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    lines.push(`Cargo capacity: ${snapshot.bot.loads.length}/${capacity} (${capacity - snapshot.bot.loads.length} free slots)`);
+    lines.push('');
+
+    lines.push('PLANNED ROUTE:');
+    for (const stop of routeStops) {
+      lines.push(`  ${stop.action.toUpperCase()} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    lines.push('');
+
+    // Exclude demands already being fulfilled by the primary route
+    const primaryLoadTypes = new Set(routeStops.filter(s => s.action === 'pickup').map(s => s.loadType));
+    const remainingDemands = demands.filter(d => !primaryLoadTypes.has(d.loadType));
+
+    lines.push('YOUR OTHER DEMAND CARDS (not part of primary route):');
+    if (remainingDemands.length === 0) {
+      lines.push('  (none — all demands are part of the primary route)');
+    } else {
+      for (const d of remainingDemands) {
+        lines.push(`  ${d.loadType}: ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns)`);
+      }
+    }
+    lines.push('');
+
+    lines.push('AVAILABLE LOADS NEAR YOUR ROUTE:');
+    if (enRoutePickups.length === 0) {
+      lines.push('  (none found within scan radius)');
+    } else {
+      for (const p of enRoutePickups) {
+        lines.push(`  ${p.load} at ${p.city} → deliver to ${p.demandCity} (${p.payoff}M, ${p.onRoute ? 'ON ROUTE' : `${p.detourMileposts}mp detour`})`);
+      }
+    }
+    lines.push('');
+    lines.push('Should you add a secondary pickup to this route?');
+
+    return lines.join('\n');
+  }
+
   /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
   private static computeUpgradeAdvice(
     snapshot: WorldSnapshot,

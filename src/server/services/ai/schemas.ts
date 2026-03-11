@@ -97,6 +97,25 @@ export const ROUTE_SCHEMA = {
  *
  * Note: Anthropic requires additionalProperties: false on all object types.
  */
+/**
+ * JSON Schema for the secondary delivery evaluation response (JIRA-89).
+ * Lightweight schema: should the bot add a secondary pickup to its planned route?
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const SECONDARY_DELIVERY_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    action: { type: 'string' as const, enum: ['none', 'add_secondary'] },
+    reasoning: { type: 'string' as const },
+    pickupCity: { type: 'string' as const },
+    loadType: { type: 'string' as const },
+    deliveryCity: { type: 'string' as const },
+  },
+  required: ['action', 'reasoning'],
+};
+
 export const RE_EVAL_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,

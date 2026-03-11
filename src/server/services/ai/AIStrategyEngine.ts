@@ -35,10 +35,13 @@ import {
   LlmAttempt,
   TimelineStep,
   TurnPlanMoveTrain,
+  TRAIN_PROPERTIES,
+  TrainType,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
-import { gridToPixel } from './MapTopology';
+import { gridToPixel, loadGridPoints as loadGridPointsMap } from './MapTopology';
+import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 
@@ -82,6 +85,15 @@ export interface BotTurnResult {
   movementPath?: { row: number; col: number }[];
   // Structured action timeline for animated partial turn movements
   actionTimeline?: TimelineStep[];
+  // JIRA-89: Secondary delivery planning log
+  secondaryDelivery?: {
+    action: string;
+    reasoning: string;
+    pickupCity?: string;
+    loadType?: string;
+    deliveryCity?: string;
+    deadLoadsDropped?: string[];
+  };
 }
 
 export class AIStrategyEngine {
@@ -162,6 +174,7 @@ export class AIStrategyEngine {
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
       let previousRouteStops: RouteStop[] | null = null; // BE-010
+      let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -197,6 +210,73 @@ export class AIStrategyEngine {
         if (routeResult.route) {
           activeRoute = routeResult.route;
           console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
+
+          // ── JIRA-89: Dead load check + secondary delivery planning ──
+          const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+          const deadLoads = PlanExecutor.findDeadLoads(snapshot.bot.loads, snapshot.bot.resolvedDemands);
+          if (deadLoads.length > 0 && snapshot.bot.position) {
+            // Check if bot is at a city (can only drop at cities)
+            const gridPointsMap = loadGridPointsMap();
+            const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+            const botCity = gridPointsMap.get(posKey)?.name;
+            if (botCity) {
+              console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
+              secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
+            }
+          }
+
+          // Calculate effective cargo after potential dead load drops
+          const effectiveLoads = snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0);
+
+          // Secondary delivery: only if capacity available and not Easy bot
+          if (
+            effectiveLoads < trainCapacity &&
+            botConfig!.skillLevel !== BotSkillLevel.Easy &&
+            AIStrategyEngine.hasLLMApiKey(botConfig)
+          ) {
+            try {
+              const enRoutePickups = ContextBuilder.computeEnRoutePickups(snapshot, activeRoute.stops, gridPoints);
+              const userPrompt = ContextBuilder.serializeSecondaryDeliveryPrompt(snapshot, activeRoute.stops, context.demands, enRoutePickups);
+              const secondaryResult = await brain.findSecondaryDelivery(userPrompt, snapshot, context);
+
+              if (secondaryResult?.action === 'add_secondary' && secondaryResult.pickupCity && secondaryResult.loadType && secondaryResult.deliveryCity) {
+                console.log(`${tag} JIRA-89: Secondary delivery — pickup ${secondaryResult.loadType} at ${secondaryResult.pickupCity}, deliver to ${secondaryResult.deliveryCity}`);
+
+                // Insert pickup + deliver stops
+                const pickupStop: RouteStop = { action: 'pickup', loadType: secondaryResult.loadType, city: secondaryResult.pickupCity };
+                const deliverStop: RouteStop = { action: 'deliver', loadType: secondaryResult.loadType, city: secondaryResult.deliveryCity };
+                const combinedStops = [...activeRoute.stops, pickupStop, deliverStop];
+
+                // Reorder by proximity if bot has a position
+                if (snapshot.bot.position) {
+                  const gridPointsMap = loadGridPointsMap();
+                  activeRoute = {
+                    ...activeRoute,
+                    stops: RouteValidator.reorderStopsByProximity(combinedStops, snapshot.bot.position, gridPointsMap),
+                  };
+                } else {
+                  activeRoute = { ...activeRoute, stops: combinedStops };
+                }
+
+                console.log(`${tag} JIRA-89: Route amended with secondary delivery — ${activeRoute.stops.length} stops`);
+                secondaryDeliveryLog = {
+                  ...secondaryDeliveryLog,
+                  action: 'add_secondary',
+                  reasoning: secondaryResult.reasoning,
+                  pickupCity: secondaryResult.pickupCity,
+                  loadType: secondaryResult.loadType,
+                  deliveryCity: secondaryResult.deliveryCity,
+                };
+              } else {
+                console.log(`${tag} JIRA-89: No secondary delivery opportunity — ${secondaryResult?.reasoning ?? 'LLM returned null'}`);
+                if (!secondaryDeliveryLog) {
+                  secondaryDeliveryLog = { action: 'none', reasoning: secondaryResult?.reasoning ?? 'no opportunity' };
+                }
+              }
+            } catch (err) {
+              console.warn(`${tag} JIRA-89: Secondary delivery LLM call failed:`, err instanceof Error ? err.message : err);
+            }
+          }
 
           // Execute the first step of the new route
           const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
@@ -784,6 +864,7 @@ export class AIStrategyEngine {
         compositionTrace,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
+        secondaryDelivery: secondaryDeliveryLog,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

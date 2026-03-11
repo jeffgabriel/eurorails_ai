@@ -536,6 +536,27 @@ export class PlanExecutor {
     };
   }
 
+  // ── Dead Load Detection (JIRA-89) ───────────────────────────────────────
+
+  /**
+   * Find carried loads with no matching demand card (dead loads).
+   * A load is "dead" when no demand card requests that load type at any city.
+   * Pure heuristic — no LLM needed.
+   */
+  static findDeadLoads(
+    carriedLoads: string[],
+    resolvedDemands: Array<{ demands: Array<{ loadType: string }> }>,
+  ): string[] {
+    if (carriedLoads.length === 0) return [];
+
+    return carriedLoads.filter(loadType => {
+      const hasMatchingDemand = resolvedDemands.some(card =>
+        card.demands.some(d => d.loadType === loadType),
+      );
+      return !hasMatchingDemand;
+    });
+  }
+
   // ── Cargo Evaluation ──────────────────────────────────────────────────────
 
   /**

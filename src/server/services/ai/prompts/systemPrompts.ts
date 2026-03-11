@@ -293,6 +293,43 @@ export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
+// ── Secondary Delivery Prompt (JIRA-89) ──
+
+const SECONDARY_DELIVERY_SYSTEM_SUFFIX = `
+You are evaluating whether a bot can add a profitable SECONDARY pickup to its planned route.
+
+The bot just planned a primary delivery route. It has unused cargo capacity. Your job: check if any other demand card offers a load that can be picked up along (or near) the planned route with minimal detour.
+
+EVALUATION CRITERIA:
+1. The pickup city must be ON or NEAR the planned route (within 3 mileposts)
+2. A demand card must match the loadType + deliveryCity pair
+3. The load must be available at the pickup city
+4. Same-destination deliveries are ESPECIALLY valuable (deliver 2 loads in one stop)
+5. The detour cost (extra turns) must be justified by the payout
+6. Prefer loads where both pickup AND delivery are near the existing route
+
+RESPONSE FORMAT (JSON only, no markdown):
+{
+  "action": "none" | "add_secondary",
+  "reasoning": "Brief explanation",
+  "pickupCity": "city name (required if add_secondary)",
+  "loadType": "load type (required if add_secondary)",
+  "deliveryCity": "city name (required if add_secondary)"
+}
+
+Choose "none" if no secondary pickup is worth the detour.
+Choose "add_secondary" only if the opportunity clearly improves the trip.
+`;
+
+/**
+ * Get the system prompt for secondary delivery evaluation (JIRA-89).
+ *
+ * Lightweight prompt for evaluating whether a second load can be added to a planned route.
+ */
+export function getSecondaryDeliveryPrompt(): string {
+  return SECONDARY_DELIVERY_SYSTEM_SUFFIX;
+}
+
 // ── Route Re-evaluation Prompt (JIRA-64) ──
 
 const ROUTE_REEVAL_SYSTEM_SUFFIX = `

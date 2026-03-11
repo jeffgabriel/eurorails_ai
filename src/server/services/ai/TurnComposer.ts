@@ -678,7 +678,7 @@ export class TurnComposer {
   /**
    * Attempt to append a build step using the current (post-operation) budget.
    */
-  private static async tryAppendBuild(
+  static async tryAppendBuild(
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
