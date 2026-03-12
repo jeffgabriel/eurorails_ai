@@ -370,6 +370,30 @@ export class PlanExecutor {
       };
     }
 
+    // JIRA-101: Feasibility check — don't build toward a stop whose estimated
+    // track cost exceeds the bot's available cash. Demand scoring estimates can
+    // be wildly inaccurate (hex-distance heuristic), so this prevents the bot
+    // from draining all cash on an unaffordable route.
+    const matchingDemand = context.demands.find(d =>
+      (stop.action === 'pickup' && d.supplyCity === stop.city && d.loadType === stop.loadType) ||
+      (stop.action === 'deliver' && d.deliveryCity === stop.city && d.loadType === stop.loadType),
+    );
+    if (matchingDemand) {
+      const estimatedCost = stop.action === 'pickup'
+        ? matchingDemand.estimatedTrackCostToSupply
+        : matchingDemand.estimatedTrackCostToDelivery;
+      if (estimatedCost > snapshot.bot.money) {
+        console.warn(`${tag} JIRA-101: Build toward ${stop.city} blocked — estimated track cost $${estimatedCost}M exceeds cash $${snapshot.bot.money}M`);
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Route unaffordable: estimated $${estimatedCost}M track cost exceeds $${snapshot.bot.money}M cash`,
+        };
+      }
+    }
+
     const buildResult = await ActionResolver.resolve(
       { action: 'BUILD', details: { toward: stop.city }, reasoning: '', planHorizon: '' },
       snapshot, context, route.startingCity,

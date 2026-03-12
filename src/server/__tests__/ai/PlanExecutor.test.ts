@@ -212,6 +212,61 @@ describe('PlanExecutor', () => {
       expect(result.routeAbandoned).toBe(false);
       expect(result.updatedRoute.phase).toBe('build');
     });
+
+    it('JIRA-101: should abandon route when estimated track cost exceeds cash (pickup stop)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        demands: [{
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 60, estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const snapshot = makeSnapshot(); // money: 50
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(mockResolve).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD' }),
+        expect.anything(), expect.anything(), expect.anything(),
+      );
+    });
+
+    it('JIRA-101: should allow build when estimated track cost is within cash', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        demands: [{
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const snapshot = makeSnapshot(); // money: 50
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.routeAbandoned).toBe(false);
+    });
   });
 
   describe('Q2: Can I get there? — city ON network → MOVE', () => {
