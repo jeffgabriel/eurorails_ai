@@ -4111,6 +4111,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       return snapshot;
     }
 
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
     it('should mutate snapshot.bot.loads and log dead load drop at a city', async () => {
       const snapshot = setupWithRoute({}, ['Hops']);
 

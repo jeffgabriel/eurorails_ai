@@ -244,8 +244,8 @@ export class AIStrategyEngine {
             }
           }
 
-          // Calculate effective cargo after potential dead load drops
-          const effectiveLoads = snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0);
+          // Calculate effective cargo after potential dead load drops (snapshot already mutated by splice above)
+          const effectiveLoads = snapshot.bot.loads.length;
 
           // Secondary delivery: only if capacity available and not Easy bot
           if (
@@ -306,7 +306,7 @@ export class AIStrategyEngine {
             }
             return count;
           })();
-          const effectiveFreeSlots = trainCapacity - (snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0));
+          const effectiveFreeSlots = trainCapacity - snapshot.bot.loads.length;
 
           if (
             routePickupCount > effectiveFreeSlots &&
