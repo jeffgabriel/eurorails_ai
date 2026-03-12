@@ -1319,7 +1319,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // heuristicFallback returns a MOVE action for continuation
-      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }] };
+      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
       mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
@@ -3597,6 +3597,227 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockCapture.mock.calls.length).toBeGreaterThanOrEqual(2);
       // ContextBuilder.build called at least twice — initial + fresh post-delivery build
       expect(mockContextBuild.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // ── JIRA-100 fix: Post-delivery double BUILD ──────────────────────────
+  describe('JIRA-100: Post-delivery double BUILD prevention', () => {
+    /**
+     * Setup: Route completed mid-turn, Stage 3d re-plans with reclaimed movement.
+     * PlanExecutor+TurnComposer produce reCompSteps that may contain a BUILD.
+     * The fix ensures:
+     * 1. reCompSteps are applied to simState before tryAppendBuild
+     * 2. If reCompSteps already has BUILD, tryAppendBuild is skipped entirely
+     */
+    function setupPostDeliveryReplan(reCompStepsIncludeBuild: boolean) {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Wine', city: 'Warszawa', demandCardId: 1, payment: 12 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+        reasoning: 'Deliver wine',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        deliveryCount: 1,
+        totalEarnings: 20,
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: ['Wine'],
+        money: 46,
+      } as any);
+      const context = makeContext({
+        loads: ['Wine'],
+        money: 46,
+        demands: [{
+          cardIndex: 0, loadType: 'Marble', supplyCity: 'Firenze', deliveryCity: 'Lodz',
+          payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 3,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 4, efficiencyPerTurn: 0.8, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      // Post-delivery snapshot
+      const postSnap = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: [],
+        money: 46,
+      } as any);
+      const postContext = makeContext({
+        loads: [],
+        money: 46,
+        demands: context.demands,
+      });
+
+      let captureCallCount = 0;
+      mockCapture.mockImplementation(async () => {
+        captureCallCount++;
+        return captureCallCount === 1 ? snapshot : postSnap;
+      });
+      let contextBuildCallCount = 0;
+      mockContextBuild.mockImplementation(async () => {
+        contextBuildCallCount++;
+        return contextBuildCallCount === 1 ? context : postContext;
+      });
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue(context.demands);
+
+      // First PlanExecutor call: delivery (route complete)
+      // Second PlanExecutor call: Stage 3d re-execution with new route
+      let planExecCallCount = 0;
+      mockPlanExecutorExecute.mockImplementation(async () => {
+        planExecCallCount++;
+        if (planExecCallCount === 1) {
+          return {
+            plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Warszawa', cardId: 1, payout: 12 },
+            routeComplete: true,
+            routeAbandoned: false,
+            updatedRoute: route,
+            description: 'Delivering Wine',
+          };
+        }
+        // Second call: returns BUILD (unreachable stop) or MOVE depending on test scenario
+        if (reCompStepsIncludeBuild) {
+          return {
+            plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12, 5)], cost: 20, targetCity: 'Firenze' },
+            routeComplete: false,
+            routeAbandoned: false,
+            updatedRoute: undefined as unknown as StrategicRoute,
+            description: 'Building toward Firenze',
+          };
+        }
+        return {
+          plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], to: 'Firenze', fees: new Set<string>(), totalFee: 0 },
+          routeComplete: false,
+          routeAbandoned: false,
+          updatedRoute: undefined as unknown as StrategicRoute,
+          description: 'Moving toward Firenze',
+        };
+      });
+
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Warszawa', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 12, updatedMoney: 46, newCard: { id: 50, demands: [] },
+      });
+
+      // First TurnComposer.compose: delivery + heuristic MOVE (gives wasted movement for reclaim)
+      const heuristicPath = [
+        { row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 },
+        { row: 10, col: 13 }, { row: 10, col: 14 }, { row: 10, col: 15 },
+      ];
+      let composeCallCount = 0;
+      mockTurnComposerCompose.mockImplementation(async (plan: any) => {
+        composeCallCount++;
+        if (composeCallCount === 1) {
+          return { plan: {
+            type: 'MultiAction' as const,
+            steps: [
+              { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Warszawa', cardId: 1, payout: 12 },
+              { type: AIActionType.MoveTrain, path: heuristicPath, to: 'SomeCity', fees: new Set<string>(), totalFee: 0 },
+            ],
+          }, trace: {
+            inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad', 'MoveTrain'],
+            moveBudget: { total: 9, used: 9, wasted: 0 },
+            a1: { citiesScanned: 0, opportunitiesFound: 0 },
+            a2: { iterations: 1, terminationReason: 'budget exhausted' },
+            a3: { movePreprended: false },
+            build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
+            pickups: [], deliveries: [{ load: 'Wine', city: 'Warszawa' }],
+          } } as any;
+        }
+        // Second call: re-composition wraps the PlanExecutor result
+        if (reCompStepsIncludeBuild) {
+          return { plan, trace: {
+            inputPlan: ['BuildTrack'], outputPlan: ['BuildTrack'],
+            moveBudget: { total: 5, used: 0, wasted: 5 },
+            a1: { citiesScanned: 0, opportunitiesFound: 0 },
+            a2: { iterations: 0, terminationReason: '' },
+            a3: { movePreprended: false },
+            build: { target: 'Firenze', cost: 20, skipped: false, upgradeConsidered: false },
+            pickups: [], deliveries: [],
+          } };
+        }
+        return { plan, trace: {
+          inputPlan: ['MoveTrain'], outputPlan: ['MoveTrain'],
+          moveBudget: { total: 5, used: 1, wasted: 4 },
+          a1: { citiesScanned: 0, opportunitiesFound: 0 },
+          a2: { iterations: 0, terminationReason: '' },
+          a3: { movePreprended: false },
+          build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
+          pickups: [], deliveries: [],
+        } };
+      });
+
+      const newRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Marble', city: 'Firenze' }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 5,
+        reasoning: 'Pick up marble',
+      };
+      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
+        route: newRoute,
+        model: 'claude-haiku-4-5-20251001',
+        latencyMs: 200,
+        llmLog: [],
+      });
+      (LLMStrategyBrain as any).mockImplementation(() => ({
+        decideAction: jest.fn(),
+        planRoute: mockPlanRouteFn,
+        reEvaluateRoute: jest.fn(),
+      }));
+
+      return { route, newRoute };
+    }
+
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should skip tryAppendBuild when reCompSteps already contains a BuildTrack', async () => {
+      setupPostDeliveryReplan(true);
+      const mockTryAppendBuild = TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>;
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // tryAppendBuild should NOT have been called — reCompSteps already has BUILD
+      expect(mockTryAppendBuild).not.toHaveBeenCalled();
+    });
+
+    it('should call tryAppendBuild with updated sim state when reCompSteps has no BUILD', async () => {
+      setupPostDeliveryReplan(false);
+      const mockApplyPlanToState = ActionResolver.applyPlanToState as jest.MockedFunction<typeof ActionResolver.applyPlanToState>;
+      const mockTryAppendBuild = TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>;
+      mockTryAppendBuild.mockResolvedValue({
+        type: AIActionType.BuildTrack, segments: [makeSegment(10, 12, 10, 13, 5)], cost: 15, targetCity: 'Firenze',
+      } as any);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // applyPlanToState should have been called for the reCompSteps (MOVE step)
+      // It's also called for postDeliveryCoreSteps, so check it was called at least once more
+      expect(mockApplyPlanToState).toHaveBeenCalled();
+      // tryAppendBuild SHOULD have been called — no BUILD in reCompSteps
+      expect(mockTryAppendBuild).toHaveBeenCalled();
     });
   });
 

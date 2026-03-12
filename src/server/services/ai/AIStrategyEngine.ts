@@ -603,8 +603,15 @@ export class AIStrategyEngine {
               }
             }
 
+            // JIRA-100: Apply reCompSteps to sim state before build phase
+            for (const step of reCompSteps) {
+              ActionResolver.applyPlanToState(step, simSnapshot, simContext);
+            }
+
             // Re-compose build phase targeting the new route, replacing old build step
-            const reBuild = await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            // JIRA-100: Skip if reCompSteps already contains a BUILD (game rule: one build per turn)
+            const reCompHasBuild = reCompSteps.some(s => s.type === AIActionType.BuildTrack);
+            const reBuild = reCompHasBuild ? null : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
             if (reBuild) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
               decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, reBuild] };
