@@ -263,6 +263,25 @@ export class RouteValidator {
   ): void {
     let runningCash = snapshot.bot.money;
 
+    // JIRA-96: Defensive $0M gate — when bot has no cash, reject any stop
+    // requiring track building. The per-stop trackCost check below should
+    // catch this, but upstream estimatedTrackCost/isOnNetwork may be wrong.
+    if (runningCash < 1) {
+      for (const v of validations) {
+        if (!v.feasible) continue;
+        const stop = v.stop;
+        const demand = RouteValidator.findMatchingDemand(stop, context);
+        if (!demand) continue;
+        const needsTrack = stop.action === 'pickup'
+          ? !demand.isSupplyOnNetwork && demand.estimatedTrackCostToSupply > 0
+          : !demand.isDeliveryOnNetwork && demand.estimatedTrackCostToDelivery > 0;
+        if (needsTrack) {
+          v.feasible = false;
+          v.error = `Bot has ${runningCash}M — cannot afford track to ${stop.city}.`;
+        }
+      }
+    }
+
     for (const v of validations) {
       if (!v.feasible) continue; // already marked infeasible by per-stop checks
 
