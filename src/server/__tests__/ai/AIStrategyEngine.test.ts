@@ -1381,6 +1381,107 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(patch.activeRoute).toBeNull();
     });
 
+    it('JIRA-99: should preserve replacement route in memory when Stage 3d re-eval succeeds', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const oldRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Tourists', city: 'Torino', demandCardId: 1, payment: 19 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 5,
+        reasoning: 'Deliver tourists to Torino',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain,
+        activeRoute: oldRoute,
+        turnsOnRoute: 3,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 1,
+        totalEarnings: 19,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: ['Tourists'],
+      } as any);
+      const context = makeContext({ loads: ['Tourists'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns delivery + routeComplete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Tourists', city: 'Torino', cardId: 1, payout: 19 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Tourists to Torino',
+      });
+
+      // Stage 3d: LLM plans a replacement route
+      const newRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Tourists', city: 'Venezia', demandCardId: 3, payment: 15 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 8,
+        reasoning: 'Deliver remaining tourists to Venezia',
+      };
+      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
+        route: newRoute,
+        model: 'claude-haiku-4-5-20251001',
+        latencyMs: 200,
+        llmLog: [],
+      });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn, reEvaluateRoute: jest.fn() })) as any,
+      );
+
+      // Set up delivery execution mocks for JIRA-91 early execution
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Torino', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 19, updatedMoney: 69, newCard: { id: 50, demands: [] },
+      });
+      // rebuildDemands must include the new route's loadType so JIRA-64 stale-route
+      // check doesn't invalidate the replacement route.
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Tourists', supplyCity: 'Unknown', deliveryCity: 'Venezia',
+          payout: 15, isSupplyReachable: false, isDeliveryReachable: true,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
+          loadChipTotal: 2, loadChipCarried: 1, estimatedTurns: 1,
+          demandScore: 10, efficiencyPerTurn: 10, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ] as any[]);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Stage 3d should have called planRoute (routeWasCompleted path)
+      expect(mockPlanRouteFn).toHaveBeenCalled();
+
+      // JIRA-99: Memory should save the NEW replacement route, not null
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toEqual(newRoute);
+      expect(patch.turnsOnRoute).toBe(0);
+
+      // Old route should be logged as completed in routeHistory
+      expect(patch.routeHistory).toBeDefined();
+      expect(patch.routeHistory.length).toBe(1);
+      expect(patch.routeHistory[0].outcome).toBe('completed');
+      expect(patch.routeHistory[0].route).toEqual(oldRoute);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
     it('should not call heuristicFallback continuation when route was abandoned', async () => {
       const route: StrategicRoute = {
         stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],

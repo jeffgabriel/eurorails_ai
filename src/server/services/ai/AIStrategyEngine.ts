@@ -727,7 +727,9 @@ export class AIStrategyEngine {
       };
 
       // Update route state in memory
-      if (routeWasCompleted || routeWasAbandoned) {
+      // JIRA-99: When reEvalHandled is true, Stage 3d already set activeRoute to the
+      // replacement route (line 617). Don't clear it — let the else-if branch save it.
+      if ((routeWasCompleted || routeWasAbandoned) && !reEvalHandled) {
         const outcome = routeWasCompleted ? 'completed' : 'abandoned';
         const routeToLog = memory.activeRoute ?? activeRoute;
         if (routeToLog) {
@@ -743,6 +745,18 @@ export class AIStrategyEngine {
           }
         }
         memoryPatch.activeRoute = null;
+        memoryPatch.turnsOnRoute = 0;
+      } else if (reEvalHandled && activeRoute) {
+        // JIRA-99: Route completed but Stage 3d planned a replacement — log the old
+        // route as completed AND save the new replacement route.
+        const routeToLog = memory.activeRoute;
+        if (routeToLog) {
+          memoryPatch.routeHistory = [
+            ...(memory.routeHistory ?? []),
+            { route: routeToLog, outcome: 'completed', turns: memory.turnsOnRoute + 1 },
+          ];
+        }
+        memoryPatch.activeRoute = activeRoute;
         memoryPatch.turnsOnRoute = 0;
       } else if (activeRoute) {
         memoryPatch.activeRoute = activeRoute;
