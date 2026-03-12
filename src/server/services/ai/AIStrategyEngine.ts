@@ -522,7 +522,21 @@ export class AIStrategyEngine {
               console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
               logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
             } else {
-              console.warn(`${tag} JIRA-86: Post-delivery planRoute returned no route (${llmMs}ms) — all attempts rejected`);
+              // JIRA-103: Retry once with budget hint when all inner attempts failed
+              console.warn(`${tag} JIRA-103: Post-delivery planRoute returned no route (${llmMs}ms) — retrying with budget hint`);
+              const budgetHint = `Previous route plans were rejected for budget infeasibility. Prioritize routes where supply and delivery cities are on or near existing track. Available cash: ${freshSnap.bot.money}M. Avoid routes requiring expensive mountain/Alpine track construction.`;
+              const retryResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops, budgetHint);
+              const retryMs = Date.now() - llmStart - llmMs;
+              if (retryResult.llmLog?.length) {
+                decision.llmLog = [...(decision.llmLog ?? []), ...retryResult.llmLog];
+              }
+              if (retryResult.route) {
+                newRoute = retryResult.route;
+                console.log(`${tag} JIRA-103: Budget-hint retry succeeded: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${retryMs}ms)`);
+                logPhase('reeval', [], null, null, { llmReasoning: `budget-retry: ${newRoute.reasoning}`, llmLatencyMs: llmMs + retryMs });
+              } else {
+                console.warn(`${tag} JIRA-103: Budget-hint retry also failed (${retryMs}ms) — falling through to heuristic`);
+              }
             }
           } else {
             // Route still active — ask LLM whether to continue, amend, or abandon

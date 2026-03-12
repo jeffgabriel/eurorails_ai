@@ -971,6 +971,62 @@ describe('LLMStrategyBrain', () => {
     });
   });
 
+  // --- JIRA-103: budgetHint parameter ---
+  describe('planRoute — budgetHint parameter (JIRA-103)', () => {
+    const mockSerializeRoutePlanningPrompt = ContextBuilder.serializeRoutePlanningPrompt as jest.Mock;
+
+    const validRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Krakow' },
+        { action: 'deliver', loadType: 'Coal', city: 'Roma', payment: 29 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build' as const,
+      startingCity: 'Berlin',
+      createdAtTurn: 5,
+      reasoning: 'test route',
+    };
+
+    it('should prepend budgetHint to user prompt when provided', async () => {
+      mockSerializeRoutePlanningPrompt.mockReturnValue('base-route-prompt');
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue(validRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      const hint = 'Prioritize routes on existing track. Available cash: 30M.';
+      await brain.planRoute(makeSnapshot(), makeContext(), [], null, null, hint);
+
+      expect(mockChat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userPrompt: expect.stringContaining(hint),
+        }),
+      );
+      // budgetHint should appear before the base prompt
+      const actualPrompt = mockChat.mock.calls[0][0].userPrompt as string;
+      expect(actualPrompt.indexOf(hint)).toBeLessThan(actualPrompt.indexOf('base-route-prompt'));
+    });
+
+    it('should NOT modify user prompt when budgetHint is undefined', async () => {
+      mockSerializeRoutePlanningPrompt.mockReturnValue('base-route-prompt');
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue(validRoute);
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      const actualPrompt = mockChat.mock.calls[0][0].userPrompt as string;
+      expect(actualPrompt).toBe('base-route-prompt');
+    });
+  });
+
   describe('provider selection and model defaults', () => {
     it('should create GoogleAdapter when provider is Google', () => {
       const mockGoogleChat = jest.fn();

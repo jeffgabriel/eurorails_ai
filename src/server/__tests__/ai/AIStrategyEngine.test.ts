@@ -1533,6 +1533,227 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const lastEntry = patch.routeHistory[patch.routeHistory.length - 1];
       expect(lastEntry.outcome).toBe('abandoned');
     });
+
+    it('JIRA-103: should retry planRoute with budgetHint when first attempt returns null after delivery', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const oldRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 5,
+        reasoning: 'Deliver coal to Berlin',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 6,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: oldRoute,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns delivery + routeComplete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      // planRoute: first call returns null, second (retry) returns a route
+      const retryRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Steel', city: 'Warszawa', demandCardId: 2, payment: 20 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 6,
+        reasoning: 'Cheap nearby delivery',
+      };
+      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValueOnce({ route: null, llmLog: [{ attemptNumber: 1, status: 'validation_error', responseText: '', error: 'too expensive' }] })
+        .mockResolvedValueOnce({ route: retryRoute, model: 'claude-haiku-4-5-20251001', latencyMs: 150, llmLog: [{ attemptNumber: 1, status: 'success', responseText: '' }] });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn, reEvaluateRoute: jest.fn() })) as any,
+      );
+
+      // Set up delivery execution mocks for JIRA-91 early execution
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 25, updatedMoney: 75, newCard: { id: 50, demands: [] },
+      });
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Warszawa',
+          payout: 20, isSupplyReachable: false, isDeliveryReachable: true,
+          isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 2, loadChipCarried: 0, estimatedTurns: 2,
+          demandScore: 10, efficiencyPerTurn: 5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ] as any[]);
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // planRoute should have been called twice (original + retry)
+      expect(mockPlanRouteFn).toHaveBeenCalledTimes(2);
+
+      // Second call should include budgetHint (6th argument)
+      const retryArgs = mockPlanRouteFn.mock.calls[1];
+      expect(retryArgs[5]).toBeDefined();
+      expect(retryArgs[5]).toContain('budget infeasibility');
+      expect(retryArgs[5]).toContain('existing track');
+
+      // Memory should save the retry route
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toEqual(retryRoute);
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('JIRA-103: should fall through to heuristic when both planRoute attempts return null', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const oldRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 5,
+        reasoning: 'Deliver coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 6,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: oldRoute,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      // Both planRoute calls return null
+      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({ route: null, llmLog: [{ attemptNumber: 1, status: 'validation_error', responseText: '', error: 'all attempts failed' }] });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn, reEvaluateRoute: jest.fn() })) as any,
+      );
+
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 25, updatedMoney: 75, newCard: { id: 50, demands: [] },
+      });
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([] as any[]);
+
+      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // planRoute called twice (original + budget-hint retry)
+      expect(mockPlanRouteFn).toHaveBeenCalledTimes(2);
+
+      // heuristicFallback should have been called as final fallback
+      expect(mockHeuristicFallback).toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('JIRA-103: should NOT retry planRoute when route was abandoned (not completed)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 3,
+        reasoning: 'Pick up coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // Route abandoned, not completed
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: true,
+        updatedRoute: route,
+        description: 'Route abandoned',
+      });
+
+      // planRoute mock — should only be called if code incorrectly retries
+      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
+        .mockResolvedValue({ route: null, llmLog: [] });
+      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
+        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn, reEvaluateRoute: jest.fn() })) as any,
+      );
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // planRoute should NOT have been called (abandoned, not completed)
+      expect(mockPlanRouteFn).not.toHaveBeenCalled();
+
+      delete process.env.ANTHROPIC_API_KEY;
+    });
   });
 
   describe('JIRA-19: LLM metadata in BotTurnResult', () => {

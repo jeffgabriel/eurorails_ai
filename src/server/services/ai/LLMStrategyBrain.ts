@@ -265,6 +265,7 @@ export class LLMStrategyBrain {
     gridPoints: GridPoint[],
     lastAbandonedRouteKey?: string | null,
     previousRouteStops?: RouteStop[] | null, // BE-010
+    budgetHint?: string, // JIRA-103: optional cost constraint guidance for retry
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | { route: null; llmLog: LlmAttempt[] }> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
@@ -276,6 +277,11 @@ export class LLMStrategyBrain {
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
       let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
+
+      // JIRA-103: Prepend budget hint when provided (outer retry with cost guidance)
+      if (budgetHint) {
+        userPrompt = `${budgetHint}\n\n${userPrompt}`;
+      }
 
       if (lastError) {
         userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;
