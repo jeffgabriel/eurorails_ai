@@ -125,9 +125,9 @@ export class ActionResolver {
       return { success: false, error: `Target city "${targetCity}" not found on the map.` };
     }
 
-    const budget = ActionResolver.getBuildBudget(snapshot);
+    const budget = ActionResolver.getBuildBudget(snapshot, context.turnBuildCost);
     if (budget <= 0) {
-      return { success: false, error: `No budget available to build (money=${snapshot.bot.money}).` };
+      return { success: false, error: `No budget available to build (money=${snapshot.bot.money}, turnBuildCost=${context.turnBuildCost}).` };
     }
 
     // Determine start positions: track frontier for regular build,
@@ -1172,8 +1172,8 @@ export class ActionResolver {
   }
 
   /** Compute remaining build budget for this turn. */
-  private static getBuildBudget(snapshot: WorldSnapshot): number {
-    return Math.min(ActionResolver.TURN_BUILD_BUDGET, snapshot.bot.money);
+  private static getBuildBudget(snapshot: WorldSnapshot, turnBuildCost: number = 0): number {
+    return Math.min(ActionResolver.TURN_BUILD_BUDGET - turnBuildCost, snapshot.bot.money);
   }
 
   /**

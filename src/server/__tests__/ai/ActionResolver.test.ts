@@ -730,6 +730,68 @@ describe('ActionResolver', () => {
       expect(posKeys).toContain('10,11');
       expect(posKeys).toContain('11,10');
     });
+
+    // ─── JIRA-98: Build budget respects turnBuildCost ─────────────────────────
+
+    describe('JIRA-98: build budget respects turnBuildCost', () => {
+      beforeEach(() => {
+        setupGridPoints([{ row: 10, col: 10, name: 'Berlin' }]);
+      });
+
+      it('caps budget at 20 - turnBuildCost when money exceeds remaining cap', async () => {
+        const builtSegments = [makeSegment(5, 6, 6, 6)];
+        mockComputeBuildSegments.mockReturnValue(builtSegments);
+
+        const snapshot = makeWorldSnapshot({ bot: { money: 40 } as any });
+        const context = makeGameContext({ turnBuildCost: 10 });
+
+        const result = await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, context);
+
+        expect(result.success).toBe(true);
+        // computeBuildSegments should have been called with budget = min(20-10, 40) = 10
+        const budgetArg = mockComputeBuildSegments.mock.calls[0][2]; // 3rd arg is budget
+        expect(budgetArg).toBe(10);
+      });
+
+      it('returns full 20M budget when turnBuildCost is 0 (regression)', async () => {
+        const builtSegments = [makeSegment(5, 6, 6, 6)];
+        mockComputeBuildSegments.mockReturnValue(builtSegments);
+
+        const snapshot = makeWorldSnapshot({ bot: { money: 40 } as any });
+        const context = makeGameContext({ turnBuildCost: 0 });
+
+        const result = await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, context);
+
+        expect(result.success).toBe(true);
+        const budgetArg = mockComputeBuildSegments.mock.calls[0][2];
+        expect(budgetArg).toBe(20);
+      });
+
+      it('returns 0 budget (fails) when turnBuildCost exhausts cap', async () => {
+        const snapshot = makeWorldSnapshot({ bot: { money: 40 } as any });
+        const context = makeGameContext({ turnBuildCost: 20 });
+
+        const result = await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, context);
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('No budget available to build');
+      });
+
+      it('uses money as binding constraint when less than remaining cap', async () => {
+        const builtSegments = [makeSegment(5, 6, 6, 6)];
+        mockComputeBuildSegments.mockReturnValue(builtSegments);
+
+        const snapshot = makeWorldSnapshot({ bot: { money: 8 } as any });
+        const context = makeGameContext({ turnBuildCost: 5 });
+
+        const result = await ActionResolver.resolve(makeBuildIntent('Berlin'), snapshot, context);
+
+        expect(result.success).toBe(true);
+        // budget = min(20-5, 8) = min(15, 8) = 8
+        const budgetArg = mockComputeBuildSegments.mock.calls[0][2];
+        expect(budgetArg).toBe(8);
+      });
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
