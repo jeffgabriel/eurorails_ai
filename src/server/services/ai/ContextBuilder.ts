@@ -2239,6 +2239,10 @@ export class ContextBuilder {
     const cityPoints = gridPoints.filter(gp => gp.city?.name === cityName);
     if (cityPoints.length === 0) return 0;
 
+    // JIRA-102: Destination city milepost cost (added to fallback estimates)
+    // Major cities cost 5M, small/medium cities cost 3M to build into.
+    const cityCost = ContextBuilder.getDestinationCityCost(cityPoints[0]);
+
     if (segments.length === 0) {
       // Cold-start: if fromCity specified, estimate cost from that city
       // (used for delivery cost estimation from the supply city)
@@ -2262,8 +2266,8 @@ export class ContextBuilder {
           }
           if (minDist === Infinity || minDist <= 1) return 0;
           const pathCost = estimatePathCost(bestFrom.row, bestFrom.col, bestTo.row, bestTo.col);
-          // Fall back to conservative hex-distance estimate if Dijkstra can't find a path
-          return pathCost > 0 ? pathCost : Math.round(minDist * 2.0);
+          // JIRA-102: Fall back to conservative estimate with terrain multiplier + city cost
+          return pathCost > 0 ? pathCost : Math.round(minDist * 3.0) + cityCost;
         }
       }
 
@@ -2288,7 +2292,8 @@ export class ContextBuilder {
       }
       if (minDist === Infinity || minDist <= 1) return 0; // City IS a major city
       const pathCost2 = estimatePathCost(bestMajor.row, bestMajor.col, bestCity.row, bestCity.col);
-      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 3.0) + cityCost;
     }
 
     // Collect unique track endpoints for landmass detection
@@ -2341,7 +2346,8 @@ export class ContextBuilder {
       }
       if (minDist === Infinity) return 0;
       const sameLandCost = estimatePathCost(bestSeg.row, bestSeg.col, bestCity.row, bestCity.col);
-      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 3.0) + cityCost;
     }
 
     // Cross-water target — check ferry state
@@ -2366,7 +2372,8 @@ export class ContextBuilder {
       }
       if (minFarDist === Infinity) return 0;
       const ferryCrossCost = estimatePathCost(bestArrival.row, bestArrival.col, bestCity.row, bestCity.col);
-      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 3.0) + cityCost;
     }
 
     // Bot has no ferry access — estimate full route via best ferry
@@ -2385,7 +2392,8 @@ export class ContextBuilder {
         }
       }
       const overlandToDep = estimatePathCost(bestEp.row, bestEp.col, dep.row, dep.col);
-      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 2.0);
+      // JIRA-102: Conservative multiplier (no city cost — destination is a ferry port)
+      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 3.0);
 
       // Far-side cost from arrival port to target city (terrain-aware)
       let bestCp = cityPoints[0];
@@ -2398,7 +2406,8 @@ export class ContextBuilder {
         }
       }
       const overlandFromArr = estimatePathCost(arr.row, arr.col, bestCp.row, bestCp.col);
-      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 3.0) + cityCost;
 
       // Look up the ferry cost for this specific departure port
       let ferryCost = ferryInfo.cheapestFerryCost;
@@ -2423,10 +2432,25 @@ export class ContextBuilder {
           minDist = Math.min(minDist, d);
         }
       }
-      return Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return Math.round(minDist * 3.0) + cityCost;
     }
 
     return Math.round(bestTotal);
+  }
+
+  /**
+   * JIRA-102: Get the build cost of a destination city milepost.
+   * Major cities cost 5M, small/medium cities cost 3M.
+   * Used to improve fallback estimates when Dijkstra can't find a path.
+   */
+  private static getDestinationCityCost(cityPoint: GridPoint): number {
+    switch (cityPoint.terrain) {
+      case TerrainType.MajorCity: return 5;
+      case TerrainType.SmallCity:
+      case TerrainType.MediumCity: return 3;
+      default: return 0;
+    }
   }
 
   /**
