@@ -15,6 +15,7 @@
 
 import { TrackSegment } from '../../../shared/types/GameTypes';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { MajorCityCoordinate } from '../victoryService';
 
 /**
  * Count the number of major cities connected by a continuous track network.
@@ -66,6 +67,69 @@ export function getConnectedMajorCityCount(segments: TrackSegment[]): number {
   }
 
   return bestCityCount;
+}
+
+/**
+ * Get the major cities connected by a continuous track network, with details
+ * (name, row, col) needed by VictoryService.declareVictory().
+ *
+ * Returns cities from the largest connected component only.
+ */
+export function getConnectedMajorCities(segments: TrackSegment[]): MajorCityCoordinate[] {
+  if (segments.length === 0) return [];
+
+  const graph = buildTrackGraph(segments);
+  const cityGroups = getMajorCityGroups();
+
+  // Find all connected components
+  const allNodes = new Set(graph.keys());
+  const visited = new Set<string>();
+  const components: Set<string>[] = [];
+
+  for (const startKey of allNodes) {
+    if (!visited.has(startKey)) {
+      const component = bfs(graph, startKey);
+      component.forEach(node => visited.add(node));
+      components.push(component);
+    }
+  }
+
+  // Find the component with the most major cities
+  let bestComponent: Set<string> | null = null;
+  let bestCityCount = 0;
+
+  for (const component of components) {
+    let cityCount = 0;
+    for (const group of cityGroups) {
+      const allMileposts = [group.center, ...group.outposts];
+      for (const mp of allMileposts) {
+        if (component.has(`${mp.row},${mp.col}`)) {
+          cityCount++;
+          break;
+        }
+      }
+    }
+    if (cityCount > bestCityCount) {
+      bestCityCount = cityCount;
+      bestComponent = component;
+    }
+  }
+
+  if (!bestComponent) return [];
+
+  // Collect city details for cities in the best component
+  const cities: MajorCityCoordinate[] = [];
+  for (const group of cityGroups) {
+    const allMileposts = [group.center, ...group.outposts];
+    for (const mp of allMileposts) {
+      if (bestComponent.has(`${mp.row},${mp.col}`)) {
+        cities.push({ name: group.cityName, row: mp.row, col: mp.col });
+        break; // One representative per city
+      }
+    }
+  }
+
+  return cities;
 }
 
 /**
