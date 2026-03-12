@@ -623,9 +623,14 @@ export class AIStrategyEngine {
         }
 
         const continuation = await ActionResolver.heuristicFallback(simContext, simSnapshot);
-        if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn) {
+        // JIRA-97: Do not speculatively build track after route completion when LLM
+        // re-eval failed. Without a validated route, building wastes money on unvalidated targets.
+        const isBuildAction = continuation.plan?.type === AIActionType.BuildTrack;
+        if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn && !isBuildAction) {
           decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
           console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
+        } else if (isBuildAction) {
+          console.log(`${tag} JIRA-97: Blocked speculative BuildTrack from heuristic continuation (no validated route)`);
         }
       }
 

@@ -1221,7 +1221,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('route completion continuation (BE-003)', () => {
-    it('should chain BUILD from heuristicFallback after route completes', async () => {
+    it('JIRA-97: should NOT chain BUILD from heuristicFallback after route completes (no validated route)', async () => {
       const route: StrategicRoute = {
         stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
         currentStopIndex: 0,
@@ -1276,6 +1276,56 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(patch.activeRoute).toBeNull();
       expect(patch.routeHistory).toBeDefined();
       expect(patch.routeHistory[0].outcome).toBe('completed');
+    });
+
+    it('JIRA-97: should chain MOVE from heuristicFallback after route completes (non-build allowed)', async () => {
+      const route: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+        reasoning: 'Deliver coal',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+      } as any);
+      const context = makeContext({ loads: ['Coal'] });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor returns delivery + routeComplete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Delivered Coal to Berlin',
+      });
+
+      // heuristicFallback returns a MOVE action for continuation
+      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }] };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Should have called heuristicFallback for continuation
+      expect(mockHeuristicFallback).toHaveBeenCalled();
     });
 
     it('should not chain continuation when heuristicFallback fails', async () => {
