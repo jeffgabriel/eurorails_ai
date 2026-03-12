@@ -35,6 +35,7 @@ import {
   LlmAttempt,
   TimelineStep,
   TurnPlanMoveTrain,
+  TurnPlanDropLoad,
   TRAIN_PROPERTIES,
   TrainType,
 } from '../../../shared/types/GameTypes';
@@ -214,6 +215,7 @@ export class AIStrategyEngine {
           // ── JIRA-89: Dead load check + secondary delivery planning ──
           const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
           const deadLoads = PlanExecutor.findDeadLoads(snapshot.bot.loads, snapshot.bot.resolvedDemands);
+          const deadLoadDropPlans: TurnPlanDropLoad[] = [];
           if (deadLoads.length > 0 && snapshot.bot.position) {
             // Check if bot is at a city (can only drop at cities)
             const gridPointsMap = loadGridPointsMap();
@@ -221,6 +223,9 @@ export class AIStrategyEngine {
             const botCity = gridPointsMap.get(posKey)?.name;
             if (botCity) {
               console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
+              for (const load of deadLoads) {
+                deadLoadDropPlans.push({ type: AIActionType.DropLoad, load, city: botCity });
+              }
               secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
             }
           }
@@ -281,8 +286,16 @@ export class AIStrategyEngine {
           // Execute the first step of the new route
           const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
 
+          // JIRA-89: Prepend dead load drops to the route plan so they execute first
+          let routePlan: TurnPlan = execResult.plan;
+          if (deadLoadDropPlans.length > 0) {
+            const routeSteps = routePlan.type === 'MultiAction' ? routePlan.steps : [routePlan];
+            routePlan = { type: 'MultiAction' as const, steps: [...deadLoadDropPlans, ...routeSteps] };
+            console.log(`${tag} JIRA-89: Prepended ${deadLoadDropPlans.length} dead load drop(s) to route plan`);
+          }
+
           decision = {
-            plan: execResult.plan,
+            plan: routePlan,
             reasoning: `[route-planned] ${activeRoute.reasoning}. ${execResult.description}`,
             planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
             model: routeResult.model,
