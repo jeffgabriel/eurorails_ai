@@ -260,6 +260,24 @@ export class ActionResolver {
       const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
       speed = Math.ceil(rawSpeed / 2);
       console.log(`[Ferry] Crossing ${ferryCrossing.ferryName}: (${skipFerryPortKey}) → (${fromPosition.row},${fromPosition.col}) — half speed (${speed})`);
+
+      // After ferry teleportation, check if the bot landed at the target city.
+      // Dublin is both a Small City and a ferry endpoint — when the target IS the
+      // paired port, pathfinding from (24,10) to (24,10) returns an empty path
+      // which gets rejected. Instead, return a successful zero-length move.
+      const atTargetAfterFerry = targetPositions.some(
+        tp => tp.row === fromPosition.row && tp.col === fromPosition.col,
+      );
+      if (atTargetAfterFerry) {
+        console.log(`[Ferry] Bot arrived at ${targetCity} via ferry crossing — zero movement`);
+        const plan: TurnPlanMoveTrain = {
+          type: AIActionType.MoveTrain,
+          path: [fromPosition],
+          fees: new Set<string>(),
+          totalFee: 0,
+        };
+        return { success: true, plan };
+      }
     }
 
     // Try each target milepost (major cities have multiple), pick the shortest valid path

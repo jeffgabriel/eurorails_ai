@@ -2086,7 +2086,7 @@ describe('TurnComposer', () => {
           isSupplyOnNetwork: true, isLoadOnTrain: false,
           estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
           isLoadAvailable: true, ferryRequired: false,
-          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
           demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as any[],
       });
@@ -2142,7 +2142,7 @@ describe('TurnComposer', () => {
           isSupplyOnNetwork: true, isLoadOnTrain: false,
           estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 20,
           isLoadAvailable: true, ferryRequired: false,
-          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
           demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         }] as any[],
       });
@@ -2163,6 +2163,124 @@ describe('TurnComposer', () => {
       const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
 
       // No pickup should be proposed
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(0);
+      } else {
+        expect(result.type).toBe(AIActionType.MoveTrain);
+      }
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Rejected infeasible opportunistic pickup'),
+      );
+
+      warnSpy.mockRestore();
+    });
+
+    it('JIRA-87: allows opportunistic pickup when delivery is achievable within 2 turns', async () => {
+      // Coal→Paris: delivery NOT on network, track cost exceeds money,
+      // BUT estimatedTurns=2 — within relaxed feasibility window (current + 1 turn)
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          money: 15,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        money: 15,
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isDeliveryOnNetwork: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 2,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, (plan as any).load];
+        }
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+      });
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
+
+      // Pickup SHOULD be proposed — estimatedTurns=2 passes the relaxed gate
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBe(1);
+      }
+    });
+
+    it('JIRA-87: rejects opportunistic pickup when delivery requires more than 2 turns and cost is infeasible', async () => {
+      // Coal→Paris: delivery NOT on network, track cost exceeds money,
+      // AND estimatedTurns=5 — beyond relaxed feasibility window
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          money: 15,
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Paris', loadType: 'Coal', payment: 25 }] },
+          ],
+        },
+        loadAvailability: { Berlin: ['Coal'] },
+      });
+      const context = makeContext({
+        capacity: 2,
+        money: 15,
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isDeliveryOnNetwork: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: true, isLoadOnTrain: false,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 30,
+          isLoadAvailable: true, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 10, col: 20 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['10,20', { row: 10, col: 20, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+      ]));
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context);
+
+      // Pickup should NOT be proposed — estimatedTurns=5 exceeds the 2-turn window
       if (result.type === 'MultiAction') {
         const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
         expect(pickupSteps.length).toBe(0);

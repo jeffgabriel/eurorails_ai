@@ -34,10 +34,15 @@ import {
   GameContext,
   LlmAttempt,
   TimelineStep,
+  TurnPlanMoveTrain,
+  TurnPlanDropLoad,
+  TRAIN_PROPERTIES,
+  TrainType,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
-import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
-import { gridToPixel } from './MapTopology';
+import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { gridToPixel, loadGridPoints as loadGridPointsMap } from './MapTopology';
+import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 
@@ -60,7 +65,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>;
   // JIRA-32: Strategic context and composition trace for NDJSON game log
   gamePhase?: string;
   cash?: number;
@@ -81,6 +86,15 @@ export interface BotTurnResult {
   movementPath?: { row: number; col: number }[];
   // Structured action timeline for animated partial turn movements
   actionTimeline?: TimelineStep[];
+  // JIRA-89: Secondary delivery planning log
+  secondaryDelivery?: {
+    action: string;
+    reasoning: string;
+    pickupCity?: string;
+    loadType?: string;
+    deliveryCity?: string;
+    deadLoadsDropped?: string[];
+  };
 }
 
 export class AIStrategyEngine {
@@ -126,6 +140,13 @@ export class AIStrategyEngine {
       // JIRA-60: Inject delivery count from memory for upgrade advice gating
       context.deliveryCount = memory.deliveryCount ?? 0;
 
+      // JIRA-87: Inject en-route pickup opportunities from active route
+      if (memory.activeRoute?.stops) {
+        context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
+          snapshot, memory.activeRoute.stops, gridPoints,
+        );
+      }
+
       // Inject previous turn summary from memory for LLM context continuity
       if (memory.lastReasoning || memory.lastPlanHorizon) {
         const parts: string[] = [];
@@ -154,6 +175,7 @@ export class AIStrategyEngine {
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
       let previousRouteStops: RouteStop[] | null = null; // BE-010
+      let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -190,11 +212,90 @@ export class AIStrategyEngine {
           activeRoute = routeResult.route;
           console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
 
+          // ── JIRA-89: Dead load check + secondary delivery planning ──
+          const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+          const deadLoads = PlanExecutor.findDeadLoads(snapshot.bot.loads, snapshot.bot.resolvedDemands);
+          const deadLoadDropPlans: TurnPlanDropLoad[] = [];
+          if (deadLoads.length > 0 && snapshot.bot.position) {
+            // Check if bot is at a city (can only drop at cities)
+            const gridPointsMap = loadGridPointsMap();
+            const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+            const botCity = gridPointsMap.get(posKey)?.name;
+            if (botCity) {
+              console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
+              for (const load of deadLoads) {
+                deadLoadDropPlans.push({ type: AIActionType.DropLoad, load, city: botCity });
+              }
+              secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
+            }
+          }
+
+          // Calculate effective cargo after potential dead load drops
+          const effectiveLoads = snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0);
+
+          // Secondary delivery: only if capacity available and not Easy bot
+          if (
+            effectiveLoads < trainCapacity &&
+            botConfig!.skillLevel !== BotSkillLevel.Easy &&
+            AIStrategyEngine.hasLLMApiKey(botConfig)
+          ) {
+            try {
+              const enRoutePickups = ContextBuilder.computeEnRoutePickups(snapshot, activeRoute.stops, gridPoints);
+              const userPrompt = ContextBuilder.serializeSecondaryDeliveryPrompt(snapshot, activeRoute.stops, context.demands, enRoutePickups);
+              const secondaryResult = await brain.findSecondaryDelivery(userPrompt, snapshot, context);
+
+              if (secondaryResult?.action === 'add_secondary' && secondaryResult.pickupCity && secondaryResult.loadType && secondaryResult.deliveryCity) {
+                console.log(`${tag} JIRA-89: Secondary delivery — pickup ${secondaryResult.loadType} at ${secondaryResult.pickupCity}, deliver to ${secondaryResult.deliveryCity}`);
+
+                // Insert pickup + deliver stops
+                const pickupStop: RouteStop = { action: 'pickup', loadType: secondaryResult.loadType, city: secondaryResult.pickupCity };
+                const deliverStop: RouteStop = { action: 'deliver', loadType: secondaryResult.loadType, city: secondaryResult.deliveryCity };
+                const combinedStops = [...activeRoute.stops, pickupStop, deliverStop];
+
+                // Reorder by proximity if bot has a position
+                if (snapshot.bot.position) {
+                  const gridPointsMap = loadGridPointsMap();
+                  activeRoute = {
+                    ...activeRoute,
+                    stops: RouteValidator.reorderStopsByProximity(combinedStops, snapshot.bot.position, gridPointsMap),
+                  };
+                } else {
+                  activeRoute = { ...activeRoute, stops: combinedStops };
+                }
+
+                console.log(`${tag} JIRA-89: Route amended with secondary delivery — ${activeRoute.stops.length} stops`);
+                secondaryDeliveryLog = {
+                  ...secondaryDeliveryLog,
+                  action: 'add_secondary',
+                  reasoning: secondaryResult.reasoning,
+                  pickupCity: secondaryResult.pickupCity,
+                  loadType: secondaryResult.loadType,
+                  deliveryCity: secondaryResult.deliveryCity,
+                };
+              } else {
+                console.log(`${tag} JIRA-89: No secondary delivery opportunity — ${secondaryResult?.reasoning ?? 'LLM returned null'}`);
+                if (!secondaryDeliveryLog) {
+                  secondaryDeliveryLog = { action: 'none', reasoning: secondaryResult?.reasoning ?? 'no opportunity' };
+                }
+              }
+            } catch (err) {
+              console.warn(`${tag} JIRA-89: Secondary delivery LLM call failed:`, err instanceof Error ? err.message : err);
+            }
+          }
+
           // Execute the first step of the new route
           const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
 
+          // JIRA-89: Prepend dead load drops to the route plan so they execute first
+          let routePlan: TurnPlan = execResult.plan;
+          if (deadLoadDropPlans.length > 0) {
+            const routeSteps = routePlan.type === 'MultiAction' ? routePlan.steps : [routePlan];
+            routePlan = { type: 'MultiAction' as const, steps: [...deadLoadDropPlans, ...routeSteps] };
+            console.log(`${tag} JIRA-89: Prepended ${deadLoadDropPlans.length} dead load drop(s) to route plan`);
+          }
+
           decision = {
-            plan: execResult.plan,
+            plan: routePlan,
             reasoning: `[route-planned] ${activeRoute.reasoning}. ${execResult.description}`,
             planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
             model: routeResult.model,
@@ -311,75 +412,154 @@ export class AIStrategyEngine {
         activeRoute = null;
       }
 
-      // ── Stage 3d: JIRA-83 Post-composition LLM re-eval for same-turn A2 movement ──
-      // When A2 terminated with "no valid target" after a delivery, call LLM to re-evaluate
-      // the route. If re-eval provides a new/amended route, re-compose with remaining budget.
+      // ── Stage 3d: Post-delivery LLM call ──
+      // After any delivery, the bot has a new demand card and needs strategic direction
+      // for both remaining movement AND build targeting.
+      // JIRA-86: Route completed → call planRoute() for a fresh strategy (not reEvaluateRoute,
+      // which asks about a dead route). Route still active → call reEvaluateRoute().
       let reEvalHandled = false;
+      let earlyExecutedSteps: TurnPlan[] = [];
       const hasQueuedDelivery = composedSteps.filter(s => s.type === AIActionType.DeliverLoad).length > 1;
       if (
         hasDelivery
         && !hasQueuedDelivery
-        && compositionTrace.a2?.terminationReason === 'no valid target'
-        && compositionTrace.moveBudget?.wasted > 0
         && AIStrategyEngine.hasLLMApiKey(botConfig)
       ) {
-        const routeForReEval = preDeliveryRoute ?? activeRoute;
-        if (routeForReEval) {
-          try {
-            // Refresh demands before re-eval (delivery drew a new card)
-            const freshSnap = await capture(gameId, botPlayerId);
-            const freshDemands = ContextBuilder.rebuildDemands(freshSnap, gridPoints);
-            const reEvalContext = { ...context, demands: freshDemands };
-
-            const brain = AIStrategyEngine.createBrain(botConfig!);
-            const reEvalStart = Date.now();
-            const reEvalResult = await brain.reEvaluateRoute(snapshot, reEvalContext, routeForReEval, gridPoints);
-            const reEvalMs = Date.now() - reEvalStart;
-
-            if (reEvalResult) {
-              console.log(`${tag} JIRA-83: Post-composition re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${reEvalMs}ms)`);
-              logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: reEvalMs });
-
-              let newRoute: StrategicRoute | null = null;
-              if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
-                newRoute = { ...routeForReEval, stops: reEvalResult.amendedStops, currentStopIndex: 0 };
-              } else if (reEvalResult.decision === 'continue') {
-                newRoute = routeForReEval;
-              }
-              // abandon or null → keep existing plan as-is
-
-              if (newRoute) {
-                // Simulate current plan to get post-execution state
-                const simSnapshot = ActionResolver.cloneSnapshot(snapshot);
-                const simContext = { ...reEvalContext, speed: compositionTrace.moveBudget.wasted };
-                const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
-                for (const step of planSteps) {
-                  ActionResolver.applyPlanToState(step, simSnapshot, simContext);
-                }
-
-                // Execute route step with remaining budget, then compose for A2 enrichment
-                const routeExec = await PlanExecutor.execute(newRoute, simSnapshot, simContext);
-                if (routeExec.plan.type !== AIActionType.PassTurn) {
-                  const reComposition = await TurnComposer.compose(routeExec.plan, simSnapshot, simContext, newRoute);
-                  const reCompSteps = reComposition.plan.type === 'MultiAction'
-                    ? reComposition.plan.steps : [reComposition.plan];
-                  decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, ...reCompSteps] };
-
-                  compositionTrace.a2.terminationReason = `re-eval(${reEvalResult.decision}) → ${reComposition.trace.a2.terminationReason}`;
-                  compositionTrace.moveBudget.wasted = reComposition.trace.moveBudget.wasted;
-
-                  console.log(`${tag} JIRA-83: Re-composed with ${reCompSteps.length} additional steps after re-eval`);
-                }
-
-                activeRoute = newRoute;
-                reEvalHandled = true;
-              }
-            } else {
-              console.log(`${tag} JIRA-83: Re-evaluation returned null, keeping existing plan (${Date.now() - reEvalStart}ms)`);
+        try {
+          // JIRA-91: Execute delivery steps (everything through last DeliverLoad) against DB
+          // before the LLM call so capture() returns real post-delivery state with new demand card.
+          const lastDelivIdx = (() => {
+            for (let i = composedSteps.length - 1; i >= 0; i--) {
+              if (composedSteps[i].type === AIActionType.DeliverLoad) return i;
             }
-          } catch (err) {
-            console.warn(`${tag} JIRA-83: Post-composition re-eval error, keeping existing plan:`, err instanceof Error ? err.message : err);
+            return -1;
+          })();
+          earlyExecutedSteps = composedSteps.slice(0, lastDelivIdx + 1);
+          await TurnExecutor.executePlan(
+            { type: 'MultiAction' as const, steps: earlyExecutedSteps },
+            ActionResolver.cloneSnapshot(snapshot),
+          );
+          console.log(`${tag} JIRA-91: Early-executed ${earlyExecutedSteps.length} delivery steps`);
+
+          // Now capture() returns real DB state with new demand card, updated money, correct loads
+          const freshSnap = await capture(gameId, botPlayerId);
+          const freshContext = await ContextBuilder.build(freshSnap, skillLevel, gridPoints);
+          const brain = AIStrategyEngine.createBrain(botConfig!);
+          const llmStart = Date.now();
+
+          let newRoute: StrategicRoute | null = null;
+
+          if (routeWasCompleted) {
+            // Route is done — ask LLM for a brand new strategic plan
+            console.log(`${tag} JIRA-86: Route completed after delivery — calling planRoute() for fresh strategy`);
+            const routeResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
+            const llmMs = Date.now() - llmStart;
+            // Thread llmLog from post-delivery planRoute into decision for NDJSON observability
+            if (routeResult.llmLog?.length) {
+              decision.llmLog = [...(decision.llmLog ?? []), ...routeResult.llmLog];
+            }
+            if (routeResult.route) {
+              newRoute = routeResult.route;
+              console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
+              logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
+            } else {
+              console.warn(`${tag} JIRA-86: Post-delivery planRoute returned no route (${llmMs}ms) — all attempts rejected`);
+            }
+          } else {
+            // Route still active — ask LLM whether to continue, amend, or abandon
+            const routeForReEval = preDeliveryRoute ?? activeRoute;
+            if (routeForReEval) {
+              const reEvalResult = await brain.reEvaluateRoute(freshSnap, freshContext, routeForReEval, gridPoints);
+              const llmMs = Date.now() - llmStart;
+
+              if (reEvalResult) {
+                console.log(`${tag} JIRA-86: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${llmMs}ms)`);
+                logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: llmMs });
+
+                if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
+                  newRoute = { ...routeForReEval, stops: reEvalResult.amendedStops, currentStopIndex: 0 };
+                } else if (reEvalResult.decision === 'continue') {
+                  newRoute = routeForReEval;
+                }
+                // abandon or null → keep existing plan as-is
+              } else {
+                console.log(`${tag} JIRA-86: Re-evaluation returned null, keeping existing plan (${Date.now() - llmStart}ms)`);
+              }
+            }
           }
+
+          if (newRoute) {
+            const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+            let wastedMovement = compositionTrace.moveBudget?.wasted ?? 0;
+
+            // JIRA-90: When route completed, A2 heuristic continuations consumed movement
+            // that should be redirected toward the new LLM-planned route. Strip post-delivery
+            // A2 steps and reclaim their movement budget.
+            let coreSteps = planSteps;
+            if (routeWasCompleted) {
+              const lastDeliveryIdx = (() => {
+                for (let i = planSteps.length - 1; i >= 0; i--) {
+                  if (planSteps[i].type === AIActionType.DeliverLoad) return i;
+                }
+                return -1;
+              })();
+              if (lastDeliveryIdx >= 0 && lastDeliveryIdx < planSteps.length - 1) {
+                const postDeliverySteps = planSteps.slice(lastDeliveryIdx + 1);
+                // Calculate movement used by post-delivery heuristic steps
+                const majorCityLookup = getMajorCityLookup();
+                let reclaimedMovement = 0;
+                for (const step of postDeliverySteps) {
+                  if (step.type === AIActionType.MoveTrain) {
+                    reclaimedMovement += computeEffectivePathLength((step as TurnPlanMoveTrain).path, majorCityLookup);
+                  }
+                }
+                if (reclaimedMovement > 0) {
+                  coreSteps = planSteps.slice(0, lastDeliveryIdx + 1);
+                  wastedMovement += reclaimedMovement;
+                  console.log(`${tag} JIRA-90: Reclaimed ${reclaimedMovement}mp from ${postDeliverySteps.length} A2 heuristic steps for LLM-guided replanning`);
+                }
+              }
+            }
+
+            // JIRA-91: Simulate remaining core steps against fresh post-delivery state.
+            // Delivery steps are already executed against DB, so skip them in simulation.
+            const postDeliveryCoreSteps = coreSteps.slice(earlyExecutedSteps.length);
+            const simSnapshot = ActionResolver.cloneSnapshot(freshSnap);
+            const simContext = { ...freshContext, speed: wastedMovement };
+            for (const step of postDeliveryCoreSteps) {
+              ActionResolver.applyPlanToState(step, simSnapshot, simContext);
+            }
+
+            // Execute route step with remaining movement (if any)
+            let reCompSteps: typeof planSteps = [];
+            if (wastedMovement > 0) {
+              const routeExec = await PlanExecutor.execute(newRoute, simSnapshot, simContext);
+              if (routeExec.plan.type !== AIActionType.PassTurn) {
+                const reComposition = await TurnComposer.compose(routeExec.plan, simSnapshot, simContext, newRoute);
+                reCompSteps = reComposition.plan.type === 'MultiAction'
+                  ? reComposition.plan.steps : [reComposition.plan];
+
+                compositionTrace.a2.terminationReason = `re-eval → ${reComposition.trace.a2.terminationReason}`;
+                compositionTrace.moveBudget.wasted = reComposition.trace.moveBudget.wasted;
+              }
+            }
+
+            // Re-compose build phase targeting the new route, replacing old build step
+            const reBuild = await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            if (reBuild) {
+              const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
+              decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, reBuild] };
+              console.log(`${tag} JIRA-90: Re-targeted build phase toward ${(reBuild as any).targetCity ?? 'new route'}`);
+            } else if (reCompSteps.length > 0) {
+              decision.plan = { type: 'MultiAction' as const, steps: [...coreSteps, ...reCompSteps] };
+            }
+
+            console.log(`${tag} JIRA-90: Post-delivery re-composed with ${reCompSteps.length} movement steps + build retarget (reclaimed ${wastedMovement}mp)`);
+            activeRoute = newRoute;
+            reEvalHandled = true;
+          }
+        } catch (err) {
+          console.warn(`${tag} JIRA-86: Post-delivery LLM call error, keeping existing plan:`, err instanceof Error ? err.message : err);
         }
       }
 
@@ -400,6 +580,19 @@ export class AIStrategyEngine {
           decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
           console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
         }
+      }
+
+      // JIRA-91: Strip delivery steps that were already executed against DB in Stage 3d.
+      // These steps must not be re-executed in Stage 5 or checked by guardrails.
+      if (earlyExecutedSteps.length > 0) {
+        const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        const remainingSteps = planSteps.slice(earlyExecutedSteps.length);
+        decision.plan = remainingSteps.length === 0
+          ? { type: AIActionType.PassTurn as const }
+          : remainingSteps.length === 1
+            ? remainingSteps[0]
+            : { type: 'MultiAction' as const, steps: remainingSteps };
+        console.log(`${tag} JIRA-91: Stripped ${earlyExecutedSteps.length} early-executed delivery steps from plan, ${remainingSteps.length} steps remain`);
       }
 
       // ── Stage 4: Apply guardrails ──
@@ -636,6 +829,7 @@ export class AIStrategyEngine {
             estimatedTurns: d.estimatedTurns,
             trackCostToSupply: d.estimatedTrackCostToSupply,
             trackCostToDelivery: d.estimatedTrackCostToDelivery,
+            ferryRequired: d.ferryRequired,
           };
         });
 
@@ -717,6 +911,7 @@ export class AIStrategyEngine {
         compositionTrace,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
+        secondaryDelivery: secondaryDeliveryLog,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

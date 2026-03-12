@@ -635,19 +635,20 @@ export class DebugOverlay {
     return html;
   }
 
-  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>, playerColor: string): string {
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>, playerColor: string): string {
     const rows = ranking.map(d => {
       const rowColor = d.rank === 1 ? playerColor : d.score < 0 ? '#f87171' : '#e5e7eb';
       const turns = d.estimatedTurns != null ? `${d.estimatedTurns}` : '—';
       const totalBuildCost = (d.trackCostToSupply ?? 0) + (d.trackCostToDelivery ?? 0);
       const buildDisplay = totalBuildCost > 0 ? `${totalBuildCost}M` : '0';
-      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;">${buildDisplay}</td><td style="padding:2px 8px;text-align:right;">${turns}</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score.toFixed(2)}</td></tr>`;
+      const ferryIcon = d.ferryRequired ? '\u26F4' : '';
+      return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;">${buildDisplay}</td><td style="padding:2px 8px;text-align:right;">${turns}</td><td style="padding:2px 4px;text-align:center;">${ferryIcon}</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score.toFixed(2)}</td></tr>`;
     }).join('');
     return `
       <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid ${playerColor};">
         <div style="color:${playerColor};font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
         <table style="font-size:13px;border-collapse:collapse;width:100%;">
-          <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Build</th><th style="text-align:right;padding:2px 8px;">Turns</th><th style="text-align:right;padding:2px 8px;">Score</th></tr>
+          <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Build</th><th style="text-align:right;padding:2px 8px;">Turns</th><th style="text-align:center;padding:2px 4px;">F</th><th style="text-align:right;padding:2px 8px;">Score</th></tr>
           ${rows}
         </table>
       </div>

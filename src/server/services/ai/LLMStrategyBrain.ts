@@ -28,13 +28,22 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt } from './prompts/systemPrompts';
+import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt, getSecondaryDeliveryPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
-import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA } from './schemas';
+import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA, SECONDARY_DELIVERY_SCHEMA } from './schemas';
+
+/** JIRA-89: Result of secondary delivery evaluation */
+export interface SecondaryDeliveryResult {
+  action: 'none' | 'add_secondary';
+  reasoning: string;
+  pickupCity?: string;
+  loadType?: string;
+  deliveryCity?: string;
+}
 
 /** JIRA-64: Result of post-delivery route re-evaluation */
 export interface ReEvalResult {
@@ -493,6 +502,90 @@ export class LLMStrategyBrain {
 
     // All attempts failed — return null (caller treats as "continue")
     console.warn('[LLMStrategyBrain] reEvaluateRoute: all attempts failed, returning null');
+    return null;
+  }
+
+  /**
+   * JIRA-89: Evaluate whether a secondary pickup can be added to the planned route.
+   *
+   * Lightweight LLM call: no thinking, temperature=0, 1024 max tokens, 8s timeout.
+   * Returns null on failure (graceful degradation — original route preserved).
+   */
+  async findSecondaryDelivery(
+    userPrompt: string,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<SecondaryDeliveryResult | null> {
+    const systemPrompt = getSecondaryDeliveryPrompt();
+    const MAX_RETRIES = 1;
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const promptWithError = lastError
+        ? `${userPrompt}\n\nYOUR PREVIOUS RESPONSE FAILED VALIDATION:\n${lastError}\nPlease provide a corrected response.`
+        : userPrompt;
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: 1024,
+          temperature: 0,
+          systemPrompt,
+          userPrompt: promptWithError,
+          outputSchema: SECONDARY_DELIVERY_SCHEMA,
+          timeoutMs: 8000,
+        });
+
+        const parsed = JSON.parse(response.text);
+        const action = parsed.action;
+
+        if (!['none', 'add_secondary'].includes(action)) {
+          lastError = `Invalid action: ${action}. Must be "none" or "add_secondary".`;
+          continue;
+        }
+
+        if (action === 'add_secondary') {
+          // Validate required fields
+          if (!parsed.pickupCity || !parsed.loadType || !parsed.deliveryCity) {
+            console.warn('[LLMStrategyBrain] findSecondaryDelivery: add_secondary missing required fields, treating as none');
+            return { action: 'none', reasoning: 'LLM returned add_secondary without required fields' };
+          }
+
+          // Validate load is available at the pickup city
+          const availableLoads = snapshot.loadAvailability?.[parsed.pickupCity] ?? [];
+          if (!availableLoads.includes(parsed.loadType)) {
+            console.warn(`[LLMStrategyBrain] findSecondaryDelivery: ${parsed.loadType} not available at ${parsed.pickupCity}, treating as none`);
+            return { action: 'none', reasoning: `${parsed.loadType} not available at ${parsed.pickupCity}` };
+          }
+
+          // Validate a demand card matches the loadType + deliveryCity
+          const hasMatchingDemand = snapshot.bot.resolvedDemands.some(card =>
+            card.demands.some(d =>
+              d.loadType === parsed.loadType &&
+              d.city.toLowerCase() === parsed.deliveryCity.toLowerCase(),
+            ),
+          );
+          if (!hasMatchingDemand) {
+            console.warn(`[LLMStrategyBrain] findSecondaryDelivery: no demand card for ${parsed.loadType} → ${parsed.deliveryCity}, treating as none`);
+            return { action: 'none', reasoning: `No demand card for ${parsed.loadType} → ${parsed.deliveryCity}` };
+          }
+        }
+
+        return {
+          action,
+          reasoning: parsed.reasoning ?? '',
+          pickupCity: parsed.pickupCity,
+          loadType: parsed.loadType,
+          deliveryCity: parsed.deliveryCity,
+        };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[LLMStrategyBrain] findSecondaryDelivery attempt ${attempt + 1} failed: ${errMsg}`);
+        lastError = errMsg;
+      }
+    }
+
+    console.warn('[LLMStrategyBrain] findSecondaryDelivery: all attempts failed, returning null');
     return null;
   }
 

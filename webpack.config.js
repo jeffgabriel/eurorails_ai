@@ -53,7 +53,12 @@ module.exports = {
       },
       {
         test: /\.css$/,
+        exclude: /lobby\/index\.css$/,
         use: ['style-loader', 'css-loader', 'postcss-loader'],
+      },
+      {
+        test: /lobby\/index\.css$/,
+        use: ['style-loader', 'css-loader'],
       },
       {
         test: /\.(png|svg|jpg|jpeg|gif)$/i,
@@ -93,6 +98,14 @@ module.exports = {
     compress: true,
     port: 3000,
     hot: true,
+    client: {
+      overlay: {
+        runtimeErrors: (error) => {
+          if (error?.message?.includes('ResizeObserver loop')) return false;
+          return true;
+        },
+      },
+    },
     liveReload: true,
     watchFiles: ['src/**/*'],
     historyApiFallback: {

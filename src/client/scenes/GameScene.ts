@@ -637,6 +637,12 @@ export class GameScene extends Phaser.Scene {
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
+        // Guard: clean up any stale listeners from a prior create() call
+        // that wasn't paired with a full shutdown() (e.g. scene re-entry)
+        this.socketUnsubDebugAny?.();
+        this.socketUnsubBotToast?.();
+        this.socketUnsubBotTurnComplete?.();
+
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);

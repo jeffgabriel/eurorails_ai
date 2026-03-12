@@ -74,6 +74,16 @@ export interface GameTurnLogEntry {
   guardrailOverride?: boolean;
   guardrailReason?: string;
 
+  // JIRA-89: Secondary delivery planning
+  secondaryDelivery?: {
+    action: string;
+    reasoning: string;
+    pickupCity?: string;
+    loadType?: string;
+    deliveryCity?: string;
+    deadLoadsDropped?: string[];
+  };
+
   // Execution Results
   success: boolean;
   error?: string;

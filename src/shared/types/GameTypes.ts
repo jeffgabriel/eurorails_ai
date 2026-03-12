@@ -686,6 +686,16 @@ export interface PickupOpportunity {
     bestDeliveryCity: string;
 }
 
+/** En-route pickup opportunity near the bot's planned route */
+export interface EnRoutePickup {
+    city: string;
+    load: string;
+    demandCity: string;
+    payoff: number;
+    detourMileposts: number;
+    onRoute: boolean;
+}
+
 /** Filtered opponent info included in LLM context (skill-level dependent) */
 export interface OpponentContext {
     name: string;
@@ -728,6 +738,8 @@ export interface GameContext {
     upgradeAdvice?: string;
     /** Number of completed deliveries this game (JIRA-60) */
     deliveryCount?: number;
+    /** En-route pickup opportunities near the bot's planned route (JIRA-87) */
+    enRoutePickups?: EnRoutePickup[];
 }
 
 /** A single action within an LLM multi-action response */

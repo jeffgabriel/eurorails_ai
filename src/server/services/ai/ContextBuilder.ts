@@ -21,6 +21,7 @@ import {
   GridPoint,
   TerrainType,
   RouteStop,
+  EnRoutePickup,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
@@ -637,7 +638,12 @@ export class ContextBuilder {
         }
       }
     }
-    const estimatedTurns = buildTurns + travelTurns + 1;
+    // JIRA-88: Add ferry penalty — each crossing costs ~2 turns
+    // (1 turn mandatory stop at port + ~1 turn half-rate movement)
+    const ferryCrossings = ferryRequired
+      ? ContextBuilder.countFerryCrossings(supplyCity, deliveryCity, gridPoints)
+      : 0;
+    const estimatedTurns = buildTurns + travelTurns + (ferryCrossings * 2) + 1;
 
     // 10. Build affordability check (BE-001) — moved before scoring for JIRA-51
     const affordability = ContextBuilder.isBuildAffordable(
@@ -907,6 +913,16 @@ export class ContextBuilder {
       lines.push(`REMINDER: Use ALL ${context.speed} movement points each turn. Stopping early wastes your turn. Loading/unloading costs ZERO movement.`);
     }
     lines.push('');
+
+    // ── EN-ROUTE PICKUPS (JIRA-87) ──
+    if (context.enRoutePickups && context.enRoutePickups.length > 0) {
+      lines.push('EN-ROUTE PICKUPS (near your route):');
+      for (const p of context.enRoutePickups) {
+        const detour = p.onRoute ? 'on route' : `${p.detourMileposts} mp detour`;
+        lines.push(`- ${p.city}: ${p.load} → ${p.demandCity} ${p.payoff}M (${detour})`);
+      }
+      lines.push('');
+    }
 
     // ── CITIES REACHABLE ──
     if (context.reachableCities.length > 0) {
@@ -1438,6 +1454,147 @@ export class ContextBuilder {
     }
 
     return opportunities;
+  }
+
+  /**
+   * Scan cities within 3 hex distance of the bot's route stops for loads
+   * matching demand cards. Returns top 5 opportunities sorted by net value.
+   * Called post-build from AIStrategyEngine and injected into context.
+   */
+  static computeEnRoutePickups(
+    snapshot: WorldSnapshot,
+    routeStops: RouteStop[],
+    gridPoints: GridPoint[],
+  ): EnRoutePickup[] {
+    if (!routeStops || routeStops.length === 0) return [];
+    if (snapshot.gameStatus === 'initialBuild') return [];
+
+    const SCAN_RADIUS = 3;
+    const MAX_RESULTS = 5;
+
+    // Build lookup: city name → grid coordinates
+    const cityCoords = new Map<string, { row: number; col: number }>();
+    for (const gp of gridPoints) {
+      if (gp.city?.name && !cityCoords.has(gp.city.name)) {
+        cityCoords.set(gp.city.name, { row: gp.row, col: gp.col });
+      }
+    }
+
+    // Collect route stop coordinates
+    const routeCoordsList: Array<{ row: number; col: number }> = [];
+    const routeCityNames = new Set<string>();
+    for (const stop of routeStops) {
+      const coord = cityCoords.get(stop.city);
+      if (coord) {
+        routeCoordsList.push(coord);
+        routeCityNames.add(stop.city);
+      }
+    }
+    if (routeCoordsList.length === 0) return [];
+
+    // Build set of demanded load types → { demandCity, payoff }
+    const demandMap = new Map<string, { demandCity: string; payoff: number }>();
+    for (const resolved of snapshot.bot.resolvedDemands) {
+      for (const demand of resolved.demands) {
+        const existing = demandMap.get(demand.loadType);
+        if (!existing || demand.payment > existing.payoff) {
+          demandMap.set(demand.loadType, {
+            demandCity: demand.city,
+            payoff: demand.payment,
+          });
+        }
+      }
+    }
+    if (demandMap.size === 0) return [];
+
+    // Scan all cities within SCAN_RADIUS of any route stop
+    const results: EnRoutePickup[] = [];
+    const seenCityLoad = new Set<string>();
+
+    for (const [cityName, coord] of cityCoords) {
+      let minDist = Infinity;
+      for (const routeCoord of routeCoordsList) {
+        const dist = hexDistance(coord.row, coord.col, routeCoord.row, routeCoord.col);
+        if (dist < minDist) minDist = dist;
+      }
+      if (minDist > SCAN_RADIUS) continue;
+
+      const availableLoads = snapshot.loadAvailability?.[cityName] ?? [];
+      for (const loadType of availableLoads) {
+        const key = `${cityName}:${loadType}`;
+        if (seenCityLoad.has(key)) continue;
+        seenCityLoad.add(key);
+
+        if (snapshot.bot.loads.includes(loadType)) continue;
+
+        const demand = demandMap.get(loadType);
+        if (!demand) continue;
+
+        results.push({
+          city: cityName,
+          load: loadType,
+          demandCity: demand.demandCity,
+          payoff: demand.payoff,
+          detourMileposts: minDist,
+          onRoute: routeCityNames.has(cityName) || minDist === 0,
+        });
+      }
+    }
+
+    results.sort((a, b) => (b.payoff - b.detourMileposts) - (a.payoff - a.detourMileposts));
+    return results.slice(0, MAX_RESULTS);
+  }
+
+  /**
+   * JIRA-89: Build user prompt for the secondary delivery evaluation LLM call.
+   * Includes planned route, remaining demands (excluding primary), and near-route loads.
+   */
+  static serializeSecondaryDeliveryPrompt(
+    snapshot: WorldSnapshot,
+    routeStops: RouteStop[],
+    demands: DemandContext[],
+    enRoutePickups: EnRoutePickup[],
+  ): string {
+    const lines: string[] = [];
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Cash: ${snapshot.bot.money}M | Train: ${snapshot.bot.trainType} | Loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+
+    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    lines.push(`Cargo capacity: ${snapshot.bot.loads.length}/${capacity} (${capacity - snapshot.bot.loads.length} free slots)`);
+    lines.push('');
+
+    lines.push('PLANNED ROUTE:');
+    for (const stop of routeStops) {
+      lines.push(`  ${stop.action.toUpperCase()} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    lines.push('');
+
+    // Exclude demands already being fulfilled by the primary route
+    const primaryLoadTypes = new Set(routeStops.filter(s => s.action === 'pickup').map(s => s.loadType));
+    const remainingDemands = demands.filter(d => !primaryLoadTypes.has(d.loadType));
+
+    lines.push('YOUR OTHER DEMAND CARDS (not part of primary route):');
+    if (remainingDemands.length === 0) {
+      lines.push('  (none — all demands are part of the primary route)');
+    } else {
+      for (const d of remainingDemands) {
+        lines.push(`  ${d.loadType}: ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns)`);
+      }
+    }
+    lines.push('');
+
+    lines.push('AVAILABLE LOADS NEAR YOUR ROUTE:');
+    if (enRoutePickups.length === 0) {
+      lines.push('  (none found within scan radius)');
+    } else {
+      for (const p of enRoutePickups) {
+        lines.push(`  ${p.load} at ${p.city} → deliver to ${p.demandCity} (${p.payoff}M, ${p.onRoute ? 'ON ROUTE' : `${p.detourMileposts}mp detour`})`);
+      }
+    }
+    lines.push('');
+    lines.push('Should you add a secondary pickup to this route?');
+
+    return lines.join('\n');
   }
 
   /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
@@ -2254,6 +2411,57 @@ export class ContextBuilder {
     }
 
     return false;
+  }
+
+  /**
+   * Count the number of distinct water barrier crossings between supply and delivery.
+   * Groups ferries by barrier (English Channel vs Irish Sea) so that multiple
+   * Channel ferry options count as a single crossing.
+   * Belfast (from continent): 2 crossings (Channel + Irish Sea).
+   * Dublin (from Britain): 1 crossing (Irish Sea).
+   * Continent to Britain: 1 crossing (Channel).
+   */
+  private static countFerryCrossings(
+    supplyCity: string | null,
+    deliveryCity: string,
+    gridPoints: GridPoint[],
+  ): number {
+    if (!supplyCity) return 0;
+
+    const CHANNEL_FERRIES = new Set([
+      'Plymouth_Cherbourg', 'Portsmouth_LeHavre', 'Dover_Calais', 'Harwich_Ijmuiden',
+    ]);
+    const IRISH_SEA_FERRIES = new Set([
+      'Belfast_Stranraer', 'Dublin_Liverpool',
+    ]);
+
+    const ferryEdges = getFerryEdges();
+    const barrierFerries = ferryEdges.filter(
+      f => CHANNEL_FERRIES.has(f.name) || IRISH_SEA_FERRIES.has(f.name),
+    );
+    if (barrierFerries.length === 0) return 0;
+
+    const supplyPos = gridPoints.find(gp => gp.city?.name === supplyCity);
+    const deliveryPos = gridPoints.find(gp => gp.city?.name === deliveryCity);
+    if (!supplyPos || !deliveryPos) return 0;
+
+    let channelCrossed = false;
+    let irishSeaCrossed = false;
+    for (const ferry of barrierFerries) {
+      const supplyToA = hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
+      const supplyToB = hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
+      const deliveryToA = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
+      const deliveryToB = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
+
+      const supplyCloserToA = supplyToA < supplyToB;
+      const deliveryCloserToA = deliveryToA < deliveryToB;
+      if (supplyCloserToA !== deliveryCloserToA) {
+        if (CHANNEL_FERRIES.has(ferry.name)) channelCrossed = true;
+        if (IRISH_SEA_FERRIES.has(ferry.name)) irishSeaCrossed = true;
+      }
+    }
+
+    return (channelCrossed ? 1 : 0) + (irishSeaCrossed ? 1 : 0);
   }
 
   // ── Corridor detection (BE-002, BE-003) ─────────────────────────────────

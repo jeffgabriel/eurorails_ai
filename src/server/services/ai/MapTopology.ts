@@ -8,7 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
-import type { FerryEdge } from '../../../shared/services/majorCityGroups';
+import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
 /** Parsed grid point from gridPoints.json */
@@ -33,6 +33,25 @@ const GRID_MARGIN = 120;
 
 // ── Cache ──────────────────────────────────────────────────────────────
 let gridPointsCache: Map<string, GridPointData> | null = null;
+
+// Ferry port lookup: "row,col" → array of { pairedRow, pairedCol, cost }
+let ferryPortCache: Map<string, Array<{ row: number; col: number; cost: number }>> | null = null;
+
+/** Load ferry edges into a port-indexed lookup map. Cached after first call. */
+function loadFerryPorts(): Map<string, Array<{ row: number; col: number; cost: number }>> {
+  if (ferryPortCache) return ferryPortCache;
+  ferryPortCache = new Map();
+  const edges = getFerryEdges();
+  for (const edge of edges) {
+    const keyA = makeKey(edge.pointA.row, edge.pointA.col);
+    const keyB = makeKey(edge.pointB.row, edge.pointB.col);
+    if (!ferryPortCache.has(keyA)) ferryPortCache.set(keyA, []);
+    if (!ferryPortCache.has(keyB)) ferryPortCache.set(keyB, []);
+    ferryPortCache.get(keyA)!.push({ row: edge.pointB.row, col: edge.pointB.col, cost: edge.cost });
+    ferryPortCache.get(keyB)!.push({ row: edge.pointA.row, col: edge.pointA.col, cost: edge.cost });
+  }
+  return ferryPortCache;
+}
 
 export function makeKey(row: number, col: number): string {
   return `${row},${col}`;
@@ -338,8 +357,11 @@ class CostHeap {
 
 /**
  * Estimate the minimum terrain-aware build cost between two hex positions.
- * Uses Dijkstra's algorithm over the actual hex grid with real terrain costs
- * and water crossing surcharges. Returns cost in ECU millions.
+ * Uses Dijkstra's algorithm over the actual hex grid with real terrain costs,
+ * water crossing surcharges, and ferry port build costs. Returns cost in ECU millions.
+ *
+ * Ferry ports are traversed as virtual edges: when Dijkstra visits a ferry port,
+ * the paired port on the other side is added as a neighbor with cost = ferry build cost.
  *
  * Returns 0 if source equals target or target is unreachable.
  */
@@ -353,6 +375,7 @@ export function estimatePathCost(
   const targetKey = makeKey(toRow, toCol);
   if (!grid.has(targetKey)) return 0;
 
+  const ferryPorts = loadFerryPorts();
   const visited = new Map<string, number>();
   const heap = new CostHeap();
   const startKey = makeKey(fromRow, fromCol);
@@ -368,6 +391,7 @@ export function estimatePathCost(
     // Skip if we've already found a cheaper path to this node
     if (current.cost > (visited.get(currentKey) ?? Infinity)) continue;
 
+    // Enumerate hex neighbors
     for (const nb of getHexNeighbors(current.row, current.col)) {
       const nbData = grid.get(makeKey(nb.row, nb.col));
       if (!nbData) continue;
@@ -384,6 +408,19 @@ export function estimatePathCost(
         heap.push({ row: nb.row, col: nb.col, cost: newCost });
       }
     }
+
+    // JIRA-88: Traverse ferry edges from ferry port nodes
+    const ferryDestinations = ferryPorts.get(currentKey);
+    if (ferryDestinations) {
+      for (const dest of ferryDestinations) {
+        const destKey = makeKey(dest.row, dest.col);
+        const ferryCost = current.cost + dest.cost;
+        if (ferryCost < (visited.get(destKey) ?? Infinity)) {
+          visited.set(destKey, ferryCost);
+          heap.push({ row: dest.row, col: dest.col, cost: ferryCost });
+        }
+      }
+    }
   }
 
   return 0; // Target unreachable
@@ -393,6 +430,9 @@ export function estimatePathCost(
  * Estimate the minimum hop count (milepost edges) between two hex positions.
  * Uses BFS over the actual hex grid — unlike hexDistance() which returns
  * straight-line Chebyshev distance ignoring map topology.
+ *
+ * Ferry ports are traversed as virtual edges (hop cost = 1) so that
+ * cross-water routes (Belfast, Dublin) return valid hop counts.
  *
  * Returns 0 if source equals target or target is unreachable.
  */
@@ -407,6 +447,7 @@ export function estimateHopDistance(
   const targetKey = makeKey(toRow, toCol);
   if (!grid.has(startKey) || !grid.has(targetKey)) return 0;
 
+  const ferryPorts = loadFerryPorts();
   const visited = new Set<string>();
   visited.add(startKey);
   const queue: Array<{ key: string; hops: number }> = [{ key: startKey, hops: 0 }];
@@ -429,6 +470,19 @@ export function estimateHopDistance(
         queue.push({ key: nbKey, hops: hops + 1 });
       }
     }
+
+    // JIRA-88: Traverse ferry edges from ferry port nodes
+    const ferryDestinations = ferryPorts.get(key);
+    if (ferryDestinations) {
+      for (const dest of ferryDestinations) {
+        const destKey = makeKey(dest.row, dest.col);
+        if (destKey === targetKey) return hops + 1;
+        if (!visited.has(destKey)) {
+          visited.add(destKey);
+          queue.push({ key: destKey, hops: hops + 1 });
+        }
+      }
+    }
   }
 
   return 0; // Target unreachable
@@ -437,4 +491,5 @@ export function estimateHopDistance(
 /** Reset the cache (for testing). */
 export function _resetCache(): void {
   gridPointsCache = null;
+  ferryPortCache = null;
 }
