@@ -1352,4 +1352,63 @@ describe('PlanExecutor', () => {
       expect(PlanExecutor.findDemandBuildTarget(context)).toBe('Roma');
     });
   });
+
+  // ── JIRA-95: Broke bot route abandonment ────────────────────────────────
+
+  describe('JIRA-95: Broke bot abandons route instead of passing forever', () => {
+    it('should abandon route when broke at resolveBuild (canBuild false, money 0)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 0;
+      const context = makeContext({ citiesOnNetwork: [], canBuild: false, money: 0 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(result.routeComplete).toBe(false);
+      expect(result.description).toContain('Broke');
+      expect(result.description).toContain('abandoning route');
+    });
+
+    it('should NOT abandon route when non-broke at resolveBuild (canBuild false, money 5)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 5;
+      const context = makeContext({ citiesOnNetwork: [], canBuild: false, money: 5 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.routeComplete).toBe(false);
+    });
+
+    it('should abandon route when broke at executeInitialBuild (canBuild false, money 0)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 0;
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: false, money: 0 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(result.routeComplete).toBe(false);
+      expect(result.description).toContain('Broke');
+    });
+
+    it('should NOT abandon route when non-broke at executeInitialBuild (canBuild false, money 10)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 10;
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: false, money: 10 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.routeComplete).toBe(false);
+    });
+  });
 });

@@ -147,6 +147,17 @@ export class PlanExecutor {
 
     // Current stop city needs track — build toward it
     if (!context.canBuild) {
+      // JIRA-95: If broke, abandon route instead of waiting forever.
+      // At $0M with no income source, the build budget will never replenish.
+      if (snapshot.bot.money < 1) {
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Broke ($${snapshot.bot.money}M) and cannot build — abandoning route to allow discard.`,
+        };
+      }
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
@@ -339,6 +350,17 @@ export class PlanExecutor {
     }
 
     if (!context.canBuild) {
+      // JIRA-95: If broke, abandon route instead of waiting forever.
+      // At $0M with no income source, the build budget will never replenish.
+      if (snapshot.bot.money < 1) {
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Broke ($${snapshot.bot.money}M) and cannot build — abandoning route to allow discard.`,
+        };
+      }
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
