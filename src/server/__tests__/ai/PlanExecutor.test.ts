@@ -894,6 +894,81 @@ describe('PlanExecutor', () => {
 
       expect(result.currentStopIndex).toBe(5);
     });
+
+    // JIRA-104: Same-load-type multi-pickup tests
+    it('should NOT skip second pickup of same load type when train has only 1 instance', () => {
+      const route = makeRoute({
+        currentStopIndex: 1,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Flowers', city: 'Krakow', demandCardId: 2, payment: 20 },
+        ],
+      });
+      // Train has 1 Flowers from first pickup, now at stop 1 (second pickup)
+      const context = makeContext({ loads: ['Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Should NOT skip — only 1 Flowers on train but 1 same-type pickup already before this index
+      expect(result.currentStopIndex).toBe(1);
+    });
+
+    it('should skip both pickups when train has 2 instances of same load type', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train already has 2 Flowers
+      const context = makeContext({ loads: ['Flowers', 'Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Both pickups should be skipped (2 on train covers both stops)
+      expect(result.currentStopIndex).toBe(2);
+    });
+
+    it('should skip first pickup but not second when train has 1 instance (starting from stop 0)', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train has 1 Flowers — covers first pickup but not second
+      const context = makeContext({ loads: ['Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // First pickup skipped (1 on train > 0 prior), second NOT skipped (1 on train == 1 prior)
+      expect(result.currentStopIndex).toBe(1);
+    });
+
+    it('should handle mixed load types correctly with same-type pickups', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train has Coal + 1 Flowers
+      const context = makeContext({ loads: ['Coal', 'Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Coal pickup skipped, first Flowers pickup skipped, second Flowers pickup NOT skipped
+      expect(result.currentStopIndex).toBe(2);
+    });
   });
 
   describe('deliver-before-build (FR-8)', () => {

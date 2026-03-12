@@ -671,9 +671,14 @@ export class PlanExecutor {
       const stop = route.stops[idx];
 
       if (stop.action === 'pickup') {
-        // Pickup is complete if the load type is already on the train
-        if (context.loads.includes(stop.loadType)) {
-          console.log(`[PlanExecutor] Skipping completed pickup: ${stop.loadType} at ${stop.city} (already on train)`);
+        // JIRA-104: Count-aware pickup check — don't skip if train doesn't have
+        // enough instances to cover all same-type pickup stops up to and including this index
+        const loadsOnTrain = context.loads.filter(l => l === stop.loadType).length;
+        const sameTypePickupsUpToHere = route.stops
+          .slice(0, idx + 1)
+          .filter(s => s.action === 'pickup' && s.loadType === stop.loadType).length;
+        if (loadsOnTrain >= sameTypePickupsUpToHere) {
+          console.log(`[PlanExecutor] Skipping completed pickup: ${stop.loadType} at ${stop.city} (${loadsOnTrain} on train, ${sameTypePickupsUpToHere} pickups up to here)`);
           idx++;
           continue;
         }
