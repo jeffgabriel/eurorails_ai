@@ -670,7 +670,7 @@ export class ContextBuilder {
     return {
       cardIndex,
       loadType,
-      supplyCity: supplyCity ?? 'Unknown',
+      supplyCity: supplyCity ?? 'OnTrain',
       deliveryCity,
       payout: demand.payment,
       isSupplyReachable,

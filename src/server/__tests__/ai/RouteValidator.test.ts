@@ -510,4 +510,33 @@ describe('RouteValidator', () => {
       expect(result.errors).toHaveLength(0);
     });
   });
+
+  // JIRA-107: "OnTrain" sentinel prevents phantom pickup stops
+  describe('JIRA-107: OnTrain sentinel', () => {
+    it('should reject pickup at a city that does not match any demand supplyCity', () => {
+      // LLM hallucinates pickup(Fish@SomeCity) but the only Fish demand has supplyCity "OnTrain"
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Fish', city: 'Hamburg' },
+          { action: 'deliver', loadType: 'Fish', city: 'Berlin', demandCardId: 1, payment: 20 },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({
+            loadType: 'Fish',
+            supplyCity: 'OnTrain',
+            deliveryCity: 'Berlin',
+            isLoadOnTrain: true,
+          }),
+        ],
+      });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+      // The pickup stop should be pruned — Hamburg doesn't match "OnTrain"
+      // Route may be invalid if pruning leaves no viable delivery path
+      const errors = result.errors ?? [];
+      const hasPickupMismatchError = errors.some(e => e.includes('not a known supply city'));
+      expect(hasPickupMismatchError).toBe(true);
+    });
+  });
 });

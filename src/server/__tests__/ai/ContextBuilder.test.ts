@@ -2900,7 +2900,7 @@ describe('ContextBuilder.build — JIRA-82: no supply cities without load on tra
 
     expect(demand).toBeDefined();
     expect(demand!.isLoadOnTrain).toBe(true);
-    expect(demand!.supplyCity).toBe('Unknown');
+    expect(demand!.supplyCity).toBe('OnTrain');
     expect(demand!.demandScore).not.toBe(-999);
   });
 });
