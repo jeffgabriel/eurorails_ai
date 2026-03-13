@@ -135,28 +135,7 @@ export class PlanExecutor {
           };
         }
       }
-      // All route stops reachable — build toward demand cities with remaining budget
-      if (context.canBuild) {
-        // Build toward demand card cities with remaining budget
-        const demandTarget = PlanExecutor.findDemandBuildTarget(context);
-        if (demandTarget) {
-          console.log(`${tag} All route stops reachable, building toward demand city ${demandTarget}`);
-          const buildResult = await ActionResolver.resolve(
-            { action: 'BUILD', details: { toward: demandTarget }, reasoning: '', planHorizon: '' },
-            snapshot, context, route.startingCity,
-          );
-          if (buildResult.success && buildResult.plan) {
-            return {
-              plan: buildResult.plan,
-              routeComplete: false,
-              routeAbandoned: false,
-              updatedRoute: { ...route, phase: 'build' },
-              description: `${tag} Building toward demand city ${demandTarget} (all route stops reachable)`,
-            };
-          }
-        }
-      }
-      // Nothing to build
+      // All route stops reachable — nothing to build
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
@@ -168,6 +147,17 @@ export class PlanExecutor {
 
     // Current stop city needs track — build toward it
     if (!context.canBuild) {
+      // JIRA-95: If broke, abandon route instead of waiting forever.
+      // At $0M with no income source, the build budget will never replenish.
+      if (snapshot.bot.money < 1) {
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Broke ($${snapshot.bot.money}M) and cannot build — abandoning route to allow discard.`,
+        };
+      }
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
@@ -360,6 +350,17 @@ export class PlanExecutor {
     }
 
     if (!context.canBuild) {
+      // JIRA-95: If broke, abandon route instead of waiting forever.
+      // At $0M with no income source, the build budget will never replenish.
+      if (snapshot.bot.money < 1) {
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Broke ($${snapshot.bot.money}M) and cannot build — abandoning route to allow discard.`,
+        };
+      }
       return {
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
@@ -367,6 +368,30 @@ export class PlanExecutor {
         updatedRoute: { ...route, phase: 'build' },
         description: `${tag} Cannot build this turn (budget exhausted). Waiting.`,
       };
+    }
+
+    // JIRA-101: Feasibility check — don't build toward a stop whose estimated
+    // track cost exceeds the bot's available cash. Demand scoring estimates can
+    // be wildly inaccurate (hex-distance heuristic), so this prevents the bot
+    // from draining all cash on an unaffordable route.
+    const matchingDemand = context.demands.find(d =>
+      (stop.action === 'pickup' && d.supplyCity === stop.city && d.loadType === stop.loadType) ||
+      (stop.action === 'deliver' && d.deliveryCity === stop.city && d.loadType === stop.loadType),
+    );
+    if (matchingDemand) {
+      const estimatedCost = stop.action === 'pickup'
+        ? matchingDemand.estimatedTrackCostToSupply
+        : matchingDemand.estimatedTrackCostToDelivery;
+      if (estimatedCost > snapshot.bot.money) {
+        console.warn(`${tag} JIRA-101: Build toward ${stop.city} blocked — estimated track cost $${estimatedCost}M exceeds cash $${snapshot.bot.money}M`);
+        return {
+          plan: { type: AIActionType.PassTurn },
+          routeComplete: false,
+          routeAbandoned: true,
+          updatedRoute: { ...route, phase: 'build' },
+          description: `${tag} Route unaffordable: estimated $${estimatedCost}M track cost exceeds $${snapshot.bot.money}M cash`,
+        };
+      }
     }
 
     const buildResult = await ActionResolver.resolve(
@@ -646,9 +671,14 @@ export class PlanExecutor {
       const stop = route.stops[idx];
 
       if (stop.action === 'pickup') {
-        // Pickup is complete if the load type is already on the train
-        if (context.loads.includes(stop.loadType)) {
-          console.log(`[PlanExecutor] Skipping completed pickup: ${stop.loadType} at ${stop.city} (already on train)`);
+        // JIRA-104: Count-aware pickup check — don't skip if train doesn't have
+        // enough instances to cover all same-type pickup stops up to and including this index
+        const loadsOnTrain = context.loads.filter(l => l === stop.loadType).length;
+        const sameTypePickupsUpToHere = route.stops
+          .slice(0, idx + 1)
+          .filter(s => s.action === 'pickup' && s.loadType === stop.loadType).length;
+        if (loadsOnTrain >= sameTypePickupsUpToHere) {
+          console.log(`[PlanExecutor] Skipping completed pickup: ${stop.loadType} at ${stop.city} (${loadsOnTrain} on train, ${sameTypePickupsUpToHere} pickups up to here)`);
           idx++;
           continue;
         }

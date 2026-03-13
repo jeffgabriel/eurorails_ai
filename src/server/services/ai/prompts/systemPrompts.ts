@@ -122,7 +122,7 @@ ROUTE PLANNING CRITERIA:
 3. BUDGET CHECK: Estimate total track building cost for the route. Don't plan routes that cost more to build than they pay out. IMPORTANT: Your current cash is shown in the context. Do NOT plan routes that require building more track than you can afford. If all routes require more track cost than your cash, plan a shorter route or recommend DISCARD_HAND.
 4. EXISTING TRACK: Prefer routes that leverage your existing network — zero-cost pickups/deliveries are the best.
 5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
-6. STARTING CITY: For initial builds with no track, start from the SUPPLY city of your first planned pickup. Starting at the supply end lets you pick up immediately when the train is placed, saving turns. If multiple supply cities exist, prefer the one in central Europe. Only start at a delivery city if it is also a supply city for another pickup on your route.
+6. STARTING CITY: Your train MUST start at one of the 8 major cities (Paris, Holland, Milano, Ruhr, Berlin, London, Wien, Madrid). Pick the major city nearest to your first planned pickup's supply city. You will build track FROM that major city TOWARD the supply city. If the supply city IS a major city, start there.
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
 8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
 9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
@@ -328,6 +328,40 @@ Choose "add_secondary" only if the opportunity clearly improves the trip.
  */
 export function getSecondaryDeliveryPrompt(): string {
   return SECONDARY_DELIVERY_SYSTEM_SUFFIX;
+}
+
+// ── Cargo Conflict Prompt (JIRA-92) ──
+
+const CARGO_CONFLICT_SYSTEM_SUFFIX = `
+You are evaluating whether a bot should DROP a carried load to free cargo slots for a better planned route.
+
+The bot has planned a new delivery route, but it needs more cargo slots than it has free. One or more carried loads are NOT part of the planned route. Your job: decide whether to drop a carried load to enable the planned pickups.
+
+DECISION CRITERIA:
+1. If the carried load's delivery is IMMINENT (on existing network, 1-2 turns away), KEEP it — completing the delivery is more valuable than dropping.
+2. If the carried load's delivery is EXPENSIVE (requires significant track building) or DISTANT (many turns), dropping it to enable a clearly better route is correct.
+3. Compare: (carried load payout - track cost) / estimated turns VS (planned route total payout - track cost) / estimated turns. Drop the worse deal.
+4. An empty slot earning 20M+ over 6 turns beats a slot holding a 48M load that costs 40M track and 9 turns.
+5. When in doubt, KEEP — dropping a load wastes the effort to pick it up.
+
+RESPONSE FORMAT (JSON only, no markdown):
+{
+  "action": "drop" | "keep",
+  "dropLoad": "load type to drop (required if action is drop)",
+  "reasoning": "Brief explanation of the decision"
+}
+
+Choose "keep" if the carried load is valuable or delivery is imminent.
+Choose "drop" only if the planned route is significantly better and the carried load is a poor investment.
+`;
+
+/**
+ * Get the system prompt for cargo conflict evaluation (JIRA-92).
+ *
+ * Lightweight prompt for evaluating whether to drop carried cargo to enable a better route.
+ */
+export function getCargoConflictPrompt(): string {
+  return CARGO_CONFLICT_SYSTEM_SUFFIX;
 }
 
 // ── Route Re-evaluation Prompt (JIRA-64) ──

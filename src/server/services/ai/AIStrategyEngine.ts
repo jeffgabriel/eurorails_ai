@@ -176,6 +176,7 @@ export class AIStrategyEngine {
       let routeWasAbandoned = false;
       let previousRouteStops: RouteStop[] | null = null; // BE-010
       let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
+      const deadLoadDropActions: TurnPlanDropLoad[] = [];
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -227,11 +228,24 @@ export class AIStrategyEngine {
                 deadLoadDropPlans.push({ type: AIActionType.DropLoad, load, city: botCity });
               }
               secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
+
+              // JIRA-89 fix: Create DropLoad actions and mutate snapshot
+              for (const deadLoad of deadLoads) {
+                deadLoadDropActions.push({
+                  type: AIActionType.DropLoad,
+                  load: deadLoad,
+                  city: botCity,
+                });
+                const dropIndex = snapshot.bot.loads.indexOf(deadLoad);
+                if (dropIndex >= 0) {
+                  snapshot.bot.loads.splice(dropIndex, 1);
+                }
+              }
             }
           }
 
-          // Calculate effective cargo after potential dead load drops
-          const effectiveLoads = snapshot.bot.loads.length - (deadLoads.length > 0 && secondaryDeliveryLog ? deadLoads.length : 0);
+          // Calculate effective cargo after potential dead load drops (snapshot already mutated by splice above)
+          const effectiveLoads = snapshot.bot.loads.length;
 
           // Secondary delivery: only if capacity available and not Easy bot
           if (
@@ -280,6 +294,51 @@ export class AIStrategyEngine {
               }
             } catch (err) {
               console.warn(`${tag} JIRA-89: Secondary delivery LLM call failed:`, err instanceof Error ? err.message : err);
+            }
+          }
+
+          // ── JIRA-92: Cargo conflict check — drop carried loads blocking planned pickups ──
+          const routePickupCount = (() => {
+            let count = 0;
+            for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+              if (activeRoute.stops[i].action === 'pickup') count++;
+              else break; // Count consecutive pickups from current index
+            }
+            return count;
+          })();
+          const effectiveFreeSlots = trainCapacity - snapshot.bot.loads.length;
+
+          if (
+            routePickupCount > effectiveFreeSlots &&
+            botConfig!.skillLevel !== BotSkillLevel.Easy &&
+            AIStrategyEngine.hasLLMApiKey(botConfig)
+          ) {
+            console.log(`${tag} JIRA-92: Cargo conflict — route needs ${routePickupCount} pickup slots, only ${effectiveFreeSlots} free`);
+
+            // Identify carried loads NOT in route's delivery stops
+            const routeDeliveryLoads = new Set(
+              activeRoute.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
+            );
+            const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
+
+            if (conflictingLoads.length > 0) {
+              try {
+                const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
+                const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
+
+                if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
+                  console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
+                  // Remove the load from snapshot so downstream sees updated capacity
+                  const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
+                  if (dropIndex >= 0) {
+                    snapshot.bot.loads.splice(dropIndex, 1);
+                  }
+                } else {
+                  console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
+                }
+              } catch (err) {
+                console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
+              }
             }
           }
 
@@ -463,7 +522,21 @@ export class AIStrategyEngine {
               console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
               logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
             } else {
-              console.warn(`${tag} JIRA-86: Post-delivery planRoute returned no route (${llmMs}ms) — all attempts rejected`);
+              // JIRA-103: Retry once with budget hint when all inner attempts failed
+              console.warn(`${tag} JIRA-103: Post-delivery planRoute returned no route (${llmMs}ms) — retrying with budget hint`);
+              const budgetHint = `Previous route plans were rejected for budget infeasibility. Prioritize routes where supply and delivery cities are on or near existing track. Available cash: ${freshSnap.bot.money}M. Avoid routes requiring expensive mountain/Alpine track construction.`;
+              const retryResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops, budgetHint);
+              const retryMs = Date.now() - llmStart - llmMs;
+              if (retryResult.llmLog?.length) {
+                decision.llmLog = [...(decision.llmLog ?? []), ...retryResult.llmLog];
+              }
+              if (retryResult.route) {
+                newRoute = retryResult.route;
+                console.log(`${tag} JIRA-103: Budget-hint retry succeeded: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${retryMs}ms)`);
+                logPhase('reeval', [], null, null, { llmReasoning: `budget-retry: ${newRoute.reasoning}`, llmLatencyMs: llmMs + retryMs });
+              } else {
+                console.warn(`${tag} JIRA-103: Budget-hint retry also failed (${retryMs}ms) — falling through to heuristic`);
+              }
             }
           } else {
             // Route still active — ask LLM whether to continue, amend, or abandon
@@ -544,8 +617,15 @@ export class AIStrategyEngine {
               }
             }
 
+            // JIRA-100: Apply reCompSteps to sim state before build phase
+            for (const step of reCompSteps) {
+              ActionResolver.applyPlanToState(step, simSnapshot, simContext);
+            }
+
             // Re-compose build phase targeting the new route, replacing old build step
-            const reBuild = await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            // JIRA-100: Skip if reCompSteps already contains a BUILD (game rule: one build per turn)
+            const reCompHasBuild = reCompSteps.some(s => s.type === AIActionType.BuildTrack);
+            const reBuild = reCompHasBuild ? null : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
             if (reBuild) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
               decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, reBuild] };
@@ -576,9 +656,14 @@ export class AIStrategyEngine {
         }
 
         const continuation = await ActionResolver.heuristicFallback(simContext, simSnapshot);
-        if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn) {
+        // JIRA-97: Do not speculatively build track after route completion when LLM
+        // re-eval failed. Without a validated route, building wastes money on unvalidated targets.
+        const isBuildAction = continuation.plan?.type === AIActionType.BuildTrack;
+        if (continuation.success && continuation.plan && continuation.plan.type !== AIActionType.PassTurn && !isBuildAction) {
           decision.plan = { type: 'MultiAction' as const, steps: [...planSteps, continuation.plan] };
           console.log(`${tag} Route complete — continuation ${continuation.plan.type}`);
+        } else if (isBuildAction) {
+          console.log(`${tag} JIRA-97: Blocked speculative BuildTrack from heuristic continuation (no validated route)`);
         }
       }
 
@@ -593,6 +678,13 @@ export class AIStrategyEngine {
             ? remainingSteps[0]
             : { type: 'MultiAction' as const, steps: remainingSteps };
         console.log(`${tag} JIRA-91: Stripped ${earlyExecutedSteps.length} early-executed delivery steps from plan, ${remainingSteps.length} steps remain`);
+      }
+
+      // JIRA-89 fix: Prepend dead load drop actions to the plan
+      if (deadLoadDropActions.length > 0) {
+        const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        decision.plan = { type: 'MultiAction' as const, steps: [...deadLoadDropActions, ...existingSteps] };
+        console.log(`${tag} JIRA-89: Prepended ${deadLoadDropActions.length} dead load drop action(s) to plan`);
       }
 
       // ── Stage 4: Apply guardrails ──
@@ -656,7 +748,9 @@ export class AIStrategyEngine {
       };
 
       // Update route state in memory
-      if (routeWasCompleted || routeWasAbandoned) {
+      // JIRA-99: When reEvalHandled is true, Stage 3d already set activeRoute to the
+      // replacement route (line 617). Don't clear it — let the else-if branch save it.
+      if ((routeWasCompleted || routeWasAbandoned) && !reEvalHandled) {
         const outcome = routeWasCompleted ? 'completed' : 'abandoned';
         const routeToLog = memory.activeRoute ?? activeRoute;
         if (routeToLog) {
@@ -672,6 +766,18 @@ export class AIStrategyEngine {
           }
         }
         memoryPatch.activeRoute = null;
+        memoryPatch.turnsOnRoute = 0;
+      } else if (reEvalHandled && activeRoute) {
+        // JIRA-99: Route completed but Stage 3d planned a replacement — log the old
+        // route as completed AND save the new replacement route.
+        const routeToLog = memory.activeRoute;
+        if (routeToLog) {
+          memoryPatch.routeHistory = [
+            ...(memory.routeHistory ?? []),
+            { route: routeToLog, outcome: 'completed', turns: memory.turnsOnRoute + 1 },
+          ];
+        }
+        memoryPatch.activeRoute = activeRoute;
         memoryPatch.turnsOnRoute = 0;
       } else if (activeRoute) {
         memoryPatch.activeRoute = activeRoute;

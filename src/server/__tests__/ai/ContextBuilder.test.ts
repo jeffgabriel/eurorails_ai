@@ -2904,3 +2904,340 @@ describe('ContextBuilder.build — JIRA-82: no supply cities without load on tra
     expect(demand!.demandScore).not.toBe(-999);
   });
 });
+
+// ── JIRA-88: countFerryCrossings ferry penalty in estimatedTurns ─────────────
+
+describe('ContextBuilder ferry crossing penalty (JIRA-88)', () => {
+  const { getFerryEdges } = require('../../../shared/services/majorCityGroups');
+
+  // Barrier ferry edges with coordinates that clearly separate sides.
+  // Channel ferries: pointA = Britain side (high col), pointB = continent side (low col)
+  // Irish Sea ferries: pointA = Ireland side (low col), pointB = Britain side (high col)
+  const BARRIER_FERRY_EDGES = [
+    { name: 'Dover_Calais', pointA: { row: 18, col: 28 }, pointB: { row: 18, col: 24 }, cost: 4 },
+    { name: 'Portsmouth_LeHavre', pointA: { row: 20, col: 27 }, pointB: { row: 20, col: 23 }, cost: 4 },
+    { name: 'Belfast_Stranraer', pointA: { row: 7, col: 26 }, pointB: { row: 5, col: 28 }, cost: 4 },
+    { name: 'Dublin_Liverpool', pointA: { row: 10, col: 24 }, pointB: { row: 12, col: 28 }, cost: 8 },
+  ];
+
+  afterEach(() => {
+    (getFerryEdges as jest.Mock).mockReturnValue([]);
+  });
+
+  it('mainland route: ferryRequired=false, no ferry penalty', async () => {
+    // Both cities on the continent — no barrier crossing
+    (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
+
+    // Paris (20,20) and Berlin (10,10) — both on continent side of all ferries
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Cheese']),
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 20, col: 20 },
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Cheese', payment: 12 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Berlin');
+
+    expect(demand).toBeDefined();
+    expect(demand!.ferryRequired).toBe(false);
+    // No ferry penalty — estimatedTurns should be positive and not the sentinel
+    expect(demand!.estimatedTurns).toBeGreaterThan(0);
+    expect(demand!.estimatedTurns).toBeLessThan(99);
+  });
+
+  it('cross-Channel route: ferryRequired=true, estimatedTurns includes +2 penalty', async () => {
+    // Supply on continent, delivery on Britain — clearly opposite sides of Channel
+    (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
+
+    // Calais at (18,22) is closer to Dover_Calais pointB (18,24) → continent side
+    // Birmingham at (16,30) is closer to Dover_Calais pointA (18,28) → Britain side
+    // Include BOTH mainland and cross-Channel demands in one build for comparison
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(18, 22, 'Calais', TerrainType.MajorCity, ['Wine', 'Cheese']),
+      makeCityPoint(16, 30, 'Birmingham', TerrainType.MajorCity, ['Steel']),
+      // A second continent city at similar distance for mainland comparison
+      makeCityPoint(10, 22, 'Frankfurt', TerrainType.MajorCity, ['Coal']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 18, col: 22 },
+      botSegments: [],
+      resolvedDemands: [
+        {
+          cardId: 1,
+          demands: [{ city: 'Birmingham', loadType: 'Wine', payment: 30 }],
+        },
+        {
+          cardId: 2,
+          demands: [{ city: 'Frankfurt', loadType: 'Cheese', payment: 30 }],
+        },
+      ],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const ferryDemand = context.demands.find(d => d.deliveryCity === 'Birmingham');
+    const mainlandDemand = context.demands.find(d => d.deliveryCity === 'Frankfurt');
+
+    expect(ferryDemand).toBeDefined();
+    expect(mainlandDemand).toBeDefined();
+    expect(ferryDemand!.ferryRequired).toBe(true);
+    expect(mainlandDemand!.ferryRequired).toBe(false);
+
+    // The ferry demand should have a higher estimatedTurns due to the +2 penalty
+    // (both are at roughly similar hex distances from Calais)
+    expect(ferryDemand!.estimatedTurns).toBeGreaterThan(mainlandDemand!.estimatedTurns);
+  });
+
+  it('Irish Sea crossing: Dublin delivery from Britain has ferryRequired=true', async () => {
+    // Supply on Britain side (high col), delivery in Ireland (low col)
+    (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
+
+    // Birmingham (16,30) is closer to Dublin_Liverpool pointB (12,28) → Britain side
+    // Dublin (10,24) is closer to Dublin_Liverpool pointA (10,24) → Ireland side
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(16, 30, 'Birmingham', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(10, 24, 'Dublin', TerrainType.MajorCity, ['Whiskey']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 16, col: 30 },
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Dublin', loadType: 'Steel', payment: 25 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Dublin');
+
+    expect(demand).toBeDefined();
+    expect(demand!.ferryRequired).toBe(true);
+    expect(demand!.estimatedTurns).toBeGreaterThan(0);
+    expect(demand!.estimatedTurns).toBeLessThan(99);
+  });
+
+  it('ferry port city detection: delivery to FerryPort terrain triggers ferryRequired', async () => {
+    // When delivery city has FerryPort terrain, isFerryOnRoute Check 1 catches it
+    (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Wine']),
+      makeGridPoint(7, 26, {
+        terrain: TerrainType.FerryPort,
+        city: { type: TerrainType.FerryPort, name: 'Belfast', availableLoads: ['Whiskey'] },
+      }),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 20, col: 20 },
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Belfast', loadType: 'Wine', payment: 40 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Belfast');
+
+    expect(demand).toBeDefined();
+    expect(demand!.ferryRequired).toBe(true);
+  });
+
+  it('unfulfillable demand: null supply city → 0 ferry crossings, sentinel estimatedTurns', async () => {
+    (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
+
+    // No city supplies 'Diamonds' — triggers unfulfillable path
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Cheese']),
+      makeCityPoint(10, 24, 'Dublin', TerrainType.MajorCity, ['Whiskey']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 20, col: 20 },
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Dublin', loadType: 'Diamonds', payment: 50 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Dublin');
+
+    expect(demand).toBeDefined();
+    // countFerryCrossings returns 0 for null supply — sentinel estimatedTurns
+    expect(demand!.estimatedTurns).toBe(99);
+  });
+
+  it('no barrier ferry edges mocked: ferryRequired=false even for distant cities', async () => {
+    // With empty ferry edges, no barrier crossing can be detected
+    (getFerryEdges as jest.Mock).mockReturnValue([]);
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Wine']),
+      makeCityPoint(16, 30, 'Birmingham', TerrainType.MajorCity, ['Steel']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 20, col: 20 },
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Birmingham', loadType: 'Wine', payment: 30 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Birmingham');
+
+    expect(demand).toBeDefined();
+    // Without ferry edges, isFerryOnRoute Check 2 returns false
+    expect(demand!.ferryRequired).toBe(false);
+  });
+});
+
+// ── TEST: JIRA-102 Track cost estimation accuracy ────────────────────────────
+
+describe('JIRA-102: estimateTrackCost fallback includes city cost and conservative multiplier', () => {
+
+  it('should include +5M city cost for MajorCity destination in cold-start fallback', async () => {
+    // FarCity (MajorCity) at (40,40), far from Berlin (10,10) and Paris (20,20)
+    // hexDistance from Paris (nearest major) ≈ 28. Fallback = round(28 * 3.0) + 5 = 89
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+      makeCityPoint(40, 40, 'FarCity', TerrainType.MajorCity, []),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'FarCity', loadType: 'Steel', payment: 50 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'FarCity');
+
+    expect(demand).toBeDefined();
+    // Fallback should use * 3.0 multiplier + 5M major city cost
+    // The estimate should be higher than the old formula (hexDist * 2.0)
+    const hexDist = demand!.estimatedTrackCostToDelivery;
+    expect(hexDist).toBeGreaterThan(0);
+    // Must include at least 5M for the major city destination
+    expect(hexDist).toBeGreaterThanOrEqual(5);
+  });
+
+  it('should include +3M city cost for SmallCity destination in cold-start fallback', async () => {
+    // SmallTown at (50,50), far from both Berlin (10,10) and Paris (20,20)
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+      makeCityPoint(50, 50, 'SmallTown', TerrainType.SmallCity, ['Coal']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'SmallTown', loadType: 'Steel', payment: 30 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'SmallTown');
+
+    expect(demand).toBeDefined();
+    // Fallback should use * 3.0 multiplier + 3M small city cost
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThanOrEqual(3);
+  });
+
+  it('should produce higher fallback estimates with 3.0 multiplier + city cost for off-grid cities', async () => {
+    // OffGridTown at (55,55) is far off the real game grid, so Dijkstra returns 0
+    // and the fallback formula applies: round(hexDist * 3.0) + cityCost
+    // hexDist from Paris (20,20) ≈ 49. Old: round(49 * 2.0) = 98. New: round(49 * 3.0) + 3 = 150
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, []),
+      makeCityPoint(55, 55, 'OffGridTown', TerrainType.SmallCity, []),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'OffGridTown', loadType: 'Steel', payment: 20 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'OffGridTown');
+
+    expect(demand).toBeDefined();
+    // Fallback uses * 3.0 + 3M (SmallCity), so estimate > what old * 2.0 would produce
+    // With hexDist ~49: old = 98, new = 150
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThan(100);
+  });
+
+  it('should still return 0 estimate when city IS a major city (on-network regression)', async () => {
+    // Berlin IS a major city at (10,10) — estimate to itself should be 0
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(10, 10, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(20, 20, 'Paris', TerrainType.MajorCity, ['Cheese']),
+    ];
+
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: null,
+      botSegments: [],
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Cheese', payment: 12 }],
+      }],
+      opponents: [],
+      gameStatus: 'initialBuild',
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.deliveryCity === 'Berlin');
+
+    expect(demand).toBeDefined();
+    // Supply IS Paris (major city) → supply cost = 0
+    expect(demand!.estimatedTrackCostToSupply).toBe(0);
+  });
+});

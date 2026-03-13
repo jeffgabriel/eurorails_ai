@@ -18,6 +18,9 @@ jest.mock('../../db/index', () => ({
 jest.mock('../../services/socketService', () => ({
   emitToGame: jest.fn<() => void>(),
   getSocketIO: jest.fn<() => any>().mockReturnValue(null),
+  emitVictoryTriggered: jest.fn<() => void>(),
+  emitGameOver: jest.fn<() => void>(),
+  emitTieExtended: jest.fn<() => void>(),
 }));
 
 jest.mock('../../services/playerService', () => ({
@@ -42,13 +45,39 @@ jest.mock('../../services/ai/BotMemory', () => ({
   clearMemory: jest.fn(),
 }));
 
+jest.mock('../../services/ai/GameLogger', () => ({
+  appendTurn: jest.fn(),
+}));
+
+jest.mock('../../services/victoryService', () => ({
+  VictoryService: {
+    getVictoryState: jest.fn<() => Promise<any>>(),
+    declareVictory: jest.fn<() => Promise<any>>(),
+    isFinalTurn: jest.fn<() => Promise<boolean>>(),
+    resolveVictory: jest.fn<() => Promise<any>>(),
+  },
+}));
+
+jest.mock('../../services/trackService', () => ({
+  TrackService: {
+    getTrackState: jest.fn<() => Promise<any>>(),
+  },
+}));
+
+jest.mock('../../services/ai/connectedMajorCities', () => ({
+  getConnectedMajorCities: jest.fn<() => any[]>(),
+}));
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
-import { onTurnChange, pendingBotTurns } from '../../services/ai/BotTurnTrigger';
+import { onTurnChange, pendingBotTurns, checkBotVictory } from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
-import { emitToGame } from '../../services/socketService';
+import { emitToGame, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
 import { AIActionType } from '../../../shared/types/GameTypes';
+import { VictoryService } from '../../services/victoryService';
+import { TrackService } from '../../services/trackService';
+import { getConnectedMajorCities } from '../../services/ai/connectedMajorCities';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
@@ -227,5 +256,134 @@ describe('BotTurnTrigger — JIRA-19: LLM metadata persistence', () => {
     expect(payload.llmLatencyMs).toBe(750);
     expect(payload.tokenUsage).toEqual({ input: 200, output: 80 });
     expect(payload.retried).toBe(false);
+  });
+});
+
+// ── JIRA-106: Bot Victory Check Tests ──────────────────────────────────────
+
+const mockGetVictoryState = VictoryService.getVictoryState as jest.MockedFunction<typeof VictoryService.getVictoryState>;
+const mockDeclareVictory = VictoryService.declareVictory as jest.MockedFunction<typeof VictoryService.declareVictory>;
+const mockIsFinalTurn = VictoryService.isFinalTurn as jest.MockedFunction<typeof VictoryService.isFinalTurn>;
+const mockResolveVictory = VictoryService.resolveVictory as jest.MockedFunction<typeof VictoryService.resolveVictory>;
+const mockGetTrackState = TrackService.getTrackState as jest.MockedFunction<typeof TrackService.getTrackState>;
+const mockGetConnectedMajorCities = getConnectedMajorCities as jest.MockedFunction<typeof getConnectedMajorCities>;
+const mockEmitVictoryTriggered = emitVictoryTriggered as jest.MockedFunction<typeof emitVictoryTriggered>;
+const mockEmitGameOver = emitGameOver as jest.MockedFunction<typeof emitGameOver>;
+
+describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsFinalTurn.mockResolvedValue(false);
+  });
+
+  const sevenCities = [
+    { name: 'London', row: 10, col: 5 },
+    { name: 'Paris', row: 20, col: 10 },
+    { name: 'Berlin', row: 15, col: 25 },
+    { name: 'Madrid', row: 35, col: 3 },
+    { name: 'Roma', row: 30, col: 20 },
+    { name: 'Wien', row: 18, col: 22 },
+    { name: 'Warszawa', row: 12, col: 30 },
+  ];
+
+  it('should declare victory when bot has 250M+ and 7+ connected cities', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 260, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 }] } as any);
+    mockGetConnectedMajorCities.mockReturnValue(sevenCities);
+    mockDeclareVictory.mockResolvedValue({
+      success: true,
+      victoryState: {
+        triggered: true,
+        triggerPlayerIndex: 1,
+        victoryThreshold: 250,
+        finalTurnPlayerIndex: 0,
+      },
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+
+    expect(result).toBe(true);
+    expect(mockDeclareVictory).toHaveBeenCalledWith('game-1', 'bot-1', sevenCities);
+    expect(mockEmitVictoryTriggered).toHaveBeenCalledWith('game-1', 1, 'Flash', 0, 250);
+  });
+
+  it('should NOT declare victory when bot has < 250M', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 200, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+
+    expect(result).toBe(false);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('should NOT declare victory when bot has < 7 connected cities', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 300, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 }] } as any);
+    mockGetConnectedMajorCities.mockReturnValue(sevenCities.slice(0, 5));
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+
+    expect(result).toBe(false);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('should NOT declare victory when victory already triggered', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: true,
+      triggerPlayerIndex: 0,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: 1,
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+
+    expect(result).toBe(false);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('should account for debt when checking net worth', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      // 300 money - 60 debt = 240 net worth (below 250 threshold)
+      if (sql.includes('SELECT money')) return { rows: [{ money: 300, debt_owed: 60, name: 'Flash' }] };
+      return { rows: [] };
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+
+    expect(result).toBe(false);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
   });
 });

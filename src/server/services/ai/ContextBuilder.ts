@@ -21,6 +21,7 @@ import {
   GridPoint,
   TerrainType,
   RouteStop,
+  StrategicRoute,
   EnRoutePickup,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
@@ -1597,6 +1598,78 @@ export class ContextBuilder {
     return lines.join('\n');
   }
 
+  /**
+   * JIRA-92: Serialize context for cargo conflict evaluation.
+   *
+   * Builds a focused prompt showing the planned route value vs carried load delivery details,
+   * so the LLM can decide whether to drop carried cargo to free slots for the better route.
+   */
+  static serializeCargoConflictPrompt(
+    snapshot: WorldSnapshot,
+    plannedRoute: StrategicRoute,
+    conflictingLoads: string[],
+    demands: DemandContext[],
+  ): string {
+    const lines: string[] = [];
+    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const freeSlots = capacity - snapshot.bot.loads.length;
+
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Train: ${snapshot.bot.trainType} (capacity ${capacity}, speed ${TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9})`);
+    lines.push(`Cash: ${snapshot.bot.money}M`);
+    lines.push(`Carried loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+    lines.push(`Free slots: ${freeSlots} of ${capacity}`);
+    lines.push('');
+
+    // Planned route summary
+    const routeStops = plannedRoute.stops;
+    const pickupCount = routeStops.filter(s => s.action === 'pickup').length;
+    const totalPayout = routeStops
+      .filter(s => s.action === 'deliver' && s.payment)
+      .reduce((sum, s) => sum + (s.payment ?? 0), 0);
+
+    lines.push('PLANNED ROUTE:');
+    for (const stop of routeStops) {
+      lines.push(`  ${stop.action.toUpperCase()} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    lines.push(`  Pickups needed: ${pickupCount} | Total payout: ${totalPayout}M`);
+    lines.push('');
+
+    // Conflicting carried loads — loads NOT in the route's delivery plan
+    lines.push('CARRIED LOADS BLOCKING THE ROUTE (not part of planned deliveries):');
+    for (const loadType of conflictingLoads) {
+      // Find the best demand context for this carried load
+      const demandCtx = demands.find(d => d.loadType === loadType && d.isLoadOnTrain);
+      if (demandCtx) {
+        const trackCost = demandCtx.estimatedTrackCostToDelivery;
+        const netProfit = demandCtx.payout - trackCost;
+        const onNetwork = trackCost === 0 ? 'YES — delivery on existing network' : 'NO — requires building track';
+        lines.push(`  ${loadType} → ${demandCtx.deliveryCity}: ${demandCtx.payout}M payout, ~${trackCost}M track cost, ~${demandCtx.estimatedTurns} turns, net profit: ${netProfit}M`);
+        lines.push(`    Delivery on network: ${onNetwork}`);
+        lines.push(`    Efficiency: ${demandCtx.efficiencyPerTurn.toFixed(1)}M/turn`);
+      } else {
+        // No demand context found — load has no matching demand card (shouldn't happen, but be safe)
+        lines.push(`  ${loadType} → no matching demand card found`);
+      }
+    }
+    lines.push('');
+
+    // Full demand ranking for context
+    lines.push('YOUR DEMAND CARDS:');
+    for (let i = 0; i < demands.length; i++) {
+      const d = demands[i];
+      const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+      const tag = d.isLoadOnTrain ? ' [ON TRAIN]' : '';
+      lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: ${d.payout}M, build ~${buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn${tag}`);
+    }
+    lines.push('');
+
+    lines.push(`CARGO CONFLICT: Your planned route needs ${pickupCount} pickup slots but you only have ${freeSlots} free.`);
+    lines.push('Should you DROP any of the carried loads listed above to free slots for the planned route?');
+
+    return lines.join('\n');
+  }
+
   /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
   private static computeUpgradeAdvice(
     snapshot: WorldSnapshot,
@@ -2166,6 +2239,10 @@ export class ContextBuilder {
     const cityPoints = gridPoints.filter(gp => gp.city?.name === cityName);
     if (cityPoints.length === 0) return 0;
 
+    // JIRA-102: Destination city milepost cost (added to fallback estimates)
+    // Major cities cost 5M, small/medium cities cost 3M to build into.
+    const cityCost = ContextBuilder.getDestinationCityCost(cityPoints[0]);
+
     if (segments.length === 0) {
       // Cold-start: if fromCity specified, estimate cost from that city
       // (used for delivery cost estimation from the supply city)
@@ -2189,8 +2266,8 @@ export class ContextBuilder {
           }
           if (minDist === Infinity || minDist <= 1) return 0;
           const pathCost = estimatePathCost(bestFrom.row, bestFrom.col, bestTo.row, bestTo.col);
-          // Fall back to conservative hex-distance estimate if Dijkstra can't find a path
-          return pathCost > 0 ? pathCost : Math.round(minDist * 2.0);
+          // JIRA-102: Fall back to conservative estimate with terrain multiplier + city cost
+          return pathCost > 0 ? pathCost : Math.round(minDist * 3.0) + cityCost;
         }
       }
 
@@ -2215,7 +2292,8 @@ export class ContextBuilder {
       }
       if (minDist === Infinity || minDist <= 1) return 0; // City IS a major city
       const pathCost2 = estimatePathCost(bestMajor.row, bestMajor.col, bestCity.row, bestCity.col);
-      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 3.0) + cityCost;
     }
 
     // Collect unique track endpoints for landmass detection
@@ -2268,7 +2346,8 @@ export class ContextBuilder {
       }
       if (minDist === Infinity) return 0;
       const sameLandCost = estimatePathCost(bestSeg.row, bestSeg.col, bestCity.row, bestCity.col);
-      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 3.0) + cityCost;
     }
 
     // Cross-water target — check ferry state
@@ -2293,7 +2372,8 @@ export class ContextBuilder {
       }
       if (minFarDist === Infinity) return 0;
       const ferryCrossCost = estimatePathCost(bestArrival.row, bestArrival.col, bestCity.row, bestCity.col);
-      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 3.0) + cityCost;
     }
 
     // Bot has no ferry access — estimate full route via best ferry
@@ -2312,7 +2392,8 @@ export class ContextBuilder {
         }
       }
       const overlandToDep = estimatePathCost(bestEp.row, bestEp.col, dep.row, dep.col);
-      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 2.0);
+      // JIRA-102: Conservative multiplier (no city cost — destination is a ferry port)
+      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 3.0);
 
       // Far-side cost from arrival port to target city (terrain-aware)
       let bestCp = cityPoints[0];
@@ -2325,7 +2406,8 @@ export class ContextBuilder {
         }
       }
       const overlandFromArr = estimatePathCost(arr.row, arr.col, bestCp.row, bestCp.col);
-      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 3.0) + cityCost;
 
       // Look up the ferry cost for this specific departure port
       let ferryCost = ferryInfo.cheapestFerryCost;
@@ -2350,10 +2432,25 @@ export class ContextBuilder {
           minDist = Math.min(minDist, d);
         }
       }
-      return Math.round(minDist * 2.0);
+      // JIRA-102: Conservative fallback with terrain multiplier + city cost
+      return Math.round(minDist * 3.0) + cityCost;
     }
 
     return Math.round(bestTotal);
+  }
+
+  /**
+   * JIRA-102: Get the build cost of a destination city milepost.
+   * Major cities cost 5M, small/medium cities cost 3M.
+   * Used to improve fallback estimates when Dijkstra can't find a path.
+   */
+  private static getDestinationCityCost(cityPoint: GridPoint): number {
+    switch (cityPoint.terrain) {
+      case TerrainType.MajorCity: return 5;
+      case TerrainType.SmallCity:
+      case TerrainType.MediumCity: return 3;
+      default: return 0;
+    }
   }
 
   /**

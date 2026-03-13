@@ -351,6 +351,147 @@ describe('RouteValidator', () => {
     });
   });
 
+  describe('JIRA-93: delivery-less route rejection after pruning', () => {
+    it('rejects route with only pickup stops (no delivery stops)', () => {
+      // Route has only pickups — no delivery means no payout, no destination
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'pickup', loadType: 'Wine', city: 'Essen' },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen' }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Essen' }),
+        ],
+      });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain('Route has no delivery stops after pruning — not viable');
+    });
+
+    it('accepts route with pickup + delivery after pruning (control case)', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand()],
+      });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(true);
+    });
+
+    it('rejects route where delivery gets budget-pruned, leaving orphaned pickup', () => {
+      // Delivery requires expensive track (50M) but bot only has 10M
+      // Budget pruning removes delivery → paired pruning removes pickup → zero deliveries → rejected
+      const demand = makeDemand({
+        estimatedTrackCostToDelivery: 50,
+        isDeliveryOnNetwork: false,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({ demands: [demand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(10));
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('no delivery stops after pruning') || e.includes('budget'))).toBe(true);
+    });
+  });
+
+  // ── JIRA-96: $0M cash gate ───────────────────────────────────────────
+  describe('JIRA-96: $0M cash gate rejects routes requiring track', () => {
+    it('rejects route when bot has $0M and delivery requires track', () => {
+      const demand = makeDemand({
+        estimatedTrackCostToDelivery: 5,
+        isDeliveryOnNetwork: false,
+      });
+      const route = makeRoute();
+      const context = makeContext({ demands: [demand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(0));
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some(e => e.includes('cannot afford track'))).toBe(true);
+    });
+
+    it('accepts route when bot has $0M but all cities on network', () => {
+      const demand = makeDemand({
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: true,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 0,
+      });
+      const route = makeRoute();
+      const context = makeContext({ demands: [demand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(0));
+
+      expect(result.valid).toBe(true);
+    });
+
+    it('partially prunes multi-stop route at $0M when only some stops need track', () => {
+      const coalDemand = makeDemand({
+        loadType: 'Coal',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        isDeliveryOnNetwork: true,
+        estimatedTrackCostToDelivery: 0,
+        payout: 15,
+      });
+      const steelDemand = makeDemand({
+        loadType: 'Steel',
+        supplyCity: 'Hamburg',
+        deliveryCity: 'Frankfurt',
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToDelivery: 5,
+        payout: 20,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Steel', city: 'Hamburg' },
+          { action: 'deliver', loadType: 'Steel', city: 'Frankfurt', demandCardId: 2, payment: 20 },
+        ],
+      });
+      const context = makeContext({ demands: [coalDemand, steelDemand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(0));
+
+      // Coal route (on network) should survive; Steel route (needs track) should be pruned
+      expect(result.valid).toBe(true);
+      expect(result.prunedRoute).toBeDefined();
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Coal')).toBe(true);
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Steel')).toBe(false);
+    });
+
+    it('accepts route when bot has cash and delivery requires track within budget', () => {
+      const demand = makeDemand({
+        estimatedTrackCostToDelivery: 5,
+        isDeliveryOnNetwork: false,
+      });
+      const route = makeRoute();
+      const context = makeContext({ demands: [demand] });
+
+      const result = RouteValidator.validate(route, context, makeSnapshot(10));
+
+      expect(result.valid).toBe(true);
+    });
+  });
+
   describe('JIRA-77: null bot position during initial build', () => {
     it('should validate multi-stop route when bot position is null', () => {
       // During initial build, bot has no position (train not placed yet).

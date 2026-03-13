@@ -6,12 +6,16 @@
  */
 
 import { db } from '../../db/index';
-import { emitToGame, getSocketIO } from '../socketService';
+import { emitToGame, getSocketIO, emitVictoryTriggered, emitGameOver, emitTieExtended } from '../socketService';
 import { PlayerService } from '../playerService';
 import { InitialBuildService } from '../InitialBuildService';
 import { AIStrategyEngine } from './AIStrategyEngine';
 import { clearMemory } from './BotMemory';
 import { appendTurn } from './GameLogger';
+import { VictoryService } from '../victoryService';
+import { TrackService } from '../trackService';
+import { getConnectedMajorCities } from './connectedMajorCities';
+import { VICTORY_INITIAL_THRESHOLD } from '../../../shared/types/GameTypes';
 
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
@@ -220,8 +224,18 @@ export async function onTurnChange(
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
     }
 
+    // JIRA-106: Check victory conditions for bot after turn completes
+    const victoryDeclared = await checkBotVictory(gameId, currentPlayerId);
+    if (victoryDeclared) {
+      // Victory declared — game enters final-turn mode, but turn still advances
+      console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
+    }
+
     // Advance to next player
     await advanceTurnAfterBot(gameId);
+
+    // JIRA-106: Check if this was the final turn and resolve victory
+    await checkAndResolveFinalTurn(gameId);
   } catch (error) {
     console.error(`[BotTurnTrigger] Error executing bot turn for game ${gameId}:`, error);
   } finally {
@@ -269,4 +283,90 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
     }
   }
   // completed/abandoned: do nothing
+}
+
+/**
+ * JIRA-106: Check if a bot meets victory conditions after its turn.
+ * Mirrors the client-side check in GameScene.checkAndDeclareVictory().
+ *
+ * Returns true if victory was successfully declared.
+ */
+export async function checkBotVictory(
+  gameId: string,
+  playerId: string,
+): Promise<boolean> {
+  try {
+    // Skip if victory already triggered
+    const victoryState = await VictoryService.getVictoryState(gameId);
+    if (victoryState?.triggered) return false;
+
+    // Get bot's money and debt
+    const playerResult = await db.query(
+      'SELECT money, debt_owed, name FROM players WHERE id = $1',
+      [playerId],
+    );
+    if (playerResult.rows.length === 0) return false;
+
+    const player = playerResult.rows[0];
+    const threshold = victoryState?.victoryThreshold ?? VICTORY_INITIAL_THRESHOLD;
+    const netWorth = player.money - (player.debt_owed || 0);
+
+    // Quick check: enough money?
+    if (netWorth < threshold) return false;
+
+    // Get track segments and check connected cities
+    const trackState = await TrackService.getTrackState(gameId, playerId);
+    if (!trackState || trackState.segments.length === 0) return false;
+
+    const connectedCities = getConnectedMajorCities(trackState.segments);
+    if (connectedCities.length < 7) return false;
+
+    // Both conditions met — declare victory
+    console.log(`[BotTurnTrigger] Bot "${player.name}" meets victory conditions: ${netWorth}M ECU, ${connectedCities.length} connected cities`);
+    const result = await VictoryService.declareVictory(gameId, playerId, connectedCities);
+
+    if (!result.success) {
+      console.warn(`[BotTurnTrigger] Victory declaration rejected: ${result.error}`);
+      return false;
+    }
+
+    // Emit victory triggered event to all clients
+    if (result.victoryState) {
+      emitVictoryTriggered(
+        gameId,
+        result.victoryState.triggerPlayerIndex,
+        player.name,
+        result.victoryState.finalTurnPlayerIndex,
+        result.victoryState.victoryThreshold,
+      );
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`[BotTurnTrigger] Victory check failed for game ${gameId}:`, error instanceof Error ? error.message : error);
+    return false;
+  }
+}
+
+/**
+ * JIRA-106: After advancing the turn, check if the game is in final-turn mode
+ * and the final turn just completed. If so, resolve victory.
+ * Mirrors the client-side check in GameScene.resolveVictory().
+ */
+async function checkAndResolveFinalTurn(gameId: string): Promise<void> {
+  try {
+    const isFinal = await VictoryService.isFinalTurn(gameId);
+    if (!isFinal) return;
+
+    console.log(`[BotTurnTrigger] Final turn completed for game ${gameId} — resolving victory`);
+    const result = await VictoryService.resolveVictory(gameId);
+
+    if (result.gameOver && result.winnerId && result.winnerName) {
+      emitGameOver(gameId, result.winnerId, result.winnerName);
+    } else if (result.tieExtended && result.newThreshold) {
+      emitTieExtended(gameId, result.newThreshold);
+    }
+  } catch (error) {
+    console.error(`[BotTurnTrigger] Final turn resolution failed for game ${gameId}:`, error instanceof Error ? error.message : error);
+  }
 }

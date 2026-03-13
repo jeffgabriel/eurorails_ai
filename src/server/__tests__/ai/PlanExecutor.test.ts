@@ -212,6 +212,61 @@ describe('PlanExecutor', () => {
       expect(result.routeAbandoned).toBe(false);
       expect(result.updatedRoute.phase).toBe('build');
     });
+
+    it('JIRA-101: should abandon route when estimated track cost exceeds cash (pickup stop)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        demands: [{
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 60, estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      const snapshot = makeSnapshot(); // money: 50
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(mockResolve).not.toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD' }),
+        expect.anything(), expect.anything(), expect.anything(),
+      );
+    });
+
+    it('JIRA-101: should allow build when estimated track cost is within cash', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({
+        citiesOnNetwork: [],
+        canBuild: true,
+        demands: [{
+          cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+          payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 10,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as any[],
+      });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+      });
+
+      const snapshot = makeSnapshot(); // money: 50
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.routeAbandoned).toBe(false);
+    });
   });
 
   describe('Q2: Can I get there? — city ON network → MOVE', () => {
@@ -363,7 +418,7 @@ describe('PlanExecutor', () => {
       expect(buildCall).toBeDefined();
     });
 
-    it('should build toward demand city when all route stops reachable during initialBuild', async () => {
+    it('should pass when all route stops reachable during initialBuild (JIRA-93: no speculative builds)', async () => {
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'Berlin',
@@ -390,20 +445,11 @@ describe('PlanExecutor', () => {
         ],
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      // JIRA-93: No speculative builds — PassTurn when all route stops are reachable
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.updatedRoute.currentStopIndex).toBe(0);
-      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
-      );
-      expect(buildCall).toBeDefined();
     });
 
     it('should build toward target city during initialBuild when not starting city and not on network', async () => {
@@ -679,9 +725,8 @@ describe('PlanExecutor', () => {
     });
   });
 
-  describe('demand fallback when all route stops connected', () => {
-    it('falls back to findDemandBuildTarget when all route stops are on network', async () => {
-      // All route stops are on the network — should build toward demand cities
+  describe('JIRA-93: no speculative demand builds when route stops connected', () => {
+    it('returns PassTurn when all route stops are on network (no speculative builds)', async () => {
       const route = makeRoute({
         currentStopIndex: 0,
         startingCity: 'Berlin',
@@ -708,20 +753,11 @@ describe('PlanExecutor', () => {
         ],
       });
 
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-      });
-
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      // JIRA-93: No speculative builds — PassTurn when all route stops are reachable
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.routeComplete).toBe(false);
-      // JIRA-58: Should build toward supply city first (Bordeaux) — bot needs to pick up before delivering
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD' && args[0]?.details?.toward === 'Bordeaux',
-      );
-      expect(buildCall).toBeDefined();
     });
   });
 
@@ -857,6 +893,81 @@ describe('PlanExecutor', () => {
       const result = PlanExecutor.skipCompletedStops(route, context);
 
       expect(result.currentStopIndex).toBe(5);
+    });
+
+    // JIRA-104: Same-load-type multi-pickup tests
+    it('should NOT skip second pickup of same load type when train has only 1 instance', () => {
+      const route = makeRoute({
+        currentStopIndex: 1,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Flowers', city: 'Krakow', demandCardId: 2, payment: 20 },
+        ],
+      });
+      // Train has 1 Flowers from first pickup, now at stop 1 (second pickup)
+      const context = makeContext({ loads: ['Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Should NOT skip — only 1 Flowers on train but 1 same-type pickup already before this index
+      expect(result.currentStopIndex).toBe(1);
+    });
+
+    it('should skip both pickups when train has 2 instances of same load type', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train already has 2 Flowers
+      const context = makeContext({ loads: ['Flowers', 'Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Both pickups should be skipped (2 on train covers both stops)
+      expect(result.currentStopIndex).toBe(2);
+    });
+
+    it('should skip first pickup but not second when train has 1 instance (starting from stop 0)', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Flowers', city: 'Kaliningrad', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train has 1 Flowers — covers first pickup but not second
+      const context = makeContext({ loads: ['Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // First pickup skipped (1 on train > 0 prior), second NOT skipped (1 on train == 1 prior)
+      expect(result.currentStopIndex).toBe(1);
+    });
+
+    it('should handle mixed load types correctly with same-type pickups', () => {
+      const route = makeRoute({
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'pickup', loadType: 'Flowers', city: 'Holland' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+      });
+      // Train has Coal + 1 Flowers
+      const context = makeContext({ loads: ['Coal', 'Flowers'] });
+
+      const result = PlanExecutor.skipCompletedStops(route, context);
+
+      // Coal pickup skipped, first Flowers pickup skipped, second Flowers pickup NOT skipped
+      expect(result.currentStopIndex).toBe(2);
     });
   });
 
@@ -1216,9 +1327,11 @@ describe('PlanExecutor', () => {
       });
 
       // The resolve mock should be called with BUILD toward 'Essen' (supply city from demand fallback)
+      // Use cost=20 to exhaust build budget so continuationBuild doesn't try more resolve calls
+      const fullBudgetSegment = { ...makeSegment(10, 10, 10, 11), cost: 20 };
       mockResolve.mockResolvedValueOnce({
         success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        plan: { type: AIActionType.BuildTrack, segments: [fullBudgetSegment] },
       });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
@@ -1261,9 +1374,10 @@ describe('PlanExecutor', () => {
         ],
       });
 
+      const fullBudgetSegment = { ...makeSegment(10, 10, 10, 11), cost: 20 };
       mockResolve.mockResolvedValueOnce({
         success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        plan: { type: AIActionType.BuildTrack, segments: [fullBudgetSegment] },
       });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
@@ -1366,6 +1480,65 @@ describe('PlanExecutor', () => {
       });
       // Roma is cheapest affordable — should be selected
       expect(PlanExecutor.findDemandBuildTarget(context)).toBe('Roma');
+    });
+  });
+
+  // ── JIRA-95: Broke bot route abandonment ────────────────────────────────
+
+  describe('JIRA-95: Broke bot abandons route instead of passing forever', () => {
+    it('should abandon route when broke at resolveBuild (canBuild false, money 0)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 0;
+      const context = makeContext({ citiesOnNetwork: [], canBuild: false, money: 0 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(result.routeComplete).toBe(false);
+      expect(result.description).toContain('Broke');
+      expect(result.description).toContain('abandoning route');
+    });
+
+    it('should NOT abandon route when non-broke at resolveBuild (canBuild false, money 5)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 5;
+      const context = makeContext({ citiesOnNetwork: [], canBuild: false, money: 5 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.routeComplete).toBe(false);
+    });
+
+    it('should abandon route when broke at executeInitialBuild (canBuild false, money 0)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 0;
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: false, money: 0 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(true);
+      expect(result.routeComplete).toBe(false);
+      expect(result.description).toContain('Broke');
+    });
+
+    it('should NOT abandon route when non-broke at executeInitialBuild (canBuild false, money 10)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 10;
+      const context = makeContext({ isInitialBuild: true, citiesOnNetwork: [], canBuild: false, money: 10 });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.routeComplete).toBe(false);
     });
   });
 });

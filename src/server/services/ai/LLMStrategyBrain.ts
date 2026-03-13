@@ -28,13 +28,20 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt, getSecondaryDeliveryPrompt } from './prompts/systemPrompts';
+import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt, getSecondaryDeliveryPrompt, getCargoConflictPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
-import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA, SECONDARY_DELIVERY_SCHEMA } from './schemas';
+import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA, SECONDARY_DELIVERY_SCHEMA, CARGO_CONFLICT_SCHEMA } from './schemas';
+
+/** JIRA-92: Result of cargo conflict evaluation */
+export interface CargoConflictResult {
+  action: 'drop' | 'keep';
+  dropLoad?: string;
+  reasoning: string;
+}
 
 /** JIRA-89: Result of secondary delivery evaluation */
 export interface SecondaryDeliveryResult {
@@ -258,6 +265,7 @@ export class LLMStrategyBrain {
     gridPoints: GridPoint[],
     lastAbandonedRouteKey?: string | null,
     previousRouteStops?: RouteStop[] | null, // BE-010
+    budgetHint?: string, // JIRA-103: optional cost constraint guidance for retry
   ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | { route: null; llmLog: LlmAttempt[] }> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
@@ -269,6 +277,11 @@ export class LLMStrategyBrain {
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
       let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
+
+      // JIRA-103: Prepend budget hint when provided (outer retry with cost guidance)
+      if (budgetHint) {
+        userPrompt = `${budgetHint}\n\n${userPrompt}`;
+      }
 
       if (lastError) {
         userPrompt += `\n\nYOUR PREVIOUS ROUTE PLAN FAILED VALIDATION:\n${lastError}\nPlease provide a corrected route.`;
@@ -586,6 +599,75 @@ export class LLMStrategyBrain {
     }
 
     console.warn('[LLMStrategyBrain] findSecondaryDelivery: all attempts failed, returning null');
+    return null;
+  }
+
+  /**
+   * JIRA-92: Evaluate whether to drop a carried load to free cargo slots for a better route.
+   *
+   * Lightweight LLM call: no thinking, temperature=0, 1024 max tokens, 8s timeout.
+   * Returns null on failure (graceful degradation — bot keeps all cargo).
+   */
+  async evaluateCargoConflict(
+    userPrompt: string,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<CargoConflictResult | null> {
+    const systemPrompt = getCargoConflictPrompt();
+    const MAX_RETRIES = 1;
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const promptWithError = lastError
+        ? `${userPrompt}\n\nYOUR PREVIOUS RESPONSE FAILED VALIDATION:\n${lastError}\nPlease provide a corrected response.`
+        : userPrompt;
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: 1024,
+          temperature: 0,
+          systemPrompt,
+          userPrompt: promptWithError,
+          outputSchema: CARGO_CONFLICT_SCHEMA,
+          timeoutMs: 8000,
+        });
+
+        const parsed = JSON.parse(response.text);
+        const action = parsed.action;
+
+        if (!['drop', 'keep'].includes(action)) {
+          lastError = `Invalid action: ${action}. Must be "drop" or "keep".`;
+          continue;
+        }
+
+        if (action === 'drop') {
+          // Validate dropLoad is present
+          if (!parsed.dropLoad) {
+            console.warn('[LLMStrategyBrain] evaluateCargoConflict: drop without dropLoad, treating as keep');
+            return { action: 'keep', reasoning: 'LLM said drop but did not specify which load' };
+          }
+
+          // Validate dropLoad matches a carried load
+          if (!snapshot.bot.loads.includes(parsed.dropLoad)) {
+            console.warn(`[LLMStrategyBrain] evaluateCargoConflict: dropLoad "${parsed.dropLoad}" not carried, treating as keep`);
+            return { action: 'keep', reasoning: `LLM said drop "${parsed.dropLoad}" but bot is not carrying it` };
+          }
+        }
+
+        return {
+          action,
+          dropLoad: parsed.dropLoad,
+          reasoning: parsed.reasoning ?? '',
+        };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[LLMStrategyBrain] evaluateCargoConflict attempt ${attempt + 1} failed: ${errMsg}`);
+        lastError = errMsg;
+      }
+    }
+
+    console.warn('[LLMStrategyBrain] evaluateCargoConflict: all attempts failed, returning null');
     return null;
   }
 
