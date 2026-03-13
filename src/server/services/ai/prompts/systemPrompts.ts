@@ -57,6 +57,7 @@ CRITICAL RULES — ALWAYS FOLLOW:
 12. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
 13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
 14. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
+15. GAME PACE: Games typically last ~100 turns. Don't play as if the game goes on forever. Upgrades (20M) and expensive track that cut travel time in half are often correct — turn savings compound. At turn 40+, prioritize velocity over hoarding cash.
 
 SUPPLY RARITY STRATEGY:
 Each load type is sourced from a limited number of cities. When the demand context shows supply availability, consider rarity:

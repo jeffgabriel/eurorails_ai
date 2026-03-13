@@ -512,21 +512,21 @@ describe('ResponseParser', () => {
     it('should parse a pre-validated route object directly', () => {
       const obj = {
         route: [
-          { action: 'PICKUP', load: 'Coal', city: 'Essen' },
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
           { action: 'DELIVER', load: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20 },
         ],
-        startingCity: 'Essen',
+        startingCity: 'Ruhr',
         reasoning: 'Quick coal delivery',
       };
 
       const result = ResponseParser.parseStrategicRoute(obj, 10);
 
       expect(result.stops).toHaveLength(2);
-      expect(result.stops[0]).toEqual({ action: 'pickup', loadType: 'Coal', city: 'Essen' });
+      expect(result.stops[0]).toEqual({ action: 'pickup', loadType: 'Coal', city: 'Ruhr' });
       expect(result.stops[1]).toEqual({
         action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 7, payment: 20,
       });
-      expect(result.startingCity).toBe('Essen');
+      expect(result.startingCity).toBe('Ruhr');
       expect(result.reasoning).toBe('Quick coal delivery');
       expect(result.createdAtTurn).toBe(10);
       expect(result.currentStopIndex).toBe(0);
@@ -557,7 +557,7 @@ describe('ResponseParser', () => {
 
   describe('parseStrategicRoute — truncated JSON recovery', () => {
     it('should recover truncated JSON missing closing }', () => {
-      const truncated = '{"route": [{"action": "PICKUP", "load": "Coal", "city": "Essen"}, {"action": "DELIVER", "load": "Coal", "city": "Berlin"}], "reasoning": "test"';
+      const truncated = '{"route": [{"action": "PICKUP", "load": "Coal", "city": "Ruhr"}, {"action": "DELIVER", "load": "Coal", "city": "Berlin"}], "reasoning": "test"';
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
       const result = ResponseParser.parseStrategicRoute(truncated, 5);

@@ -95,6 +95,8 @@ export interface BotTurnResult {
     deliveryCity?: string;
     deadLoadsDropped?: string[];
   };
+  // Debug overlay: current active route snapshot (or null if cleared)
+  activeRoute?: StrategicRoute | null;
 }
 
 export class AIStrategyEngine {
@@ -1018,6 +1020,7 @@ export class AIStrategyEngine {
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
+        activeRoute: activeRoute ?? null,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

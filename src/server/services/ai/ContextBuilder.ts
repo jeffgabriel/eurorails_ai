@@ -765,7 +765,15 @@ export class ContextBuilder {
 
     // ── TURN/PHASE header ──
     lines.push(`TURN ${context.turnNumber} \u2014 GAME PHASE: ${context.phase}`);
+    // Game-clock awareness: humans typically win in ~100 turns; bots should not play as if game goes forever
+    lines.push(`(Games typically last ~100 turns. Plan accordingly \u2014 upgrades and expensive track that cut travel time often pay off.)`);
     lines.push('');
+
+    // ── TURN PRESSURE: escalate risk tolerance past midpoint ──
+    if (context.turnNumber >= 40 && !context.isInitialBuild) {
+      lines.push(`TURN PRESSURE: You are past turn 40. Favor upgrades and expensive track that significantly cuts travel time over conservative play. The game will not go on forever.`);
+      lines.push('');
+    }
 
     // ── PREVIOUS TURN (context continuity) ──
     if (context.previousTurnSummary) {
@@ -825,7 +833,7 @@ export class ContextBuilder {
     if (context.phase === 'Victory Imminent' && context.unconnectedMajorCities.length > 0) {
       const last = context.unconnectedMajorCities[0];
       const cashNeeded = Math.max(0, 250 - context.money);
-      lines.push(`- LATE-GAME DIRECTIVE: VICTORY IS IMMINENT: Connect ${last.cityName} (~${last.estimatedCost}M) and earn ${cashNeeded}M more. Do NOT discard hand or take unnecessary risks.`);
+      lines.push(`- LATE-GAME DIRECTIVE: VICTORY IS IMMINENT: Connect ${last.cityName} (~${last.estimatedCost}M) and earn ${cashNeeded}M more. Take calculated risks \u2014 upgrades and expensive track that cut travel time in half are justified to close the gap.`);
     } else if (context.phase === 'Late Game' && context.unconnectedMajorCities.length > 0) {
       const citiesNeeded = 7 - context.connectedMajorCities.length;
       const cashNeeded = Math.max(0, 250 - context.money);
@@ -1005,6 +1013,10 @@ export class ContextBuilder {
 
     // ── TURN/PHASE header ──
     lines.push(`TURN ${context.turnNumber} \u2014 GAME PHASE: ${context.phase}`);
+    lines.push(`(Games typically last ~100 turns. Prefer routes that cut travel time \u2014 expensive track that halves a route pays off.)`);
+    if (context.turnNumber >= 40 && !context.isInitialBuild) {
+      lines.push(`TURN PRESSURE: Past turn 40. Favor speed and expensive shortcuts.`);
+    }
     lines.push('');
 
     // ── YOUR STATUS (same as serializePrompt) ──

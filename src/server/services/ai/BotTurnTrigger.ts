@@ -83,8 +83,12 @@ export async function onTurnChange(
     return;
   }
 
-  // Double execution guard
-  if (pendingBotTurns.has(gameId)) return;
+  // Double execution guard — queue the turn instead of dropping it
+  if (pendingBotTurns.has(gameId)) {
+    queuedBotTurns.set(gameId, { gameId, currentPlayerIndex, currentPlayerId });
+    console.log(`[BotTurnTrigger] Queued bot turn for game ${gameId} (another bot turn in progress)`);
+    return;
+  }
 
   // Queue bot turn if no human is connected
   const humanConnected = await hasConnectedHuman(gameId);
@@ -184,6 +188,8 @@ export async function onTurnChange(
       movementPath: result.movementPath,
       // Structured action timeline for animated partial turn movements
       actionTimeline: result.actionTimeline,
+      // Debug overlay: active route snapshot (or null if cleared)
+      activeRoute: result.activeRoute ?? null,
     });
 
     // JIRA-32: Append structured turn log to NDJSON game file
@@ -240,21 +246,64 @@ export async function onTurnChange(
     console.error(`[BotTurnTrigger] Error executing bot turn for game ${gameId}:`, error);
   } finally {
     pendingBotTurns.delete(gameId);
+
+    // Dequeue and execute any chained bot turn that was queued while this one was running
+    const queued = queuedBotTurns.get(gameId);
+    if (queued) {
+      queuedBotTurns.delete(gameId);
+      console.log(`[BotTurnTrigger] Dequeuing chained bot turn for game ${gameId}`);
+      onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId).catch(err => {
+        console.error(`[BotTurnTrigger] Chained bot turn error for game ${gameId}:`, err);
+      });
+    }
   }
 }
 
 /**
  * Dequeue and execute a pending bot turn when a human reconnects.
+ * Also detects "stuck bot" state: game says it's a bot's turn but
+ * nothing is executing (not pending, not queued). This recovers from
+ * lost bot turns caused by race conditions or server errors.
  */
 export async function onHumanReconnect(gameId: string): Promise<void> {
   if (!isAIBotsEnabled()) return;
 
+  // Case 1: Queued turn waiting for human
   const queued = queuedBotTurns.get(gameId);
-  if (!queued) return;
+  if (queued) {
+    console.log(`[BotTurnTrigger] Dequeuing bot turn for game ${gameId} (human reconnected)`);
+    queuedBotTurns.delete(gameId);
+    await onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId);
+    return;
+  }
 
-  console.log(`[BotTurnTrigger] Dequeuing bot turn for game ${gameId} (human reconnected)`);
-  queuedBotTurns.delete(gameId);
-  await onTurnChange(queued.gameId, queued.currentPlayerIndex, queued.currentPlayerId);
+  // Case 2: Stuck bot — game state says bot's turn, but nothing is running
+  if (pendingBotTurns.has(gameId)) return; // Bot turn is actively running, not stuck
+
+  try {
+    const gameResult = await db.query(
+      'SELECT status, current_player_index FROM games WHERE id = $1',
+      [gameId],
+    );
+    const game = gameResult.rows[0];
+    if (!game || game.status !== 'active') return;
+
+    // Find the current player by index (matches PlayerService ordering)
+    const playerResult = await db.query(
+      'SELECT id, is_bot, name FROM players WHERE game_id = $1 ORDER BY created_at ASC LIMIT 1 OFFSET $2',
+      [gameId, game.current_player_index],
+    );
+    const currentPlayer = playerResult.rows[0];
+    if (!currentPlayer?.is_bot) return;
+
+    // It's a bot's turn, nothing is pending or queued — this bot is stuck
+    console.log(`[BotTurnTrigger] Stuck bot detected on reconnect: game ${gameId}, player "${currentPlayer.name}" (index ${game.current_player_index}). Re-triggering turn.`);
+    onTurnChange(gameId, game.current_player_index, currentPlayer.id).catch(err => {
+      console.error(`[BotTurnTrigger] Stuck bot recovery failed for game ${gameId}:`, err);
+    });
+  } catch (error) {
+    console.error(`[BotTurnTrigger] Stuck bot check failed for game ${gameId}:`, error instanceof Error ? error.message : error);
+  }
 }
 
 /**

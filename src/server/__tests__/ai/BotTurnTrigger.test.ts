@@ -70,7 +70,7 @@ jest.mock('../../services/ai/connectedMajorCities', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
-import { onTurnChange, pendingBotTurns, checkBotVictory } from '../../services/ai/BotTurnTrigger';
+import { onTurnChange, pendingBotTurns, checkBotVictory, queuedBotTurns, onHumanReconnect } from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
 import { emitToGame, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
@@ -385,5 +385,113 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     expect(result).toBe(false);
     expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-107: Chained bot turn queuing ──────────────────────────────────────
+
+describe('BotTurnTrigger — chained bot turn queuing', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    pendingBotTurns.clear();
+    queuedBotTurns.clear();
+    process.env.ENABLE_AI_BOTS = 'true';
+  });
+
+  it('should queue a bot turn when pendingBotTurns guard is active', async () => {
+    // Simulate another bot turn already in progress
+    pendingBotTurns.add('game-1');
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true }]);
+        if (sql.includes('SELECT status FROM games')) return mockResult([{ status: 'active' }]);
+      }
+      return mockResult([]);
+    });
+
+    await onTurnChange('game-1', 1, 'bot-2');
+
+    // Turn should be queued, not dropped
+    expect(queuedBotTurns.has('game-1')).toBe(true);
+    const queued = queuedBotTurns.get('game-1');
+    expect(queued?.currentPlayerId).toBe('bot-2');
+    expect(queued?.currentPlayerIndex).toBe(1);
+
+    // Clean up
+    pendingBotTurns.delete('game-1');
+    queuedBotTurns.clear();
+  });
+});
+
+// ── Stuck bot detection on reconnect ────────────────────────────────────────
+
+describe('BotTurnTrigger — stuck bot recovery on reconnect', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    pendingBotTurns.clear();
+    queuedBotTurns.clear();
+    process.env.ENABLE_AI_BOTS = 'true';
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true }]);
+        if (sql.includes('SELECT status FROM games') || sql.includes('current_player_index'))
+          return mockResult([{ status: 'active', current_player_index: 1 }]);
+        if (sql.includes('SELECT id, is_bot, name FROM players'))
+          return mockResult([{ id: 'bot-1', is_bot: true, name: 'Flash' }]);
+        if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);
+        if (sql.includes('UPDATE')) return mockResult([]);
+        if (sql.includes('SELECT COUNT')) return mockResult([{ count: 3 }]);
+      }
+      return mockResult([]);
+    });
+  });
+
+  it('should re-trigger bot turn on reconnect when bot is stuck', async () => {
+    mockTakeTurn.mockResolvedValue({
+      action: AIActionType.MoveTrain,
+      segmentsBuilt: 0,
+      cost: 0,
+      durationMs: 100,
+      success: true,
+    } as any);
+
+    // No queued turns, no pending turns — bot is stuck
+    await onHumanReconnect('game-1');
+
+    // Give the fire-and-forget onTurnChange time to start
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // The bot pipeline should have been triggered
+    expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-1');
+  });
+
+  it('should NOT re-trigger if a bot turn is already pending', async () => {
+    pendingBotTurns.add('game-1');
+
+    await onHumanReconnect('game-1');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(mockTakeTurn).not.toHaveBeenCalled();
+
+    pendingBotTurns.delete('game-1');
+  });
+
+  it('should NOT re-trigger if current player is human', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT status FROM games') || sql.includes('current_player_index'))
+          return mockResult([{ status: 'active', current_player_index: 0 }]);
+        if (sql.includes('SELECT id, is_bot, name FROM players'))
+          return mockResult([{ id: 'human-1', is_bot: false, name: 'matt' }]);
+      }
+      return mockResult([]);
+    });
+
+    await onHumanReconnect('game-1');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(mockTakeTurn).not.toHaveBeenCalled();
   });
 });

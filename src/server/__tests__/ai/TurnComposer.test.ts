@@ -4570,6 +4570,64 @@ describe('TurnComposer', () => {
       return { snapshot, context, movePlan, activeRoute };
     }
 
+    it('planned pickup at arrival executes before opportunistic scans', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          resolvedDemands: [],
+          loads: [],
+        },
+        loadAvailability: {}, // no opportunistic pickups available
+      });
+      const context = makeContext({ canBuild: false, loads: [] });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Ham', city: 'Warszawa' },
+          { action: 'deliver', loadType: 'Ham', city: 'Torino', demandCardId: 2, payment: 29 },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [
+          { row: 10, col: 10 }, { row: 12, col: 12 }, { row: 13, col: 13 },
+        ],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockLoadGridPoints.mockReturnValue(new Map([
+        ['12,12', { row: 12, col: 12, terrain: TerrainType.MediumCity, name: 'Warszawa' }],
+      ]));
+
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+      mockApplyPlanToState.mockImplementation(() => {});
+
+      // Planned pickup resolves successfully
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Ham', city: 'Warszawa' },
+      });
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Should include the planned pickup at Warszawa
+      expect(result.type).toBe('MultiAction');
+      if (result.type === 'MultiAction') {
+        const pickupSteps = result.steps.filter(s => s.type === AIActionType.PickupLoad);
+        expect(pickupSteps.length).toBeGreaterThanOrEqual(1);
+        expect((pickupSteps[0] as any).load).toBe('Ham');
+        expect((pickupSteps[0] as any).city).toBe('Warszawa');
+      }
+
+      // Ensure the pickup was invoked via ActionResolver.resolve
+      const pickupCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'PICKUP',
+      );
+      expect(pickupCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
     it('route with 2 consecutive pickups → reservedSlots=2, blocks opportunistic pickup', async () => {
       const route = makeRoute({
         stops: [

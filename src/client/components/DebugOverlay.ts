@@ -269,8 +269,8 @@ export class DebugOverlay {
         entry.guardrailOverride = payload.guardrailOverride;
         entry.guardrailReason = payload.guardrailReason;
       }
-      if (payload?.activeRoute) {
-        entry.activeRoute = payload.activeRoute;
+      if ('activeRoute' in payload) {
+        entry.activeRoute = payload.activeRoute ?? undefined;
       }
       if (payload?.demandRanking?.length) {
         entry.demandRanking = payload.demandRanking;

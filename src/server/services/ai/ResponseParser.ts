@@ -6,6 +6,7 @@
  */
 
 import { ParsedSelection, LLMActionIntent, LLMAction, AIActionType, StrategicRoute, RouteStop } from '../../../shared/types/GameTypes';
+import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
 
 /** Custom error for unparseable LLM responses */
 export class ParseError extends Error {
@@ -385,7 +386,21 @@ export class ResponseParser {
     }
 
     const reasoning = String(parsed.reasoning ?? '');
-    const startingCity = parsed.startingCity ? String(parsed.startingCity) : undefined;
+    const rawStartingCity = parsed.startingCity ? String(parsed.startingCity) : undefined;
+
+    // Validate startingCity is a major city; snap to nearest major city if not
+    let startingCity = rawStartingCity;
+    if (rawStartingCity) {
+      const majorCities = getMajorCityGroups().map(g => g.cityName);
+      const isMajor = majorCities.some(mc => mc.toLowerCase() === rawStartingCity.toLowerCase());
+      if (!isMajor) {
+        // Find the first supply city from route stops and pick nearest major city
+        const firstSupply = stops.find(s => s.action === 'pickup')?.city;
+        console.warn(`[ResponseParser] LLM chose non-major startingCity "${rawStartingCity}" — must be one of [${majorCities.join(', ')}]`);
+        // Default to undefined so autoPlaceBot picks the best major city
+        startingCity = undefined;
+      }
+    }
 
     const route: StrategicRoute = {
       stops,

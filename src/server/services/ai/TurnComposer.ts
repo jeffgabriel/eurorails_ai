@@ -545,6 +545,31 @@ export class TurnComposer {
       snapshot.bot.position = { row: pos.row, col: pos.col };
       const actionPlans: TurnPlan[] = [];
 
+      // Planned stop enforcement: execute the route's next pickup/deliver at this city
+      // before opportunistic scans.
+      if (currentRoute && currentRoute.currentStopIndex < currentRoute.stops.length) {
+        const plannedStop = currentRoute.stops[currentRoute.currentStopIndex];
+        if (plannedStop.city === cityName) {
+          const plannedActionType = plannedStop.action === 'pickup' ? 'PICKUP' : 'DELIVER';
+          const plannedResult = await ActionResolver.resolve(
+            { action: plannedActionType, details: { load: plannedStop.loadType, at: cityName }, reasoning: '', planHorizon: '' },
+            snapshot, context,
+          );
+          if (plannedResult.success && plannedResult.plan) {
+            actionPlans.push(plannedResult.plan);
+            ActionResolver.applyPlanToState(plannedResult.plan, snapshot, context);
+            currentRoute = { ...currentRoute, currentStopIndex: currentRoute.currentStopIndex + 1 };
+            console.log(
+              `[TurnComposer] Planned stop executed at ${cityName}: ${plannedActionType} ${plannedStop.loadType}`,
+            );
+          } else {
+            console.warn(
+              `[TurnComposer] Planned stop failed at ${cityName}: ${plannedActionType} ${plannedStop.loadType} (${plannedResult.error ?? 'unknown error'})`,
+            );
+          }
+        }
+      }
+
       // Check for DELIVER: bot carries a load AND demand card exists for load+city
       for (const rd of snapshot.bot.resolvedDemands) {
         for (const demand of rd.demands) {
