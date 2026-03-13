@@ -1,9 +1,8 @@
 /**
  * WorldSnapshotService — ferryHalfSpeed flag tests (TEST-004)
  *
- * After BE-006, ferryHalfSpeed is no longer set by terrain detection in capture().
- * Instead, ActionResolver.resolveMove() handles ferry crossing and half-speed
- * directly when the bot teleports across a ferry.
+ * JIRA-108: Restored terrain-based ferry detection in capture().
+ * When bot is at a FerryPort milepost, ferryHalfSpeed = true (half speed this turn).
  */
 
 import { TerrainType } from '../../../shared/types/GameTypes';
@@ -74,9 +73,7 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
 
   afterEach(() => jest.clearAllMocks());
 
-  it('should always set ferryHalfSpeed=false (BE-006: moved to ActionResolver)', async () => {
-    // After BE-006, ferryHalfSpeed is always false in capture().
-    // Half-speed is applied directly in resolveMove() during ferry teleportation.
+  it('should set ferryHalfSpeed=true when bot is at a FerryPort (JIRA-108)', async () => {
     const botRow = makeBotRow(10, 20);
     mockQuery.mockResolvedValueOnce({ rows: [botRow] });
 
@@ -85,7 +82,7 @@ describe('WorldSnapshotService.capture — ferryHalfSpeed', () => {
     mockLoadGridPoints.mockReturnValue(grid);
 
     const snapshot = await capture(GAME_ID, BOT_ID);
-    expect(snapshot.bot.ferryHalfSpeed).toBe(false);
+    expect(snapshot.bot.ferryHalfSpeed).toBe(true);
   });
 
   it('should set ferryHalfSpeed=false when bot is at Clear terrain', async () => {

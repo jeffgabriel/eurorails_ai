@@ -148,11 +148,18 @@ export async function capture(gameId: string, botPlayerId: string): Promise<Worl
   const majorCityGroupsData = getMajorCityGroups();
   const ferryEdgesData = getFerryEdges();
 
-  // ferryHalfSpeed is now set by ActionResolver.resolveMove() when the bot
-  // actually crosses a ferry (teleportation), not by terrain detection here.
-  // This prevents false-positive half-speed on turns where the bot is at a
-  // ferry port but not crossing (e.g., building track nearby).
-  const ferryHalfSpeed = false;
+  // Check if bot is currently at a ferry port — means previous turn ended there,
+  // so this turn should be at half speed (game rule: ferry crossing penalty).
+  let ferryHalfSpeed = false;
+  if (botRow.position_row != null && botRow.position_col != null) {
+    const grid = loadGridPoints();
+    const posKey = `${botRow.position_row},${botRow.position_col}`;
+    const posPoint = grid.get(posKey);
+    if (posPoint && posPoint.terrain === TerrainType.FerryPort) {
+      ferryHalfSpeed = true;
+      console.warn(`[Ferry] Bot at ferry port ${posPoint.name ?? posKey} — half speed this turn`);
+    }
+  }
 
   return {
     gameId,
