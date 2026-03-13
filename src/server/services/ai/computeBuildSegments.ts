@@ -6,7 +6,7 @@
  * a major city when no track exists.
  */
 
-import { TrackSegment, TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
+import { TrackSegment, TerrainType } from '../../../shared/types/GameTypes';
 import {
   getHexNeighbors,
   getTerrainCost,
@@ -19,25 +19,7 @@ import {
   GridPointData,
 } from './MapTopology';
 import { getMajorCityLookup, getMajorCityGroups, getFerryEdges, isIntraCityEdge } from '../../../shared/services/majorCityGroups';
-import waterCrossingsData from '../../../../configuration/waterCrossings.json';
-
-// Precompute water crossing costs for O(1) edge lookup.
-// River = +2M, Lake/Ocean inlet = +3M (additive to terrain cost).
-const _waterCrossingCosts = new Map<string, number>();
-for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).riverEdges ?? []) {
-  _waterCrossingCosts.set(edge, WaterCrossingType.River); // 2
-}
-for (const edge of (waterCrossingsData as { riverEdges?: string[]; nonRiverWaterEdges?: string[] }).nonRiverWaterEdges ?? []) {
-  _waterCrossingCosts.set(edge, WaterCrossingType.Lake); // 3
-}
-
-/** Extra cost for building across a river, lake, or ocean inlet. */
-function getWaterCrossingCost(fromRow: number, fromCol: number, toRow: number, toCol: number): number {
-  const a = `${fromRow},${fromCol}`;
-  const b = `${toRow},${toCol}`;
-  const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
-  return _waterCrossingCosts.get(key) ?? 0;
-}
+import { getWaterCrossingExtraCost } from '../../../shared/config/waterCrossings';
 
 /** Internal node for Dijkstra's priority queue */
 interface DijkstraNode {
@@ -163,7 +145,7 @@ function buildSegment(
       col: toCoord.col,
       terrain: toData.terrain,
     },
-    cost: baseCost + getWaterCrossingCost(fromCoord.row, fromCoord.col, toCoord.row, toCoord.col),
+    cost: baseCost + getWaterCrossingExtraCost(fromCoord, toCoord),
   };
 }
 
@@ -405,7 +387,7 @@ export function computeBuildSegments(
         continue;
       }
 
-      const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
+      const waterExtra = getWaterCrossingExtraCost(current, nb);
       const newCost = current.cost + terrainCost + waterExtra;
       if (!hasTargets && newCost > budget) continue; // over budget (only for untargeted builds)
 

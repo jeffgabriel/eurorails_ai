@@ -2,6 +2,7 @@ import { TrackNetwork } from "../types/PlayerTypes";
 import { Result, Ok, Err } from "neverthrow";
 import { TrackNetworkService } from "./TrackNetworkService";
 import { Milepost, TerrainType } from "../types/GameTypes";
+import { TERRAIN_BUILD_COSTS } from "../config/terrainCosts";
 import { TrackBuildOptions } from "../types/TrackTypes";
 import ferryPointsConfig from "../../../configuration/ferryPoints.json";
 
@@ -43,19 +44,7 @@ export class TrackBuildingService {
             return _ferryPortCostById.get(to.id) ?? 0;
         }
 
-        // Return cost based on terrain type
-        const terrainCosts: { [key in TerrainType]: number } = {
-            [TerrainType.Clear]: 1,
-            [TerrainType.Mountain]: 2,
-            [TerrainType.Alpine]: 5,
-            [TerrainType.SmallCity]: 3,
-            [TerrainType.MediumCity]: 3,
-            [TerrainType.MajorCity]: 5,
-            [TerrainType.FerryPort]: 0,
-            [TerrainType.Water]: 0
-        };
-
-        return terrainCosts[to.type] || 1;
+        return TERRAIN_BUILD_COSTS[to.type] ?? 1;
     }
 
     private async getPlayerNetwork(playerId: string, gameId: string): Promise<TrackNetwork> {

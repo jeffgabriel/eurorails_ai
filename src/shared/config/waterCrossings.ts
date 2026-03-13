@@ -1,5 +1,5 @@
 import crossings from "../../../configuration/waterCrossings.json";
-import { GridPoint, WaterCrossingType } from "../types/GameTypes";
+import { WaterCrossingType } from "../types/GameTypes";
 
 type WaterCrossingsJson = {
   riverEdges: string[];
@@ -18,7 +18,7 @@ function edgeKey(a: { row: number; col: number }, b: { row: number; col: number 
 const riverSet = new Set<string>(json.riverEdges || []);
 const nonRiverSet = new Set<string>(json.nonRiverWaterEdges || []);
 
-export function getWaterCrossingExtraCost(from: GridPoint, to: GridPoint): number {
+export function getWaterCrossingExtraCost(from: { row: number; col: number }, to: { row: number; col: number }): number {
   const key = edgeKey(from, to);
   if (riverSet.has(key)) return WaterCrossingType.River; // 2
   if (nonRiverSet.has(key)) return WaterCrossingType.Lake; // 3 (also used for ocean inlet)

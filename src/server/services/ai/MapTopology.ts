@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
+import { getTerrainBuildCost } from '../../../shared/config/terrainCosts';
 import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
@@ -150,19 +151,7 @@ export function gridToPixel(row: number, col: number): { x: number; y: number } 
 }
 
 /** Return the build cost for a terrain type in ECU millions. */
-export function getTerrainCost(terrain: TerrainType): number {
-  switch (terrain) {
-    case TerrainType.Clear:       return 1;
-    case TerrainType.Mountain:    return 2;
-    case TerrainType.Alpine:      return 5;
-    case TerrainType.SmallCity:   return 3;
-    case TerrainType.MediumCity:  return 3;
-    case TerrainType.MajorCity:   return 5;
-    case TerrainType.FerryPort:   return 0; // actual cost is ferryConnection.cost (4–16M), applied at call site
-    case TerrainType.Water:       return Infinity;
-    default:                      return 1;
-  }
-}
+export const getTerrainCost = getTerrainBuildCost;
 
 /** Check if a terrain type is water (unbuildable). */
 export function isWater(terrain: TerrainType): boolean {
