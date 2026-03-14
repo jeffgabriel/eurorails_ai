@@ -136,9 +136,10 @@ export class LLMStrategyBrain {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     const llmLog: LlmAttempt[] = [];
+    const initialUserPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
+      let userPrompt = initialUserPrompt;
 
       // On retry, append error context so the LLM can correct itself
       if (lastError) {
@@ -249,6 +250,8 @@ export class LLMStrategyBrain {
       tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
       retried: attempt > 0,
       llmLog,
+      systemPrompt: this.systemPrompt,
+      userPrompt: initialUserPrompt,
     };
   }
 
@@ -266,7 +269,7 @@ export class LLMStrategyBrain {
     lastAbandonedRouteKey?: string | null,
     previousRouteStops?: RouteStop[] | null, // BE-010
     budgetHint?: string, // JIRA-103: optional cost constraint guidance for retry
-  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] } | { route: null; llmLog: LlmAttempt[] }> {
+  ): Promise<{ route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[]; systemPrompt?: string; userPrompt?: string } | { route: null; llmLog: LlmAttempt[] }> {
     const routePrompt = getRoutePlanningPrompt(this.config.skillLevel);
     let attempt = 0;
     let lastError: string | undefined;
@@ -274,9 +277,10 @@ export class LLMStrategyBrain {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     const llmLog: LlmAttempt[] = [];
+    const initialRouteUserPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
+      let userPrompt = initialRouteUserPrompt;
 
       // JIRA-103: Prepend budget hint when provided (outer retry with cost guidance)
       if (budgetHint) {
@@ -379,6 +383,8 @@ export class LLMStrategyBrain {
           latencyMs: totalLatencyMs,
           tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
           llmLog,
+          systemPrompt: routePrompt,
+          userPrompt: initialRouteUserPrompt,
         };
       } catch (e: unknown) {
         const attemptLatency = Date.now() - startTime;

@@ -97,6 +97,9 @@ export interface BotTurnResult {
   };
   // Debug overlay: current active route snapshot (or null if cleared)
   activeRoute?: StrategicRoute | null;
+  // Prompt text for NDJSON observability
+  systemPrompt?: string;
+  userPrompt?: string;
 }
 
 export class AIStrategyEngine {
@@ -1031,6 +1034,9 @@ export class AIStrategyEngine {
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
+        // Prompt text for NDJSON observability
+        systemPrompt: decision.systemPrompt,
+        userPrompt: decision.userPrompt,
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

@@ -84,6 +84,10 @@ export interface GameTurnLogEntry {
     deadLoadsDropped?: string[];
   };
 
+  // Prompt text for NDJSON observability
+  systemPrompt?: string;
+  userPrompt?: string;
+
   // Execution Results
   success: boolean;
   error?: string;

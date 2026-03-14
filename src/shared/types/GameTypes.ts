@@ -844,4 +844,7 @@ export interface LLMDecisionResult {
     retried: boolean;
     guardrailOverride?: boolean;
     llmLog?: LlmAttempt[];
+    // Prompt text for NDJSON observability
+    systemPrompt?: string;
+    userPrompt?: string;
 }
