@@ -533,6 +533,55 @@ describe('ResponseParser', () => {
       expect(result.phase).toBe('build');
     });
 
+    it('should parse upgradeOnRoute when present', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        upgradeOnRoute: 'FastFreight',
+        reasoning: 'Upgrade then deliver coal',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBe('FastFreight');
+      expect(result.stops).toHaveLength(2);
+      expect(result.reasoning).toBe('Upgrade then deliver coal');
+    });
+
+    it('should set upgradeOnRoute to undefined when absent', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        reasoning: 'No upgrade',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBeUndefined();
+    });
+
+    it('should pass through arbitrary upgradeOnRoute values without validation', () => {
+      const obj = {
+        route: [
+          { action: 'PICKUP', load: 'Coal', city: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin' },
+        ],
+        startingCity: 'Ruhr',
+        upgradeOnRoute: 'InvalidTrain',
+        reasoning: 'Bad upgrade value',
+      };
+
+      const result = ResponseParser.parseStrategicRoute(obj, 5);
+
+      expect(result.upgradeOnRoute).toBe('InvalidTrain');
+    });
+
     it('should throw ParseError for empty route array in object input', () => {
       const obj = { route: [], reasoning: 'empty' };
 

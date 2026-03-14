@@ -85,6 +85,7 @@ export const ROUTE_SCHEMA = {
       },
     },
     startingCity: { type: 'string' as const },
+    upgradeOnRoute: { type: 'string' as const, enum: ['FastFreight', 'HeavyFreight', 'Superfreight'] },
     reasoning: { type: 'string' as const },
     planHorizon: { type: 'string' as const },
   },

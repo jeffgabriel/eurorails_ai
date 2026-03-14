@@ -402,11 +402,14 @@ export class ResponseParser {
       }
     }
 
+    const upgradeOnRoute = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
+
     const route: StrategicRoute = {
       stops,
       currentStopIndex: 0,
       phase: 'build',
       startingCity,
+      upgradeOnRoute,
       createdAtTurn: turnNumber,
       reasoning,
     };

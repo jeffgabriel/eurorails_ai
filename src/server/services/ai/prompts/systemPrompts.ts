@@ -187,26 +187,27 @@ Even if you can't deliver the secondary load immediately, carrying it costs noth
 
 Pick up a load with no matching demand card if it's at a remote city you're already passing through AND your train has a free slot. Eg you are in Porto so pickup an extra fish load! Oranges in Sevilla! Tobacco in Napoli. Oil in Aberdeen.
 
-TRAIN UPGRADE STRATEGY:
-Upgrading costs 20M and takes your entire build phase (no track building that turn). There are two upgrade paths from the starting Freight train:
+TRAIN UPGRADE STRATEGY — COMPETITIVE REALITY:
+No one wins this game on a basic Freight train. Winners upgrade TWICE to Superfreight. The first player to upgrade often wins — they deliver faster, earn more per turn, and snowball ahead. Sitting on 40M+ cash mid-game without upgrading is a strategic error. That money should be working for you.
 
-UPGRADE OPTIONS:
+UPGRADE OPTIONS (20M each, replaces track building for that turn):
 - Freight (9 speed, 2 cargo) → Fast Freight (12 speed, 2 cargo) — 20M
-  Best when: Your routes are long. Fast Freight's +3 speed means any route over 15 mileposts takes 1 fewer turn. Over 5 deliveries that's 5 extra turns of income.
+  Almost always the right FIRST upgrade. +3 speed saves ~1 turn per delivery. Over 5 deliveries that's 5 extra turns of income.
 - Freight (9 speed, 2 cargo) → Heavy Freight (9 speed, 3 cargo) — 20M
-  Best when: You have corridor routes where you can carry 3 loads simultaneously. The extra slot means delivering 3 loads per route instead of 2.
-- Either → Superfreight (12 speed, 3 cargo) — another 20M
-  The endgame train. 12 speed + 3 cargo is dominant. Plan to reach Superfreight by mid-game.
+  Best when you have corridor routes where you can carry 3 loads simultaneously.
+- Fast Freight or Heavy Freight → Superfreight (12 speed, 3 cargo) — 20M
+  The endgame train. 12 speed + 3 cargo is dominant. Plan to reach Superfreight by turn 25-35.
 
 WHEN TO UPGRADE:
+- After your FIRST delivery, if you have 30M+ cash, UPGRADE. The 20M pays for itself in 2-3 deliveries.
+- When you have a guaranteed delivery queued (a loaded train heading to a demand city), upgrade NOW — you know income is coming.
 - DON'T upgrade before your first delivery. You need cash flow first.
-- DON'T upgrade when you have less than 30M — you'll be unable to build track afterward.
-- DO upgrade when you have 60M+ cash and your current routes involve long travel distances (Fast Freight) or you consistently have 3 viable pickups (Heavy Freight).
-- DO upgrade when spending 20M on track this turn wouldn't meaningfully advance your route — upgrading might be better value.
-- The upgrade pays for itself quickly: Fast Freight saves 1 turn on any route over 15 mileposts; Heavy Freight earns an extra delivery payout per route when corridors are available.
+- If you're still on Freight past turn 10, you are falling behind. Upgrade immediately.
 
 CROSSGRADE:
-You can switch between Fast Freight and Heavy Freight for only 5M (and still build up to 15M of track that turn). Consider this when your strategy shifts from long routes to corridor routes or vice versa.
+You can switch between Fast Freight and Heavy Freight for only 5M (and still build up to 15M of track that turn). Consider this when your strategy shifts.
+
+To upgrade, include "upgradeOnRoute" in your response. The upgrade will execute on the turn the route starts (replacing track building for that turn).
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
@@ -215,11 +216,12 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
     { "action": "DELIVER", "load": "<load type>", "city": "<city name>" }
   ],
   "startingCity": "<major city to start building from, if no track yet>",
+  "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if you want to upgrade this turn, omit if not upgrading>",
   "reasoning": "<1-2 sentences explaining why this route>",
   "planHorizon": "<estimated turns: Build X→Y (N turns), pickup, deliver (N turns)>"
 }
 
-EXAMPLE — efficient double-delivery route:
+EXAMPLE — efficient double-delivery route with upgrade:
 {
   "route": [
     { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
@@ -228,8 +230,9 @@ EXAMPLE — efficient double-delivery route:
     { "action": "DELIVER", "load": "Potatoes", "city": "Ruhr" }
   ],
   "startingCity": "Berlin",
-  "reasoning": "Two potato demands share a route through central Europe. Picking up 2x at Szczecin maximizes throughput.",
-  "planHorizon": "Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
+  "upgradeOnRoute": "FastFreight",
+  "reasoning": "Upgrading to Fast Freight for +3 speed, then two potato demands through central Europe.",
+  "planHorizon": "Upgrade + Build Berlin→Szczecin (3 turns), pickup 2x, deliver Paris then Ruhr (2 turns each)"
 }`;
 
 // ── Plan Selection Suffix ────────────────────────────────────────────

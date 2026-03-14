@@ -452,6 +452,7 @@ export interface StrategicRoute {
   currentStopIndex: number;     // which stop we're working toward
   phase: 'build' | 'travel' | 'act';  // within current stop: build track → travel → pickup/deliver
   startingCity?: string;        // for initial build: where to start building from
+  upgradeOnRoute?: string;      // LLM's upgrade decision: 'FastFreight' | 'HeavyFreight' | 'Superfreight'
   createdAtTurn: number;
   reasoning: string;            // LLM's reasoning for choosing this route
 }
