@@ -509,6 +509,7 @@ export class AIStrategyEngine {
           const llmStart = Date.now();
 
           let newRoute: StrategicRoute | null = null;
+          let reEvalReasoning: string | null = null; // JIRA-109: capture re-eval reasoning for debug overlay
 
           if (routeWasCompleted) {
             // Route is done — ask LLM for a brand new strategic plan
@@ -521,6 +522,7 @@ export class AIStrategyEngine {
             }
             if (routeResult.route) {
               newRoute = routeResult.route;
+              reEvalReasoning = newRoute.reasoning ?? null;
               console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
               logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
             } else {
@@ -534,6 +536,7 @@ export class AIStrategyEngine {
               }
               if (retryResult.route) {
                 newRoute = retryResult.route;
+                reEvalReasoning = newRoute.reasoning ?? null;
                 console.log(`${tag} JIRA-103: Budget-hint retry succeeded: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${retryMs}ms)`);
                 logPhase('reeval', [], null, null, { llmReasoning: `budget-retry: ${newRoute.reasoning}`, llmLatencyMs: llmMs + retryMs });
               } else {
@@ -550,6 +553,7 @@ export class AIStrategyEngine {
               if (reEvalResult) {
                 console.log(`${tag} JIRA-86: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${llmMs}ms)`);
                 logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: llmMs });
+                reEvalReasoning = reEvalResult.reasoning ?? null;
 
                 if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
                   newRoute = { ...routeForReEval, stops: reEvalResult.amendedStops, currentStopIndex: 0 };
@@ -639,6 +643,12 @@ export class AIStrategyEngine {
             console.log(`${tag} JIRA-90: Post-delivery re-composed with ${reCompSteps.length} movement steps + build retarget (reclaimed ${wastedMovement}mp)`);
             activeRoute = newRoute;
             reEvalHandled = true;
+
+            // JIRA-109: Update debug overlay fields to reflect post-re-eval route
+            decision.planHorizon = `Route: ${newRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
+            if (reEvalReasoning) {
+              decision.reasoning = `${decision.reasoning} | [re-eval] ${reEvalReasoning}`;
+            }
           }
         } catch (err) {
           console.warn(`${tag} JIRA-86: Post-delivery LLM call error, keeping existing plan:`, err instanceof Error ? err.message : err);
