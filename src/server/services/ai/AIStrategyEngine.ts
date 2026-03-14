@@ -100,6 +100,14 @@ export interface BotTurnResult {
   // Prompt text for NDJSON observability
   systemPrompt?: string;
   userPrompt?: string;
+  // Enriched debugging fields
+  positionStart?: { row: number; col: number; cityName?: string } | null;
+  positionEnd?: { row: number; col: number; cityName?: string } | null;
+  carriedLoads?: string[];
+  connectedMajorCities?: string[];
+  trainSpeed?: number;
+  trainCapacity?: number;
+  demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
 }
 
 export class AIStrategyEngine {
@@ -138,6 +146,15 @@ export class AIStrategyEngine {
       const botConfig = snapshot.bot.botConfig as BotConfig | null;
       const skillLevel = (botConfig?.skillLevel as BotSkillLevel) ?? BotSkillLevel.Medium;
       const gridPoints = snapshot.hexGrid ?? [];
+
+      // Capture start position for NDJSON logging (before any movement)
+      const positionStart = snapshot.bot.position
+        ? {
+          row: snapshot.bot.position.row,
+          col: snapshot.bot.position.col,
+          cityName: gridPoints.find(gp => gp.row === snapshot.bot.position!.row && gp.col === snapshot.bot.position!.col)?.city?.name,
+        }
+        : null;
 
       // ── Stage 2: Build game context ──
       const context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
@@ -1037,6 +1054,16 @@ export class AIStrategyEngine {
         // Prompt text for NDJSON observability
         systemPrompt: decision.systemPrompt,
         userPrompt: decision.userPrompt,
+        // Enriched debugging fields
+        positionStart,
+        positionEnd: movementPath.length > 0
+          ? (() => { const last = movementPath[movementPath.length - 1]; return { row: last.row, col: last.col, cityName: gridPoints.find(gp => gp.row === last.row && gp.col === last.col)?.city?.name }; })()
+          : positionStart,
+        carriedLoads: snapshot.bot.loads.length > 0 ? [...snapshot.bot.loads] : undefined,
+        connectedMajorCities: context.connectedMajorCities.length > 0 ? context.connectedMajorCities : undefined,
+        trainSpeed: context.speed,
+        trainCapacity: context.capacity,
+        demandCards: context.demands.map(d => ({ loadType: d.loadType, supplyCity: d.supplyCity, deliveryCity: d.deliveryCity, payout: d.payout, cardIndex: d.cardIndex })),
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

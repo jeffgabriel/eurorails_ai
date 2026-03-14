@@ -65,12 +65,13 @@ export async function onTurnChange(
 ): Promise<void> {
   if (!isAIBotsEnabled()) return;
 
-  // Query player: is_bot?
+  // Query player: is_bot + name for logging
   const playerResult = await db.query(
-    'SELECT is_bot FROM players WHERE id = $1',
+    'SELECT is_bot, name FROM players WHERE id = $1',
     [currentPlayerId],
   );
   if (!playerResult.rows[0]?.is_bot) return;
+  const playerName: string | undefined = playerResult.rows[0]?.name;
 
   // Check game status
   const gameResult = await db.query(
@@ -197,7 +198,17 @@ export async function onTurnChange(
       appendTurn(gameId, {
         turn: turnNumber + 1,
         playerId: currentPlayerId,
+        playerName,
         timestamp: new Date().toISOString(),
+        positionStart: result.positionStart,
+        positionEnd: result.positionEnd,
+        carriedLoads: result.carriedLoads,
+        movementPath: result.movementPath,
+        trainSpeed: result.trainSpeed,
+        trainCapacity: result.trainCapacity,
+        connectedMajorCities: result.connectedMajorCities,
+        activeRoute: result.activeRoute ? { stops: result.activeRoute.stops.map(s => ({ action: s.action, loadType: s.loadType, city: s.city })), currentStopIndex: result.activeRoute.currentStopIndex } : undefined,
+        demandCards: result.demandCards,
         action: result.action,
         reasoning: result.reasoning,
         planHorizon: result.planHorizon,

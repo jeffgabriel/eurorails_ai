@@ -19,7 +19,23 @@ function ensureDir(): void {
 export interface GameTurnLogEntry {
   turn: number;
   playerId: string;
+  playerName?: string;
   timestamp: string;
+
+  // Position & Movement
+  positionStart?: { row: number; col: number; cityName?: string } | null;
+  positionEnd?: { row: number; col: number; cityName?: string } | null;
+  carriedLoads?: string[];
+  movementPath?: { row: number; col: number }[];
+
+  // Train details
+  trainSpeed?: number;
+  trainCapacity?: number;
+
+  // Strategic state
+  connectedMajorCities?: string[];
+  activeRoute?: { stops: Array<{ action: string; loadType: string; city: string }>; currentStopIndex: number } | null;
+  demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
 
   // LLM Decision
   action: string;
