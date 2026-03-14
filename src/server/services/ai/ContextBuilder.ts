@@ -953,9 +953,9 @@ export class ContextBuilder {
       lines.push('');
     }
 
-    // ── UPGRADE OPTIONS (JIRA-55 Part B) ──
-    // Gate: don't mention upgrades until bot has 3+ deliveries and >= 50M cash
-    const upgradeEligible = (context.deliveryCount ?? 0) >= 3 && context.money >= 50;
+    // ── UPGRADE OPTIONS (JIRA-55 Part B, JIRA-105: lowered gates) ──
+    // Gate: mention upgrades after 1+ delivery with >= 30M cash
+    const upgradeEligible = (context.deliveryCount ?? 0) >= 1 && context.money >= 30;
     if (upgradeEligible && context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' &&
         context.turnNumber >= 8;
@@ -1707,12 +1707,12 @@ export class ContextBuilder {
 
     if (trainType === TrainType.Freight) {
       if (turn >= 15 && money >= 20) {
-        parts.push(`URGENT: Still on Freight at turn ${turn}. Upgrade NOW \u2014 every turn without Fast Freight or Heavy Freight costs you efficiency.`);
+        parts.push(`URGENT: Still on Freight at turn ${turn}. Upgrade NOW — every turn without Fast Freight or Heavy Freight costs you efficiency.`);
+      } else if (turn >= 10 && money >= 20) {
+        parts.push(`WARNING: Still on basic Freight at turn ${turn}. No one wins this game on Freight — upgrade to Fast Freight or Heavy Freight NOW.`);
       }
-      if (money >= 60) {
-        parts.push('Fast Freight (20M): +3 speed saves ~1 turn per delivery. Heavy Freight (20M): +1 cargo slot for corridor deliveries.');
-      } else if (money >= 20) {
-        parts.push('You can afford an upgrade (20M). Fast Freight for speed, Heavy Freight for cargo \u2014 choose based on your route lengths.');
+      if (money >= 20) {
+        parts.push('Fast Freight (20M): +3 speed saves ~1 turn per delivery — almost always the best first upgrade. Heavy Freight (20M): +1 cargo slot for corridor deliveries.');
       }
       // ROI enrichment
       if (avgRouteLength > 15 && money >= 20) {

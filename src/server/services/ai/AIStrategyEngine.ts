@@ -36,6 +36,7 @@ import {
   TimelineStep,
   TurnPlanMoveTrain,
   TurnPlanDropLoad,
+  TurnPlanUpgradeTrain,
   TRAIN_PROPERTIES,
   TrainType,
 } from '../../../shared/types/GameTypes';
@@ -199,6 +200,7 @@ export class AIStrategyEngine {
       let previousRouteStops: RouteStop[] | null = null; // BE-010
       let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
       const deadLoadDropActions: TurnPlanDropLoad[] = [];
+      let pendingUpgradeAction: TurnPlanUpgradeTrain | null = null; // JIRA-105
 
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
@@ -234,6 +236,14 @@ export class AIStrategyEngine {
         if (routeResult.route) {
           activeRoute = routeResult.route;
           console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
+
+          // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
+          if (activeRoute.upgradeOnRoute) {
+            const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag);
+            if (upgradeResult) {
+              pendingUpgradeAction = upgradeResult;
+            }
+          }
 
           // ── JIRA-89: Dead load check + secondary delivery planning ──
           const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
@@ -436,6 +446,13 @@ export class AIStrategyEngine {
       }
 
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
+
+      // ── JIRA-105: Inject pending upgrade action into decision plan (before TurnComposer) ──
+      if (pendingUpgradeAction) {
+        const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
+        decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, pendingUpgradeAction] };
+        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${pendingUpgradeAction.targetTrain}) into turn plan`);
+      }
 
       // ── Stage 3b: Compose full turn (fill missing phases) ──
       const compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
@@ -648,14 +665,30 @@ export class AIStrategyEngine {
               ActionResolver.applyPlanToState(step, simSnapshot, simContext);
             }
 
+            // ── JIRA-105: Consume upgradeOnRoute from post-delivery new route ──
+            let postDeliveryUpgrade: TurnPlanUpgradeTrain | null = null;
+            if (newRoute.upgradeOnRoute) {
+              const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(newRoute, simSnapshot, tag);
+              if (upgradeResult) {
+                postDeliveryUpgrade = upgradeResult;
+              }
+            }
+
             // Re-compose build phase targeting the new route, replacing old build step
             // JIRA-100: Skip if reCompSteps already contains a BUILD (game rule: one build per turn)
+            // JIRA-105: Skip build if upgrade is pending (game rule: upgrade replaces build)
             const reCompHasBuild = reCompSteps.some(s => s.type === AIActionType.BuildTrack);
-            const reBuild = reCompHasBuild ? null : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
-            if (reBuild) {
+            const skipBuildForUpgrade = postDeliveryUpgrade !== null;
+            const reBuild = (reCompHasBuild || skipBuildForUpgrade) ? null : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            const phaseBAction = postDeliveryUpgrade ?? reBuild;
+            if (phaseBAction) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
-              decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, reBuild] };
-              console.log(`${tag} JIRA-90: Re-targeted build phase toward ${(reBuild as any).targetCity ?? 'new route'}`);
+              decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, phaseBAction] };
+              if (postDeliveryUpgrade) {
+                console.log(`${tag} JIRA-105: Post-delivery upgrade to ${postDeliveryUpgrade.targetTrain} (replacing build phase)`);
+              } else {
+                console.log(`${tag} JIRA-90: Re-targeted build phase toward ${(phaseBAction as any).targetCity ?? 'new route'}`);
+              }
             } else if (reCompSteps.length > 0) {
               decision.plan = { type: 'MultiAction' as const, steps: [...coreSteps, ...reCompSteps] };
             }
@@ -1305,6 +1338,42 @@ export class AIStrategyEngine {
    * Check if the bot has LLM API key configured.
    * Returns false if no provider or no matching env var — falls back to heuristic.
    */
+  /**
+   * JIRA-105: Consume upgradeOnRoute from a route, returning a TurnPlanUpgradeTrain if valid.
+   * Clears upgradeOnRoute from the route after consumption (one-time use).
+   */
+  private static tryConsumeUpgrade(
+    route: StrategicRoute,
+    snapshot: WorldSnapshot,
+    tag: string,
+  ): TurnPlanUpgradeTrain | null {
+    const targetTrain = route.upgradeOnRoute!;
+    route.upgradeOnRoute = undefined; // one-time consumption
+
+    // Validate upgrade path using same logic as ActionResolver.UPGRADE_PATHS
+    const UPGRADE_PATHS: Record<string, Record<string, number>> = {
+      [TrainType.Freight]: { [TrainType.FastFreight]: 20, [TrainType.HeavyFreight]: 20 },
+      [TrainType.FastFreight]: { [TrainType.Superfreight]: 20, [TrainType.HeavyFreight]: 5 },
+      [TrainType.HeavyFreight]: { [TrainType.Superfreight]: 20, [TrainType.FastFreight]: 5 },
+    };
+
+    const currentTrain = snapshot.bot.trainType;
+    const paths = UPGRADE_PATHS[currentTrain];
+    if (!paths || !(targetTrain in paths)) {
+      console.warn(`${tag} JIRA-105: upgradeOnRoute "${targetTrain}" invalid from "${currentTrain}" — skipping`);
+      return null;
+    }
+
+    const cost = paths[targetTrain];
+    if (snapshot.bot.money < cost) {
+      console.warn(`${tag} JIRA-105: upgradeOnRoute "${targetTrain}" unaffordable (need ${cost}M, have ${snapshot.bot.money}M) — skipping`);
+      return null;
+    }
+
+    console.log(`${tag} JIRA-105: Consuming upgradeOnRoute → ${targetTrain} (cost=${cost}M)`);
+    return { type: AIActionType.UpgradeTrain, targetTrain, cost };
+  }
+
   private static hasLLMApiKey(botConfig: BotConfig | null): boolean {
     if (!botConfig) return false;
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;

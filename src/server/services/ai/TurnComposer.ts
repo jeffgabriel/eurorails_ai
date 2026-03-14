@@ -453,7 +453,9 @@ export class TurnComposer {
     }
 
     // ── Phase B: Build/Upgrade ──
-    if (!skipBuildPhase) {
+    // JIRA-105: Skip build if plan already contains an UpgradeTrain action (game rule: upgrade replaces building)
+    const hasUpgradeInSteps = steps.some(s => s.type === AIActionType.UpgradeTrain);
+    if (!skipBuildPhase && !hasUpgradeInSteps) {
       try {
         // INF-002: Log when upgrade would be preferred over building
         const canAffordUpgrade = simContext.canUpgrade && simSnapshot.bot.money >= 20;
