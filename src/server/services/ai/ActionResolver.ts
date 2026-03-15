@@ -189,9 +189,10 @@ export class ActionResolver {
 
     // Filter existingSegments to only the connected component reachable from bot position.
     // This prevents Dijkstra from starting at disconnected cluster endpoints (e.g., remote major cities).
-    const connectedSegments = hasTrack
-      ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position!)
-      : [];
+    // Skip filtering when position is null (initialBuild — bot has track but no pawn placement yet).
+    const connectedSegments = hasTrack && snapshot.bot.position
+      ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position)
+      : snapshot.bot.existingSegments;
 
     const segments = computeBuildSegments(
       startPositions,
