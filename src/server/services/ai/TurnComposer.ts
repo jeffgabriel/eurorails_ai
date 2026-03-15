@@ -22,6 +22,7 @@ import {
   GameContext,
   AIActionType,
   StrategicRoute,
+  TerrainType,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints } from './MapTopology';
@@ -876,6 +877,7 @@ export class TurnComposer {
   ): Array<{ row: number; col: number }> {
     const majorCityLookup = getMajorCityLookup();
     let effectiveCount = 0;
+    let budgetTruncated = path;
     for (let i = 0; i < path.length - 1; i++) {
       const fromKey = `${path[i].row},${path[i].col}`;
       const toKey = `${path[i + 1].row},${path[i + 1].col}`;
@@ -885,10 +887,21 @@ export class TurnComposer {
         effectiveCount++;
       }
       if (effectiveCount >= effectiveBudget) {
-        return path.slice(0, i + 2); // include both endpoints of the last edge
+        budgetTruncated = path.slice(0, i + 2); // include both endpoints of the last edge
+        break;
       }
     }
-    return path; // path fits within budget
+
+    // Ferry port boundary scan: trains must stop at ferry ports (skip index 0 — starting position)
+    const grid = loadGridPoints();
+    for (let i = 1; i < budgetTruncated.length; i++) {
+      const pointKey = `${budgetTruncated[i].row},${budgetTruncated[i].col}`;
+      if (grid.get(pointKey)?.terrain === TerrainType.FerryPort) {
+        return budgetTruncated.slice(0, i + 1);
+      }
+    }
+
+    return budgetTruncated;
   }
 
   /** Extract action type strings from a plan (for trace logging). */

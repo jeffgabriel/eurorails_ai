@@ -1069,7 +1069,7 @@ export class ActionResolver {
     const grid = loadGridPoints();
     const targets: GridCoord[] = [];
     for (const [, point] of grid) {
-      if (point.name === cityName && point.terrain !== 7 /* FerryPort */) {
+      if (point.name === cityName) {
         targets.push({ row: point.row, col: point.col });
       }
     }

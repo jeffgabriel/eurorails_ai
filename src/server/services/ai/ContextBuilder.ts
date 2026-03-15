@@ -243,8 +243,9 @@ export class ContextBuilder {
 
     // Check if starting position is a city
     const startPoint = gridLookup.get(startKey);
-    if (startPoint?.city?.name) {
-      reachableCities.push(startPoint.city.name);
+    const startCityName = startPoint?.city?.name ?? startPoint?.name;
+    if (startCityName) {
+      reachableCities.push(startCityName);
     }
 
     while (queue.length > 0) {
@@ -275,9 +276,10 @@ export class ContextBuilder {
         bestRemaining.set(neighborKey, newRemaining);
         queue.push({ key: neighborKey, remaining: newRemaining });
 
-        // Collect city name if this is a city
-        if (neighborPoint?.city?.name) {
-          reachableCities.push(neighborPoint.city.name);
+        // Collect city name if this is a city (including FerryPort points which have name but no city)
+        const neighborCityName = neighborPoint?.city?.name ?? neighborPoint?.name;
+        if (neighborCityName) {
+          reachableCities.push(neighborCityName);
         }
       }
     }

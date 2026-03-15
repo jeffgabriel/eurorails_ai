@@ -1021,7 +1021,7 @@ export class AIStrategyEngine {
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       for (const step of allSteps) {
         if (step.type === AIActionType.MoveTrain) {
-          milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? step.path.length - 1 : 0);
+          milepostsMoved = (milepostsMoved ?? 0) + computeEffectivePathLength(step.path, getMajorCityLookup());
           trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
           if (step.path.length > 0) {
             const last = movementPath[movementPath.length - 1];
