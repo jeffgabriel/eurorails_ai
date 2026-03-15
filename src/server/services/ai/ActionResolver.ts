@@ -265,8 +265,12 @@ export class ActionResolver {
       // Dublin is both a Small City and a ferry endpoint — when the target IS the
       // paired port, pathfinding from (24,10) to (24,10) returns an empty path
       // which gets rejected. Instead, return a successful zero-length move.
+      // Exclude FerryPort-terrain targets to prevent false matches when a ferry port
+      // shares a name with a nearby city (e.g., Newcastle ferry port vs SmallCity).
+      const ferryGrid = loadGridPoints();
       const atTargetAfterFerry = targetPositions.some(
-        tp => tp.row === fromPosition.row && tp.col === fromPosition.col,
+        tp => tp.row === fromPosition.row && tp.col === fromPosition.col
+          && ferryGrid.get(`${tp.row},${tp.col}`)?.terrain !== TerrainType.FerryPort,
       );
       if (atTargetAfterFerry) {
         console.log(`[Ferry] Bot arrived at ${targetCity} via ferry crossing — zero movement`);
@@ -1059,7 +1063,8 @@ export class ActionResolver {
   /**
    * Find grid coordinates for a city by name.
    * Returns the closest milepost to the bot's track network (or first match if no track).
-   * Excludes FerryPort-only mileposts since they are transit, not destinations.
+   * Prefers real city mileposts over FerryPort mileposts when both share the same name.
+   * Returns FerryPort mileposts only for pure ferry port cities (e.g., Dover, Calais).
    */
   private static findCityMilepost(
     cityName: string,
@@ -1068,10 +1073,19 @@ export class ActionResolver {
   ): GridCoord[] {
     const grid = loadGridPoints();
     const targets: GridCoord[] = [];
+    const ferryTargets: GridCoord[] = [];
     for (const [, point] of grid) {
       if (point.name === cityName) {
-        targets.push({ row: point.row, col: point.col });
+        if (point.terrain === TerrainType.FerryPort) {
+          ferryTargets.push({ row: point.row, col: point.col });
+        } else {
+          targets.push({ row: point.row, col: point.col });
+        }
       }
+    }
+    // If no non-ferry targets found, include ferry port mileposts (pure ferry cities like Dover)
+    if (targets.length === 0 && ferryTargets.length > 0) {
+      targets.push(...ferryTargets);
     }
     // Also check major city groups for center + outposts
     if (targets.length === 0) {
