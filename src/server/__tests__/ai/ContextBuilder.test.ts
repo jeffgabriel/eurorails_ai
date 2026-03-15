@@ -3241,3 +3241,108 @@ describe('JIRA-102: estimateTrackCost fallback includes city cost and conservati
     expect(demand!.estimatedTrackCostToSupply).toBe(0);
   });
 });
+
+// ── JIRA-105b: serializeUpgradeBeforeDropPrompt ──
+
+describe('ContextBuilder.serializeUpgradeBeforeDropPrompt', () => {
+  function makeUpgradeSnapshot(): any {
+    return {
+      turnNumber: 14,
+      bot: {
+        trainType: 'Freight',
+        money: 50,
+        loads: ['Oil', 'Hops'],
+      },
+    };
+  }
+
+  function makeUpgradeRoute(): any {
+    return {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', payment: 30 },
+        { action: 'deliver', loadType: 'Hops', city: 'Stockholm', payment: 48 },
+      ],
+    };
+  }
+
+  it('should include train info, cash, and upgrade options', () => {
+    const prompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+      makeUpgradeSnapshot(),
+      makeUpgradeRoute(),
+      [{ targetTrain: 'HeavyFreight', cost: 20 }],
+      78,
+      [],
+    );
+
+    expect(prompt).toContain('Train: Freight');
+    expect(prompt).toContain('Cash: 50M');
+    expect(prompt).toContain('HeavyFreight');
+    expect(prompt).toContain('cost: 20M');
+    expect(prompt).toContain('Total route payout: 78M');
+  });
+
+  it('should include conflicting loads that would be dropped', () => {
+    const prompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+      makeUpgradeSnapshot(),
+      makeUpgradeRoute(),
+      [{ targetTrain: 'HeavyFreight', cost: 20 }],
+      78,
+      [{
+        cardIndex: 0,
+        loadType: 'Oil',
+        supplyCity: 'Hamburg',
+        deliveryCity: 'Zagreb',
+        payout: 25,
+        isSupplyReachable: true,
+        isDeliveryReachable: true,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 10,
+        estimatedTurns: 5,
+        efficiencyPerTurn: 3.0,
+        isLoadOnTrain: true,
+      }],
+    );
+
+    expect(prompt).toContain('LOAD THAT WOULD BE DROPPED');
+    expect(prompt).toContain('Oil');
+    expect(prompt).toContain('Zagreb');
+    expect(prompt).toContain('25M payout');
+  });
+
+  it('should show multiple upgrade options sorted by cost', () => {
+    const snap = makeUpgradeSnapshot();
+    snap.bot.trainType = 'FastFreight';
+
+    const prompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+      snap,
+      makeUpgradeRoute(),
+      [
+        { targetTrain: 'HeavyFreight', cost: 5 },
+        { targetTrain: 'Superfreight', cost: 20 },
+      ],
+      78,
+      [],
+    );
+
+    expect(prompt).toContain('HeavyFreight');
+    expect(prompt).toContain('Superfreight');
+    expect(prompt).toContain('cost: 5M');
+    expect(prompt).toContain('cost: 20M');
+  });
+
+  it('should include the decision prompt', () => {
+    const prompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+      makeUpgradeSnapshot(),
+      makeUpgradeRoute(),
+      [{ targetTrain: 'HeavyFreight', cost: 20 }],
+      78,
+      [],
+    );
+
+    expect(prompt).toContain('DECISION:');
+    expect(prompt).toContain('UPGRADE your train or SKIP');
+  });
+});

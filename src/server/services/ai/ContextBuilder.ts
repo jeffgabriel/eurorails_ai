@@ -1684,6 +1684,74 @@ export class ContextBuilder {
     return lines.join('\n');
   }
 
+  /**
+   * JIRA-105b: Serialize context for upgrade-before-drop evaluation.
+   *
+   * Builds a focused prompt showing upgrade cost vs route payout and the value
+   * of the load that would be dropped, so the LLM can decide whether to upgrade.
+   */
+  static serializeUpgradeBeforeDropPrompt(
+    snapshot: WorldSnapshot,
+    route: StrategicRoute,
+    upgradeOptions: { targetTrain: string; cost: number }[],
+    totalRoutePayout: number,
+    demands: DemandContext[],
+  ): string {
+    const lines: string[] = [];
+    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const freeSlots = capacity - snapshot.bot.loads.length;
+
+    lines.push(`TURN ${snapshot.turnNumber}`);
+    lines.push(`Train: ${snapshot.bot.trainType} (capacity ${capacity}, speed ${TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9})`);
+    lines.push(`Cash: ${snapshot.bot.money}M`);
+    lines.push(`Carried loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
+    lines.push(`Free slots: ${freeSlots} of ${capacity}`);
+    lines.push('');
+
+    // Route summary with payouts
+    lines.push('PLANNED ROUTE:');
+    for (const stop of route.stops) {
+      lines.push(`  ${stop.action.toUpperCase()} ${stop.loadType} at ${stop.city}${stop.payment ? ` (${stop.payment}M)` : ''}`);
+    }
+    const pickupCount = route.stops.filter(s => s.action === 'pickup').length;
+    lines.push(`  Pickups needed: ${pickupCount} | Total route payout: ${totalRoutePayout}M`);
+    lines.push('');
+
+    // Upgrade options
+    lines.push('AVAILABLE UPGRADES (capacity-increasing):');
+    for (const opt of upgradeOptions) {
+      const targetCap = TRAIN_PROPERTIES[opt.targetTrain as TrainType]?.capacity ?? 3;
+      const targetSpeed = TRAIN_PROPERTIES[opt.targetTrain as TrainType]?.speed ?? 9;
+      const netBenefit = totalRoutePayout - opt.cost;
+      lines.push(`  ${opt.targetTrain} (capacity ${targetCap}, speed ${targetSpeed}) — cost: ${opt.cost}M, net benefit: ${netBenefit}M`);
+    }
+    lines.push('');
+
+    // Identify the load most likely to be dropped (carried loads not in route delivery)
+    const routeDeliveryLoads = new Set(
+      route.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
+    );
+    const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
+    if (conflictingLoads.length > 0) {
+      lines.push('LOAD THAT WOULD BE DROPPED IF NOT UPGRADING:');
+      for (const loadType of conflictingLoads) {
+        const demandCtx = demands.find(d => d.loadType === loadType && d.isLoadOnTrain);
+        if (demandCtx) {
+          lines.push(`  ${loadType} → ${demandCtx.deliveryCity}: ${demandCtx.payout}M payout, ~${demandCtx.estimatedTrackCostToDelivery}M track cost, ~${demandCtx.estimatedTurns} turns`);
+        } else {
+          lines.push(`  ${loadType} → no matching demand card found`);
+        }
+      }
+      lines.push('');
+    }
+
+    lines.push(`DECISION: You need ${pickupCount} pickup slots but only have ${freeSlots} free.`);
+    lines.push(`Upgrading costs ${upgradeOptions[0]?.cost ?? 20}M but lets you carry all ${pickupCount + snapshot.bot.loads.length} loads.`);
+    lines.push('Should you UPGRADE your train or SKIP and drop a load instead?');
+
+    return lines.join('\n');
+  }
+
   /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
   private static computeUpgradeAdvice(
     snapshot: WorldSnapshot,

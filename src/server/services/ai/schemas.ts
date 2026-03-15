@@ -134,6 +134,24 @@ export const CARGO_CONFLICT_SCHEMA = {
   required: ['action', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the upgrade-before-drop evaluation response (JIRA-105b).
+ * When the bot has a cargo conflict and a capacity-increasing upgrade is affordable,
+ * should it upgrade instead of dropping a load?
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const UPGRADE_BEFORE_DROP_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    action: { type: 'string' as const, enum: ['upgrade', 'skip'] },
+    targetTrain: { type: 'string' as const },
+    reasoning: { type: 'string' as const },
+  },
+  required: ['action', 'reasoning'],
+};
+
 export const RE_EVAL_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,

@@ -368,6 +368,40 @@ export function getCargoConflictPrompt(): string {
   return CARGO_CONFLICT_SYSTEM_SUFFIX;
 }
 
+// ── Upgrade-Before-Drop Prompt (JIRA-105b) ──
+
+const UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX = `
+You are evaluating whether a bot should UPGRADE its train instead of DROPPING a carried load to resolve a cargo conflict.
+
+The bot has a planned route needing more cargo slots than it currently has. A capacity-increasing upgrade is affordable. Your job: decide whether upgrading is better than dropping a load.
+
+DECISION CRITERIA:
+1. Calculate net benefit: (total route payout) - (upgrade cost). If the upgrade lets the bot deliver ALL loads and the net benefit is positive, upgrading is almost always correct.
+2. Compare upgrade cost vs the value of the load that would be dropped. If the dropped load is worth MORE than the upgrade cost, upgrade instead.
+3. Consider the bot's cash — upgrading replaces track building this turn. If the bot urgently needs to build track (e.g., route requires track to reach the next pickup), skipping the upgrade may be better.
+4. Upgrading is a permanent investment — the bot keeps 3 cargo slots for the rest of the game. This has compounding value beyond the current route.
+5. When in doubt, UPGRADE — the long-term capacity benefit usually outweighs one turn of lost track building.
+
+RESPONSE FORMAT (JSON only, no markdown):
+{
+  "action": "upgrade" | "skip",
+  "targetTrain": "target train type (required if action is upgrade)",
+  "reasoning": "Brief explanation of the decision"
+}
+
+Choose "upgrade" if the net benefit is positive and the bot can afford it.
+Choose "skip" only if the bot cannot afford the upgrade, or the dropped load is cheap and track building is urgently needed this turn.
+`;
+
+/**
+ * Get the system prompt for upgrade-before-drop evaluation (JIRA-105b).
+ *
+ * Lightweight prompt for evaluating whether to upgrade train instead of dropping cargo.
+ */
+export function getUpgradeBeforeDropPrompt(): string {
+  return UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX;
+}
+
 // ── Route Re-evaluation Prompt (JIRA-64) ──
 
 const ROUTE_REEVAL_SYSTEM_SUFFIX = `

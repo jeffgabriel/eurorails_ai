@@ -1538,6 +1538,135 @@ describe('LLMStrategyBrain', () => {
       expect(result).toBeNull();
     });
   });
+  // ── JIRA-105b: evaluateUpgradeBeforeDrop ──
+
+  describe('evaluateUpgradeBeforeDrop', () => {
+    function createBrain(): LLMStrategyBrain {
+      return new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'test-key',
+        timeoutMs: 8000,
+        maxRetries: 1,
+      });
+    }
+
+    it('should return upgrade with valid targetTrain', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'upgrade',
+          targetTrain: 'HeavyFreight',
+          reasoning: 'Net benefit is positive',
+        }),
+        usage: { input: 50, output: 30 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('upgrade');
+      expect(result!.targetTrain).toBe('HeavyFreight');
+      expect(result!.reasoning).toBe('Net benefit is positive');
+    });
+
+    it('should return skip when LLM says skip', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'skip',
+          reasoning: 'Need to build track urgently',
+        }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('skip');
+      expect(result!.targetTrain).toBeUndefined();
+    });
+
+    it('should treat upgrade without targetTrain as skip', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({
+          action: 'upgrade',
+          reasoning: 'Should upgrade but forgot target',
+        }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('skip');
+    });
+
+    it('should retry on invalid action then return null', async () => {
+      mockChat
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ action: 'buy', reasoning: 'bad action' }),
+          usage: { input: 50, output: 20 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ action: 'sell', reasoning: 'still bad' }),
+          usage: { input: 50, output: 20 },
+        });
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).toBeNull();
+      expect(mockChat).toHaveBeenCalledTimes(2); // Initial + 1 retry
+    });
+
+    it('should return null on LLM timeout', async () => {
+      mockChat.mockRejectedValue(new Error('API timeout'));
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null on invalid JSON', async () => {
+      mockChat.mockResolvedValue({
+        text: 'not valid json',
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      const result = await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(result).toBeNull();
+    });
+  });
+});
+
+// ── JIRA-105b: UPGRADE_BEFORE_DROP_SCHEMA validation ──
+
+describe('UPGRADE_BEFORE_DROP_SCHEMA', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { UPGRADE_BEFORE_DROP_SCHEMA } = require('../../services/ai/schemas');
+
+  it('should have upgrade and skip as valid action values', () => {
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.properties.action.enum).toEqual(['upgrade', 'skip']);
+  });
+
+  it('should require action and reasoning', () => {
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.required).toContain('action');
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.required).toContain('reasoning');
+  });
+
+  it('should have targetTrain as optional string', () => {
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.properties.targetTrain.type).toBe('string');
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.required).not.toContain('targetTrain');
+  });
+
+  it('should disallow additional properties', () => {
+    expect(UPGRADE_BEFORE_DROP_SCHEMA.additionalProperties).toBe(false);
+  });
 });
 
 // ── JIRA-92: CARGO_CONFLICT_SCHEMA validation ──

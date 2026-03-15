@@ -28,18 +28,25 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt, getSecondaryDeliveryPrompt, getCargoConflictPrompt } from './prompts/systemPrompts';
+import { getSystemPrompt, getRoutePlanningPrompt, getRouteReEvaluationPrompt, getSecondaryDeliveryPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
-import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA, SECONDARY_DELIVERY_SCHEMA, CARGO_CONFLICT_SCHEMA } from './schemas';
+import { ACTION_SCHEMA, ROUTE_SCHEMA, RE_EVAL_SCHEMA, SECONDARY_DELIVERY_SCHEMA, CARGO_CONFLICT_SCHEMA, UPGRADE_BEFORE_DROP_SCHEMA } from './schemas';
 
 /** JIRA-92: Result of cargo conflict evaluation */
 export interface CargoConflictResult {
   action: 'drop' | 'keep';
   dropLoad?: string;
+  reasoning: string;
+}
+
+/** JIRA-105b: Result of upgrade-before-drop evaluation */
+export interface UpgradeBeforeDropResult {
+  action: 'upgrade' | 'skip';
+  targetTrain?: string;
   reasoning: string;
 }
 
@@ -674,6 +681,66 @@ export class LLMStrategyBrain {
     }
 
     console.warn('[LLMStrategyBrain] evaluateCargoConflict: all attempts failed, returning null');
+    return null;
+  }
+
+  /**
+   * JIRA-105b: Evaluate whether to upgrade train instead of dropping a load at cargo conflict.
+   *
+   * Lightweight LLM call: no thinking, temperature=0, 1024 max tokens, 8s timeout.
+   * Returns null on failure (graceful degradation — falls through to cargo conflict drop).
+   */
+  async evaluateUpgradeBeforeDrop(
+    userPrompt: string,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<UpgradeBeforeDropResult | null> {
+    const systemPrompt = getUpgradeBeforeDropPrompt();
+    const MAX_RETRIES = 1;
+    let lastError: string | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const promptWithError = lastError
+        ? `${userPrompt}\n\nYOUR PREVIOUS RESPONSE FAILED VALIDATION:\n${lastError}\nPlease provide a corrected response.`
+        : userPrompt;
+
+      try {
+        const response = await this.adapter.chat({
+          model: this.model,
+          maxTokens: 1024,
+          temperature: 0,
+          systemPrompt,
+          userPrompt: promptWithError,
+          outputSchema: UPGRADE_BEFORE_DROP_SCHEMA,
+          timeoutMs: 8000,
+        });
+
+        const parsed = JSON.parse(response.text);
+        const action = parsed.action;
+
+        if (!['upgrade', 'skip'].includes(action)) {
+          lastError = `Invalid action: ${action}. Must be "upgrade" or "skip".`;
+          continue;
+        }
+
+        if (action === 'upgrade' && !parsed.targetTrain) {
+          console.warn('[LLMStrategyBrain] evaluateUpgradeBeforeDrop: upgrade without targetTrain, treating as skip');
+          return { action: 'skip', reasoning: 'LLM said upgrade but did not specify target train' };
+        }
+
+        return {
+          action,
+          targetTrain: parsed.targetTrain,
+          reasoning: parsed.reasoning ?? '',
+        };
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.warn(`[LLMStrategyBrain] evaluateUpgradeBeforeDrop attempt ${attempt + 1} failed: ${errMsg}`);
+        lastError = errMsg;
+      }
+    }
+
+    console.warn('[LLMStrategyBrain] evaluateUpgradeBeforeDrop: all attempts failed, returning null');
     return null;
   }
 

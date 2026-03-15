@@ -347,29 +347,92 @@ export class AIStrategyEngine {
           ) {
             console.log(`${tag} JIRA-92: Cargo conflict — route needs ${routePickupCount} pickup slots, only ${effectiveFreeSlots} free`);
 
-            // Identify carried loads NOT in route's delivery stops
-            const routeDeliveryLoads = new Set(
-              activeRoute.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
-            );
-            const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
-
-            if (conflictingLoads.length > 0) {
-              try {
-                const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
-                const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
-
-                if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
-                  console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
-                  // Remove the load from snapshot so downstream sees updated capacity
-                  const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
-                  if (dropIndex >= 0) {
-                    snapshot.bot.loads.splice(dropIndex, 1);
-                  }
-                } else {
-                  console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
+            // ── JIRA-105b: Upgrade-before-drop check ──
+            // Before asking to drop, check if upgrading gives enough capacity
+            let upgradeBeforeDropHandled = false;
+            const currentCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+            if (
+              pendingUpgradeAction === null &&
+              currentCapacity < 3
+            ) {
+              // Find capacity-increasing upgrade options
+              const UPGRADE_PATHS: Record<string, Record<string, number>> = {
+                [TrainType.Freight]: { [TrainType.HeavyFreight]: 20 },
+                [TrainType.FastFreight]: { [TrainType.Superfreight]: 20, [TrainType.HeavyFreight]: 5 },
+              };
+              const paths = UPGRADE_PATHS[snapshot.bot.trainType] ?? {};
+              const upgradeOptions: { targetTrain: string; cost: number }[] = [];
+              for (const [target, cost] of Object.entries(paths)) {
+                if (snapshot.bot.money >= cost) {
+                  upgradeOptions.push({ targetTrain: target, cost });
                 }
-              } catch (err) {
-                console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
+              }
+
+              if (upgradeOptions.length > 0) {
+                // Sort by cost ascending (cheapest first)
+                upgradeOptions.sort((a, b) => a.cost - b.cost);
+                console.log(`${tag} JIRA-105b: Upgrade-before-drop check — ${routePickupCount} pickups needed, ${effectiveFreeSlots} free slots, upgrade to ${upgradeOptions[0].targetTrain} available`);
+
+                // Calculate total route payout
+                const totalRoutePayout = activeRoute.stops
+                  .filter(s => s.action === 'deliver' && s.payment)
+                  .reduce((sum, s) => sum + (s.payment ?? 0), 0);
+
+                try {
+                  const upgradePrompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+                    snapshot, activeRoute, upgradeOptions, totalRoutePayout, context.demands,
+                  );
+                  const upgradeResult = await brain.evaluateUpgradeBeforeDrop(upgradePrompt, snapshot, context);
+
+                  if (upgradeResult?.action === 'upgrade' && upgradeResult.targetTrain) {
+                    // Validate the target train is in our options
+                    const matchedOption = upgradeOptions.find(o => o.targetTrain === upgradeResult.targetTrain);
+                    if (matchedOption) {
+                      console.log(`${tag} JIRA-105b: Upgrade-before-drop → upgrading to ${upgradeResult.targetTrain} instead of dropping — ${upgradeResult.reasoning}`);
+                      pendingUpgradeAction = {
+                        type: AIActionType.UpgradeTrain,
+                        targetTrain: matchedOption.targetTrain,
+                        cost: matchedOption.cost,
+                      };
+                      upgradeBeforeDropHandled = true;
+                    } else {
+                      console.warn(`${tag} JIRA-105b: LLM suggested "${upgradeResult.targetTrain}" but not in valid options, falling through to cargo conflict`);
+                    }
+                  } else {
+                    console.log(`${tag} JIRA-105b: Upgrade-before-drop → skip — ${upgradeResult?.reasoning ?? 'LLM returned null'}`);
+                  }
+                } catch (err) {
+                  console.warn(`${tag} JIRA-105b: Upgrade-before-drop LLM call failed:`, err instanceof Error ? err.message : err);
+                }
+              }
+            }
+
+            // Only run cargo conflict drop if upgrade-before-drop didn't handle it
+            if (!upgradeBeforeDropHandled) {
+              // Identify carried loads NOT in route's delivery stops
+              const routeDeliveryLoads = new Set(
+                activeRoute.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
+              );
+              const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
+
+              if (conflictingLoads.length > 0) {
+                try {
+                  const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
+                  const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
+
+                  if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
+                    console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
+                    // Remove the load from snapshot so downstream sees updated capacity
+                    const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
+                    if (dropIndex >= 0) {
+                      snapshot.bot.loads.splice(dropIndex, 1);
+                    }
+                  } else {
+                    console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
+                  }
+                } catch (err) {
+                  console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
+                }
               }
             }
           }
