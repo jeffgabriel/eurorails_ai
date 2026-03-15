@@ -3197,15 +3197,17 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(mockReEval).toHaveBeenCalled();
     });
 
-    it('should skip re-eval when plan already has queued DELIVER step', async () => {
+    it('JIRA-112: should still call re-eval when plan has multiple DELIVER steps at same city', async () => {
       setupA2NoTargetScenario();
 
-      // Override TurnComposer to include TWO DELIVER steps
+      // Override TurnComposer to include TWO DELIVER steps at same city
+      // JIRA-112: hasQueuedDelivery guard removed — JIRA-91 early-execution
+      // applies all deliveries before capture(), so re-eval gets fresh state.
       mockTurnComposerCompose.mockResolvedValue({ plan: {
         type: 'MultiAction' as const,
         steps: [
           { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Berlin', cardId: 1, payout: 19 },
-          { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Essen', cardId: 2, payout: 28 },
+          { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 2, payout: 28 },
         ],
       }, trace: {
         inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad', 'DeliverLoad'],
@@ -3214,10 +3216,14 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         a2: { iterations: 1, terminationReason: 'no valid target' },
         a3: { movePreprended: false },
         build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-        pickups: [], deliveries: [{ load: 'Steel', city: 'Berlin' }, { load: 'Coal', city: 'Essen' }],
+        pickups: [], deliveries: [{ load: 'Steel', city: 'Berlin' }, { load: 'Coal', city: 'Berlin' }],
       } } as any);
 
-      const mockReEval = jest.fn();
+      const mockReEval = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
+        decision: 'amend',
+        amendedStops: [{ action: 'pickup', loadType: 'Coal', city: 'Essen' }],
+        reasoning: 'Pickup coal next',
+      });
       (LLMStrategyBrain as any).mockImplementation(() => ({
         decideAction: jest.fn(),
         planRoute: jest.fn(),
@@ -3226,8 +3232,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Re-eval should NOT be called — plan already has productive queued delivery
-      expect(mockReEval).not.toHaveBeenCalled();
+      // Re-eval SHOULD be called — JIRA-91 early-execution makes hasQueuedDelivery obsolete
+      expect(mockReEval).toHaveBeenCalled();
     });
 
     it('should gracefully fallback when re-eval throws an error', async () => {
