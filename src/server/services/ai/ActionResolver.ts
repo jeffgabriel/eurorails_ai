@@ -187,9 +187,15 @@ export class ActionResolver {
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
 
+    // Filter existingSegments to only the connected component reachable from bot position.
+    // This prevents Dijkstra from starting at disconnected cluster endpoints (e.g., remote major cities).
+    const connectedSegments = hasTrack
+      ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position!)
+      : [];
+
     const segments = computeBuildSegments(
       startPositions,
-      snapshot.bot.existingSegments,
+      connectedSegments,
       budget,
       budget, // maxSegments = budget (cheapest segment costs 1M)
       occupiedEdges,
@@ -1165,6 +1171,112 @@ export class ActionResolver {
       }
     }
     return positions;
+  }
+
+  /**
+   * Filter segments to only those in the connected component containing `position`.
+   * Uses BFS on segment adjacency. Major city red areas act as implicit edges:
+   * two segment endpoints touching the same major city's outposts are connected.
+   */
+  static filterConnectedSegments(
+    segments: TrackSegment[],
+    position: { row: number; col: number },
+  ): TrackSegment[] {
+    if (segments.length === 0) return [];
+
+    // Build adjacency: position key → set of connected position keys
+    const adjacency = new Map<string, Set<string>>();
+    const addEdge = (a: string, b: string): void => {
+      if (!adjacency.has(a)) adjacency.set(a, new Set());
+      if (!adjacency.has(b)) adjacency.set(b, new Set());
+      adjacency.get(a)!.add(b);
+      adjacency.get(b)!.add(a);
+    };
+
+    // Add direct segment edges
+    for (const seg of segments) {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      addEdge(fromKey, toKey);
+    }
+
+    // Add implicit major city red area edges: all outposts of the same major city are connected
+    const majorCityLookup = getMajorCityLookup();
+    const majorCityGroupsList = getMajorCityGroups();
+    const cityGroupMap = new Map(majorCityGroupsList.map(g => [g.cityName, g]));
+
+    // Collect all segment endpoint keys
+    const endpointKeys = new Set<string>();
+    for (const seg of segments) {
+      endpointKeys.add(`${seg.from.row},${seg.from.col}`);
+      endpointKeys.add(`${seg.to.row},${seg.to.col}`);
+    }
+
+    // For each major city, connect all of its mileposts that appear in our endpoints
+    const citiesProcessed = new Set<string>();
+    for (const key of endpointKeys) {
+      const cityName = majorCityLookup.get(key);
+      if (!cityName || citiesProcessed.has(cityName)) continue;
+      citiesProcessed.add(cityName);
+
+      const group = cityGroupMap.get(cityName);
+      if (!group) continue;
+
+      // Collect all mileposts for this city (center + outposts)
+      const cityKeys: string[] = [];
+      for (const point of [group.center, ...group.outposts]) {
+        cityKeys.push(`${point.row},${point.col}`);
+      }
+
+      // Connect all pairs that exist in our adjacency graph or as the bot position
+      for (let i = 0; i < cityKeys.length; i++) {
+        for (let j = i + 1; j < cityKeys.length; j++) {
+          addEdge(cityKeys[i], cityKeys[j]);
+        }
+      }
+    }
+
+    // Also check if bot position is at a major city — add its outposts to adjacency
+    const posKey = `${position.row},${position.col}`;
+    const botCityName = majorCityLookup.get(posKey);
+    if (botCityName && !citiesProcessed.has(botCityName)) {
+      const group = cityGroupMap.get(botCityName);
+      if (group) {
+        const cityKeys: string[] = [];
+        for (const point of [group.center, ...group.outposts]) {
+          cityKeys.push(`${point.row},${point.col}`);
+        }
+        for (let i = 0; i < cityKeys.length; i++) {
+          for (let j = i + 1; j < cityKeys.length; j++) {
+            addEdge(cityKeys[i], cityKeys[j]);
+          }
+        }
+      }
+    }
+
+    // BFS from bot position
+    const visited = new Set<string>();
+    const queue: string[] = [posKey];
+    visited.add(posKey);
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const neighbors = adjacency.get(current);
+      if (!neighbors) continue;
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push(neighbor);
+        }
+      }
+    }
+
+    // Filter segments: keep only those where both endpoints are in the visited set
+    return segments.filter(seg => {
+      const fromKey = `${seg.from.row},${seg.from.col}`;
+      const toKey = `${seg.to.row},${seg.to.col}`;
+      return visited.has(fromKey) && visited.has(toKey);
+    });
   }
 
   /**

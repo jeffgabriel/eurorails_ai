@@ -4088,4 +4088,107 @@ describe('ActionResolver', () => {
     });
   });
 
+  describe('filterConnectedSegments', () => {
+    beforeEach(() => {
+      mockGetMajorCityLookup.mockReturnValue(new Map());
+      mockGetMajorCityGroups.mockReturnValue([]);
+    });
+
+    it('returns all segments when all are in one connected cluster', () => {
+      const segments = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+        makeSegment(10, 12, 11, 12),
+      ];
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 10, col: 10 });
+      expect(result).toHaveLength(3);
+    });
+
+    it('filters out disconnected cluster when bot is in first cluster', () => {
+      // Cluster 1: bot is here
+      const cluster1 = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+      ];
+      // Cluster 2: disconnected
+      const cluster2 = [
+        makeSegment(30, 30, 30, 31),
+        makeSegment(30, 31, 30, 32),
+      ];
+      const allSegments = [...cluster1, ...cluster2];
+
+      const result = ActionResolver.filterConnectedSegments(allSegments, { row: 10, col: 10 });
+      expect(result).toHaveLength(2);
+      expect(result).toEqual(cluster1);
+    });
+
+    it('returns empty array for empty segments', () => {
+      const result = ActionResolver.filterConnectedSegments([], { row: 10, col: 10 });
+      expect(result).toHaveLength(0);
+    });
+
+    it('connects clusters via major city red area', () => {
+      // Cluster 1 touches Berlin outpost at (20,20)
+      const cluster1 = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 20, 20),
+      ];
+      // Cluster 2 touches Berlin outpost at (20,22)
+      const cluster2 = [
+        makeSegment(20, 22, 30, 30),
+      ];
+
+      // Berlin major city group: center (20,21), outposts (20,20) and (20,22)
+      mockGetMajorCityLookup.mockReturnValue(new Map([
+        ['20,20', 'Berlin'],
+        ['20,21', 'Berlin'],
+        ['20,22', 'Berlin'],
+      ]));
+      mockGetMajorCityGroups.mockReturnValue([{
+        cityName: 'Berlin',
+        center: { row: 20, col: 21 },
+        outposts: [{ row: 20, col: 20 }, { row: 20, col: 22 }],
+      }]);
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...cluster1, ...cluster2],
+        { row: 10, col: 10 },
+      );
+      // Both clusters should be connected via Berlin red area
+      expect(result).toHaveLength(3);
+    });
+
+    it('returns only bot cluster when bot position is not on any segment endpoint', () => {
+      // Bot at (5,5) which is not on any segment — should find nothing connected
+      const segments = [
+        makeSegment(10, 10, 10, 11),
+        makeSegment(10, 11, 10, 12),
+      ];
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 5, col: 5 });
+      expect(result).toHaveLength(0);
+    });
+
+    it('connects bot at major city center to segments on city outposts', () => {
+      // Bot at Berlin center (20,21), segment on Berlin outpost (20,20)
+      const segments = [
+        makeSegment(20, 20, 10, 10),
+        makeSegment(10, 10, 10, 11),
+      ];
+
+      mockGetMajorCityLookup.mockReturnValue(new Map([
+        ['20,20', 'Berlin'],
+        ['20,21', 'Berlin'],
+        ['20,22', 'Berlin'],
+      ]));
+      mockGetMajorCityGroups.mockReturnValue([{
+        cityName: 'Berlin',
+        center: { row: 20, col: 21 },
+        outposts: [{ row: 20, col: 20 }, { row: 20, col: 22 }],
+      }]);
+
+      const result = ActionResolver.filterConnectedSegments(segments, { row: 20, col: 21 });
+      expect(result).toHaveLength(2);
+    });
+  });
+
 });

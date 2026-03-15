@@ -286,17 +286,64 @@ describe('PlanExecutor', () => {
       expect(result.updatedRoute.phase).toBe('travel');
     });
 
-    it('should fall back to build when move fails', async () => {
+    it('should fall back to BUILD (not PassTurn) when move fails', async () => {
       const route = makeRoute({ currentStopIndex: 0 });
       const context = makeContext({ citiesOnNetwork: ['Berlin'], position: { row: 5, col: 5 } });
 
-      mockResolve.mockResolvedValue({
+      // First call: MOVE fails
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'No valid path',
+      });
+      // Second call: BUILD succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(5, 5, 5, 6)], targetCity: 'Berlin' },
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(result.updatedRoute.phase).toBe('build');
+      // Verify MOVE was called first, then BUILD
+      expect(mockResolve).toHaveBeenCalledTimes(2);
+      expect(mockResolve.mock.calls[0][0].action).toBe('MOVE');
+      expect(mockResolve.mock.calls[1][0].action).toBe('BUILD');
+    });
+
+    it('should return PassTurn when move fails AND build also fails', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({ citiesOnNetwork: ['Berlin'], position: { row: 5, col: 5 } });
+
+      // First call: MOVE fails
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'No valid path',
+      });
+      // Second call: BUILD also fails
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'No path within budget',
+      });
+
+      const result = await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+      expect(result.updatedRoute.phase).toBe('build');
+    });
+
+    it('should return PassTurn when move fails and canBuild is false (no budget)', async () => {
+      const route = makeRoute({ currentStopIndex: 0 });
+      const context = makeContext({ citiesOnNetwork: ['Berlin'], position: { row: 5, col: 5 }, canBuild: false });
+
+      mockResolve.mockResolvedValueOnce({
         success: false,
         error: 'No valid path',
       });
 
       const result = await PlanExecutor.execute(route, makeSnapshot(), context);
 
+      // canBuild is false, so resolveBuild returns PassTurn without calling ActionResolver.resolve for BUILD
       expect(result.plan.type).toBe(AIActionType.PassTurn);
       expect(result.updatedRoute.phase).toBe('build');
     });

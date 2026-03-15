@@ -306,15 +306,9 @@ export class PlanExecutor {
       };
     }
 
-    // Move failed — city might not actually be reachable via our track. Fall back to build.
-    console.warn(`${tag} Move to ${stop.city} failed: ${moveResult.error}. Falling back to build.`);
-    return {
-      plan: { type: AIActionType.PassTurn },
-      routeComplete: false,
-      routeAbandoned: false,
-      updatedRoute: { ...route, phase: 'build' },
-      description: `${tag} Move failed, falling back to build`,
-    };
+    // Move failed — city might not actually be reachable via our track. Fall back to BUILD.
+    console.warn(`${tag} Move to ${stop.city} failed: ${moveResult.error}. Falling back to BUILD.`);
+    return PlanExecutor.resolveBuild(route, stop, snapshot, context, tag);
   }
 
   /**
