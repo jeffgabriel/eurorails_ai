@@ -546,7 +546,7 @@ describe('ResponseParser', () => {
 
       const result = ResponseParser.parseStrategicRoute(obj, 5);
 
-      expect(result.upgradeOnRoute).toBe('FastFreight');
+      expect(result.upgradeOnRoute).toBe('fast_freight');
       expect(result.stops).toHaveLength(2);
       expect(result.reasoning).toBe('Upgrade then deliver coal');
     });

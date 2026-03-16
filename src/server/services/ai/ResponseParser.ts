@@ -5,7 +5,7 @@
  * malformed responses, and index validation against option counts.
  */
 
-import { ParsedSelection, LLMActionIntent, LLMAction, AIActionType, StrategicRoute, RouteStop } from '../../../shared/types/GameTypes';
+import { ParsedSelection, LLMActionIntent, LLMAction, AIActionType, StrategicRoute, RouteStop, TrainType } from '../../../shared/types/GameTypes';
 import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
 
 /** Custom error for unparseable LLM responses */
@@ -402,7 +402,14 @@ export class ResponseParser {
       }
     }
 
-    const upgradeOnRoute = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
+    // Normalize LLM PascalCase upgrade values to TrainType snake_case enum values
+    const UPGRADE_LABEL_TO_TRAIN: Record<string, string> = {
+      FastFreight: TrainType.FastFreight,
+      HeavyFreight: TrainType.HeavyFreight,
+      Superfreight: TrainType.Superfreight,
+    };
+    const rawUpgrade = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
+    const upgradeOnRoute = rawUpgrade ? (UPGRADE_LABEL_TO_TRAIN[rawUpgrade] ?? rawUpgrade) : undefined;
 
     const route: StrategicRoute = {
       stops,
