@@ -458,7 +458,11 @@ export class PlanExecutor {
     }
     // JIRA-80: All stops were skipped (startingCity or on-network).
     // Check if the supply city needs track even though the delivery city is on-network.
+    // JIRA-114: Skip demands on the same card as the active route's delivery —
+    // that card will be discarded when the delivery completes.
+    const doomedCards = PlanExecutor.getActiveDeliveryCardIndices(route);
     for (const demand of context.demands) {
+      if (doomedCards.has(demand.cardIndex)) continue;
       if (!demand.isSupplyOnNetwork && demand.isDeliveryOnNetwork) {
         return demand.supplyCity;
       }
@@ -467,6 +471,20 @@ export class PlanExecutor {
       }
     }
     return null;
+  }
+
+  /**
+   * JIRA-114: Collect cardIndices that will be discarded by the active route's deliveries.
+   * Demands on these cards are not viable secondary build targets.
+   */
+  private static getActiveDeliveryCardIndices(route: StrategicRoute): Set<number> {
+    const indices = new Set<number>();
+    for (const stop of route.stops) {
+      if (stop.action === 'deliver' && stop.demandCardId != null) {
+        indices.add(stop.demandCardId);
+      }
+    }
+    return indices;
   }
 
   // ── JIRA-73: Continuation build loop ─────────────────────────────────────
@@ -513,6 +531,17 @@ export class PlanExecutor {
 
     for (const stop of route.stops) {
       if (spentSoFar >= PlanExecutor.MAX_BUILD_BUDGET) break;
+
+      // JIRA-114: Skip deliver stops whose card will be discarded by an earlier delivery.
+      // If an earlier deliver stop shares this stop's demandCardId, that delivery discards
+      // the card — making this delivery impossible and track toward it wasted.
+      if (stop.action === 'deliver' && stop.demandCardId != null) {
+        const stopIdx = route.stops.indexOf(stop);
+        const earlierSameCard = route.stops.slice(0, stopIdx).some(
+          s => s.action === 'deliver' && s.demandCardId === stop.demandCardId,
+        );
+        if (earlierSameCard) continue;
+      }
 
       // JIRA-80: Don't skip startingCity — it's a valid build target when it needs track
       if (simContext.citiesOnNetwork.includes(stop.city)) continue;

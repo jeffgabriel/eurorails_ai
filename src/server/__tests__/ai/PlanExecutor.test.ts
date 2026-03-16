@@ -1588,4 +1588,159 @@ describe('PlanExecutor', () => {
       expect(result.routeComplete).toBe(false);
     });
   });
+
+  // ── JIRA-114: Same-card demand filtering ────────────────────────────────
+
+  describe('JIRA-114: findInitialBuildTarget filters same-card demands', () => {
+    function makeDemand(overrides: Partial<any> = {}): any {
+      return {
+        cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+        payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+        isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 10,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+        demandScore: 6, efficiencyPerTurn: 1.2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        ...overrides,
+      };
+    }
+
+    it('should skip demands on the same card as the active delivery', async () => {
+      // Route delivers Cattle to Ruhr (card 39). Cheese demand (card 39) has supply on-network.
+      // findInitialBuildTarget should skip it because card 39 will be discarded.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Cattle', city: 'Bern' },
+          { action: 'deliver', loadType: 'Cattle', city: 'Ruhr', demandCardId: 39, payment: 19 },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Ruhr',
+      });
+      const context = makeContext({
+        isInitialBuild: true,
+        citiesOnNetwork: ['Bern', 'Ruhr'],
+        canBuild: true,
+        demands: [
+          makeDemand({ cardIndex: 39, loadType: 'Cheese', supplyCity: 'Bern', deliveryCity: 'Lodz', isSupplyOnNetwork: true, isDeliveryOnNetwork: false }),
+        ],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.gameStatus = 'initialBuild';
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      // Should pass turn — the only viable demand is on a doomed card
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+    });
+
+    it('should select demands on a different card than the active delivery', async () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Cattle', city: 'Bern' },
+          { action: 'deliver', loadType: 'Cattle', city: 'Ruhr', demandCardId: 39, payment: 19 },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Ruhr',
+      });
+      const context = makeContext({
+        isInitialBuild: true,
+        citiesOnNetwork: ['Bern', 'Ruhr'],
+        canBuild: true,
+        demands: [
+          makeDemand({ cardIndex: 39, loadType: 'Cheese', supplyCity: 'Bern', deliveryCity: 'Lodz', isSupplyOnNetwork: true, isDeliveryOnNetwork: false }),
+          makeDemand({ cardIndex: 49, loadType: 'Tobacco', supplyCity: 'Napoli', deliveryCity: 'Berlin', isSupplyOnNetwork: false, isDeliveryOnNetwork: true }),
+        ],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.gameStatus = 'initialBuild';
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 1, 2)], targetCity: 'Napoli' },
+      });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      // Should build toward Napoli (card 49, not doomed)
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD', details: { toward: 'Napoli' } }),
+        expect.anything(), expect.anything(), expect.anything(),
+      );
+    });
+
+    it('should not filter demands when route has no deliver stops', async () => {
+      // Route with only pickup stops — no demandCardId, no doomed cards
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Ruhr',
+      });
+      const context = makeContext({
+        isInitialBuild: true,
+        citiesOnNetwork: ['Berlin', 'Ruhr'],
+        canBuild: true,
+        demands: [
+          makeDemand({ cardIndex: 10, loadType: 'Beer', supplyCity: 'Frankfurt', deliveryCity: 'Szczecin', isSupplyOnNetwork: true, isDeliveryOnNetwork: false }),
+        ],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.gameStatus = 'initialBuild';
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(2, 2, 2, 3)], targetCity: 'Szczecin' },
+      });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD', details: { toward: 'Szczecin' } }),
+        expect.anything(), expect.anything(), expect.anything(),
+      );
+    });
+
+    it('continuationBuild should skip later deliver stops sharing same demandCardId', async () => {
+      // Route: pickup Beer@Frankfurt, deliver Beer@Szczecin (card 39), deliver Cheese@Lodz (card 39).
+      // Current stop (Frankfurt) is on-network, so executeInitialBuild enters findInitialBuildTarget path.
+      // Primary build goes toward Szczecin. Continuation should skip Lodz (same card 39, earlier delivery discards it).
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+          { action: 'deliver', loadType: 'Beer', city: 'Szczecin', demandCardId: 39, payment: 9 },
+          { action: 'deliver', loadType: 'Cheese', city: 'Lodz', demandCardId: 39, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        startingCity: 'Frankfurt',
+      });
+      const context = makeContext({
+        isInitialBuild: true,
+        citiesOnNetwork: ['Frankfurt'],
+        canBuild: true,
+        demands: [],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.gameStatus = 'initialBuild';
+
+      // Primary build toward Szczecin costs 10M (leaves 10M remaining)
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [{ ...makeSegment(1, 1, 1, 2), cost: 10 }], targetCity: 'Szczecin' },
+      });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.plan.type).toBe(AIActionType.BuildTrack);
+      // Should only have been called for Szczecin, NOT for Lodz
+      const buildCalls = mockResolve.mock.calls.filter(
+        (c: any[]) => c[0]?.action === 'BUILD',
+      );
+      const buildTargets = buildCalls.map((c: any[]) => c[0]?.details?.toward);
+      expect(buildTargets).toContain('Szczecin');
+      expect(buildTargets).not.toContain('Lodz');
+    });
+  });
 });
