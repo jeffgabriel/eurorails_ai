@@ -584,7 +584,7 @@ export class ActionResolver {
   }
 
   /** Valid upgrade paths: source -> { target -> cost } */
-  private static readonly UPGRADE_PATHS: Record<string, Record<string, number>> = {
+  static readonly UPGRADE_PATHS: Record<string, Record<string, number>> = {
     [TrainType.Freight]: {
       [TrainType.FastFreight]: 20,
       [TrainType.HeavyFreight]: 20,

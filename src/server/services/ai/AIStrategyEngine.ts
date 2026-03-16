@@ -355,12 +355,13 @@ export class AIStrategyEngine {
               pendingUpgradeAction === null &&
               currentCapacity < 3
             ) {
-              // Find capacity-increasing upgrade options
-              const UPGRADE_PATHS: Record<string, Record<string, number>> = {
-                [TrainType.Freight]: { [TrainType.HeavyFreight]: 20 },
-                [TrainType.FastFreight]: { [TrainType.Superfreight]: 20, [TrainType.HeavyFreight]: 5 },
-              };
-              const paths = UPGRADE_PATHS[snapshot.bot.trainType] ?? {};
+              // Find capacity-increasing upgrade options (filter ActionResolver.UPGRADE_PATHS to targets with capacity > current)
+              const allPaths = ActionResolver.UPGRADE_PATHS[snapshot.bot.trainType] ?? {};
+              const paths: Record<string, number> = {};
+              for (const [target, cost] of Object.entries(allPaths)) {
+                const targetCapacity = TRAIN_PROPERTIES[target as TrainType]?.capacity ?? 0;
+                if (targetCapacity > currentCapacity) paths[target] = cost;
+              }
               const upgradeOptions: { targetTrain: string; cost: number }[] = [];
               for (const [target, cost] of Object.entries(paths)) {
                 if (snapshot.bot.money >= cost) {
@@ -1423,15 +1424,9 @@ export class AIStrategyEngine {
     const targetTrain = route.upgradeOnRoute!;
     route.upgradeOnRoute = undefined; // one-time consumption
 
-    // Validate upgrade path using same logic as ActionResolver.UPGRADE_PATHS
-    const UPGRADE_PATHS: Record<string, Record<string, number>> = {
-      [TrainType.Freight]: { [TrainType.FastFreight]: 20, [TrainType.HeavyFreight]: 20 },
-      [TrainType.FastFreight]: { [TrainType.Superfreight]: 20, [TrainType.HeavyFreight]: 5 },
-      [TrainType.HeavyFreight]: { [TrainType.Superfreight]: 20, [TrainType.FastFreight]: 5 },
-    };
-
+    // Validate upgrade path using ActionResolver.UPGRADE_PATHS
     const currentTrain = snapshot.bot.trainType;
-    const paths = UPGRADE_PATHS[currentTrain];
+    const paths = ActionResolver.UPGRADE_PATHS[currentTrain];
     if (!paths || !(targetTrain in paths)) {
       console.warn(`${tag} JIRA-105: upgradeOnRoute "${targetTrain}" invalid from "${currentTrain}" — skipping`);
       return null;

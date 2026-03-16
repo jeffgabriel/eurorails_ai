@@ -724,8 +724,9 @@ export class LLMStrategyBrain {
         }
 
         if (action === 'upgrade' && !parsed.targetTrain) {
-          console.warn('[LLMStrategyBrain] evaluateUpgradeBeforeDrop: upgrade without targetTrain, treating as skip');
-          return { action: 'skip', reasoning: 'LLM said upgrade but did not specify target train' };
+          lastError = 'Action is "upgrade" but targetTrain is missing. You must specify targetTrain when action is "upgrade".';
+          console.warn(`[LLMStrategyBrain] evaluateUpgradeBeforeDrop attempt ${attempt + 1}: upgrade without targetTrain, retrying`);
+          continue;
         }
 
         return {

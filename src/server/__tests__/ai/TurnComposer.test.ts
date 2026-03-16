@@ -4652,6 +4652,20 @@ describe('TurnComposer', () => {
         const delivers = result.steps.filter(s => s.type === AIActionType.DeliverLoad);
         expect(moves.length).toBe(2);
         expect(delivers.length).toBe(1);
+
+        // Verify delivery is Coal at CityA
+        const deliver = delivers[0] as any;
+        expect(deliver.load).toBe('Coal');
+        expect(deliver.city).toBe('CityA');
+
+        // Verify step order: pickup → move → deliver → move (A2 continuation)
+        const stepTypes = result.steps.map(s => s.type);
+        const deliverIdx = stepTypes.indexOf(AIActionType.DeliverLoad);
+        const moveBeforeDeliver = stepTypes.slice(0, deliverIdx).filter(t => t === AIActionType.MoveTrain);
+        const moveAfterDeliver = stepTypes.slice(deliverIdx + 1).filter(t => t === AIActionType.MoveTrain);
+        expect(moveBeforeDeliver.length).toBeGreaterThanOrEqual(1);
+        expect(moveAfterDeliver.length).toBeGreaterThanOrEqual(1);
+
         // Total movement: 4 + 5 = 9mp (fully used, not wasted)
         const totalMp = moves.reduce(
           (sum, m) => sum + ((m as any).path.length - 1), 0,
@@ -4768,6 +4782,19 @@ describe('TurnComposer', () => {
         const moves = result.steps.filter(s => s.type === AIActionType.MoveTrain);
         expect(pickups.length).toBe(1);
         expect(moves.length).toBeGreaterThanOrEqual(2);
+
+        // Verify pickup is Wine at CityA
+        const pickup = pickups[0] as any;
+        expect(pickup.load).toBe('Wine');
+        expect(pickup.city).toBe('CityA');
+
+        // Verify step order: move → pickup → move (A2 continuation after pickup)
+        const stepTypes = result.steps.map(s => s.type);
+        const pickupIdx = stepTypes.indexOf(AIActionType.PickupLoad);
+        const moveBeforePickup = stepTypes.slice(0, pickupIdx).filter(t => t === AIActionType.MoveTrain);
+        const moveAfterPickup = stepTypes.slice(pickupIdx + 1).filter(t => t === AIActionType.MoveTrain);
+        expect(moveBeforePickup.length).toBeGreaterThanOrEqual(1);
+        expect(moveAfterPickup.length).toBeGreaterThanOrEqual(1);
       }
 
       logSpy.mockRestore();
