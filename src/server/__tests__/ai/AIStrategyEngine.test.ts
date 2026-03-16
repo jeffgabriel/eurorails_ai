@@ -4323,7 +4323,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // PlanExecutor returns a PASS (no delivery → no early execution)
       mockPlanExecutorExecute.mockResolvedValue({
         plan: { type: AIActionType.PassTurn },
-        routeComplete: false, routeAbandoned: false, updatedRoute: null, description: 'Pass',
+        routeComplete: false, routeAbandoned: false, updatedRoute: undefined as unknown as StrategicRoute, description: 'Pass',
       });
 
       // TurnComposer passes through the PASS plan

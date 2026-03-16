@@ -3303,6 +3303,15 @@ describe('ContextBuilder.serializeUpgradeBeforeDropPrompt', () => {
         estimatedTurns: 5,
         efficiencyPerTurn: 3.0,
         isLoadOnTrain: true,
+        isLoadAvailable: true,
+        ferryRequired: false,
+        loadChipTotal: 4,
+        loadChipCarried: 1,
+        demandScore: 3.0,
+        networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0,
+        isAffordable: true,
+        projectedFundsAfterDelivery: 103,
       }],
     );
 
