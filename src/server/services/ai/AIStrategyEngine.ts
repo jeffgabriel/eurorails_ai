@@ -1073,9 +1073,22 @@ export class AIStrategyEngine {
 
       // JIRA-32: Extract movement data from composed plan for game log
       // JIRA-36: Also extract concatenated movement path for client animation
+      // JIRA-116: Prepend early-executed MOVE paths so movementPath reflects the complete turn trajectory
       let milepostsMoved: number | undefined;
       let trackUsageFee: number | undefined;
       const movementPath: { row: number; col: number }[] = [];
+      // Extract MOVE paths from early-executed steps (stripped by JIRA-91) before processing finalPlan
+      for (const earlyStep of earlyExecutedSteps) {
+        if (earlyStep.type === AIActionType.MoveTrain && 'path' in earlyStep && (earlyStep as any).path?.length > 0) {
+          const path = (earlyStep as any).path as Array<{ row: number; col: number }>;
+          milepostsMoved = (milepostsMoved ?? 0) + computeEffectivePathLength(path, getMajorCityLookup());
+          trackUsageFee = (trackUsageFee ?? 0) + ((earlyStep as any).totalFee ?? 0);
+          const last = movementPath[movementPath.length - 1];
+          const first = path[0];
+          const startIndex = (last && last.row === first.row && last.col === first.col) ? 1 : 0;
+          movementPath.push(...path.slice(startIndex));
+        }
+      }
       const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
       const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];

@@ -4198,4 +4198,157 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(snapshot.bot.loads).toEqual(['Hops', 'Wine']);
     });
   });
+
+  // ── JIRA-116: movementPath includes early-executed MOVE segments ──────
+  describe('JIRA-116: movementPath includes early-executed MOVE segments', () => {
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should include MOVE paths from early-executed steps in movementPath', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'deliver', loadType: 'Beer', city: 'Bruxelles', demandCardId: 1, payment: 10 },
+          { action: 'pickup', loadType: 'Chocolate', city: 'Bern' },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        createdAtTurn: 3,
+        reasoning: 'Deliver beer then pickup chocolate',
+      };
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
+        lastAction: AIActionType.MoveTrain, activeRoute: route,
+        turnsOnRoute: 2, routeHistory: [], deliveryCount: 1, totalEarnings: 15,
+        currentBuildTarget: null, turnsOnTarget: 0,
+      });
+
+      const preDeliverySnap = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: ['Beer'], money: 50,
+      } as any);
+      const postDeliverySnap = makeSnapshot({
+        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
+        loads: [], money: 60, demandCards: [1, 50],
+      } as any);
+
+      let captureCallCount = 0;
+      mockCapture.mockImplementation(async () => {
+        captureCallCount++;
+        return captureCallCount === 1 ? preDeliverySnap : postDeliverySnap;
+      });
+
+      const preContext = makeContext({ loads: ['Beer'], money: 50, demands: [] as any[] });
+      const postContext = makeContext({ loads: [], money: 60, demands: [] as any[] });
+      let contextCallCount = 0;
+      mockContextBuild.mockImplementation(async () => {
+        contextCallCount++;
+        return contextCallCount === 1 ? preContext : postContext;
+      });
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([]);
+
+      // PlanExecutor returns DELIVER plan
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
+        routeComplete: false, routeAbandoned: false, updatedRoute: route, description: 'Delivering Beer',
+      });
+
+      // Early MOVE path: bot moves from (10,10) to (12,12)
+      const earlyMovePath = [{ row: 10, col: 10 }, { row: 11, col: 11 }, { row: 12, col: 12 }];
+      mockTurnComposerCompose.mockResolvedValue({ plan: {
+        type: 'MultiAction' as const,
+        steps: [
+          { type: AIActionType.MoveTrain, path: earlyMovePath, fees: new Set(), totalFee: 0 },
+          { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
+        ],
+      }, trace: {
+        inputPlan: ['DeliverLoad'], outputPlan: ['MoveTrain', 'DeliverLoad'],
+        moveBudget: { total: 9, used: 2, wasted: 0 },
+        a1: { citiesScanned: 0, opportunitiesFound: 0 },
+        a2: { iterations: 0, terminationReason: 'none' },
+        a3: { movePreprended: false },
+        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
+        pickups: [], deliveries: [{ load: 'Beer', city: 'Bruxelles' }],
+      } } as any);
+
+      // Grid for city lookup in handleMoveTrain/handleDeliverLoad
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      gridMap.set('12,12', { row: 12, col: 12, name: 'Bruxelles', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
+
+      // PlayerService mocks for early execution
+      (PlayerService.moveTrainForUser as any).mockResolvedValue({
+        feeTotal: 0, updatedMoney: 50, affectedPlayerIds: ['bot-1'],
+      });
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 10, updatedMoney: 60, newCard: { id: 50, demands: [] },
+      });
+
+      // After early execution, reEvaluateRoute returns 'continue'
+      const mockReEvalFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
+        decision: 'continue', reasoning: 'Continue to pickup',
+      });
+      (LLMStrategyBrain as any).mockImplementation(() => ({
+        decideAction: jest.fn(), planRoute: jest.fn(),
+        reEvaluateRoute: mockReEvalFn,
+        findSecondaryDelivery: jest.fn(() => Promise.resolve(null)),
+      }));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // movementPath should include the early-executed MOVE path
+      expect(result.movementPath).toBeDefined();
+      expect(result.movementPath).toEqual(earlyMovePath);
+    });
+
+    it('should not include movementPath when no early execution occurs (no delivery)', async () => {
+      // No API key → no early execution path
+      delete process.env.ANTHROPIC_API_KEY;
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
+        lastAction: null, activeRoute: null, turnsOnRoute: 0,
+        routeHistory: [], deliveryCount: 0, totalEarnings: 0,
+        currentBuildTarget: null, turnsOnTarget: 0,
+      });
+
+      const snapshot = makeSnapshot({ botConfig: null } as any);
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(makeContext());
+
+      // PlanExecutor returns a PASS (no delivery → no early execution)
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false, routeAbandoned: false, updatedRoute: null, description: 'Pass',
+      });
+
+      // TurnComposer passes through the PASS plan
+      mockTurnComposerCompose.mockResolvedValue({ plan: {
+        type: AIActionType.PassTurn as const,
+      }, trace: {
+        inputPlan: ['PassTurn'], outputPlan: ['PassTurn'],
+        moveBudget: { total: 9, used: 0, wasted: 0 },
+        a1: { citiesScanned: 0, opportunitiesFound: 0 },
+        a2: { iterations: 0, terminationReason: 'none' },
+        a3: { movePreprended: false },
+        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
+        pickups: [], deliveries: [],
+      } } as any);
+
+      // Heuristic fallback returns a PASS (no movement)
+      mockHeuristicFallback.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PassTurn },
+      });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // No movement → no movementPath
+      expect(result.movementPath).toBeUndefined();
+    });
+  });
 });
