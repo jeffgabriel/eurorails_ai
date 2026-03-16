@@ -639,7 +639,7 @@ describe('TurnComposer', () => {
   describe('build phase composition', () => {
     it('Primary DELIVER + BUILD', async () => {
       const snapshot = makeSnapshot();
-      const context = makeContext({ turnBuildCost: 0, money: 50 });
+      const context = makeContext({ turnBuildCost: 0, money: 50, citiesOnNetwork: ['Berlin', 'Paris'] });
       const route = makeRoute({
         currentStopIndex: 1,
         stops: [
@@ -688,7 +688,7 @@ describe('TurnComposer', () => {
           money: 5,
         },
       });
-      const context = makeContext({ money: 5, turnBuildCost: 0 });
+      const context = makeContext({ money: 5, turnBuildCost: 0, citiesOnNetwork: ['Berlin', 'Paris'] });
       const route = makeRoute({
         currentStopIndex: 1,
         stops: [
@@ -1313,6 +1313,251 @@ describe('TurnComposer', () => {
       // No BUILD appended — all stops on network, no unconnected cities, no demand target
       expect(result.type).toBe(AIActionType.MoveTrain);
       expect(mockResolve).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('JIRA-116: Multi-stop look-ahead building in tryAppendBuild', () => {
+    it('builds toward multiple unreached route stops with remaining budget', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 50 },
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris and Wien NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      // First BUILD toward Paris costs 5M
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.BuildTrack,
+          segments: [
+            makeSegment(10, 11, 12, 12),
+            makeSegment(12, 12, 14, 14),
+          ],
+          targetCity: 'Paris',
+        },
+      });
+      // Second BUILD toward Wien costs 3M
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.BuildTrack,
+          segments: [makeSegment(14, 14, 16, 16)],
+          targetCity: 'Wien',
+        },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      // Verify two BUILD resolve calls were made
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(2);
+      expect(buildCalls[0][0].details.toward).toBe('Paris');
+      expect(buildCalls[1][0].details.toward).toBe('Wien');
+    });
+
+    it('single-stop route behaves identically to previous code (no regression)', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Paris' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(1);
+      expect(buildCalls[0][0].details.toward).toBe('Paris');
+    });
+
+    it('stops iterating when computeBuildSegments returns empty for subsequent stop', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 50 },
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris and Wien NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      // First BUILD toward Paris succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 12, 12)], targetCity: 'Paris' },
+      });
+      // Second BUILD toward Wien fails (no path within budget)
+      mockResolve.mockResolvedValueOnce({
+        success: false,
+        error: 'Could not find a path to build toward "Wien" within budget.',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Should still have the first build (Paris) even though Wien failed
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(2); // Attempted both, but Wien failed
+    });
+
+    it('does not attempt second stop when budget exhausted on first stop', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 20 },
+      });
+      const context = makeContext({
+        money: 20,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris and Wien NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      // First BUILD uses full 20M budget
+      const seg1 = makeSegment(10, 11, 12, 12);
+      seg1.cost = 20; // Costs the full budget
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [seg1], targetCity: 'Paris' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      // Only one BUILD call — budget exhausted after first stop
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(1);
+      expect(buildCalls[0][0].details.toward).toBe('Paris');
+    });
+
+    it('updates snapshot existingSegments between iterations for correct frontier (AC-5)', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 50, existingSegments: [makeSegment(10, 10, 10, 11)] },
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'],
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      const parisSegment = makeSegment(10, 11, 12, 12);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [parisSegment], targetCity: 'Paris' },
+      });
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(12, 12, 14, 14)], targetCity: 'Wien' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Second BUILD call should have snapshot with Paris segment added
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(2);
+      // The second call's snapshot should include the Paris segment
+      const secondCallSnapshot = buildCalls[1][1] as WorldSnapshot;
+      expect(secondCallSnapshot.bot.existingSegments).toContainEqual(parisSegment);
     });
   });
 
@@ -4193,6 +4438,99 @@ describe('TurnComposer', () => {
       // Plan should at minimum contain the original PickupSteel
       const steps = plan.type === 'MultiAction' ? plan.steps : [plan];
       expect(steps[0].type).toBe(AIActionType.PickupLoad);
+    });
+  });
+
+  describe('JIRA-117: Same-city double pickup of identical load type', () => {
+    it('chains both pickups when route has 2x same load at same city', async () => {
+      // Route: pickup(Iron@Birmingham), pickup(Iron@Birmingham), deliver(Iron@Antwerpen)
+      // Bot at Birmingham with 0 loads and capacity 2. Both pickups should chain.
+      const gridMap = new Map([
+        ['10,10', { name: 'Birmingham', x: 0, y: 0 }],
+        ['10,15', { name: 'Antwerpen', x: 0, y: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          loads: [],
+          position: { row: 10, col: 10 },
+          resolvedDemands: [
+            { cardId: 1, demands: [{ loadType: 'Iron', city: 'Antwerpen', payment: 15 }] },
+            { cardId: 2, demands: [{ loadType: 'Iron', city: 'Praha', payment: 18 }] },
+          ],
+        },
+        loadAvailability: { Birmingham: ['Iron'] },
+      });
+
+      const context = makeContext({
+        loads: [],
+        speed: 9,
+        citiesOnNetwork: ['Birmingham', 'Antwerpen'],
+        demands: [
+          { loadType: 'Iron', supplyCity: 'Birmingham', deliveryCity: 'Antwerpen', payout: 15, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, isDeliveryReachable: true, estimatedTrackCostToDelivery: 0, cardIndex: 1 },
+          { loadType: 'Iron', supplyCity: 'Birmingham', deliveryCity: 'Praha', payout: 18, isLoadOnTrain: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, isDeliveryReachable: false, estimatedTrackCostToDelivery: 0, cardIndex: 2 },
+        ] as any,
+      });
+
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup' as const, loadType: 'Iron', city: 'Birmingham' },
+          { action: 'pickup' as const, loadType: 'Iron', city: 'Birmingham' },
+          { action: 'deliver' as const, loadType: 'Iron', city: 'Antwerpen', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'act',
+      });
+
+      // Primary plan: PICKUP Iron at Birmingham (first one)
+      const pickupIronPlan = { type: AIActionType.PickupLoad, load: 'Iron', city: 'Birmingham' };
+
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+
+      mockResolve.mockImplementation(async (action: any) => {
+        if (action.action === 'PICKUP' && action.details.load === 'Iron') {
+          return {
+            success: true,
+            plan: { type: AIActionType.PickupLoad, load: 'Iron', city: 'Birmingham' },
+          };
+        }
+        if (action.action === 'MOVE') {
+          return {
+            success: true,
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [{ row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 }],
+            },
+          };
+        }
+        return { success: false, error: 'not mocked' };
+      });
+
+      mockApplyPlanToState.mockImplementation((plan: any, snap: any) => {
+        if (plan.type === AIActionType.PickupLoad) {
+          snap.bot.loads = [...snap.bot.loads, plan.load];
+        }
+        if (plan.type === AIActionType.MoveTrain) {
+          const lastPos = plan.path[plan.path.length - 1];
+          snap.bot.position = { row: lastPos.row, col: lastPos.col };
+        }
+      });
+
+      const { plan } = await TurnComposer.compose(
+        pickupIronPlan as TurnPlan, snapshot, context, route,
+      );
+
+      // Should produce MultiAction with [PickupIron, PickupIron, Move...]
+      expect(plan.type).toBe('MultiAction');
+      if (plan.type === 'MultiAction') {
+        const pickupSteps = plan.steps.filter((s: any) => s.type === AIActionType.PickupLoad);
+        // JIRA-117: Both Iron pickups must be chained — not just 1
+        expect(pickupSteps.length).toBe(2);
+        expect((pickupSteps[0] as any).load).toBe('Iron');
+        expect((pickupSteps[1] as any).load).toBe('Iron');
+      }
     });
   });
 

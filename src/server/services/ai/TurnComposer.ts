@@ -23,6 +23,7 @@ import {
   AIActionType,
   StrategicRoute,
   TerrainType,
+  TrackSegment,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints } from './MapTopology';
@@ -285,10 +286,16 @@ export class TurnComposer {
               const nextStop = activeRoute.stops[activeRoute.currentStopIndex];
               if (nextStop.city !== botCity) break;
 
-              // Check if this stop's action is still needed
-              if (nextStop.action === 'pickup' && simSnapshot.bot.loads.includes(nextStop.loadType)) {
-                activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
-                continue; // Already picked up — skip
+              // Check if this stop's action is still needed (JIRA-117: count-aware for same load type)
+              if (nextStop.action === 'pickup') {
+                const loadsOfTypeOnTrain = simSnapshot.bot.loads.filter(l => l === nextStop.loadType).length;
+                const sameTypePickupsUpToHere = activeRoute.stops
+                  .slice(0, activeRoute.currentStopIndex + 1)
+                  .filter(s => s.action === 'pickup' && s.loadType === nextStop.loadType).length;
+                if (loadsOfTypeOnTrain >= sameTypePickupsUpToHere) {
+                  activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+                  continue; // Already picked up enough of this type — skip
+                }
               }
               if (nextStop.action === 'deliver' && !simSnapshot.bot.loads.includes(nextStop.loadType)) {
                 activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
@@ -724,15 +731,65 @@ export class TurnComposer {
     const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
     if (remainingBudget <= 0) return null;
 
-    // Find build target from route stops first
-    let buildTarget: string | null = null;
+    // Collect ALL unreached route stops for multi-stop look-ahead building
+    const unreachedRouteStops: string[] = [];
     if (activeRoute && !activeRoute.stops.every((_, idx) => idx < activeRoute.currentStopIndex)) {
       for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
         const city = activeRoute.stops[i].city;
         if (!context.citiesOnNetwork.includes(city)) {
-          buildTarget = city;
-          break;
+          unreachedRouteStops.push(city);
         }
+      }
+    }
+
+    // Multi-stop look-ahead: build toward each unreached stop, spending remaining budget
+    if (unreachedRouteStops.length > 0) {
+      const allSegments: TrackSegment[] = [];
+      let budgetSpent = context.turnBuildCost;
+      let currentSnapshot = snapshot;
+      let lastTargetCity: string | undefined;
+
+      for (const city of unreachedRouteStops) {
+        const iterBudget = Math.min(20 - budgetSpent, snapshot.bot.money - (budgetSpent - context.turnBuildCost));
+        if (iterBudget <= 0) break;
+
+        const iterContext = { ...context, turnBuildCost: budgetSpent };
+        let result;
+        try {
+          result = await ActionResolver.resolve(
+            { action: 'BUILD', details: { toward: city }, reasoning: '', planHorizon: '' },
+            currentSnapshot, iterContext,
+            activeRoute?.startingCity,
+          );
+        } catch {
+          break; // Resolve error — stop iterating
+        }
+
+        if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
+          allSegments.push(...result.plan.segments);
+          lastTargetCity = city;
+          const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
+          budgetSpent += cost;
+
+          // Update snapshot so track frontier includes new segments for next iteration (AC-5)
+          currentSnapshot = {
+            ...currentSnapshot,
+            bot: {
+              ...currentSnapshot.bot,
+              existingSegments: [...currentSnapshot.bot.existingSegments, ...result.plan.segments],
+            },
+          };
+        } else {
+          break; // Can't build toward this stop — stop iterating (AC-4)
+        }
+      }
+
+      if (allSegments.length > 0) {
+        return {
+          type: AIActionType.BuildTrack,
+          segments: allSegments,
+          targetCity: lastTargetCity,
+        };
       }
     }
 
@@ -740,21 +797,17 @@ export class TurnComposer {
     // Prefer route-stop targets > victory progress > speculative demand builds.
     // BUT: skip speculative builds when mid-route (travel/act phase) — the bot should
     // finish its delivery first to earn money, then build toward victory cities.
-    const routeNeedsBuild = activeRoute &&
-      activeRoute.stops.slice(activeRoute.currentStopIndex).some(
-        stop => !context.citiesOnNetwork.includes(stop.city),
-      );
+    const routeNeedsBuild = unreachedRouteStops.length > 0;
     const isMidRoute = activeRoute &&
       (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
-    if (!buildTarget && !routeNeedsBuild && !isMidRoute) {
+    let buildTarget: string | null = null;
+    if (!routeNeedsBuild && !isMidRoute) {
       // Build toward cheapest unconnected major city (victory progress)
       // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
-      if (!buildTarget) {
-        const unconnected = context.unconnectedMajorCities ?? [];
-        if (unconnected.length > 0 && snapshot.bot.money > 230) {
-          // Already sorted by estimatedCost in ContextBuilder
-          buildTarget = unconnected[0].cityName;
-        }
+      const unconnected = context.unconnectedMajorCities ?? [];
+      if (unconnected.length > 0 && snapshot.bot.money > 230) {
+        // Already sorted by estimatedCost in ContextBuilder
+        buildTarget = unconnected[0].cityName;
       }
     }
 
