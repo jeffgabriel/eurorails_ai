@@ -808,6 +808,56 @@ export class TurnComposer {
       }
     }
 
+    // Priority 1.5: Frontier approach — when next route stop is off-network,
+    // move toward the on-network city closest to that off-network target (JIRA-115).
+    // Prevents backtracking to already-visited cities when the bot is at a branch endpoint.
+    if (activeRoute) {
+      for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+        const stop = activeRoute.stops[i];
+        // Skip completed stops (same logic as P1)
+        if (stop.action === 'pickup' && context.loads.includes(stop.loadType)) continue;
+        if (stop.action === 'deliver' && !context.loads.includes(stop.loadType)) continue;
+
+        if (!context.citiesOnNetwork.includes(stop.city)) {
+          // This stop is off-network — find the closest on-network city
+          const gridPoints = loadGridPoints();
+          // Look up the off-network target's coordinates
+          let targetRow = -1, targetCol = -1;
+          for (const [, gp] of gridPoints) {
+            if (gp.name && gp.name === stop.city) {
+              targetRow = gp.row;
+              targetCol = gp.col;
+              break;
+            }
+          }
+          if (targetRow >= 0) {
+            let bestCity = '';
+            let bestDist = Infinity;
+            for (const networkCity of context.citiesOnNetwork) {
+              for (const [, gp] of gridPoints) {
+                if (gp.name && gp.name === networkCity) {
+                  const dist = Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
+                  if (dist < bestDist) {
+                    bestDist = dist;
+                    bestCity = networkCity;
+                  }
+                  break;
+                }
+              }
+            }
+            if (bestCity) {
+              add(bestCity);
+              console.log(
+                `[TurnComposer] JIRA-115: Frontier approach — off-network target "${stop.city}", ` +
+                `moving toward closest on-network city "${bestCity}" (dist=${bestDist})`,
+              );
+            }
+          }
+          break; // Only target the first off-network stop
+        }
+      }
+    }
+
     // Priority 2: Demand delivery cities on network (bot has the load)
     // Use live context.loads instead of stale demand.isLoadOnTrain — loads change
     // during turn composition (deliveries remove loads, pickups add them).

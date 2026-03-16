@@ -4735,4 +4735,382 @@ describe('TurnComposer', () => {
       warnSpy.mockRestore();
     });
   });
+
+  describe('JIRA-115: Frontier approach for off-network targets', () => {
+    it('moves toward closest on-network city when next route stop is off-network', async () => {
+      // Bot at Frankfurt (row=20, col=30), picked up Beer. Next stop Leipzig is off-network.
+      // On-network cities: Ruhr (row=18, col=26) and Berlin (row=16, col=38).
+      // Berlin (dist=16) is closer to Leipzig (row=14, col=40) than Ruhr (dist=18).
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 20, col: 30 },
+          loads: ['Beer'],
+        },
+      });
+      const context = makeContext({
+        position: { row: 20, col: 30 },
+        speed: 9,
+        loads: ['Beer'],
+        citiesOnNetwork: ['Ruhr', 'Berlin'],
+        reachableCities: ['Ruhr'],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+          { action: 'deliver', loadType: 'Beer', city: 'Leipzig', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      // Set up gridPoints with coordinates
+      const gridPoints = new Map<string, any>();
+      gridPoints.set('14,40', { row: 14, col: 40, name: 'Leipzig', terrain: 0 });
+      gridPoints.set('18,26', { row: 18, col: 26, name: 'Ruhr', terrain: 0 });
+      gridPoints.set('16,38', { row: 16, col: 38, name: 'Berlin', terrain: 0 });
+      gridPoints.set('20,30', { row: 20, col: 30, name: 'Frankfurt', terrain: 0 });
+      mockLoadGridPoints.mockReturnValue(gridPoints);
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Beer',
+        city: 'Frankfurt',
+      };
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+      });
+
+      mockResolve
+        // A2: MOVE to Leipzig (P1 route stop, off-network) — FAILS
+        .mockResolvedValueOnce({ success: false, error: 'No valid path to "Leipzig"' })
+        // A2: MOVE to Berlin (P1.5 frontier approach, closest to Leipzig) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 20, col: 30 }, { row: 19, col: 31 }, { row: 18, col: 32 },
+              { row: 17, col: 33 }, { row: 16, col: 34 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // Verify MOVE was attempted: first to Leipzig (P1), then to Berlin (P1.5 frontier)
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls.length).toBeGreaterThanOrEqual(2);
+      expect(moveCalls[0][0].details.to).toBe('Leipzig');
+      expect(moveCalls[1][0].details.to).toBe('Berlin');
+
+      // Verify frontier approach log message
+      const frontierLog = logSpy.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+      );
+      expect(frontierLog).toBeDefined();
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('skips frontier logic when all route stops are on-network', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 20, col: 30 },
+          loads: ['Beer'],
+        },
+      });
+      const context = makeContext({
+        position: { row: 20, col: 30 },
+        speed: 9,
+        loads: ['Beer'],
+        citiesOnNetwork: ['Berlin', 'Leipzig'],
+        reachableCities: ['Berlin'],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+          { action: 'deliver', loadType: 'Beer', city: 'Leipzig', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Beer',
+        city: 'Frankfurt',
+      };
+
+      mockApplyPlanToState.mockImplementation(() => {});
+
+      mockResolve
+        // A2: MOVE to Leipzig (P1 route stop, ON-network) — SUCCEEDS directly
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 20, col: 30 }, { row: 19, col: 31 }, { row: 18, col: 32 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // Should NOT have a frontier approach log (all stops on-network)
+      const frontierLog = logSpy.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+      );
+      expect(frontierLog).toBeUndefined();
+
+      // Only one MOVE attempted (directly to Leipzig)
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls).toHaveLength(1);
+      expect(moveCalls[0][0].details.to).toBe('Leipzig');
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('skips frontier logic when no active route', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 20, col: 30 },
+          loads: ['Beer'],
+        },
+      });
+      const context = makeContext({
+        position: { row: 20, col: 30 },
+        speed: 9,
+        loads: ['Beer'],
+        citiesOnNetwork: ['Berlin'],
+        reachableCities: ['Berlin'],
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Beer', supplyCity: 'Frankfurt', deliveryCity: 'Berlin',
+            payout: 20, isSupplyReachable: false, isDeliveryReachable: true,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 10, efficiencyPerTurn: 5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+        ],
+      });
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Beer',
+        city: 'Frankfurt',
+      };
+
+      mockApplyPlanToState.mockImplementation(() => {});
+
+      mockResolve
+        // A2: MOVE to Berlin (P2 demand delivery city) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 20, col: 30 }, { row: 19, col: 31 }, { row: 18, col: 32 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      await TurnComposer.compose(pickupPlan, snapshot, context, null);
+
+      // No frontier log — no active route
+      const frontierLog = logSpy.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+      );
+      expect(frontierLog).toBeUndefined();
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('falls through gracefully when no on-network cities exist', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 20, col: 30 },
+          loads: ['Beer'],
+        },
+      });
+      const context = makeContext({
+        position: { row: 20, col: 30 },
+        speed: 9,
+        loads: ['Beer'],
+        citiesOnNetwork: [], // No cities on network
+        reachableCities: [],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+          { action: 'deliver', loadType: 'Beer', city: 'Leipzig', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      const gridPoints = new Map<string, any>();
+      gridPoints.set('14,40', { row: 14, col: 40, name: 'Leipzig', terrain: 0 });
+      mockLoadGridPoints.mockReturnValue(gridPoints);
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Beer',
+        city: 'Frankfurt',
+      };
+
+      mockApplyPlanToState.mockImplementation(() => {});
+
+      // All MOVE attempts fail (nothing reachable)
+      mockResolve.mockResolvedValue({ success: false, error: 'No valid path' });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const { plan: result } = await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // No frontier log (no on-network cities to approach)
+      const frontierLog = logSpy.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+      );
+      expect(frontierLog).toBeUndefined();
+
+      // Result should just be the pickup (no continuation MOVE succeeded)
+      expect(result.type === AIActionType.PickupLoad || result.type === 'MultiAction').toBe(true);
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+
+    it('targets first off-network stop when multiple stops are off-network', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 20, col: 30 },
+          loads: ['Beer'],
+        },
+      });
+      const context = makeContext({
+        position: { row: 20, col: 30 },
+        speed: 9,
+        loads: ['Beer'],
+        citiesOnNetwork: ['Munich'],
+        reachableCities: ['Munich'],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Beer', city: 'Frankfurt' },
+          { action: 'deliver', loadType: 'Beer', city: 'Leipzig', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Coal', city: 'Szczecin' },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      // Leipzig at (14,40), Szczecin at (10,44), Munich at (22,36)
+      // Munich is closer to Leipzig (dist=14) than to Szczecin (dist=20)
+      const gridPoints = new Map<string, any>();
+      gridPoints.set('14,40', { row: 14, col: 40, name: 'Leipzig', terrain: 0 });
+      gridPoints.set('10,44', { row: 10, col: 44, name: 'Szczecin', terrain: 0 });
+      gridPoints.set('22,36', { row: 22, col: 36, name: 'Munich', terrain: 0 });
+      mockLoadGridPoints.mockReturnValue(gridPoints);
+
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Beer',
+        city: 'Frankfurt',
+      };
+
+      mockApplyPlanToState.mockImplementation((plan: TurnPlan, snap: WorldSnapshot, ctx: GameContext) => {
+        if (plan.type === AIActionType.MoveTrain) {
+          const movePath = (plan as any).path;
+          const endPos = movePath[movePath.length - 1];
+          snap.bot.position = { row: endPos.row, col: endPos.col };
+          ctx.position = { row: endPos.row, col: endPos.col };
+        }
+      });
+
+      mockResolve
+        // A2: MOVE to Leipzig (P1 route stop, off-network) — FAILS
+        .mockResolvedValueOnce({ success: false, error: 'No valid path to "Leipzig"' })
+        // A2: MOVE to Szczecin (P1 route stop, off-network) — FAILS
+        .mockResolvedValueOnce({ success: false, error: 'No valid path to "Szczecin"' })
+        // A2: MOVE to Munich (P1.5 frontier, closest to Leipzig — first off-network stop) — SUCCEEDS
+        .mockResolvedValueOnce({
+          success: true,
+          plan: {
+            type: AIActionType.MoveTrain,
+            path: [
+              { row: 20, col: 30 }, { row: 21, col: 31 }, { row: 22, col: 32 },
+            ],
+            fees: new Set<string>(),
+            totalFee: 0,
+          },
+        });
+
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // Verify frontier approach targets Leipzig (first off-network), not Szczecin
+      const frontierLog = logSpy.mock.calls.find(
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+      );
+      expect(frontierLog).toBeDefined();
+      expect(frontierLog![0]).toContain('Leipzig');
+      expect(frontierLog![0]).toContain('Munich');
+
+      // MOVE calls: Leipzig (P1, fails), Szczecin (P1, fails), Munich (P1.5 frontier, succeeds)
+      const moveCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'MOVE',
+      );
+      expect(moveCalls.length).toBeGreaterThanOrEqual(3);
+      expect(moveCalls[0][0].details.to).toBe('Leipzig');
+      expect(moveCalls[1][0].details.to).toBe('Szczecin');
+      expect(moveCalls[2][0].details.to).toBe('Munich');
+
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+    });
+  });
 });
