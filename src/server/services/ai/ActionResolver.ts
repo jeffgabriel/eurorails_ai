@@ -29,10 +29,11 @@ import {
   TRACK_USAGE_FEE,
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, GridCoord, GridPointData, hexDistance } from './MapTopology';
+import { loadGridPoints, GridCoord, GridPointData, hexDistance, makeKey } from './MapTopology';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
+import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 
 export class ActionResolver {
   /**
@@ -186,6 +187,41 @@ export class ActionResolver {
     });
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
+
+    // ── Pre-build network analysis (JIRA-113) ──────────────────────────
+    // If the bot has enough track, check if a nearby network point can serve
+    // as a shorter start position for building toward the target city.
+    if (hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments)) {
+      try {
+        const gridPoints = loadGridPoints();
+        // Build network node key set from existing segments
+        const networkNodeKeys = new Set<string>();
+        for (const seg of snapshot.bot.existingSegments) {
+          networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+          networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+        }
+
+        // Use the first (closest) target position for nearest-point search
+        const targetPos = targetPositions[0];
+        const nearestResult = NetworkBuildAnalyzer.findNearestNetworkPoint(
+          targetPos, networkNodeKeys, gridPoints,
+        );
+        NetworkBuildAnalyzer.logNearestPointResult(targetCity, nearestResult, 8);
+
+        // If a nearby network point is found and its build cost is within budget,
+        // add it to start positions so Dijkstra considers building a connector
+        if (nearestResult && nearestResult.distance > 0 && nearestResult.buildCost < budget) {
+          const alreadyIncluded = startPositions.some(
+            sp => sp.row === nearestResult.point.row && sp.col === nearestResult.point.col,
+          );
+          if (!alreadyIncluded) {
+            startPositions.push(nearestResult.point);
+          }
+        }
+      } catch (error) {
+        NetworkBuildAnalyzer.logAnalysisError(error);
+      }
+    }
 
     // Filter existingSegments to only the connected component reachable from bot position.
     // This prevents Dijkstra from starting at disconnected cluster endpoints (e.g., remote major cities).
