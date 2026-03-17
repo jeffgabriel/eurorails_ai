@@ -378,6 +378,20 @@ export class PlanExecutor {
         : matchingDemand.estimatedTrackCostToDelivery;
       if (estimatedCost > snapshot.bot.money) {
         console.warn(`${tag} JIRA-101: Build toward ${stop.city} blocked — estimated track cost $${estimatedCost}M exceeds cash $${snapshot.bot.money}M`);
+
+        // JIRA-121 Bug 1: Before abandoning, scan forward for a deliverable stop
+        // where the load is already on the train and the city is reachable on network.
+        for (let i = route.currentStopIndex + 1; i < route.stops.length; i++) {
+          const candidate = route.stops[i];
+          if (candidate.action !== 'deliver') continue;
+          if (!context.loads.includes(candidate.loadType)) continue;
+          if (!context.citiesOnNetwork.includes(candidate.city)) continue;
+
+          console.log(`${tag} JIRA-121: Skipping unaffordable stop ${stop.city}, advancing to deliverable stop ${candidate.city}`);
+          const updatedRoute = { ...route, currentStopIndex: i };
+          return PlanExecutor.execute(updatedRoute, snapshot, context);
+        }
+
         return {
           plan: { type: AIActionType.PassTurn },
           routeComplete: false,

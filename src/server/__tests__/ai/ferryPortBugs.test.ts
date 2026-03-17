@@ -24,6 +24,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
+  getFerryPairPort: jest.fn(() => null),
   _resetCache: jest.fn(),
 }));
 jest.mock('../../../shared/services/trackUsageFees', () => ({

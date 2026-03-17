@@ -26,7 +26,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
+import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints, getFerryPairPort } from './MapTopology';
 import { MIN_DELIVERIES_BEFORE_UPGRADE } from './AIStrategyEngine';
 
 /** Major cities in the cheap, dense core of the map */
@@ -204,6 +204,34 @@ export class ContextBuilder {
     gridPoints: GridPoint[],
   ): string[] {
     const startKey = `${position.row},${position.col}`;
+
+    // JIRA-121 Bug 2: If bot starts at a ferry port, model teleportation to the
+    // paired port (matching ActionResolver.resolveFerryCrossing behavior).
+    // Speed is already halved by WorldSnapshotService, so we BFS from the paired port.
+    const ferryStartPoint = gridPoints.find(gp => gp.row === position.row && gp.col === position.col);
+    if (ferryStartPoint?.terrain === TerrainType.FerryPort) {
+      const ferryEdges = getFerryEdges();
+      const pairedPort = getFerryPairPort(position.row, position.col, ferryEdges);
+      if (pairedPort) {
+        const pairedKey = `${pairedPort.row},${pairedPort.col}`;
+        if (network.nodes.has(pairedKey)) {
+          console.log(`[ContextBuilder] Ferry teleport: BFS starting from paired port (${pairedPort.row},${pairedPort.col}) instead of ferry port`);
+          // BFS from the paired port at the already-halved speed.
+          // Also include cities reachable from the original position via non-ferry neighbors.
+          const ferryReachable = ContextBuilder.computeReachableCities(
+            pairedPort, speed, network, gridPoints,
+          );
+          // Include the paired port's city name if it has one
+          const pairedPoint = gridPoints.find(gp => gp.row === pairedPort.row && gp.col === pairedPort.col);
+          const pairedCityName = pairedPoint?.city?.name ?? pairedPoint?.name;
+          if (pairedCityName && !ferryReachable.includes(pairedCityName)) {
+            ferryReachable.push(pairedCityName);
+          }
+          return Array.from(new Set(ferryReachable));
+        }
+      }
+    }
+
     if (!network.nodes.has(startKey)) {
       // Bot position is not on the track network (e.g., at a major city center
       // adjacent to but not directly on own track). Snap to nearest network node.
