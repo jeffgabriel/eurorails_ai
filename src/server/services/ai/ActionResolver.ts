@@ -230,7 +230,7 @@ export class ActionResolver {
       ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position)
       : snapshot.bot.existingSegments;
 
-    let segments = computeBuildSegments(
+    const segments = computeBuildSegments(
       startPositions,
       connectedSegments,
       budget,
@@ -238,45 +238,6 @@ export class ActionResolver {
       occupiedEdges,
       targetPositions,
     );
-
-    // ── Post-build parallel path validation (JIRA-113) ─────────────────
-    // After computing a path, check if it runs parallel to existing track.
-    // If so, reroute through existing track to avoid redundant construction.
-    if (segments.length > 0 && hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments)) {
-      try {
-        const gridPoints = loadGridPoints();
-        const proposedPath: GridCoord[] = segments.map(seg => ({ row: seg.to.row, col: seg.to.col }));
-        const detection = NetworkBuildAnalyzer.detectParallelPath(
-          proposedPath, snapshot.bot.existingSegments, gridPoints,
-        );
-        NetworkBuildAnalyzer.logParallelDetection(detection);
-
-        if (detection.isParallel && detection.suggestedWaypoint) {
-          // Re-run with suggested waypoint as additional start position
-          const rerouteStartPositions = [...startPositions, detection.suggestedWaypoint];
-          NetworkBuildAnalyzer.logRerouteDecision(detection.suggestedWaypoint, detection.parallelSegmentCount);
-
-          const reroutedSegments = computeBuildSegments(
-            rerouteStartPositions,
-            connectedSegments,
-            budget,
-            budget,
-            occupiedEdges,
-            targetPositions,
-          );
-
-          // Use rerouted path only if it's within budget and non-empty
-          const reroutedCost = reroutedSegments.reduce((sum, seg) => sum + seg.cost, 0);
-          if (reroutedSegments.length > 0 && reroutedCost <= budget) {
-            segments = reroutedSegments;
-          } else {
-            NetworkBuildAnalyzer.logRerouteFallback(reroutedCost, budget);
-          }
-        }
-      } catch (error) {
-        NetworkBuildAnalyzer.logAnalysisError(error);
-      }
-    }
 
     if (segments.length === 0) {
       return {
