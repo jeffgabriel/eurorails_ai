@@ -48,12 +48,70 @@ export class NetworkBuildAnalyzer {
    * @returns Nearest network point with distance and build cost, or null
    */
   static findNearestNetworkPoint(
-    _targetPosition: GridCoord,
-    _networkNodeKeys: Set<string>,
-    _gridPoints: Map<string, GridPointData>,
-    _maxDistance: number = 8,
+    targetPosition: GridCoord,
+    networkNodeKeys: Set<string>,
+    gridPoints: Map<string, GridPointData>,
+    maxDistance: number = 8,
   ): NearestNetworkResult | null {
-    // Implementation in BE-002
+    const startKey = makeKey(targetPosition.row, targetPosition.col);
+
+    // If the target is already on the network, return distance 0
+    if (networkNodeKeys.has(startKey)) {
+      return { point: { row: targetPosition.row, col: targetPosition.col }, distance: 0, buildCost: 0 };
+    }
+
+    // Empty network — nothing to find
+    if (networkNodeKeys.size === 0) {
+      return null;
+    }
+
+    // BFS state: queue entries carry (position, distance from target, accumulated build cost)
+    const visited = new Set<string>();
+    visited.add(startKey);
+
+    interface BfsNode {
+      row: number;
+      col: number;
+      distance: number;
+      buildCost: number;
+    }
+
+    let currentLevel: BfsNode[] = [{ row: targetPosition.row, col: targetPosition.col, distance: 0, buildCost: 0 }];
+
+    while (currentLevel.length > 0 ) {
+      const nextLevel: BfsNode[] = [];
+
+      for (const node of currentLevel) {
+        const neighbors = getHexNeighbors(node.row, node.col);
+
+        for (const neighbor of neighbors) {
+          const neighborKey = makeKey(neighbor.row, neighbor.col);
+          if (visited.has(neighborKey)) continue;
+          visited.add(neighborKey);
+
+          const gp = gridPoints.get(neighborKey);
+          if (!gp) continue; // off-map
+
+          const terrainCost = getTerrainCost(gp.terrain);
+          if (!isFinite(terrainCost)) continue; // unbuildable (water)
+
+          const newDistance = node.distance + 1;
+          if (newDistance > maxDistance) continue;
+
+          const newBuildCost = node.buildCost + terrainCost;
+
+          // Found a network node — BFS guarantees shortest distance
+          if (networkNodeKeys.has(neighborKey)) {
+            return { point: { row: neighbor.row, col: neighbor.col }, distance: newDistance, buildCost: newBuildCost };
+          }
+
+          nextLevel.push({ row: neighbor.row, col: neighbor.col, distance: newDistance, buildCost: newBuildCost });
+        }
+      }
+
+      currentLevel = nextLevel;
+    }
+
     return null;
   }
 
