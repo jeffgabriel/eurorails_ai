@@ -596,4 +596,66 @@ export class NetworkBuildAnalyzer {
       existingTrackNearby,
     };
   }
+
+  /**
+   * JIRA-122 Part 4: Detect when a proposed build path passes through map regions
+   * with high existing track density, suggesting the bot should reroute through
+   * existing track instead of building parallel.
+   *
+   * Divides the map into grid regions and counts existing segments per region.
+   * If the proposed path passes through a region with > threshold existing segments,
+   * returns a reroute suggestion.
+   *
+   * @param proposedPath - Array of grid coordinates for the proposed build
+   * @param existingSegments - Bot's existing track segments
+   * @param regionSize - Grid region size (default 10)
+   * @param densityThreshold - Segments per region to trigger detection (default 5)
+   * @returns Duplication result with suggested waypoint, or null if no duplication
+   */
+  static detectRegionDuplication(
+    proposedPath: GridCoord[],
+    existingSegments: TrackSegment[],
+    regionSize: number = 10,
+    densityThreshold: number = 5,
+  ): { isDuplicate: boolean; region: { row: number; col: number }; segmentCount: number; suggestedWaypoint: GridCoord } | null {
+    if (proposedPath.length < 2 || existingSegments.length < densityThreshold) return null;
+
+    // Build region density map from existing segments
+    const regionDensity = new Map<string, { count: number; points: GridCoord[] }>();
+    for (const seg of existingSegments) {
+      for (const point of [seg.from, seg.to]) {
+        const regionRow = Math.floor(point.row / regionSize);
+        const regionCol = Math.floor(point.col / regionSize);
+        const regionKey = `${regionRow},${regionCol}`;
+        if (!regionDensity.has(regionKey)) {
+          regionDensity.set(regionKey, { count: 0, points: [] });
+        }
+        const entry = regionDensity.get(regionKey)!;
+        entry.count++;
+        entry.points.push({ row: point.row, col: point.col });
+      }
+    }
+
+    // Check each point in the proposed path against region density
+    for (const point of proposedPath) {
+      const regionRow = Math.floor(point.row / regionSize);
+      const regionCol = Math.floor(point.col / regionSize);
+      const regionKey = `${regionRow},${regionCol}`;
+      const entry = regionDensity.get(regionKey);
+      if (entry && entry.count > densityThreshold) {
+        // Suggest rerouting through the midpoint of existing track in this region
+        const midIdx = Math.floor(entry.points.length / 2);
+        const suggestedWaypoint = entry.points[midIdx];
+        console.log(`${LOG_PREFIX} Region duplication detected: region (${regionRow},${regionCol}) has ${entry.count} segments, proposed path passes through`);
+        return {
+          isDuplicate: true,
+          region: { row: regionRow, col: regionCol },
+          segmentCount: entry.count,
+          suggestedWaypoint,
+        };
+      }
+    }
+
+    return null;
+  }
 }

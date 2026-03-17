@@ -188,7 +188,7 @@ export class ActionResolver {
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
 
-    // ── Pre-build network analysis (JIRA-113) ──────────────────────────
+    // ── Pre-build network analysis (JIRA-113 + JIRA-122) ──────────────
     // If the bot has enough track, check if a nearby network point can serve
     // as a shorter start position for building toward the target city.
     if (hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments)) {
@@ -203,10 +203,16 @@ export class ActionResolver {
 
         // Use the first (closest) target position for nearest-point search
         const targetPos = targetPositions[0];
-        const nearestResult = NetworkBuildAnalyzer.findNearestNetworkPoint(
+
+        // JIRA-122: Use ferry-aware BFS for nearest-network-point search
+        const ferryAwareResult = NetworkBuildAnalyzer.findNearestNetworkPointFerryAware(
           targetPos, networkNodeKeys, gridPoints,
         );
-        NetworkBuildAnalyzer.logNearestPointResult(targetCity, nearestResult, 8);
+        // Fall back to standard BFS if ferry-aware returned nothing
+        const nearestResult = ferryAwareResult ?? NetworkBuildAnalyzer.findNearestNetworkPoint(
+          targetPos, networkNodeKeys, gridPoints,
+        );
+        NetworkBuildAnalyzer.logNearestPointResult(targetCity, nearestResult, 12);
 
         // If a nearby network point is found and its build cost is within budget,
         // add it to start positions so Dijkstra considers building a connector
@@ -216,6 +222,21 @@ export class ActionResolver {
           );
           if (!alreadyIncluded) {
             startPositions.push(nearestResult.point);
+          }
+        }
+
+        // JIRA-122 Part 3: Target-biased source selection
+        // Pre-filter track endpoints to those nearest the build target.
+        // This prevents Berlin endpoints from being used when building toward Cardiff (London is closer).
+        if (nearestResult && nearestResult.distance > 0 && startPositions.length > 1) {
+          const distanceThreshold = nearestResult.distance * 2;
+          const biasedSources = startPositions.filter(sp => {
+            const dist = hexDistance(sp.row, sp.col, targetPos.row, targetPos.col);
+            return dist <= distanceThreshold;
+          });
+          if (biasedSources.length > 0) {
+            console.log(`[ActionResolver] Target-biased source selection: ${biasedSources.length}/${startPositions.length} sources within ${distanceThreshold} of target ${targetCity}`);
+            startPositions = biasedSources;
           }
         }
       } catch (error) {
@@ -275,6 +296,37 @@ export class ActionResolver {
         }
       } catch (error) {
         NetworkBuildAnalyzer.logAnalysisError(error);
+      }
+
+      // JIRA-122 Part 4: Region-based duplicate detection
+      if (segments.length > 0) {
+        try {
+          const proposedRegionPath: GridCoord[] = segments.map(seg => ({ row: seg.to.row, col: seg.to.col }));
+          const duplication = NetworkBuildAnalyzer.detectRegionDuplication(
+            proposedRegionPath, snapshot.bot.existingSegments,
+          );
+          if (duplication) {
+            // Re-run with suggested waypoint through dense existing track region
+            const rerouteStartPositions = [...startPositions, duplication.suggestedWaypoint];
+            console.log(`[ActionResolver] Region duplication reroute: waypoint (${duplication.suggestedWaypoint.row},${duplication.suggestedWaypoint.col}) in dense region`);
+
+            const reroutedSegments = computeBuildSegments(
+              rerouteStartPositions,
+              connectedSegments,
+              budget,
+              budget,
+              occupiedEdges,
+              targetPositions,
+            );
+
+            const reroutedCost = reroutedSegments.reduce((sum, seg) => sum + seg.cost, 0);
+            if (reroutedSegments.length > 0 && reroutedCost <= budget) {
+              segments = reroutedSegments;
+            }
+          }
+        } catch (error) {
+          NetworkBuildAnalyzer.logAnalysisError(error);
+        }
       }
     }
 
