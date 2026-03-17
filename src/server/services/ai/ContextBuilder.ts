@@ -27,6 +27,7 @@ import {
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
+import { MIN_DELIVERIES_BEFORE_UPGRADE } from './AIStrategyEngine';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -957,7 +958,7 @@ export class ContextBuilder {
 
     // ── UPGRADE OPTIONS (JIRA-55 Part B, JIRA-105: lowered gates) ──
     // Gate: mention upgrades after 1+ delivery with >= 30M cash
-    const upgradeEligible = (context.deliveryCount ?? 0) >= 4 && context.money >= 30;
+    const upgradeEligible = (context.deliveryCount ?? 0) >= MIN_DELIVERIES_BEFORE_UPGRADE && context.money >= 30;
     if (upgradeEligible && context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' &&
         context.turnNumber >= 8;

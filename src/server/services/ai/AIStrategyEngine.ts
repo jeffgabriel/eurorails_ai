@@ -47,6 +47,13 @@ import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 
+/**
+ * Minimum number of completed deliveries before a bot may upgrade its train.
+ * Prevents premature upgrades that leave the bot cash-poor and unable to build track.
+ * Adjust this value to tune bot upgrade timing across all skill levels.
+ */
+export const MIN_DELIVERIES_BEFORE_UPGRADE = 4;
+
 export interface BotTurnResult {
   action: AIActionType;
   segmentsBuilt: number;
@@ -227,6 +234,27 @@ export class AIStrategyEngine {
           activeRoute = execResult.updatedRoute;
         }
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
+        // ── Pre-LLM discard gate: broke bot with no deliverable hand ──
+        // If cash < 5M, no affordable demands, and no immediate delivery,
+        // skip the LLM entirely and discard immediately (saves 1-3 LLM calls).
+        const isBroke = snapshot.bot.money < 5;
+        const noAffordableDemands = context.demands.length > 0 && context.demands.every(d => !d.isAffordable);
+        const noDelivery = !context.canDeliver || context.canDeliver.length === 0;
+        const noDeliverableOnNetwork = context.demands.every(d =>
+          !(d.isLoadOnTrain && d.isDeliveryOnNetwork),
+        );
+
+        if (!context.isInitialBuild && isBroke && noAffordableDemands && noDelivery && noDeliverableOnNetwork) {
+          console.warn(`${tag} [pre-LLM] Broke bot gate — cash=${snapshot.bot.money}M, no affordable demands, no delivery. Skipping LLM, discarding hand.`);
+          decision = {
+            plan: { type: AIActionType.DiscardHand },
+            reasoning: `[broke-bot-gate] Cash=${snapshot.bot.money}M with no affordable demands — discarding hand (LLM skipped)`,
+            planHorizon: 'Immediate',
+            model: 'broke-bot-heuristic',
+            latencyMs: 0,
+            retried: false,
+          };
+        } else {
         // ── No active route — consult LLM for a new strategic route ──
         const brain = AIStrategyEngine.createBrain(botConfig!);
 
@@ -239,7 +267,7 @@ export class AIStrategyEngine {
 
           // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
           if (activeRoute.upgradeOnRoute) {
-            const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag);
+            const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag, memory.deliveryCount ?? 0);
             if (upgradeResult) {
               pendingUpgradeAction = upgradeResult;
             }
@@ -470,6 +498,8 @@ export class AIStrategyEngine {
         } else {
           // Route planning failed — try heuristic fallback before passing
           console.warn(`${tag} [LLM] Route planning failed — attempting heuristic fallback`);
+          // JIRA-120: Thread LLM failure counter into context for discard gate
+          context = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
           const fallback = await ActionResolver.heuristicFallback(context, snapshot);
           if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
             console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
@@ -496,6 +526,7 @@ export class AIStrategyEngine {
             };
           }
         }
+        } // close broke-bot-gate else
       } else {
         // No LLM key — pass turn with debug logging
         console.error(`${tag} [LLM] No API key configured — passing turn`);
@@ -512,6 +543,14 @@ export class AIStrategyEngine {
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
 
       // ── JIRA-105: Inject pending upgrade action into decision plan (before TurnComposer) ──
+      // ── JIRA-119: Gate 2 — suppress pending upgrade if delivery count too low ──
+      if (pendingUpgradeAction) {
+        const effectiveDeliveryCount = memory.deliveryCount ?? 0;
+        if (effectiveDeliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) {
+          console.warn(`${tag} JIRA-119: Suppressed pending upgrade — only ${effectiveDeliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`);
+          pendingUpgradeAction = null;
+        }
+      }
       if (pendingUpgradeAction) {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
         decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, pendingUpgradeAction] };
@@ -730,7 +769,7 @@ export class AIStrategyEngine {
             // ── JIRA-105: Consume upgradeOnRoute from post-delivery new route ──
             let postDeliveryUpgrade: TurnPlanUpgradeTrain | null = null;
             if (newRoute.upgradeOnRoute) {
-              const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(newRoute, simSnapshot, tag);
+              const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(newRoute, simSnapshot, tag, (memory.deliveryCount ?? 0) + 1);
               if (upgradeResult) {
                 postDeliveryUpgrade = upgradeResult;
               }
@@ -867,6 +906,8 @@ export class AIStrategyEngine {
         noProgressTurns: madeProgress ? 0 : (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
+        consecutiveLlmFailures: decision.model === 'heuristic-fallback' || decision.model === 'llm-failed'
+          ? (memory.consecutiveLlmFailures ?? 0) + 1 : 0,
         deliveryCount: (memory.deliveryCount ?? 0) + (hadDelivery ? 1 : 0), // JIRA-60
         totalEarnings: (memory.totalEarnings ?? 0) + (result.payment ?? 0), // JIRA-60
         turnNumber: snapshot.turnNumber,
@@ -1420,9 +1461,16 @@ export class AIStrategyEngine {
     route: StrategicRoute,
     snapshot: WorldSnapshot,
     tag: string,
+    deliveryCount: number,
   ): TurnPlanUpgradeTrain | null {
     const targetTrain = route.upgradeOnRoute!;
     route.upgradeOnRoute = undefined; // one-time consumption
+
+    // JIRA-119: Gate 1 — block upgrade before sufficient deliveries
+    if (deliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) {
+      console.warn(`${tag} JIRA-119: upgradeOnRoute blocked — only ${deliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`);
+      return null;
+    }
 
     // Validate upgrade path using ActionResolver.UPGRADE_PATHS
     const currentTrain = snapshot.bot.trainType;

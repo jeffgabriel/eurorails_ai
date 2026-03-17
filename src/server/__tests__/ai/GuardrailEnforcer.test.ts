@@ -237,6 +237,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
+
     });
 
     describe('No guardrail fires', () => {
