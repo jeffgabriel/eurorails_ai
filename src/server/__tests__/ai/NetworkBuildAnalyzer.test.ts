@@ -454,3 +454,68 @@ describe('NetworkBuildAnalyzer.findSpurOpportunities', () => {
     expect(result).toEqual([]);
   });
 });
+
+// ── evaluateBuildOption Tests ─────────────────────────────────────────
+
+describe('NetworkBuildAnalyzer.evaluateBuildOption', () => {
+  it('early game (turn 10): low-value spur is not worthwhile', () => {
+    // 3M spur saving 2 mileposts at speed 9 → turnsSaved = 2/9 ≈ 0.22
+    // 0.22 * 2.5 = 0.56 < 3 → not worthwhile
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 3, distanceSaved: 2, alternativeDistance: 10 }, 10, 9,
+    );
+    expect(result.valuePerTurn).toBe(2.5);
+    expect(result.isWorthwhile).toBe(false);
+  });
+
+  it('late game (turn 80): moderate spur is worthwhile', () => {
+    // 3M spur saving 6 mileposts at speed 9 → turnsSaved = 6/9 ≈ 0.67
+    // 0.67 * 11.5 = 7.67 > 3 → worthwhile
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 3, distanceSaved: 6, alternativeDistance: 20 }, 80, 9,
+    );
+    expect(result.valuePerTurn).toBe(11.5);
+    expect(result.isWorthwhile).toBe(true);
+    expect(result.turnsSaved).toBeCloseTo(6 / 9);
+  });
+
+  it('late game: expensive ferry saving many mileposts is worthwhile', () => {
+    // 16M ferry saving 20 mileposts at speed 12 → turnsSaved = 20/12 ≈ 1.67
+    // 1.67 * 11.5 = 19.17 > 16 → worthwhile
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 16, distanceSaved: 20, alternativeDistance: 40 }, 80, 12,
+    );
+    expect(result.isWorthwhile).toBe(true);
+  });
+
+  it('expensive ferry saving few mileposts is not worthwhile', () => {
+    // 16M ferry saving 3 mileposts at speed 12 → turnsSaved = 3/12 = 0.25
+    // 0.25 * 11.5 = 2.875 < 16 → not worthwhile
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 16, distanceSaved: 3, alternativeDistance: 20 }, 80, 12,
+    );
+    expect(result.isWorthwhile).toBe(false);
+  });
+
+  it('zero distance saved is not worthwhile', () => {
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 3, distanceSaved: 0, alternativeDistance: 10 }, 50, 9,
+    );
+    expect(result.turnsSaved).toBe(0);
+    expect(result.isWorthwhile).toBe(false);
+  });
+
+  it('mid game uses correct valuePerTurn', () => {
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 1, distanceSaved: 5, alternativeDistance: 15 }, 40, 9,
+    );
+    expect(result.valuePerTurn).toBe(6.5);
+  });
+
+  it('returns correct buildCost in evaluation', () => {
+    const result = NetworkBuildAnalyzer.evaluateBuildOption(
+      { buildCost: 7, distanceSaved: 4, alternativeDistance: 12 }, 30, 9,
+    );
+    expect(result.buildCost).toBe(7);
+  });
+});

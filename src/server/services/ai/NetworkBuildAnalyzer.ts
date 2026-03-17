@@ -49,6 +49,14 @@ export interface SpurOpportunity {
   spurSegments: number;
 }
 
+/** Result of cost-per-turn build option evaluation */
+export interface BuildOptionEvaluation {
+  turnsSaved: number;
+  buildCost: number;
+  valuePerTurn: number;
+  isWorthwhile: boolean;
+}
+
 /**
  * Static utility class for pre-build network analysis.
  *
@@ -249,6 +257,46 @@ export class NetworkBuildAnalyzer {
     // Sort by spurCost ascending
     opportunities.sort((a, b) => a.spurCost - b.spurCost);
     return opportunities;
+  }
+
+  /**
+   * Evaluate whether a build option is worthwhile using a cost-per-turn heuristic.
+   * Derives game phase from turnNumber to determine value per turn saved.
+   *
+   * @param option - Build option with cost and distance metrics
+   * @param turnNumber - Current game turn number
+   * @param speed - Train speed in mileposts per turn (9 or 12)
+   * @returns Evaluation result with turnsSaved, valuePerTurn, and isWorthwhile
+   */
+  static evaluateBuildOption(
+    option: { buildCost: number; distanceSaved: number; alternativeDistance: number },
+    turnNumber: number,
+    speed: number,
+  ): BuildOptionEvaluation {
+    // Derive value per turn based on game phase
+    let valuePerTurn: number;
+    if (turnNumber <= 20) {
+      valuePerTurn = 2.5; // Early game — low delivery value
+    } else if (turnNumber <= 60) {
+      valuePerTurn = 6.5; // Mid game — moderate delivery value
+    } else {
+      valuePerTurn = 11.5; // Late game — high delivery value
+    }
+
+    // Calculate turns saved by using the shortcut vs alternative route
+    const turnsSaved = speed > 0 ? option.distanceSaved / speed : 0;
+
+    // Determine if the build is worthwhile
+    const isWorthwhile = turnsSaved > 0 && turnsSaved * valuePerTurn > option.buildCost;
+
+    console.log(`${LOG_PREFIX} Evaluating build: turnsSaved=${turnsSaved.toFixed(1)}, buildCost=${option.buildCost}M, valuePerTurn=${valuePerTurn}M, isWorthwhile=${isWorthwhile}`);
+
+    return {
+      turnsSaved,
+      buildCost: option.buildCost,
+      valuePerTurn,
+      isWorthwhile,
+    };
   }
 
   /**
