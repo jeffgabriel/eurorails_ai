@@ -395,6 +395,32 @@ class SocketService {
     this.socket.on('message-error', callback);
   }
 
+  // Whisper-specific methods
+  submitWhisper(payload: {
+    gameId: string;
+    turnNumber: number;
+    botPlayerId: string;
+    advice: string;
+    botTurnSummary: object;
+  }): void {
+    if (!this.socket) {
+      throw new Error('Socket not connected');
+    }
+    this.socket.emit('whisper:submit' as any, payload);
+  }
+
+  onWhisperRecorded(callback: (data: { whisperId: string; turnNumber: number; timestamp: string }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('whisper:recorded' as any);
+    (this.socket as any).on('whisper:recorded', callback);
+  }
+
+  onWhisperError(callback: (data: { code: string; message: string }) => void): void {
+    if (!this.socket) return;
+    this.socket.off('whisper:error' as any);
+    (this.socket as any).on('whisper:error', callback);
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }
