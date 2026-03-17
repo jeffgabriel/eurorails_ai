@@ -522,7 +522,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
       // heuristicFallback SHOULD have been called before PassTurn
-      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+      expect(mockHeuristicFallback).toHaveBeenCalledWith({ ...context, consecutiveLlmFailures: 0 }, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -603,6 +603,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -694,6 +695,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -738,6 +740,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
@@ -798,6 +801,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
@@ -821,7 +825,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.reasoning).toContain('llm-failed');
       expect(mockPlanRoute).toHaveBeenCalled();
       // heuristicFallback SHOULD have been called
-      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+      expect(mockHeuristicFallback).toHaveBeenCalledWith({ ...context, consecutiveLlmFailures: 0 }, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -839,6 +843,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       process.env.ANTHROPIC_API_KEY = 'test-key';
@@ -962,6 +967,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -982,7 +988,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.reasoning).toContain('heuristic-fallback');
-      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+      expect(mockHeuristicFallback).toHaveBeenCalledWith({ ...context, consecutiveLlmFailures: 0 }, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -1002,6 +1008,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1022,7 +1029,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.action).toBe(AIActionType.PassTurn);
       expect(result.reasoning).toContain('llm-failed');
       expect(result.reasoning).toContain('heuristic fallback both failed');
-      expect(mockHeuristicFallback).toHaveBeenCalledWith(context, snapshot);
+      expect(mockHeuristicFallback).toHaveBeenCalledWith({ ...context, consecutiveLlmFailures: 0 }, snapshot);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -1042,6 +1049,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1106,6 +1114,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1180,6 +1189,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1242,6 +1252,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1299,6 +1310,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1349,6 +1361,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1404,6 +1417,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 1,
         totalEarnings: 19,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1503,6 +1517,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1557,6 +1572,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1652,6 +1668,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1722,6 +1739,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1772,6 +1790,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1834,6 +1853,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -1875,6 +1895,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: null } as any);
@@ -1905,6 +1926,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2324,6 +2346,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2394,6 +2417,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2435,6 +2459,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: null } as any);
@@ -2474,6 +2499,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 0,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: null } as any);
@@ -2551,6 +2577,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 19,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2643,6 +2670,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 15,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2722,6 +2750,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 0,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2796,6 +2825,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 19,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -2968,6 +2998,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 0,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -3050,6 +3081,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 0,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' }, loads: ['Steel'] } as any);
@@ -3122,6 +3154,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 19,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium', provider: 'anthropic' }, loads: ['Steel'] } as any);
@@ -3285,6 +3318,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 30,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium', provider: 'anthropic' }, loads: ['Potatoes'] } as any);
@@ -3514,6 +3548,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 19,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium', provider: 'anthropic' }, loads: ['Steel'] } as any);
@@ -3626,6 +3661,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 15,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       // Pre-delivery snapshot: carrying Beer, old demand card
@@ -3861,6 +3897,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         totalEarnings: 20,
         currentBuildTarget: null,
         turnsOnTarget: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -4068,6 +4105,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnsOnTarget: 0,
         deliveryCount: 0,
         totalEarnings: 0,
+        consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({
@@ -4223,7 +4261,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain, activeRoute: route,
         turnsOnRoute: 2, routeHistory: [], deliveryCount: 1, totalEarnings: 15,
-        currentBuildTarget: null, turnsOnTarget: 0,
+        currentBuildTarget: null, turnsOnTarget: 0, consecutiveLlmFailures: 0,
       });
 
       const preDeliverySnap = makeSnapshot({
@@ -4313,7 +4351,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
         lastAction: null, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], deliveryCount: 0, totalEarnings: 0,
-        currentBuildTarget: null, turnsOnTarget: 0,
+        currentBuildTarget: null, turnsOnTarget: 0, consecutiveLlmFailures: 0,
       });
 
       const snapshot = makeSnapshot({ botConfig: null } as any);

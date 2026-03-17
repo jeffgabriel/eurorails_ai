@@ -27,6 +27,7 @@ describe('BotMemory', () => {
         lastReasoning: null,
         lastPlanHorizon: null,
         previousRouteStops: null,
+        consecutiveLlmFailures: 0,
       });
     });
 

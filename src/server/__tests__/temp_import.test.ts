@@ -34,6 +34,7 @@ describe('BotMemory and DecisionLogger module imports', () => {
       lastReasoning: null,
       lastPlanHorizon: null,
       previousRouteStops: null,
+      consecutiveLlmFailures: 0,
     });
   });
 

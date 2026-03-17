@@ -267,6 +267,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       routeHistory: [],
       lastReasoning: null,
       lastPlanHorizon: null,
+      consecutiveLlmFailures: 0,
     });
   });
 
@@ -398,7 +399,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
         noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
-        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();
@@ -500,7 +501,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
         noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
-        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();
@@ -540,7 +541,7 @@ describe('Bot Build Track Flow (Integration)', () => {
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
         noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
-        routeHistory: [], lastReasoning: null, lastPlanHorizon: null,
+        routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
       mockComputeBuild.mockReturnValue([]);
       setupWorldSnapshotQuery();

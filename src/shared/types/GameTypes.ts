@@ -489,6 +489,8 @@ export interface BotMemoryState {
     lastPlanHorizon?: string | null;
     /** Remaining stops from a partially completed route — passed to LLM for context (BE-010) */
     previousRouteStops?: RouteStop[] | null;
+    /** Consecutive turns where LLM failed to produce a valid route plan (JIRA-120) */
+    consecutiveLlmFailures: number;
 }
 
 /** Simplified option summary for decision logging */
@@ -741,6 +743,8 @@ export interface GameContext {
     deliveryCount?: number;
     /** En-route pickup opportunities near the bot's planned route (JIRA-87) */
     enRoutePickups?: EnRoutePickup[];
+    /** Consecutive LLM route planning failures — threaded from BotMemory (JIRA-120) */
+    consecutiveLlmFailures?: number;
 }
 
 /** A single action within an LLM multi-action response */

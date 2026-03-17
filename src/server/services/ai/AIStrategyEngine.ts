@@ -499,8 +499,8 @@ export class AIStrategyEngine {
           // Route planning failed — try heuristic fallback before passing
           console.warn(`${tag} [LLM] Route planning failed — attempting heuristic fallback`);
           // JIRA-120: Thread LLM failure counter into context for discard gate
-          context = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
-          const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+          const fallbackContext = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
+          const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot);
           if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
             console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
             decision = {

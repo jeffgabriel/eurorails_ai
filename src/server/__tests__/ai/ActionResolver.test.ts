@@ -3019,6 +3019,130 @@ describe('ActionResolver', () => {
       // Should DELIVER, not discard — broke-bot gate doesn't fire (cash >= 5 and demand affordable)
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
     });
+
+    it('JIRA-120: should force discard after 3+ consecutive LLM failures', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: ['Coal'],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 15 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: false,
+        consecutiveLlmFailures: 3,
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen',
+            deliveryCity: 'Berlin', payout: 15,
+            isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 10,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 1, estimatedTurns: 3,
+            demandScore: 5, efficiencyPerTurn: 5, networkCitiesUnlocked: 0,
+            victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 45,
+          } as any,
+        ],
+      });
+
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('JIRA-120'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('JIRA-120: should NOT discard when consecutiveLlmFailures < 3', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: false,
+        consecutiveLlmFailures: 2,
+        demands: [],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      // Should NOT discard — counter below threshold, falls through to later steps
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
+    });
+
+    it('JIRA-120: should NOT discard during initial build even with 3+ LLM failures', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: true,
+        consecutiveLlmFailures: 5,
+        demands: [],
+      });
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      // Initial build — discard gate skipped even with high failure count
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
+    });
+
+    it('JIRA-120: should NOT discard when consecutiveLlmFailures is undefined (backward compat)', async () => {
+      setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 },
+          money: 30,
+          loads: [],
+          resolvedDemands: [],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        money: 30,
+        canDeliver: [],
+        canPickup: [],
+        isInitialBuild: false,
+        demands: [],
+      });
+      // Do NOT set consecutiveLlmFailures — simulates legacy context
+      delete (context as any).consecutiveLlmFailures;
+
+      const result = await ActionResolver.heuristicFallback(context, snapshot);
+
+      // Should not discard — undefined defaults to 0 via ?? operator
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

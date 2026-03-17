@@ -1009,6 +1009,14 @@ export class ActionResolver {
       return ActionResolver.resolveDiscard(snapshot);
     }
 
+    // 1d. JIRA-120: Force discard after 3+ consecutive LLM route planning failures
+    if (!context.isInitialBuild && (context.consecutiveLlmFailures ?? 0) >= 3) {
+      console.warn(
+        `[heuristicFallback] JIRA-120: ${context.consecutiveLlmFailures} consecutive LLM failures — forcing DiscardHand`,
+      );
+      return ActionResolver.resolveDiscard(snapshot);
+    }
+
     // 2. Try to MOVE toward a pickup or delivery city on the network
     if (snapshot.bot.position && !context.isInitialBuild) {
       // 2a. If carrying a load, move toward the delivery city

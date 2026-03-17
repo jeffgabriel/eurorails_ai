@@ -30,6 +30,7 @@ function defaultState(): BotMemoryState {
     lastReasoning: null,
     lastPlanHorizon: null,
     previousRouteStops: null,
+    consecutiveLlmFailures: 0,
   };
 }
 
