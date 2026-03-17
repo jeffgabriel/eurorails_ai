@@ -26,7 +26,7 @@ import {
   TrackSegment,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { loadGridPoints, makeKey } from './MapTopology';
+import { loadGridPoints, makeKey, getHexNeighbors } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 
@@ -50,6 +50,10 @@ export interface CompositionTrace {
   pickups: Array<{ load: string; city: string }>;
   /** Deliveries added during composition */
   deliveries: Array<{ load: string; city: string }>;
+  /** JIRA-122: JIT build gate decision */
+  jitGate?: { deferred: boolean; reason: string; trackRunway: number; trainSpeed: number; destinationCity: string };
+  /** JIRA-122: Ferry-aware BFS search result */
+  ferryAwareBFS?: { searched: boolean; ferryHopsUsed: number; nearestPointViaFerry: { row: number; col: number; distance: number; ferryCrossings: number } | null };
 }
 
 /** Result from TurnComposer.compose() — the plan plus a trace of what happened. */
@@ -478,7 +482,7 @@ export class TurnComposer {
         }
 
         const buildPlan = await TurnComposer.tryAppendBuild(
-          simSnapshot, simContext, activeRoute,
+          simSnapshot, simContext, activeRoute, trace,
         );
         if (buildPlan) {
           steps.push(buildPlan);
@@ -727,6 +731,7 @@ export class TurnComposer {
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
+    trace?: CompositionTrace,
   ): Promise<TurnPlan | null> {
     // Check budget: need money and build capacity remaining
     const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
@@ -748,6 +753,26 @@ export class TurnComposer {
         if (!context.citiesOnNetwork.includes(city)) {
           unreachedRouteStops.push(city);
         }
+      }
+    }
+
+    // JIRA-122: JIT build gate — defer standard builds when not urgently needed
+    if (unreachedRouteStops.length > 0) {
+      const primaryTarget = unreachedRouteStops[0];
+      const trainSpeed = context.speed ?? 9;
+      const jitResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, primaryTarget, trainSpeed);
+      if (trace) {
+        trace.jitGate = {
+          deferred: jitResult.deferred,
+          reason: jitResult.reason,
+          trackRunway: jitResult.trackRunway,
+          trainSpeed,
+          destinationCity: primaryTarget,
+        };
+      }
+      if (jitResult.deferred) {
+        console.log(`[TurnComposer] JIT gate: deferring build toward ${primaryTarget} — ${jitResult.reason} (runway=${jitResult.trackRunway.toFixed(1)} turns)`);
+        return null;
       }
     }
 
@@ -947,6 +972,146 @@ export class TurnComposer {
     }
 
     return null;
+  }
+
+  /**
+   * JIRA-122: Determine if the bot should defer building this turn.
+   * Two-part check:
+   *   1. Delivery certainty — is the train committed to a delivery that requires this build?
+   *   2. Track runway — does the train have >= 2 turns of existing track toward destination?
+   *
+   * Exempt: near-miss builds, initial build phase, victory builds.
+   * Returns true to defer (skip build), false to proceed.
+   */
+  static shouldDeferBuild(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    activeRoute: StrategicRoute | null | undefined,
+    buildTarget: string,
+    trainSpeed: number,
+  ): { deferred: boolean; reason: string; trackRunway: number } {
+    // Exemption: initial build phase (first 2 turns)
+    if (context.isInitialBuild || context.turnNumber <= 2) {
+      return { deferred: false, reason: 'initial_build_exempt', trackRunway: 0 };
+    }
+
+    // Exemption: victory builds (cash > 230M, building toward major city connections)
+    if (snapshot.bot.money > 230) {
+      const unconnected = context.unconnectedMajorCities ?? [];
+      if (unconnected.some(c => c.cityName === buildTarget)) {
+        return { deferred: false, reason: 'victory_build_exempt', trackRunway: 0 };
+      }
+    }
+
+    // Check 1: Delivery certainty — build target must be in active route stops
+    if (!activeRoute) {
+      return { deferred: true, reason: 'no_active_route', trackRunway: 0 };
+    }
+
+    const routeStops = activeRoute.stops.map(s => s.city.toLowerCase());
+    const targetInRoute = routeStops.includes(buildTarget.toLowerCase());
+    if (!targetInRoute) {
+      return { deferred: true, reason: 'target_not_in_route', trackRunway: 0 };
+    }
+
+    // Check delivery commitment: train should have the load, be near pickup, or actively building toward route
+    // When route phase is 'build', the bot is explicitly in the build-toward-stop phase — allow it
+    if (activeRoute.phase !== 'build') {
+      const currentStop = activeRoute.stops[activeRoute.currentStopIndex];
+      if (currentStop) {
+        const isDeliveryCommitted = context.loads.includes(currentStop.loadType) ||
+          activeRoute.phase === 'travel' || activeRoute.phase === 'act';
+        if (!isDeliveryCommitted) {
+          return { deferred: true, reason: 'not_committed_to_delivery', trackRunway: 0 };
+        }
+      }
+    }
+
+    // Check 2: Track runway — defer if >= 2 turns of existing track remain
+    const runway = TurnComposer.calculateTrackRunway(snapshot, buildTarget, trainSpeed, context);
+    if (runway >= 2) {
+      return { deferred: true, reason: 'sufficient_runway', trackRunway: runway };
+    }
+
+    return { deferred: false, reason: 'build_needed', trackRunway: runway };
+  }
+
+  /**
+   * JIRA-122: Calculate how many turns of existing track the train has
+   * before needing new track toward a destination.
+   *
+   * Counts mileposts of existing track toward destination and divides by train speed.
+   */
+  static calculateTrackRunway(
+    snapshot: WorldSnapshot,
+    destinationCity: string,
+    trainSpeed: number,
+    context: GameContext,
+  ): number {
+    if (!snapshot.bot.position || trainSpeed <= 0) return 0;
+
+    // If destination is already on the network, full path exists
+    if (context.citiesOnNetwork.includes(destinationCity)) {
+      // Rough estimate: use existing segment count as proxy
+      // A fully connected destination means effectively infinite runway
+      return 10;
+    }
+
+    // Build a set of network node keys
+    const networkNodeKeys = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+      networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+    }
+
+    // Find the destination city position
+    const gridPoints = loadGridPoints();
+    let destPosition: { row: number; col: number } | null = null;
+    for (const [, gp] of gridPoints) {
+      if (gp.name && gp.name.toLowerCase() === destinationCity.toLowerCase()) {
+        destPosition = { row: gp.row, col: gp.col };
+        break;
+      }
+    }
+    if (!destPosition) return 0;
+
+    // BFS from bot position along existing network toward destination
+    // Count how many mileposts of track exist in the direction of the destination
+    const botKey = makeKey(snapshot.bot.position.row, snapshot.bot.position.col);
+    const visited = new Set<string>();
+    visited.add(botKey);
+
+    let frontier = [{ row: snapshot.bot.position.row, col: snapshot.bot.position.col, depth: 0 }];
+    let maxDepthOnNetwork = 0;
+
+    while (frontier.length > 0) {
+      const nextFrontier: typeof frontier = [];
+      for (const node of frontier) {
+        const neighbors = getHexNeighbors(node.row, node.col);
+        for (const neighbor of neighbors) {
+          const key = makeKey(neighbor.row, neighbor.col);
+          if (visited.has(key)) continue;
+          visited.add(key);
+
+          // Only follow existing network edges
+          if (!networkNodeKeys.has(key)) continue;
+
+          // Check if this segment actually exists (both directions)
+          const hasSegment = snapshot.bot.existingSegments.some(seg =>
+            (makeKey(seg.from.row, seg.from.col) === makeKey(node.row, node.col) && makeKey(seg.to.row, seg.to.col) === key) ||
+            (makeKey(seg.to.row, seg.to.col) === makeKey(node.row, node.col) && makeKey(seg.from.row, seg.from.col) === key),
+          );
+          if (!hasSegment) continue;
+
+          const newDepth = node.depth + 1;
+          if (newDepth > maxDepthOnNetwork) maxDepthOnNetwork = newDepth;
+          nextFrontier.push({ row: neighbor.row, col: neighbor.col, depth: newDepth });
+        }
+      }
+      frontier = nextFrontier;
+    }
+
+    return maxDepthOnNetwork / trainSpeed;
   }
 
   /**

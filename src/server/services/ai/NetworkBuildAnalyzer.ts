@@ -31,6 +31,11 @@ export interface NearestNetworkResult {
   buildCost: number;
 }
 
+/** Result of ferry-aware nearest network point BFS search */
+export interface FerryAwareNetworkResult extends NearestNetworkResult {
+  ferryCrossings: number;
+}
+
 /** A ferry port reachable from the existing network via a short spur */
 export interface FerryOpportunity {
   ferryName: string;
@@ -151,7 +156,7 @@ export class NetworkBuildAnalyzer {
     networkNodeKeys: Set<string>,
     gridPoints: Map<string, GridPointData>,
     ferryData?: FerryEdge[],
-    maxDistance: number = 4,
+    maxDistance: number = 8,
   ): FerryOpportunity[] {
     const edges = ferryData ?? NetworkBuildAnalyzer.loadFerryData();
     if (edges.length === 0) return [];
@@ -223,7 +228,7 @@ export class NetworkBuildAnalyzer {
     networkNodeKeys: Set<string>,
     demandCities: Array<{ city: string; position: { row: number; col: number } }>,
     gridPoints: Map<string, GridPointData>,
-    maxDistance: number = 3,
+    maxDistance: number = 5,
   ): SpurOpportunity[] {
     if (demandCities.length === 0) return [];
 
@@ -368,6 +373,115 @@ export class NetworkBuildAnalyzer {
           }
 
           nextLevel.push({ row: neighbor.row, col: neighbor.col, distance: newDistance, buildCost: newBuildCost });
+        }
+      }
+
+      currentLevel = nextLevel;
+    }
+
+    return null;
+  }
+
+  /**
+   * Ferry-aware BFS outward from a target position to find the closest node
+   * in the existing track network, crossing ferry edges as 0-distance hops.
+   *
+   * Unlike findNearestNetworkPoint, this BFS treats ferry port pairs as
+   * directly connected — reaching one side of a ferry immediately expands
+   * to the other side. This allows targets on ferry-connected landmasses
+   * (e.g., Belfast) to find network points via ferry crossings (e.g., Dublin).
+   *
+   * @param targetPosition - Grid position to search from
+   * @param networkNodeKeys - Set of "row,col" strings representing existing network nodes
+   * @param gridPoints - Loaded grid point data map
+   * @param maxDistance - Maximum BFS depth (default 12)
+   * @returns Nearest network result including ferry crossing count, or null
+   */
+  static findNearestNetworkPointFerryAware(
+    targetPosition: GridCoord,
+    networkNodeKeys: Set<string>,
+    gridPoints: Map<string, GridPointData>,
+    maxDistance: number = 12,
+  ): FerryAwareNetworkResult | null {
+    const startKey = makeKey(targetPosition.row, targetPosition.col);
+
+    // If the target is already on the network, return distance 0
+    if (networkNodeKeys.has(startKey)) {
+      return { point: { row: targetPosition.row, col: targetPosition.col }, distance: 0, buildCost: 0, ferryCrossings: 0 };
+    }
+
+    if (networkNodeKeys.size === 0) return null;
+
+    // Load ferry port lookup for ferry edge traversal
+    const ferryEdges = NetworkBuildAnalyzer.loadFerryData();
+    const ferryPortMap = new Map<string, Array<{ row: number; col: number }>>();
+    for (const edge of ferryEdges) {
+      const keyA = makeKey(edge.pointA.row, edge.pointA.col);
+      const keyB = makeKey(edge.pointB.row, edge.pointB.col);
+      if (!ferryPortMap.has(keyA)) ferryPortMap.set(keyA, []);
+      if (!ferryPortMap.has(keyB)) ferryPortMap.set(keyB, []);
+      ferryPortMap.get(keyA)!.push({ row: edge.pointB.row, col: edge.pointB.col });
+      ferryPortMap.get(keyB)!.push({ row: edge.pointA.row, col: edge.pointA.col });
+    }
+
+    interface FerryBfsNode {
+      row: number;
+      col: number;
+      distance: number;
+      buildCost: number;
+      ferryCrossings: number;
+    }
+
+    const visited = new Set<string>();
+    visited.add(startKey);
+
+    let currentLevel: FerryBfsNode[] = [{ row: targetPosition.row, col: targetPosition.col, distance: 0, buildCost: 0, ferryCrossings: 0 }];
+
+    while (currentLevel.length > 0) {
+      const nextLevel: FerryBfsNode[] = [];
+
+      for (const node of currentLevel) {
+        // Expand to hex neighbors (land traversal)
+        const neighbors = getHexNeighbors(node.row, node.col);
+        for (const neighbor of neighbors) {
+          const neighborKey = makeKey(neighbor.row, neighbor.col);
+          if (visited.has(neighborKey)) continue;
+          visited.add(neighborKey);
+
+          const gp = gridPoints.get(neighborKey);
+          if (!gp) continue;
+
+          const terrainCost = getTerrainCost(gp.terrain);
+          if (!isFinite(terrainCost)) continue;
+
+          const newDistance = node.distance + 1;
+          if (newDistance > maxDistance) continue;
+
+          const newBuildCost = node.buildCost + terrainCost;
+
+          if (networkNodeKeys.has(neighborKey)) {
+            return { point: { row: neighbor.row, col: neighbor.col }, distance: newDistance, buildCost: newBuildCost, ferryCrossings: node.ferryCrossings };
+          }
+
+          nextLevel.push({ row: neighbor.row, col: neighbor.col, distance: newDistance, buildCost: newBuildCost, ferryCrossings: node.ferryCrossings });
+        }
+
+        // Expand across ferry edges (0-distance hop)
+        const nodeKey = makeKey(node.row, node.col);
+        const ferryPartners = ferryPortMap.get(nodeKey);
+        if (ferryPartners) {
+          for (const partner of ferryPartners) {
+            const partnerKey = makeKey(partner.row, partner.col);
+            if (visited.has(partnerKey)) continue;
+            visited.add(partnerKey);
+
+            // Ferry crossing is 0 additional distance (free traversal once at port)
+            if (networkNodeKeys.has(partnerKey)) {
+              return { point: { row: partner.row, col: partner.col }, distance: node.distance, buildCost: node.buildCost, ferryCrossings: node.ferryCrossings + 1 };
+            }
+
+            nextLevel.push({ row: partner.row, col: partner.col, distance: node.distance, buildCost: node.buildCost, ferryCrossings: node.ferryCrossings + 1 });
+          }
         }
       }
 
