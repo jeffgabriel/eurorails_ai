@@ -14,6 +14,7 @@ import {
   getTerrainCost,
   makeKey,
 } from './MapTopology';
+import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
 
 /** Result of parallel path detection against existing track */
 export interface ParallelDetection {
@@ -28,6 +29,16 @@ export interface NearestNetworkResult {
   point: GridCoord;
   distance: number;
   buildCost: number;
+}
+
+/** A ferry port reachable from the existing network via a short spur */
+export interface FerryOpportunity {
+  ferryName: string;
+  networkPoint: { row: number; col: number };
+  ferryPort: { row: number; col: number };
+  spurCost: number;
+  ferryCost: number;
+  destinationSide: { row: number; col: number };
 }
 
 /**
@@ -84,6 +95,102 @@ export class NetworkBuildAnalyzer {
   /** Log unexpected errors during analysis (graceful degradation) */
   static logAnalysisError(error: unknown): void {
     console.warn(`${LOG_PREFIX} Network analysis failed, falling back to default behavior:`, error);
+  }
+
+  /** Cached ferry edge data, loaded once from configuration files */
+  private static ferryEdgeCache: FerryEdge[] | null = null;
+
+  /**
+   * Load ferry edge data with caching. Wraps getFerryEdges() from majorCityGroups.
+   * Returns empty array on failure (graceful degradation).
+   */
+  static loadFerryData(): FerryEdge[] {
+    if (NetworkBuildAnalyzer.ferryEdgeCache) return NetworkBuildAnalyzer.ferryEdgeCache;
+    try {
+      NetworkBuildAnalyzer.ferryEdgeCache = getFerryEdges();
+      return NetworkBuildAnalyzer.ferryEdgeCache;
+    } catch (error) {
+      console.warn(`${LOG_PREFIX} Ferry data loading failed, returning empty opportunities:`, error);
+      return [];
+    }
+  }
+
+  /** Reset ferry cache (for testing) */
+  static _resetFerryCache(): void {
+    NetworkBuildAnalyzer.ferryEdgeCache = null;
+  }
+
+  /**
+   * BFS outward from each ferry port to find connections to the existing network.
+   * For each ferry, checks both port positions and returns opportunities where
+   * the network is within maxDistance segments of a port.
+   *
+   * @param networkNodeKeys - Set of "row,col" strings representing existing network nodes
+   * @param gridPoints - Loaded grid point data map
+   * @param ferryData - Parsed ferry edges (defaults to cached ferry data)
+   * @param maxDistance - Maximum BFS depth from ferry port (default 4)
+   * @returns Array of ferry opportunities sorted by spurCost ascending
+   */
+  static findNearbyFerryPorts(
+    networkNodeKeys: Set<string>,
+    gridPoints: Map<string, GridPointData>,
+    ferryData?: FerryEdge[],
+    maxDistance: number = 4,
+  ): FerryOpportunity[] {
+    const edges = ferryData ?? NetworkBuildAnalyzer.loadFerryData();
+    if (edges.length === 0) return [];
+
+    const opportunities: FerryOpportunity[] = [];
+
+    for (const ferry of edges) {
+      // Check both sides of the ferry
+      const sides: [{ row: number; col: number }, { row: number; col: number }][] = [
+        [ferry.pointA, ferry.pointB],
+        [ferry.pointB, ferry.pointA],
+      ];
+
+      for (const [port, destination] of sides) {
+        const portKey = makeKey(port.row, port.col);
+
+        // If the port itself is on the network, distance is 0
+        if (networkNodeKeys.has(portKey)) {
+          opportunities.push({
+            ferryName: ferry.name,
+            networkPoint: { row: port.row, col: port.col },
+            ferryPort: { row: port.row, col: port.col },
+            spurCost: 0,
+            ferryCost: ferry.cost,
+            destinationSide: { row: destination.row, col: destination.col },
+          });
+          console.log(`${LOG_PREFIX} Ferry near-miss: ${ferry.name} — network at (${port.row},${port.col}) is 0 segments from port, spurCost=0M`);
+          continue;
+        }
+
+        // BFS outward from the ferry port toward the network
+        const result = NetworkBuildAnalyzer.findNearestNetworkPoint(
+          port,
+          networkNodeKeys,
+          gridPoints,
+          maxDistance,
+        );
+
+        if (result) {
+          opportunities.push({
+            ferryName: ferry.name,
+            networkPoint: { row: result.point.row, col: result.point.col },
+            ferryPort: { row: port.row, col: port.col },
+            spurCost: result.buildCost,
+            ferryCost: ferry.cost,
+            destinationSide: { row: destination.row, col: destination.col },
+          });
+          console.log(`${LOG_PREFIX} Ferry near-miss: ${ferry.name} — network at (${result.point.row},${result.point.col}) is ${result.distance} segments from port, spurCost=${result.buildCost}M`);
+        }
+      }
+    }
+
+    // Sort by spurCost ascending
+    opportunities.sort((a, b) => a.spurCost - b.spurCost);
+    return opportunities;
   }
 
   /**

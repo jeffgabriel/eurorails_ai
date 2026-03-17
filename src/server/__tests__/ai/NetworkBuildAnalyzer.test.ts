@@ -53,6 +53,10 @@ jest.mock('../../services/ai/MapTopology', () => ({
   _resetCache: jest.fn(),
 }));
 
+jest.mock('../../../shared/services/majorCityGroups', () => ({
+  getFerryEdges: jest.fn(() => []),
+}));
+
 // ── Test Grid Setup ─────────────────────────────────────────────────────
 // A small 7x7 grid of clear terrain for testing
 function buildTestGrid(overrides: Map<string, Partial<GridPointData>> = new Map()): Map<string, GridPointData> {
@@ -271,5 +275,121 @@ describe('NetworkBuildAnalyzer.shouldSkipAnalysis', () => {
       makeSegment(3, 1, 4, 1),
     ];
     expect(NetworkBuildAnalyzer.shouldSkipAnalysis(segs)).toBe(false);
+  });
+});
+
+// ── loadFerryData Tests ───────────────────────────────────────────────
+
+describe('NetworkBuildAnalyzer.loadFerryData', () => {
+  const { getFerryEdges } = require('../../../shared/services/majorCityGroups');
+
+  beforeEach(() => {
+    NetworkBuildAnalyzer._resetFerryCache();
+    getFerryEdges.mockClear();
+  });
+
+  it('returns ferry edges from getFerryEdges', () => {
+    const mockEdges = [
+      { name: 'TestFerry', pointA: { row: 1, col: 1 }, pointB: { row: 5, col: 5 }, cost: 4 },
+    ];
+    getFerryEdges.mockReturnValue(mockEdges);
+    const result = NetworkBuildAnalyzer.loadFerryData();
+    expect(result).toEqual(mockEdges);
+    expect(getFerryEdges).toHaveBeenCalledTimes(1);
+  });
+
+  it('caches result after first call', () => {
+    const mockEdges = [
+      { name: 'TestFerry', pointA: { row: 1, col: 1 }, pointB: { row: 5, col: 5 }, cost: 4 },
+    ];
+    getFerryEdges.mockReturnValue(mockEdges);
+    NetworkBuildAnalyzer.loadFerryData();
+    NetworkBuildAnalyzer.loadFerryData();
+    expect(getFerryEdges).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns empty array on error', () => {
+    getFerryEdges.mockImplementation(() => { throw new Error('file not found'); });
+    const result = NetworkBuildAnalyzer.loadFerryData();
+    expect(result).toEqual([]);
+  });
+});
+
+// ── findNearbyFerryPorts Tests ────────────────────────────────────────
+
+describe('NetworkBuildAnalyzer.findNearbyFerryPorts', () => {
+  const gridPoints = buildTestGrid();
+
+  // Test ferry: portA at (1,2), portB at (5,5), cost 8M
+  const testFerryData = [
+    { name: 'Test_Ferry', pointA: { row: 1, col: 2 }, pointB: { row: 5, col: 5 }, cost: 8 },
+  ];
+
+  it('returns opportunity when network is 2 segments from ferry port', () => {
+    // Network node at (3,2) — 2 hops from ferry portA (1,2)
+    const networkNodes = new Set(['3,2']);
+    const result = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      networkNodes, gridPoints, testFerryData, 4,
+    );
+    // Should find portA side opportunity
+    const portAOpps = result.filter(o => o.ferryPort.row === 1 && o.ferryPort.col === 2);
+    expect(portAOpps.length).toBe(1);
+    expect(portAOpps[0].ferryName).toBe('Test_Ferry');
+    expect(portAOpps[0].spurCost).toBeGreaterThan(0);
+    expect(portAOpps[0].ferryCost).toBe(8);
+    expect(portAOpps[0].destinationSide).toEqual({ row: 5, col: 5 });
+  });
+
+  it('returns empty array when network is beyond maxDistance from all ferries', () => {
+    // Network node far from any ferry port
+    const networkNodes = new Set(['6,6']);
+    const result = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      networkNodes, gridPoints, testFerryData, 1, // very short maxDistance
+    );
+    // portA at (1,2) is far from (6,6), portB at (5,5) — check if (6,6) is within 1 of (5,5)
+    // (5,5) neighbors for odd col: (4,5),(6,5),(5,4),(6,4),(5,6),(6,6) — (6,6) IS a neighbor
+    // So portB side may find it. Let's use a truly far node instead.
+    const farNodes = new Set(['0,6']);
+    const farResult = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      farNodes, gridPoints, testFerryData, 1,
+    );
+    expect(farResult.length).toBe(0);
+  });
+
+  it('returns opportunity with spurCost 0 when network is directly at ferry port', () => {
+    // Network directly at portA
+    const networkNodes = new Set(['1,2']);
+    const result = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      networkNodes, gridPoints, testFerryData, 4,
+    );
+    const portAOpps = result.filter(o => o.ferryPort.row === 1 && o.ferryPort.col === 2);
+    expect(portAOpps.length).toBe(1);
+    expect(portAOpps[0].spurCost).toBe(0);
+    expect(portAOpps[0].networkPoint).toEqual({ row: 1, col: 2 });
+  });
+
+  it('returns multiple ferry opportunities sorted by spurCost', () => {
+    const multiFerryData = [
+      { name: 'Cheap_Ferry', pointA: { row: 2, col: 2 }, pointB: { row: 6, col: 6 }, cost: 4 },
+      { name: 'Far_Ferry', pointA: { row: 4, col: 4 }, pointB: { row: 6, col: 1 }, cost: 8 },
+    ];
+    // Network at (3,3) — closer to (2,2) than to (4,4) via BFS
+    const networkNodes = new Set(['3,3']);
+    const result = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      networkNodes, gridPoints, multiFerryData, 4,
+    );
+    expect(result.length).toBeGreaterThan(0);
+    // Verify sorted by spurCost ascending
+    for (let i = 1; i < result.length; i++) {
+      expect(result[i].spurCost).toBeGreaterThanOrEqual(result[i - 1].spurCost);
+    }
+  });
+
+  it('returns empty array when ferry data is empty', () => {
+    const networkNodes = new Set(['3,3']);
+    const result = NetworkBuildAnalyzer.findNearbyFerryPorts(
+      networkNodes, gridPoints, [], 4,
+    );
+    expect(result).toEqual([]);
   });
 });
