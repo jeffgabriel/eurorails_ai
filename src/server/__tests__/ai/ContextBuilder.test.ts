@@ -2956,22 +2956,21 @@ describe('ContextBuilder ferry crossing penalty (JIRA-88)', () => {
   });
 
   it('cross-Channel route: ferryRequired=true, estimatedTurns includes +2 penalty', async () => {
-    // Supply on continent, delivery on Britain — clearly opposite sides of Channel
+    // Supply on continent (Calais at real grid coords), delivery on Britain
     (getFerryEdges as jest.Mock).mockReturnValue(BARRIER_FERRY_EDGES);
 
-    // Calais at (18,22) is closer to Dover_Calais pointB (18,24) → continent side
-    // Birmingham at (16,30) is closer to Dover_Calais pointA (18,28) → Britain side
-    // Include BOTH mainland and cross-Channel demands in one build for comparison
+    // Calais at (23,33) — real grid coordinate (FerryPort on English Channel, continent side)
+    // Birmingham at (16,30) — real grid coordinate (Britain side)
+    // Frankfurt at (10,22) — real grid coordinate (continent side, for mainland comparison)
     const gridPoints: GridPoint[] = [
-      makeCityPoint(18, 22, 'Calais', TerrainType.MajorCity, ['Wine', 'Cheese']),
+      makeCityPoint(23, 33, 'Calais', TerrainType.MajorCity, ['Wine', 'Cheese']),
       makeCityPoint(16, 30, 'Birmingham', TerrainType.MajorCity, ['Steel']),
-      // A second continent city at similar distance for mainland comparison
       makeCityPoint(10, 22, 'Frankfurt', TerrainType.MajorCity, ['Coal']),
     ];
 
     const snapshot = makeWorldSnapshot({
       botLoads: [],
-      botPosition: { row: 18, col: 22 },
+      botPosition: { row: 23, col: 33 },
       botSegments: [],
       resolvedDemands: [
         {
@@ -2996,7 +2995,6 @@ describe('ContextBuilder ferry crossing penalty (JIRA-88)', () => {
     expect(mainlandDemand!.ferryRequired).toBe(false);
 
     // The ferry demand should have a higher estimatedTurns due to the +2 penalty
-    // (both are at roughly similar hex distances from Calais)
     expect(ferryDemand!.estimatedTurns).toBeGreaterThan(mainlandDemand!.estimatedTurns);
   });
 
@@ -3089,8 +3087,9 @@ describe('ContextBuilder ferry crossing penalty (JIRA-88)', () => {
     expect(demand!.estimatedTurns).toBe(99);
   });
 
-  it('no barrier ferry edges mocked: ferryRequired=false even for distant cities', async () => {
-    // With empty ferry edges, no barrier crossing can be detected
+  it('region-based detection: Paris→Birmingham is cross-Channel regardless of ferry edges', async () => {
+    // Ferry detection is now name-based (static region lookup), not edge-based.
+    // Paris (continent) → Birmingham (Britain) requires Channel crossing.
     (getFerryEdges as jest.Mock).mockReturnValue([]);
 
     const gridPoints: GridPoint[] = [
@@ -3113,8 +3112,8 @@ describe('ContextBuilder ferry crossing penalty (JIRA-88)', () => {
     const demand = context.demands.find(d => d.deliveryCity === 'Birmingham');
 
     expect(demand).toBeDefined();
-    // Without ferry edges, isFerryOnRoute Check 2 returns false
-    expect(demand!.ferryRequired).toBe(false);
+    // Region-based: Paris (continent) ≠ Birmingham (britain) → ferry required
+    expect(demand!.ferryRequired).toBe(true);
   });
 });
 

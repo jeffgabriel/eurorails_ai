@@ -14,19 +14,13 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
 
 jest.mock('../../services/ai/MapTopology', () => ({
   hexDistance: jest.fn(),
-  loadGridPoints: jest.fn().mockReturnValue([]),
+  loadGridPoints: jest.fn().mockReturnValue(new Map()),
   estimateHopDistance: jest.fn().mockReturnValue(0),
   estimatePathCost: jest.fn().mockReturnValue(0),
-  computeLandmass: jest.fn().mockReturnValue(new Map()),
+  computeLandmass: jest.fn().mockReturnValue(new Set()),
   computeFerryRouteInfo: jest.fn().mockReturnValue({}),
   makeKey: jest.fn((...args: unknown[]) => args.join(',')),
 }));
-
-import { getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance } from '../../services/ai/MapTopology';
-
-const mockedGetFerryEdges = getFerryEdges as jest.MockedFunction<typeof getFerryEdges>;
-const mockedHexDistance = hexDistance as jest.MockedFunction<typeof hexDistance>;
 
 // ── Helper factories ───────────────────────────────────────────────────────
 
@@ -62,38 +56,27 @@ function makeCityPoint(
   });
 }
 
-// ── Ferry edge fixtures ────────────────────────────────────────────────────
-
-// Channel ferries: Britain side (low rows) ↔ Continent side (high rows)
-const CHANNEL_FERRY_EDGES = [
-  { name: 'Plymouth_Cherbourg', pointA: { row: 8, col: 5 }, pointB: { row: 25, col: 6 }, cost: 8 },
-  { name: 'Portsmouth_LeHavre', pointA: { row: 7, col: 10 }, pointB: { row: 26, col: 11 }, cost: 8 },
-  { name: 'Dover_Calais', pointA: { row: 6, col: 15 }, pointB: { row: 27, col: 16 }, cost: 6 },
-  { name: 'Harwich_Ijmuiden', pointA: { row: 5, col: 20 }, pointB: { row: 28, col: 22 }, cost: 8 },
-];
-
-// Irish Sea ferries: Ireland side (very low rows) ↔ Britain side (low rows)
-const IRISH_SEA_FERRY_EDGES = [
-  { name: 'Belfast_Stranraer', pointA: { row: 2, col: 3 }, pointB: { row: 6, col: 8 }, cost: 4 },
-  { name: 'Dublin_Liverpool', pointA: { row: 3, col: 4 }, pointB: { row: 7, col: 12 }, cost: 6 },
-];
-
-const ALL_BARRIER_FERRIES = [...CHANNEL_FERRY_EDGES, ...IRISH_SEA_FERRY_EDGES];
-
 // ── City grid points ───────────────────────────────────────────────────────
+// Region classification is by city NAME, not coordinates, so positions are arbitrary.
 
-// Continent cities (high rows)
+// Continent cities
 const paris = makeCityPoint(30, 10, 'Paris', TerrainType.MajorCity);
 const berlin = makeCityPoint(28, 30, 'Berlin', TerrainType.MajorCity);
+const beograd = makeCityPoint(48, 62, 'Beograd', TerrainType.MajorCity);
+const hamburg = makeCityPoint(20, 47, 'Hamburg', TerrainType.MajorCity);
+const stuttgart = makeCityPoint(32, 44, 'Stuttgart', TerrainType.MajorCity);
+const porto = makeCityPoint(41, 7, 'Porto', TerrainType.MajorCity);
 
-// Britain cities (low rows, close to channel ferry pointA endpoints)
+// Britain cities
 const london = makeCityPoint(6, 12, 'London', TerrainType.MajorCity);
 
-// Ireland cities (very low rows, close to Irish Sea ferry pointA endpoints)
+// Ireland cities
 const dublin = makeCityPoint(3, 5, 'Dublin', TerrainType.MajorCity);
 const belfast = makeCityPoint(2, 4, 'Belfast', TerrainType.MajorCity);
 
-const defaultGridPoints: GridPoint[] = [paris, berlin, london, dublin, belfast];
+const defaultGridPoints: GridPoint[] = [
+  paris, berlin, beograd, hamburg, stuttgart, porto, london, dublin, belfast,
+];
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -107,64 +90,96 @@ describe('ContextBuilder.countFerryCrossings', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-
-    mockedGetFerryEdges.mockReturnValue(ALL_BARRIER_FERRIES);
-
-    // Simple Manhattan-like distance
-    mockedHexDistance.mockImplementation(
-      (r1: number, c1: number, r2: number, c2: number) =>
-        Math.abs(r1 - r2) + Math.abs(c1 - c2),
-    );
   });
 
   it('returns 0 when supplyCity is null', () => {
     const result = countFerryCrossings(null, 'Berlin', defaultGridPoints);
     expect(result).toBe(0);
-    expect(mockedGetFerryEdges).not.toHaveBeenCalled();
   });
 
-  it('returns 0 when supply city not found in gridPoints', () => {
-    const result = countFerryCrossings('Atlantis', 'Berlin', defaultGridPoints);
-    expect(result).toBe(0);
-  });
-
-  it('returns 0 when delivery city not found in gridPoints', () => {
-    const result = countFerryCrossings('Paris', 'Atlantis', defaultGridPoints);
-    expect(result).toBe(0);
-  });
-
-  it('returns 0 for same-landmass cities (both on continent)', () => {
-    // Paris and Berlin are both on the continent side (high rows),
-    // so they are closer to the same ferry endpoints
+  it('returns 0 for same-region cities (both on continent)', () => {
     const result = countFerryCrossings('Paris', 'Berlin', defaultGridPoints);
     expect(result).toBe(0);
   });
 
   it('returns 1 for continent → Britain (Channel crossing)', () => {
-    // Paris (row 30) is closer to channel ferry pointB (continent side)
-    // London (row 6) is closer to channel ferry pointA (Britain side)
     const result = countFerryCrossings('Paris', 'London', defaultGridPoints);
     expect(result).toBe(1);
   });
 
   it('returns 1 for Britain → Ireland Dublin (Irish Sea crossing)', () => {
-    // London (row 6) is closer to Irish Sea ferry pointB (Britain side)
-    // Dublin (row 3) is closer to Irish Sea ferry pointA (Ireland side)
-    // For channel ferries, both are on the Britain side (low rows → closer to pointA)
     const result = countFerryCrossings('London', 'Dublin', defaultGridPoints);
     expect(result).toBe(1);
   });
 
   it('returns 2 for continent → Belfast (Channel + Irish Sea)', () => {
-    // Paris (row 30) is on the continent → crosses Channel
-    // Belfast (row 2) is in Ireland → also crosses Irish Sea
     const result = countFerryCrossings('Paris', 'Belfast', defaultGridPoints);
     expect(result).toBe(2);
   });
 
-  it('returns 0 when getFerryEdges returns empty array', () => {
-    mockedGetFerryEdges.mockReturnValue([]);
-    const result = countFerryCrossings('Paris', 'London', defaultGridPoints);
+  // ── Regression tests for false-positive routes ──────────────────────────
+
+  it('returns 0 for Beograd → Hamburg (both on continent, was false positive)', () => {
+    const result = countFerryCrossings('Beograd', 'Hamburg', defaultGridPoints);
     expect(result).toBe(0);
+  });
+
+  it('returns 0 for Stuttgart → Porto (both on continent, was false positive)', () => {
+    const result = countFerryCrossings('Stuttgart', 'Porto', defaultGridPoints);
+    expect(result).toBe(0);
+  });
+});
+
+describe('ContextBuilder.isFerryOnRoute', () => {
+  const isFerryOnRoute = (
+    supplyCity: string | null,
+    deliveryCity: string,
+    gridPoints: GridPoint[],
+  ): boolean =>
+    (ContextBuilder as any).isFerryOnRoute(supplyCity, deliveryCity, gridPoints);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it('returns false when supplyCity is null', () => {
+    const result = isFerryOnRoute(null, 'Berlin', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns true when delivery city is a ferry port', () => {
+    const ferryPortCity = makeCityPoint(10, 10, 'FerryTown', TerrainType.FerryPort);
+    const result = isFerryOnRoute('Paris', 'FerryTown', [...defaultGridPoints, ferryPortCity]);
+    expect(result).toBe(true);
+  });
+
+  it('returns false for Beograd → Hamburg (both continent, was false positive)', () => {
+    const result = isFerryOnRoute('Beograd', 'Hamburg', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns false for Stuttgart → Porto (both continent, was false positive)', () => {
+    const result = isFerryOnRoute('Stuttgart', 'Porto', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns false for Paris → Berlin (both continent)', () => {
+    const result = isFerryOnRoute('Paris', 'Berlin', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns true for London → Paris (Channel crossing)', () => {
+    const result = isFerryOnRoute('London', 'Paris', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns true for Dublin → London (Irish Sea crossing)', () => {
+    const result = isFerryOnRoute('Dublin', 'London', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns true for Belfast → Paris (crosses both barriers)', () => {
+    const result = isFerryOnRoute('Belfast', 'Paris', defaultGridPoints);
+    expect(result).toBe(true);
   });
 });

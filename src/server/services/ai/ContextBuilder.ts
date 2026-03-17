@@ -758,7 +758,7 @@ export class ContextBuilder {
       context.trainType === 'Freight' &&
       context.turnNumber >= 15 &&
       context.money >= 60 &&
-      (context.deliveryCount ?? 0) >= 5 // JIRA-60: only nudge after 5 deliveries
+      (context.deliveryCount ?? 0) >= 5 // JIRA-60: only nudge after 5 deliveries (strong nudge is higher than the 4-delivery upgrade gate)
     ) {
       lines.push(`STRONG RECOMMENDATION: You are still on Freight at turn ${context.turnNumber}. UPGRADE to FastFreight this turn.`);
       lines.push('Every turn on Freight costs you ~3 mileposts of wasted movement. Output UPGRADE as your Phase B action.');
@@ -957,7 +957,7 @@ export class ContextBuilder {
 
     // ── UPGRADE OPTIONS (JIRA-55 Part B, JIRA-105: lowered gates) ──
     // Gate: mention upgrades after 1+ delivery with >= 30M cash
-    const upgradeEligible = (context.deliveryCount ?? 0) >= 1 && context.money >= 30;
+    const upgradeEligible = (context.deliveryCount ?? 0) >= 4 && context.money >= 30;
     if (upgradeEligible && context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' &&
         context.turnNumber >= 8;
@@ -2539,6 +2539,27 @@ export class ContextBuilder {
    * Check if a ferry is likely required to reach supply or delivery cities.
    * Looks for ferry port terrain at any grid point named for those cities.
    */
+  // Static region classification for the EuroRails map.
+  // The hex grid doesn't model water barriers as complete walls, so BFS-based
+  // landmass detection won't work. Instead, we classify cities by geographic region.
+  private static readonly BRITAIN_CITIES = new Set([
+    'Aberdeen', 'Birmingham', 'Cardiff', 'Dover', 'Glasgow', 'Harwich',
+    'Liverpool', 'London', 'Manchester', 'Newcastle', 'Plymouth',
+    'Portsmouth', 'Southampton', 'Stranraer',
+  ]);
+  private static readonly IRELAND_CITIES = new Set([
+    'Belfast', 'Cork', 'Dublin',
+  ]);
+
+  /**
+   * Classify a city's geographic region: 'britain', 'ireland', or 'continent'.
+   */
+  private static getCityRegion(cityName: string): 'britain' | 'ireland' | 'continent' {
+    if (ContextBuilder.BRITAIN_CITIES.has(cityName)) return 'britain';
+    if (ContextBuilder.IRELAND_CITIES.has(cityName)) return 'ireland';
+    return 'continent';
+  }
+
   private static isFerryOnRoute(
     supplyCity: string | null,
     deliveryCity: string,
@@ -2555,41 +2576,9 @@ export class ContextBuilder {
     }
 
     // Check 2: route crosses a water barrier (Channel or Irish Sea)
-    // These ferries have NO land alternative — you MUST cross them to reach the other side.
-    // Scandinavian ferries (Newcastle_Esbjerg, Kristiansand_Hirtshals, Malmo_Sassnitz)
-    // are shortcuts with land alternatives, so we exclude them.
+    // Uses static region classification — ferry required when cities are in different regions.
     if (!supplyCity) return false;
-    const BARRIER_FERRIES = new Set([
-      'Plymouth_Cherbourg', 'Portsmouth_LeHavre', 'Dover_Calais', 'Harwich_Ijmuiden',
-      'Belfast_Stranraer', 'Dublin_Liverpool',
-    ]);
-
-    const ferryEdges = getFerryEdges();
-    const barrierFerries = ferryEdges.filter(f => BARRIER_FERRIES.has(f.name));
-    if (barrierFerries.length === 0) return false;
-
-    // Find positions for supply and delivery cities
-    const supplyPos = gridPoints.find(gp => gp.city?.name === supplyCity);
-    const deliveryPos = gridPoints.find(gp => gp.city?.name === deliveryCity);
-    if (!supplyPos || !deliveryPos) return false;
-
-    // For each barrier ferry, check if supply and delivery are on opposite sides.
-    // If supply is closer to port A and delivery closer to port B (or vice versa),
-    // the route must cross this ferry.
-    for (const ferry of barrierFerries) {
-      const supplyToA = hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
-      const supplyToB = hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
-      const deliveryToA = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
-      const deliveryToB = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
-
-      const supplyCloserToA = supplyToA < supplyToB;
-      const deliveryCloserToA = deliveryToA < deliveryToB;
-      if (supplyCloserToA !== deliveryCloserToA) {
-        return true;
-      }
-    }
-
-    return false;
+    return ContextBuilder.getCityRegion(supplyCity) !== ContextBuilder.getCityRegion(deliveryCity);
   }
 
   /**
@@ -2603,44 +2592,21 @@ export class ContextBuilder {
   private static countFerryCrossings(
     supplyCity: string | null,
     deliveryCity: string,
-    gridPoints: GridPoint[],
+    _gridPoints: GridPoint[],
   ): number {
     if (!supplyCity) return 0;
 
-    const CHANNEL_FERRIES = new Set([
-      'Plymouth_Cherbourg', 'Portsmouth_LeHavre', 'Dover_Calais', 'Harwich_Ijmuiden',
-    ]);
-    const IRISH_SEA_FERRIES = new Set([
-      'Belfast_Stranraer', 'Dublin_Liverpool',
-    ]);
+    const supplyRegion = ContextBuilder.getCityRegion(supplyCity);
+    const deliveryRegion = ContextBuilder.getCityRegion(deliveryCity);
+    if (supplyRegion === deliveryRegion) return 0;
 
-    const ferryEdges = getFerryEdges();
-    const barrierFerries = ferryEdges.filter(
-      f => CHANNEL_FERRIES.has(f.name) || IRISH_SEA_FERRIES.has(f.name),
-    );
-    if (barrierFerries.length === 0) return 0;
-
-    const supplyPos = gridPoints.find(gp => gp.city?.name === supplyCity);
-    const deliveryPos = gridPoints.find(gp => gp.city?.name === deliveryCity);
-    if (!supplyPos || !deliveryPos) return 0;
-
-    let channelCrossed = false;
-    let irishSeaCrossed = false;
-    for (const ferry of barrierFerries) {
-      const supplyToA = hexDistance(supplyPos.row, supplyPos.col, ferry.pointA.row, ferry.pointA.col);
-      const supplyToB = hexDistance(supplyPos.row, supplyPos.col, ferry.pointB.row, ferry.pointB.col);
-      const deliveryToA = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointA.row, ferry.pointA.col);
-      const deliveryToB = hexDistance(deliveryPos.row, deliveryPos.col, ferry.pointB.row, ferry.pointB.col);
-
-      const supplyCloserToA = supplyToA < supplyToB;
-      const deliveryCloserToA = deliveryToA < deliveryToB;
-      if (supplyCloserToA !== deliveryCloserToA) {
-        if (CHANNEL_FERRIES.has(ferry.name)) channelCrossed = true;
-        if (IRISH_SEA_FERRIES.has(ferry.name)) irishSeaCrossed = true;
-      }
-    }
-
-    return (channelCrossed ? 1 : 0) + (irishSeaCrossed ? 1 : 0);
+    // Count crossings based on region pair:
+    // Continent↔Britain: 1 (Channel)
+    // Britain↔Ireland: 1 (Irish Sea)
+    // Continent↔Ireland: 2 (Channel + Irish Sea — must transit through Britain)
+    const regions = new Set([supplyRegion, deliveryRegion]);
+    if (regions.has('continent') && regions.has('ireland')) return 2;
+    return 1;
   }
 
   // ── Corridor detection (BE-002, BE-003) ─────────────────────────────────
