@@ -26,8 +26,9 @@ import {
   TrackSegment,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints, makeKey } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 
 /** JIRA-32: Structured trace of what TurnComposer did during composition. */
 export interface CompositionTrace {
@@ -731,6 +732,14 @@ export class TurnComposer {
     const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
     if (remainingBudget <= 0) return null;
 
+    // ── Near-miss opportunity scanning ──────────────────────────────────
+    const nearMissPlan = await TurnComposer.tryNearMissBuild(snapshot, context);
+    if (nearMissPlan && nearMissPlan.type === AIActionType.BuildTrack) {
+      // Near-miss build consumed budget — update context for subsequent builds
+      const nearMissCost = nearMissPlan.segments.reduce((s, seg) => s + seg.cost, 0);
+      context = { ...context, turnBuildCost: context.turnBuildCost + nearMissCost };
+    }
+
     // Collect ALL unreached route stops for multi-stop look-ahead building
     const unreachedRouteStops: string[] = [];
     if (activeRoute && !activeRoute.stops.every((_, idx) => idx < activeRoute.currentStopIndex)) {
@@ -826,6 +835,119 @@ export class TurnComposer {
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  /**
+   * Scan for near-miss build opportunities (ferry ports, demand city spurs)
+   * and build the best one if worthwhile and within budget.
+   * Returns the build plan if a near-miss was built, or null.
+   */
+  private static async tryNearMissBuild(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): Promise<TurnPlan | null> {
+    // Build network node set from existing segments
+    const networkNodeKeys = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+      networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+    }
+
+    // Skip analysis for tiny networks
+    if (networkNodeKeys.size < 3) return null;
+
+    const gridPoints = loadGridPoints();
+    const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
+
+    // Scan for ferry port opportunities
+    const ferryOpps = NetworkBuildAnalyzer.findNearbyFerryPorts(networkNodeKeys, gridPoints);
+
+    // Derive demand cities from context for spur scanning
+    const demandCities: Array<{ city: string; position: { row: number; col: number } }> = [];
+    const seenCities = new Set<string>();
+    for (const demand of context.demands) {
+      for (const cityName of [demand.supplyCity, demand.deliveryCity]) {
+        if (seenCities.has(cityName)) continue;
+        seenCities.add(cityName);
+        // Resolve city name to grid position
+        for (const [, gp] of gridPoints) {
+          if (gp.name && gp.name.toLowerCase() === cityName.toLowerCase()) {
+            demandCities.push({ city: cityName, position: { row: gp.row, col: gp.col } });
+            break;
+          }
+        }
+      }
+    }
+
+    const spurOpps = NetworkBuildAnalyzer.findSpurOpportunities(networkNodeKeys, demandCities, gridPoints);
+
+    // Evaluate all opportunities
+    const speed = context.speed ?? 9;
+    interface EvaluatedOpportunity {
+      type: 'ferry' | 'spur';
+      target: string;
+      buildCost: number;
+      netValue: number;
+    }
+    const evaluated: EvaluatedOpportunity[] = [];
+
+    for (const ferry of ferryOpps) {
+      const totalCost = ferry.spurCost + ferry.ferryCost;
+      if (totalCost > remainingBudget) continue;
+      const eval_ = NetworkBuildAnalyzer.evaluateBuildOption(
+        { buildCost: totalCost, distanceSaved: 20, alternativeDistance: 40 },
+        context.turnNumber,
+        speed,
+      );
+      if (eval_.isWorthwhile) {
+        evaluated.push({
+          type: 'ferry',
+          target: ferry.ferryName,
+          buildCost: totalCost,
+          netValue: eval_.turnsSaved * eval_.valuePerTurn - totalCost,
+        });
+      }
+    }
+
+    for (const spur of spurOpps) {
+      if (spur.spurCost > remainingBudget) continue;
+      const eval_ = NetworkBuildAnalyzer.evaluateBuildOption(
+        { buildCost: spur.spurCost, distanceSaved: spur.spurSegments * 2, alternativeDistance: spur.spurSegments * 3 },
+        context.turnNumber,
+        speed,
+      );
+      if (eval_.isWorthwhile) {
+        evaluated.push({
+          type: 'spur',
+          target: spur.city,
+          buildCost: spur.spurCost,
+          netValue: eval_.turnsSaved * eval_.valuePerTurn - spur.spurCost,
+        });
+      }
+    }
+
+    if (evaluated.length === 0) return null;
+
+    // Sort by net value descending and pick the best
+    evaluated.sort((a, b) => b.netValue - a.netValue);
+    const best = evaluated[0];
+
+    console.log(`[TurnComposer] Near-miss build substituted: ${best.type} ${best.target} (net value ${best.netValue.toFixed(1)}M) over route-directed build`);
+
+    // Build toward the near-miss target via existing pipeline
+    try {
+      const result = await ActionResolver.resolve(
+        { action: 'BUILD', details: { toward: best.target }, reasoning: 'near-miss optimization', planHorizon: '' },
+        snapshot, context,
+      );
+      if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
+        return result.plan;
+      }
+    } catch {
+      // Near-miss build failed — fall through to standard build
+    }
+
+    return null;
+  }
 
   /**
    * Find MOVE targets in priority order: route stops first, then demand-based fallbacks.

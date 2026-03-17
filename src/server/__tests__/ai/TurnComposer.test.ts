@@ -19,6 +19,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
+  makeKey: (row: number, col: number) => `${row},${col}`,
   _resetCache: jest.fn(),
 }));
 jest.mock('../../../shared/services/trackUsageFees', () => ({
@@ -30,6 +31,14 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 }));
 jest.mock('../../../shared/services/TrackNetworkService', () => ({
   buildTrackNetwork: jest.fn(() => ({ adjacency: new Map(), nodeSet: new Set() })),
+}));
+jest.mock('../../services/ai/NetworkBuildAnalyzer', () => ({
+  NetworkBuildAnalyzer: {
+    findNearbyFerryPorts: jest.fn(() => []),
+    findSpurOpportunities: jest.fn(() => []),
+    evaluateBuildOption: jest.fn(() => ({ turnsSaved: 0, buildCost: 0, valuePerTurn: 0, isWorthwhile: false })),
+    loadFerryData: jest.fn(() => []),
+  },
 }));
 
 import { TurnComposer } from '../../services/ai/TurnComposer';
