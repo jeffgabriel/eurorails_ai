@@ -31,6 +31,7 @@ import { ActionResolver } from './ActionResolver';
 import { loadGridPoints } from './MapTopology';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { ContextBuilder } from './ContextBuilder';
+import { RouteValidator } from './RouteValidator';
 
 export interface PlanExecutorResult {
   plan: TurnPlan;
@@ -57,7 +58,31 @@ export class PlanExecutor {
     context: GameContext,
   ): Promise<PlanExecutorResult> {
     // Advance past any stops already completed (e.g., mid-turn pickups/deliveries)
+    const prevIndex = route.currentStopIndex;
     route = PlanExecutor.skipCompletedStops(route, context);
+
+    // JIRA-123: If stops were completed, reorder remaining stops from bot's new position
+    if (route.currentStopIndex > prevIndex && context.position && !context.isInitialBuild) {
+      const remainingStops = route.stops.slice(route.currentStopIndex);
+      if (remainingStops.length > 1) {
+        const gridPoints = loadGridPoints();
+        const reordered = RouteValidator.reorderStopsByProximity(
+          remainingStops,
+          { row: context.position.row, col: context.position.col },
+          gridPoints,
+          context.loads,
+        );
+        const oldOrder = remainingStops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
+        const newOrder = reordered.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
+        if (oldOrder !== newOrder) {
+          console.log(`[PlanExecutor] Mid-execution reorder: ${oldOrder} → ${newOrder}`);
+        }
+        route = {
+          ...route,
+          stops: [...route.stops.slice(0, route.currentStopIndex), ...reordered],
+        };
+      }
+    }
 
     const currentStop = route.stops[route.currentStopIndex];
     if (!currentStop) {

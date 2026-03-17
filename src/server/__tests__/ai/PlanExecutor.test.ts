@@ -1791,6 +1791,7 @@ describe('PlanExecutor', () => {
           networkCitiesUnlocked: 0,
           victoryMajorCitiesEnRoute: 0,
           isAffordable: false,
+          projectedFundsAfterDelivery: 0,
         }],
       });
 
@@ -1849,6 +1850,7 @@ describe('PlanExecutor', () => {
           networkCitiesUnlocked: 0,
           victoryMajorCitiesEnRoute: 0,
           isAffordable: false,
+          projectedFundsAfterDelivery: 0,
         }],
       });
 

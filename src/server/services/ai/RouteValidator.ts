@@ -359,9 +359,32 @@ export class RouteValidator {
       }
 
       // JIRA-121 Bug 3: Prioritize deliver stops for carried loads over pickup stops
-      const carriedDelivers = carriedLoads
+      // JIRA-123: Gate with detour-cost threshold — only promote deliveries when
+      // no eligible pickup is within NEARBY_PICKUP_THRESHOLD hops
+      const NEARBY_PICKUP_THRESHOLD = 4;
+      let carriedDelivers = carriedLoads
         ? eligible.filter(s => s.action === 'deliver' && carriedLoads.includes(s.loadType))
         : [];
+
+      if (carriedDelivers.length > 0) {
+        // Check if any eligible pickup is nearby — if so, grab it first
+        const eligiblePickups = eligible.filter(s => s.action === 'pickup');
+        const hasNearbyPickup = eligiblePickups.some(s => {
+          const coords = cityCoords.get(s.city.toLowerCase());
+          if (!coords) return false;
+          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
+          return dist >= 0 && dist <= NEARBY_PICKUP_THRESHOLD;
+        });
+        if (hasNearbyPickup) {
+          const nearbyPickup = eligiblePickups.find(s => {
+            const coords = cityCoords.get(s.city.toLowerCase());
+            if (!coords) return false;
+            return estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col) <= NEARBY_PICKUP_THRESHOLD;
+          });
+          console.log(`${tag} Detour-cost gate: nearby pickup ${nearbyPickup?.city} prevents carried-load delivery promotion`);
+          carriedDelivers = [];
+        }
+      }
 
       let nearest: RouteStop;
       let nearestDist = Infinity;

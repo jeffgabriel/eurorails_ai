@@ -550,14 +550,14 @@ describe('RouteValidator', () => {
       mockGridPoints.set('30,20', { row: 30, col: 20, terrain: TerrainType.MajorCity, name: 'Bruxelles' });
     });
 
-    it('should prioritize deliver stop for carried load over pickup stop even when pickup is closer', () => {
-      // Bot at Essen (10,5). Bruxelles (30,20) is farther, Dublin (12,7) is closer.
-      // Cheese is on train → deliver(Cheese@Dublin) should come before pickup(Chocolate@Bruxelles)
+    it('should NOT prioritize far delivery over nearby pickup (JIRA-123 detour-cost gate)', () => {
+      // Bot at Essen (10,5). Bruxelles (30,20) is 3 hops (within NEARBY_PICKUP_THRESHOLD=4).
+      // Cheese is on train but Bruxelles pickup is nearby → detour-cost gate prevents delivery promotion.
       mockEstimateHopDistance.mockImplementation(
         (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
           // Dublin is slightly farther than Bruxelles from Essen
           if (fromRow === 10 && toRow === 12) return 5;   // Essen→Dublin
-          if (fromRow === 10 && toRow === 30) return 3;   // Essen→Bruxelles (closer!)
+          if (fromRow === 10 && toRow === 30) return 3;   // Essen→Bruxelles (nearby!)
           if (fromRow === 12 && toRow === 30) return 15;  // Dublin→Bruxelles
           if (fromRow === 12 && toRow === 25) return 10;  // Dublin→Berlin
           if (fromRow === 30 && toRow === 25) return 8;   // Bruxelles→Berlin
@@ -577,9 +577,9 @@ describe('RouteValidator', () => {
         ['Cheese'],  // Cheese is on the train
       );
 
-      // deliver(Cheese@Dublin) should come first despite Bruxelles being closer
-      expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Cheese', city: 'Dublin' }));
-      expect(result[1]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Chocolate', city: 'Bruxelles' }));
+      // JIRA-123: Nearby pickup (3 hops) gates carried-load priority → Bruxelles first
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Chocolate', city: 'Bruxelles' }));
+      expect(result[1]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Cheese', city: 'Dublin' }));
     });
 
     it('should maintain original nearest-neighbor behavior when no carried loads', () => {
