@@ -454,7 +454,8 @@ describe('GuardrailEnforcer', () => {
         expect(result.plan.type).not.toBe(AIActionType.DiscardHand);
       });
 
-      it('JIRA-47: Stuck detection skipped when bot is carrying loads', async () => {
+      it('JIRA-120: Stuck detection fires even when bot is carrying loads', async () => {
+        // JIRA-120: Removed loads gate — carrying loads is not a reason to keep a bad hand
         const ctx = makeContext({ canDeliver: [] });
         const snap = makeSnapshot();
         snap.bot.loads = ['Coal', 'Wine'];
@@ -462,11 +463,11 @@ describe('GuardrailEnforcer', () => {
 
         const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 4);
 
-        expect(result.overridden).toBe(false);
-        expect(result.plan).toBe(plan);
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
       });
 
-      it('JIRA-47: Stuck detection still fires for loadless bot after 3 no-progress turns', async () => {
+      it('Stuck detection fires for loadless bot after 3 no-progress turns', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const snap = makeSnapshot();
         snap.bot.loads = [];
