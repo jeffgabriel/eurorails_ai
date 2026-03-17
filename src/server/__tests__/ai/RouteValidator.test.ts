@@ -625,7 +625,77 @@ describe('RouteValidator', () => {
       );
 
       // deliver(Cheese@Dublin) should be first — carried load doesn't need pickup
+      // (all stops at 5 hops, beyond NEARBY_PICKUP_THRESHOLD=4, so priority fires)
       expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Cheese' }));
+    });
+  });
+
+  // ── JIRA-123: Detour-cost threshold ─────────────────────────────────────────
+
+  describe('JIRA-123: detour-cost threshold gates carried-load priority', () => {
+    beforeEach(() => {
+      mockGridPoints.set('10,5', { row: 10, col: 5, terrain: TerrainType.MajorCity, name: 'Porto' });
+      mockGridPoints.set('12,7', { row: 12, col: 7, terrain: TerrainType.MajorCity, name: 'Lisboa' });
+      mockGridPoints.set('40,30', { row: 40, col: 30, terrain: TerrainType.MajorCity, name: 'Venezia' });
+      mockGridPoints.set('25,15', { row: 25, col: 15, terrain: TerrainType.MajorCity, name: 'Berlin' });
+    });
+
+    it('should NOT promote far delivery when a nearby pickup exists (within 4 hops)', () => {
+      // Bot at Porto (10,5). Lisboa pickup is 2 hops away (within threshold).
+      // Fish is on train for Venezia delivery (15 hops) — but Lisboa is nearby, grab it first.
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          if (fromRow === 10 && toRow === 12) return 2;   // Porto→Lisboa (nearby!)
+          if (fromRow === 10 && toRow === 40) return 15;  // Porto→Venezia (far)
+          if (fromRow === 12 && toRow === 40) return 13;  // Lisboa→Venezia
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'deliver' as const, loadType: 'Fish', city: 'Venezia', demandCardId: 1, payment: 42 },
+        { action: 'pickup' as const, loadType: 'Cork', city: 'Lisboa' },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+        ['Fish'],  // Fish on train
+      );
+
+      // Lisboa pickup (2 hops) should come first — detour-cost gate blocks Fish delivery promotion
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Cork', city: 'Lisboa' }));
+      expect(result[1]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Fish', city: 'Venezia' }));
+    });
+
+    it('should promote carried-load delivery when all pickups are far (beyond 4 hops)', () => {
+      // Bot at Porto (10,5). Berlin pickup is 8 hops (beyond threshold).
+      // Fish is on train for Venezia delivery (6 hops) — no nearby pickup, so promote delivery.
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          if (fromRow === 10 && toRow === 25) return 8;   // Porto→Berlin (far, beyond threshold)
+          if (fromRow === 10 && toRow === 40) return 6;   // Porto→Venezia
+          if (fromRow === 40 && toRow === 25) return 10;  // Venezia→Berlin
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Steel', city: 'Berlin' },
+        { action: 'deliver' as const, loadType: 'Fish', city: 'Venezia', demandCardId: 1, payment: 42 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+        ['Fish'],  // Fish on train
+      );
+
+      // Fish delivery should be first — no nearby pickup to gate the priority
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Fish', city: 'Venezia' }));
+      expect(result[1]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Steel', city: 'Berlin' }));
     });
   });
 });

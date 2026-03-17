@@ -71,10 +71,17 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
   },
 }));
 
+jest.mock('../../services/ai/RouteValidator', () => ({
+  RouteValidator: {
+    reorderStopsByProximity: jest.fn((...args: any[]) => args[0]),
+  },
+}));
+
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
+import { RouteValidator } from '../../services/ai/RouteValidator';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockApplyPlanToState = ActionResolver.applyPlanToState as jest.Mock;
@@ -1858,6 +1865,84 @@ describe('PlanExecutor', () => {
 
       expect(result.routeAbandoned).toBe(true);
       expect(result.plan.type).toBe(AIActionType.PassTurn);
+    });
+  });
+
+  // ── JIRA-123: Mid-execution stop reordering ────────────────────────────────
+
+  describe('JIRA-123: mid-execution stop reordering after completed stops', () => {
+    const mockReorderStopsByProximity = RouteValidator.reorderStopsByProximity as jest.Mock;
+
+    it('should call reorderStopsByProximity when skipCompletedStops advances the index', async () => {
+      // Route: pickup(Coal@Berlin) → pickup(Wine@Porto) → deliver(Coal@Paris)
+      // Coal is on train → stop 0 (pickup Coal) will be skipped by skipCompletedStops
+      // After skipping, remaining stops should be reordered from bot's position
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'pickup', loadType: 'Wine', city: 'Porto' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const context = makeContext({
+        loads: ['Coal'],  // Coal on train → stop 0 will be skipped
+        citiesOnNetwork: ['Porto'],
+        position: { row: 15, col: 15 },
+      });
+
+      // Reorder returns stops in reversed order to prove it was called
+      mockReorderStopsByProximity.mockReturnValueOnce([
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        { action: 'pickup', loadType: 'Wine', city: 'Porto' },
+      ]);
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 15, col: 16 }], targetCity: 'Paris' },
+      });
+
+      await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // reorderStopsByProximity should have been called with the remaining 2 stops
+      expect(mockReorderStopsByProximity).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({ action: 'pickup', loadType: 'Wine' }),
+          expect.objectContaining({ action: 'deliver', loadType: 'Coal' }),
+        ]),
+        { row: 15, col: 15 },
+        expect.anything(),  // gridPoints
+        ['Coal'],           // carriedLoads
+      );
+    });
+
+    it('should NOT call reorderStopsByProximity when no stops were skipped', async () => {
+      // Route: pickup(Wine@Porto) — Wine is NOT on train, so no stop is skipped
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Wine', city: 'Porto' },
+          { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const context = makeContext({
+        loads: [],  // No loads → stop 0 won't be skipped
+        citiesOnNetwork: ['Porto'],
+        position: { row: 10, col: 10 },
+      });
+
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 11 }], targetCity: 'Porto' },
+      });
+
+      mockReorderStopsByProximity.mockClear();
+      await PlanExecutor.execute(route, makeSnapshot(), context);
+
+      // reorderStopsByProximity should NOT have been called — no index advancement
+      expect(mockReorderStopsByProximity).not.toHaveBeenCalled();
     });
   });
 });
