@@ -36,7 +36,56 @@ export interface NearestNetworkResult {
  * All methods are pure functions — no database access, no side effects.
  * Reuses MapTopology helpers for hex neighbor traversal and terrain costs.
  */
+/** Minimum segment count before network analysis is worthwhile */
+const MIN_SEGMENTS_FOR_ANALYSIS = 3;
+
+const LOG_PREFIX = '[NetworkBuildAnalyzer]';
+
 export class NetworkBuildAnalyzer {
+  /** Check whether network analysis should be skipped (early game / too few segments) */
+  static shouldSkipAnalysis(existingSegments: TrackSegment[]): boolean {
+    if (existingSegments.length < MIN_SEGMENTS_FOR_ANALYSIS) {
+      console.log(`${LOG_PREFIX} Skipping analysis — network too small (${existingSegments.length} segments < ${MIN_SEGMENTS_FOR_ANALYSIS})`);
+      return true;
+    }
+    return false;
+  }
+
+  /** Log nearest-network-point search results */
+  static logNearestPointResult(
+    targetCity: string,
+    result: NearestNetworkResult | null,
+    maxDistance: number,
+  ): void {
+    if (result) {
+      console.log(`${LOG_PREFIX} Nearest network point to ${targetCity}: (${result.point.row},${result.point.col}) at ${result.distance} segments, buildCost=${result.buildCost}M`);
+    } else {
+      console.log(`${LOG_PREFIX} No network point within ${maxDistance} segments of ${targetCity}`);
+    }
+  }
+
+  /** Log parallel path detection results */
+  static logParallelDetection(detection: ParallelDetection): void {
+    if (detection.isParallel && detection.suggestedWaypoint) {
+      console.log(`${LOG_PREFIX} Parallel path detected: ${detection.parallelSegmentCount} segments within 1-2 hexes of existing track near (${detection.suggestedWaypoint.row},${detection.suggestedWaypoint.col})`);
+    }
+  }
+
+  /** Log reroute decision */
+  static logRerouteDecision(waypoint: GridCoord, savedSegments: number): void {
+    console.log(`${LOG_PREFIX} Rerouting build through existing track at (${waypoint.row},${waypoint.col}) — saves ${savedSegments} segments`);
+  }
+
+  /** Log reroute fallback when rerouted path exceeds budget */
+  static logRerouteFallback(cost: number, budget: number): void {
+    console.log(`${LOG_PREFIX} Rerouted path exceeds budget (${cost}M > ${budget}M), using original path`);
+  }
+
+  /** Log unexpected errors during analysis (graceful degradation) */
+  static logAnalysisError(error: unknown): void {
+    console.warn(`${LOG_PREFIX} Network analysis failed, falling back to default behavior:`, error);
+  }
+
   /**
    * BFS outward from a target city position to find the closest node
    * in the existing track network.
