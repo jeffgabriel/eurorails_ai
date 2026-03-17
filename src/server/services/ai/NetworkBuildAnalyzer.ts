@@ -41,6 +41,14 @@ export interface FerryOpportunity {
   destinationSide: { row: number; col: number };
 }
 
+/** A demand city reachable from the existing network via a short spur */
+export interface SpurOpportunity {
+  city: string;
+  nearestNetworkPoint: { row: number; col: number };
+  spurCost: number;
+  spurSegments: number;
+}
+
 /**
  * Static utility class for pre-build network analysis.
  *
@@ -185,6 +193,56 @@ export class NetworkBuildAnalyzer {
           });
           console.log(`${LOG_PREFIX} Ferry near-miss: ${ferry.name} — network at (${result.point.row},${result.point.col}) is ${result.distance} segments from port, spurCost=${result.buildCost}M`);
         }
+      }
+    }
+
+    // Sort by spurCost ascending
+    opportunities.sort((a, b) => a.spurCost - b.spurCost);
+    return opportunities;
+  }
+
+  /**
+   * BFS outward from each demand city to find connections to the existing network.
+   * Only returns opportunities for cities NOT already on the network.
+   *
+   * @param networkNodeKeys - Set of "row,col" strings representing existing network nodes
+   * @param demandCities - Array of demand city positions with city names
+   * @param gridPoints - Loaded grid point data map
+   * @param maxDistance - Maximum BFS depth from city (default 3)
+   * @returns Array of spur opportunities sorted by spurCost ascending
+   */
+  static findSpurOpportunities(
+    networkNodeKeys: Set<string>,
+    demandCities: Array<{ city: string; position: { row: number; col: number } }>,
+    gridPoints: Map<string, GridPointData>,
+    maxDistance: number = 3,
+  ): SpurOpportunity[] {
+    if (demandCities.length === 0) return [];
+
+    const opportunities: SpurOpportunity[] = [];
+
+    for (const { city, position } of demandCities) {
+      const cityKey = makeKey(position.row, position.col);
+
+      // Skip cities already on the network
+      if (networkNodeKeys.has(cityKey)) continue;
+
+      // BFS from the city toward the network
+      const result = NetworkBuildAnalyzer.findNearestNetworkPoint(
+        position,
+        networkNodeKeys,
+        gridPoints,
+        maxDistance,
+      );
+
+      if (result) {
+        opportunities.push({
+          city,
+          nearestNetworkPoint: { row: result.point.row, col: result.point.col },
+          spurCost: result.buildCost,
+          spurSegments: result.distance,
+        });
+        console.log(`${LOG_PREFIX} Spur opportunity: ${city} is ${result.distance} segments from network at (${result.point.row},${result.point.col}), cost=${result.buildCost}M`);
       }
     }
 

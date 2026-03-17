@@ -393,3 +393,64 @@ describe('NetworkBuildAnalyzer.findNearbyFerryPorts', () => {
     expect(result).toEqual([]);
   });
 });
+
+// ── findSpurOpportunities Tests ───────────────────────────────────────
+
+describe('NetworkBuildAnalyzer.findSpurOpportunities', () => {
+  const gridPoints = buildTestGrid();
+
+  it('returns SpurOpportunity when demand city is 2 segments from network', () => {
+    const networkNodes = new Set(['3,3']);
+    const demandCities = [{ city: 'TestCity', position: { row: 1, col: 3 } }];
+    const result = NetworkBuildAnalyzer.findSpurOpportunities(
+      networkNodes, demandCities, gridPoints, 3,
+    );
+    expect(result.length).toBe(1);
+    expect(result[0].city).toBe('TestCity');
+    expect(result[0].spurSegments).toBe(2);
+    expect(result[0].spurCost).toBeGreaterThan(0);
+    expect(result[0].nearestNetworkPoint).toEqual({ row: 3, col: 3 });
+  });
+
+  it('does not return city already on the network', () => {
+    const networkNodes = new Set(['3,3']);
+    const demandCities = [{ city: 'OnNetwork', position: { row: 3, col: 3 } }];
+    const result = NetworkBuildAnalyzer.findSpurOpportunities(
+      networkNodes, demandCities, gridPoints, 3,
+    );
+    expect(result.length).toBe(0);
+  });
+
+  it('does not return city beyond maxDistance', () => {
+    const networkNodes = new Set(['0,0']);
+    const demandCities = [{ city: 'FarCity', position: { row: 6, col: 6 } }];
+    const result = NetworkBuildAnalyzer.findSpurOpportunities(
+      networkNodes, demandCities, gridPoints, 2, // very short maxDistance
+    );
+    expect(result.length).toBe(0);
+  });
+
+  it('returns multiple demand cities sorted by spurCost', () => {
+    // Network at (3,3): city at (2,3) is 1 hop, city at (5,3) is 2 hops
+    const networkNodes = new Set(['3,3']);
+    const demandCities = [
+      { city: 'FarCity', position: { row: 5, col: 3 } },
+      { city: 'NearCity', position: { row: 2, col: 3 } },
+    ];
+    const result = NetworkBuildAnalyzer.findSpurOpportunities(
+      networkNodes, demandCities, gridPoints, 3,
+    );
+    expect(result.length).toBe(2);
+    // Sorted by spurCost ascending — NearCity should be first
+    expect(result[0].city).toBe('NearCity');
+    expect(result[0].spurCost).toBeLessThanOrEqual(result[1].spurCost);
+  });
+
+  it('returns empty array when demandCities is empty', () => {
+    const networkNodes = new Set(['3,3']);
+    const result = NetworkBuildAnalyzer.findSpurOpportunities(
+      networkNodes, [], gridPoints, 3,
+    );
+    expect(result).toEqual([]);
+  });
+});
