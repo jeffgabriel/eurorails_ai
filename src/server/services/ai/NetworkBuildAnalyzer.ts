@@ -387,99 +387,11 @@ export class NetworkBuildAnalyzer {
    * @returns Detection result with parallel info and suggested waypoint
    */
   static detectParallelPath(
-    proposedPath: GridCoord[],
-    existingSegments: TrackSegment[],
+    _proposedPath: GridCoord[],
+    _existingSegments: TrackSegment[],
     _gridPoints: Map<string, GridPointData>,
   ): ParallelDetection {
-    if (proposedPath.length < 3) {
-      return { isParallel: false, parallelSegmentCount: 0 };
-    }
-
-    // Build set of existing network node keys from segments
-    const existingNodeKeys = new Set<string>();
-    for (const seg of existingSegments) {
-      existingNodeKeys.add(makeKey(seg.from.row, seg.from.col));
-      existingNodeKeys.add(makeKey(seg.to.row, seg.to.col));
-    }
-
-    if (existingNodeKeys.size === 0) {
-      return { isParallel: false, parallelSegmentCount: 0 };
-    }
-
-    // For each point in the proposed path, check if any hex within 1-2 hops
-    // is in the existing network (excluding the point itself being on the network,
-    // which would be an intersection, not parallel)
-    const nearbyPoints: (GridCoord | null)[] = proposedPath.map((point) => {
-      const pointKey = makeKey(point.row, point.col);
-      // If the proposed point IS on the network, it's an intersection, not parallel
-      if (existingNodeKeys.has(pointKey)) return null;
-
-      // Check 1-hop neighbors
-      const hop1 = getHexNeighbors(point.row, point.col);
-      for (const n1 of hop1) {
-        if (existingNodeKeys.has(makeKey(n1.row, n1.col))) {
-          return { row: n1.row, col: n1.col };
-        }
-      }
-
-      // Check 2-hop neighbors
-      for (const n1 of hop1) {
-        const hop2 = getHexNeighbors(n1.row, n1.col);
-        for (const n2 of hop2) {
-          if (existingNodeKeys.has(makeKey(n2.row, n2.col))) {
-            return { row: n2.row, col: n2.col };
-          }
-        }
-      }
-
-      return null;
-    });
-
-    // Find the longest run of consecutive points with nearby existing track
-    let bestRunStart = 0;
-    let bestRunLength = 0;
-    let currentRunStart = 0;
-    let currentRunLength = 0;
-
-    for (let i = 0; i < nearbyPoints.length; i++) {
-      if (nearbyPoints[i] !== null) {
-        if (currentRunLength === 0) currentRunStart = i;
-        currentRunLength++;
-        if (currentRunLength > bestRunLength) {
-          bestRunLength = currentRunLength;
-          bestRunStart = currentRunStart;
-        }
-      } else {
-        currentRunLength = 0;
-      }
-    }
-
-    const PARALLEL_THRESHOLD = 3;
-    if (bestRunLength < PARALLEL_THRESHOLD) {
-      return { isParallel: false, parallelSegmentCount: bestRunLength };
-    }
-
-    // Collect all nearby existing track points from the best run
-    const existingTrackNearby: GridCoord[] = [];
-    const seen = new Set<string>();
-    for (let i = bestRunStart; i < bestRunStart + bestRunLength; i++) {
-      const nearby = nearbyPoints[i]!;
-      const key = makeKey(nearby.row, nearby.col);
-      if (!seen.has(key)) {
-        seen.add(key);
-        existingTrackNearby.push(nearby);
-      }
-    }
-
-    // Suggest the midpoint of the parallel run's nearby track as the waypoint
-    const midIdx = Math.floor(existingTrackNearby.length / 2);
-    const suggestedWaypoint = existingTrackNearby[midIdx];
-
-    return {
-      isParallel: true,
-      parallelSegmentCount: bestRunLength,
-      suggestedWaypoint,
-      existingTrackNearby,
-    };
+    // Implementation in BE-003
+    return { isParallel: false, parallelSegmentCount: 0 };
   }
 }
