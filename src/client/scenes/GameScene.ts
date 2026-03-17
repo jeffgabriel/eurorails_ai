@@ -15,6 +15,7 @@ import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
+import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -51,9 +52,11 @@ export class GameScene extends Phaser.Scene {
   private debugOverlay?: DebugOverlay;
   private botTrainAnimator?: BotTrainAnimator;
   private gameToastManager?: GameToastManager;
+  private whisperPanel?: WhisperPanel;
   private socketUnsubBotTurnComplete?: () => void;
   private socketUnsubBotToast?: () => void;
   private socketUnsubDebugAny?: () => void;
+  private socketUnsubWhisperTurnHistory?: () => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -634,6 +637,12 @@ export class GameScene extends Phaser.Scene {
     // Game event toast notifications
     this.gameToastManager = new GameToastManager(this);
 
+    // Whisper advice panel — only instantiate when bots are present
+    const hasBots = this.gameState.players.some(p => p.isBot);
+    if (hasBots) {
+      this.whisperPanel = new WhisperPanel(this, this.gameState.id, this.gameToastManager);
+    }
+
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
@@ -642,6 +651,7 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubDebugAny?.();
         this.socketUnsubBotToast?.();
         this.socketUnsubBotTurnComplete?.();
+        this.socketUnsubWhisperTurnHistory?.();
 
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
@@ -812,6 +822,33 @@ export class GameScene extends Phaser.Scene {
             }
           }).catch(() => {});
         });
+
+        // Whisper: accumulate bot turn history for WhisperPanel
+        const whisperPanel = this.whisperPanel;
+        if (whisperPanel) {
+          this.socketUnsubWhisperTurnHistory = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+            if (eventName !== 'bot:turn-complete') return;
+            const data = args[0];
+            if (!data?.botPlayerId) return;
+
+            const botPlayer = this.gameState.players.find(p => p.id === data.botPlayerId);
+            const entry: WhisperTurnEntry = {
+              turnNumber: data.turnNumber ?? 0,
+              botPlayerId: data.botPlayerId,
+              botName: botPlayer?.name ?? 'Unknown Bot',
+              action: data.action ?? 'Unknown',
+              reasoning: data.reasoning ?? '',
+              cost: data.cost ?? 0,
+              segmentsBuilt: data.segmentsBuilt ?? 0,
+              loadsPickedUp: data.loadsPickedUp,
+              loadsDelivered: data.loadsDelivered,
+              milepostsMoved: data.movementData?.mileposts,
+              compositionTrace: data.compositionTrace,
+              demandRanking: data.demandRanking,
+            };
+            whisperPanel.addBotTurn(entry);
+          });
+        }
       }
     } catch { /* socket not available */ }
 
@@ -1402,6 +1439,9 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
+    this.socketUnsubWhisperTurnHistory?.();
+    this.socketUnsubWhisperTurnHistory = undefined;
+    this.whisperPanel?.destroy();
   }
 
   /**
