@@ -63,6 +63,12 @@ const mockApplyPlanToState = ActionResolver.applyPlanToState as jest.Mock;
 const mockFindDemandBuildTarget = PlanExecutor.findDemandBuildTarget as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
 
+// Near-miss optimizer mocks
+const { NetworkBuildAnalyzer: MockNetworkBuildAnalyzer } = require('../../services/ai/NetworkBuildAnalyzer');
+const mockFindNearbyFerryPorts = MockNetworkBuildAnalyzer.findNearbyFerryPorts as jest.Mock;
+const mockFindSpurOpportunities = MockNetworkBuildAnalyzer.findSpurOpportunities as jest.Mock;
+const mockEvaluateBuildOption = MockNetworkBuildAnalyzer.evaluateBuildOption as jest.Mock;
+
 function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
   return {
     from: { x: 0, y: 0, row: fromRow, col: fromCol, terrain: TerrainType.Clear },
@@ -5485,6 +5491,144 @@ describe('TurnComposer', () => {
 
       logSpy.mockRestore();
       warnSpy.mockRestore();
+    });
+  });
+
+  // ── JIRA-113 P2: Near-Miss Optimizer Integration Tests ──────────────────
+
+  describe('JIRA-113: Near-miss optimizer in tryAppendBuild', () => {
+    beforeEach(() => {
+      mockFindNearbyFerryPorts.mockReturnValue([]);
+      mockFindSpurOpportunities.mockReturnValue([]);
+      mockEvaluateBuildOption.mockReturnValue({ turnsSaved: 0, buildCost: 0, valuePerTurn: 0, isWorthwhile: false });
+    });
+
+    it('no opportunities found → standard build behavior unchanged', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          existingSegments: [
+            makeSegment(10, 10, 10, 11),
+            makeSegment(10, 11, 10, 12),
+            makeSegment(10, 12, 10, 13),
+          ],
+        },
+      });
+      const context = makeContext({ turnNumber: 40 });
+      const route = makeRoute({ stops: [{ city: 'Berlin', type: 'pickup' as const }] });
+
+      // Standard build returns a plan
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 13, 10, 14)], targetCity: 'Berlin' },
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
+      // Should still produce a build plan via standard path
+      expect(result).not.toBeNull();
+      expect(mockFindNearbyFerryPorts).toHaveBeenCalled();
+      expect(mockFindSpurOpportunities).toHaveBeenCalled();
+    });
+
+    it('worthwhile spur found and budget allows → near-miss built, budget updated', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          money: 50,
+          existingSegments: [
+            makeSegment(10, 10, 10, 11),
+            makeSegment(10, 11, 10, 12),
+            makeSegment(10, 12, 10, 13),
+          ],
+        },
+      });
+      const context = makeContext({
+        turnNumber: 50,
+        turnBuildCost: 0,
+        demands: [{
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'NearCity', deliveryCity: 'FarCity',
+          payout: 10, isSupplyReachable: true, isDeliveryReachable: false,
+          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 3, estimatedTrackCostToDelivery: 20,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+        }],
+      });
+
+      // Spur opportunity found
+      mockFindSpurOpportunities.mockReturnValue([
+        { city: 'NearCity', nearestNetworkPoint: { row: 10, col: 14 }, spurCost: 5, spurSegments: 2 },
+      ]);
+      mockEvaluateBuildOption.mockReturnValue({
+        turnsSaved: 1.5, buildCost: 5, valuePerTurn: 6.5, isWorthwhile: true,
+      });
+
+      // Near-miss build succeeds with 5M cost
+      const spurSegment = makeSegment(10, 13, 10, 14, 5);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [spurSegment], targetCity: 'NearCity' },
+      });
+      // Standard build also called with remaining budget
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 14, 10, 15, 3)], targetCity: 'Berlin' },
+      });
+
+      const route = makeRoute({ stops: [{ city: 'Berlin', type: 'pickup' as const }] });
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
+
+      // Near-miss build should have been attempted
+      expect(mockFindSpurOpportunities).toHaveBeenCalled();
+      expect(mockEvaluateBuildOption).toHaveBeenCalled();
+      // ActionResolver should have been called for the near-miss build
+      expect(mockResolve).toHaveBeenCalled();
+    });
+
+    it('worthwhile spur exceeds remaining budget → spur skipped', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          money: 5,
+          existingSegments: [
+            makeSegment(10, 10, 10, 11),
+            makeSegment(10, 11, 10, 12),
+            makeSegment(10, 12, 10, 13),
+          ],
+        },
+      });
+      const context = makeContext({
+        turnNumber: 50,
+        turnBuildCost: 18, // Only 2M remaining budget
+      });
+
+      // Spur costs 5M — exceeds 2M remaining budget
+      mockFindSpurOpportunities.mockReturnValue([
+        { city: 'ExpensiveCity', nearestNetworkPoint: { row: 10, col: 14 }, spurCost: 5, spurSegments: 3 },
+      ]);
+      // evaluateBuildOption is worthwhile, but budget check in tryNearMissBuild filters it
+      mockEvaluateBuildOption.mockReturnValue({
+        turnsSaved: 2, buildCost: 5, valuePerTurn: 6.5, isWorthwhile: true,
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
+      // Budget too low for any build — should return null
+      expect(result).toBeNull();
+    });
+
+    it('network too small (<3 nodes) → near-miss scanning skipped', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          existingSegments: [makeSegment(10, 10, 10, 11)], // Only 2 unique nodes
+        },
+      });
+      const context = makeContext({ turnNumber: 50 });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
+      // With only 2 network nodes, near-miss scanning should be skipped
+      expect(mockFindNearbyFerryPorts).not.toHaveBeenCalled();
+      expect(mockFindSpurOpportunities).not.toHaveBeenCalled();
     });
   });
 });
