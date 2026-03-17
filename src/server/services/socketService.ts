@@ -10,8 +10,6 @@ import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
 import { onTurnChange as triggerBotTurn, onHumanReconnect } from './ai/BotTurnTrigger';
-import { WhisperService } from './ai/WhisperService';
-import type { WhisperSubmitPayload } from '../../shared/types/WhisperTypes';
 
 let io: SocketIOServer | null = null;
 let presenceSweepInterval: NodeJS.Timeout | null = null;
@@ -516,85 +514,6 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
           tempId,
           error: 'send_failed',
           message: 'Failed to send message. Please try again.',
-        });
-      }
-    });
-
-    /**
-     * Submit whisper advice about a bot's turn
-     */
-    socket.on('whisper:submit', async (data: WhisperSubmitPayload) => {
-      if (!data || !data.gameId || !data.botPlayerId || !data.advice) {
-        socket.emit('whisper:error', {
-          code: 'VALIDATION_ERROR',
-          message: 'Missing required fields: gameId, botPlayerId, advice',
-        });
-        return;
-      }
-
-      if (!userId) {
-        socket.emit('whisper:error', {
-          code: 'NOT_AUTHENTICATED',
-          message: 'Authentication required',
-        });
-        return;
-      }
-
-      const { gameId, botPlayerId, advice } = data;
-
-      try {
-        // Validate advice is non-empty
-        const trimmedAdvice = advice.trim();
-        if (trimmedAdvice.length === 0) {
-          socket.emit('whisper:error', {
-            code: 'VALIDATION_ERROR',
-            message: 'Advice cannot be empty',
-          });
-          return;
-        }
-
-        // Verify human is in the game
-        const humanInGame = await db.query(
-          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2 AND is_deleted = false',
-          [gameId, userId],
-        );
-        if (humanInGame.rows.length === 0) {
-          socket.emit('whisper:error', {
-            code: 'NOT_IN_GAME',
-            message: 'You are not in this game',
-          });
-          return;
-        }
-
-        // Verify target is a bot player in the same game
-        const botPlayer = await db.query(
-          'SELECT id FROM players WHERE game_id = $1 AND id = $2 AND is_bot = true AND is_deleted = false',
-          [gameId, botPlayerId],
-        );
-        if (botPlayer.rows.length === 0) {
-          socket.emit('whisper:error', {
-            code: 'INVALID_BOT',
-            message: 'Target player is not a bot in this game',
-          });
-          return;
-        }
-
-        // Record the whisper
-        const record = await WhisperService.recordWhisper(
-          { ...data, advice: trimmedAdvice },
-          userId,
-        );
-
-        socket.emit('whisper:recorded', {
-          whisperId: record.id,
-          turnNumber: record.turnNumber,
-          timestamp: record.createdAt,
-        });
-      } catch (error) {
-        console.error('[Whisper] Error recording whisper:', error);
-        socket.emit('whisper:error', {
-          code: 'PERSISTENCE_ERROR',
-          message: 'Failed to record whisper. Please try again.',
         });
       }
     });
