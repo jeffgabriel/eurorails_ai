@@ -539,4 +539,93 @@ describe('RouteValidator', () => {
       expect(hasPickupMismatchError).toBe(true);
     });
   });
+
+  // ── JIRA-121 Bug 3: Carried-load delivery priority ──────────────────────────
+
+  describe('JIRA-121 Bug 3: reorderStopsByProximity carried-load priority', () => {
+    beforeEach(() => {
+      mockGridPoints.set('10,5', { row: 10, col: 5, terrain: TerrainType.MajorCity, name: 'Essen' });
+      mockGridPoints.set('25,15', { row: 25, col: 15, terrain: TerrainType.MajorCity, name: 'Berlin' });
+      mockGridPoints.set('12,7', { row: 12, col: 7, terrain: TerrainType.MajorCity, name: 'Dublin' });
+      mockGridPoints.set('30,20', { row: 30, col: 20, terrain: TerrainType.MajorCity, name: 'Bruxelles' });
+    });
+
+    it('should prioritize deliver stop for carried load over pickup stop even when pickup is closer', () => {
+      // Bot at Essen (10,5). Bruxelles (30,20) is farther, Dublin (12,7) is closer.
+      // Cheese is on train → deliver(Cheese@Dublin) should come before pickup(Chocolate@Bruxelles)
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          // Dublin is slightly farther than Bruxelles from Essen
+          if (fromRow === 10 && toRow === 12) return 5;   // Essen→Dublin
+          if (fromRow === 10 && toRow === 30) return 3;   // Essen→Bruxelles (closer!)
+          if (fromRow === 12 && toRow === 30) return 15;  // Dublin→Bruxelles
+          if (fromRow === 12 && toRow === 25) return 10;  // Dublin→Berlin
+          if (fromRow === 30 && toRow === 25) return 8;   // Bruxelles→Berlin
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Chocolate', city: 'Bruxelles' },
+        { action: 'deliver' as const, loadType: 'Cheese', city: 'Dublin', demandCardId: 2, payment: 12 },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+        ['Cheese'],  // Cheese is on the train
+      );
+
+      // deliver(Cheese@Dublin) should come first despite Bruxelles being closer
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Cheese', city: 'Dublin' }));
+      expect(result[1]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Chocolate', city: 'Bruxelles' }));
+    });
+
+    it('should maintain original nearest-neighbor behavior when no carried loads', () => {
+      mockEstimateHopDistance.mockImplementation(
+        (fromRow: number, _fromCol: number, toRow: number, _toCol: number) => {
+          if (fromRow === 10 && toRow === 30) return 3;   // Essen→Bruxelles (closer)
+          if (fromRow === 10 && toRow === 12) return 5;   // Essen→Dublin
+          return 10;
+        },
+      );
+
+      const stops = [
+        { action: 'pickup' as const, loadType: 'Chocolate', city: 'Bruxelles' },
+        { action: 'pickup' as const, loadType: 'Cheese', city: 'Dublin' },
+      ];
+
+      // Without carriedLoads, nearest-neighbor picks Bruxelles first
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+      );
+
+      expect(result[0]).toEqual(expect.objectContaining({ city: 'Bruxelles' }));
+      expect(result[1]).toEqual(expect.objectContaining({ city: 'Dublin' }));
+    });
+
+    it('should allow carried-load delivery without requiring a pickup first', () => {
+      // Cheese is already on the train — deliver(Cheese@Dublin) should be eligible
+      // even without a pickup(Cheese) in the route
+      mockEstimateHopDistance.mockReturnValue(5);
+
+      const stops = [
+        { action: 'deliver' as const, loadType: 'Cheese', city: 'Dublin', demandCardId: 2, payment: 12 },
+        { action: 'pickup' as const, loadType: 'Chocolate', city: 'Bruxelles' },
+      ];
+
+      const result = RouteValidator.reorderStopsByProximity(
+        stops,
+        { row: 10, col: 5 },
+        mockGridPoints,
+        ['Cheese'],
+      );
+
+      // deliver(Cheese@Dublin) should be first — carried load doesn't need pickup
+      expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Cheese' }));
+    });
+  });
 });

@@ -71,6 +71,7 @@ export class RouteValidator {
           validations.filter(v => v.feasible).map(v => v.stop),
           botPos,
           gridPoints,
+          context.loads,
         );
         // Rebuild validations array in reordered sequence
         const reorderedValidations: StopValidation[] = reordered.map(stop => {
@@ -320,6 +321,7 @@ export class RouteValidator {
     stops: RouteStop[],
     botPosition: { row: number; col: number },
     gridPoints: Map<string, GridPointData>,
+    carriedLoads?: string[],
   ): RouteStop[] {
     const tag = '[RouteValidator]';
     if (stops.length <= 1) return stops;
@@ -334,6 +336,12 @@ export class RouteValidator {
 
     // Build dependency map: deliver(loadType) requires pickup(loadType) first
     const pickupDone = new Set<string>();
+    // JIRA-121 Bug 3: Carried loads already on train don't need a pickup first
+    if (carriedLoads) {
+      for (const load of carriedLoads) {
+        pickupDone.add(load);
+      }
+    }
     const remaining = [...stops];
     const ordered: RouteStop[] = [];
     let currentPos = { row: botPosition.row, col: botPosition.col };
@@ -350,16 +358,38 @@ export class RouteValidator {
         break;
       }
 
-      // Pick the nearest eligible stop
-      let nearest = eligible[0];
+      // JIRA-121 Bug 3: Prioritize deliver stops for carried loads over pickup stops
+      const carriedDelivers = carriedLoads
+        ? eligible.filter(s => s.action === 'deliver' && carriedLoads.includes(s.loadType))
+        : [];
+
+      let nearest: RouteStop;
       let nearestDist = Infinity;
-      for (const stop of eligible) {
-        const coords = cityCoords.get(stop.city.toLowerCase());
-        if (!coords) continue;
-        const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
-        if (dist >= 0 && dist < nearestDist) {
-          nearestDist = dist;
-          nearest = stop;
+
+      if (carriedDelivers.length > 0) {
+        // Pick the nearest carried-load delivery (immediate income, zero acquisition cost)
+        nearest = carriedDelivers[0];
+        for (const stop of carriedDelivers) {
+          const coords = cityCoords.get(stop.city.toLowerCase());
+          if (!coords) continue;
+          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
+          if (dist >= 0 && dist < nearestDist) {
+            nearestDist = dist;
+            nearest = stop;
+          }
+        }
+        console.log(`${tag} Carried-load priority: deliver(${nearest.loadType}@${nearest.city}) promoted ahead of pickup stops`);
+      } else {
+        // Pick the nearest eligible stop (original behavior)
+        nearest = eligible[0];
+        for (const stop of eligible) {
+          const coords = cityCoords.get(stop.city.toLowerCase());
+          if (!coords) continue;
+          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
+          if (dist >= 0 && dist < nearestDist) {
+            nearestDist = dist;
+            nearest = stop;
+          }
         }
       }
 

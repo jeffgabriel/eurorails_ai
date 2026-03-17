@@ -39,7 +39,7 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { TurnComposer } from '../../services/ai/TurnComposer';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints, getFerryPairPort } from '../../services/ai/MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import {
   GridPoint,
@@ -318,5 +318,66 @@ describe('Bug 4: truncatePathToEffectiveBudget — ferry port boundary', () => {
     const result = truncate(path, 5);
     expect(result).toHaveLength(3);
     expect(result[result.length - 1]).toEqual({ row: 3, col: 3 });
+  });
+});
+
+// ─── JIRA-121 Bug 2: BFS ferry teleportation when bot starts at ferry port ──
+
+const mockGetFerryPairPort = getFerryPairPort as jest.Mock;
+
+describe('JIRA-121 Bug 2: BFS ferry teleportation from ferry port start', () => {
+  it('should include cities reachable via ferry teleportation when bot starts at a ferry port', () => {
+    // Bot starts at Dover (ferry port at 22,33)
+    // Paired port is Calais (22,35)
+    // Dublin is 2 hops from Calais: Calais(22,35) → (22,36) → Dublin(22,37)
+    const gridPoints: GridPoint[] = [
+      makeFerryPortPoint(22, 33, 'Dover'),
+      makeGridPoint(22, 32),
+      makeFerryPortPoint(22, 35, 'Calais'),
+      makeGridPoint(22, 36),
+      makeCityPoint(22, 37, 'Dublin', TerrainType.MajorCity),
+    ];
+
+    // Network: Dover has track to (22,32), and Calais has track to (22,36) → Dublin
+    const segments = [
+      makeSegment(22, 32, 22, 33),  // track to Dover
+      makeSegment(22, 35, 22, 36),  // track from Calais
+      makeSegment(22, 36, 22, 37),  // track to Dublin
+    ];
+    const network = buildNetwork(segments);
+
+    // Mock: getFerryPairPort returns Calais when called for Dover
+    mockGetFerryPairPort.mockReturnValueOnce({ row: 22, col: 35 });
+
+    const result = ContextBuilder.computeReachableCities(
+      { row: 22, col: 33 }, 5, network, gridPoints,
+    );
+
+    expect(result).toContain('Dublin');
+    expect(result).toContain('Calais');
+  });
+
+  it('should NOT teleport when bot is at a ferry port but paired port is not on network', () => {
+    const gridPoints: GridPoint[] = [
+      makeFerryPortPoint(22, 33, 'Dover'),
+      makeGridPoint(22, 32),
+      makeFerryPortPoint(22, 35, 'Calais'),
+    ];
+
+    const segments = [
+      makeSegment(22, 32, 22, 33),  // track to Dover only
+    ];
+    const network = buildNetwork(segments);
+
+    // Paired port exists but is NOT on the network
+    mockGetFerryPairPort.mockReturnValueOnce({ row: 22, col: 35 });
+
+    const result = ContextBuilder.computeReachableCities(
+      { row: 22, col: 33 }, 5, network, gridPoints,
+    );
+
+    // Should still include Dover (starting position) but NOT Calais (not on network)
+    expect(result).toContain('Dover');
+    expect(result).not.toContain('Calais');
   });
 });

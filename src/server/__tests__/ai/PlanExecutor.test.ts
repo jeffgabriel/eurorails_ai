@@ -1743,4 +1743,119 @@ describe('PlanExecutor', () => {
       expect(buildTargets).not.toContain('Lodz');
     });
   });
+
+  // ── JIRA-121 Bug 1: Forward-scan before route abandon ─────────────────────
+
+  describe('JIRA-121 Bug 1: skip unaffordable stop to deliver carried load', () => {
+    it('should advance to a deliverable stop instead of abandoning when current stop is unaffordable', async () => {
+      // Route: pickup(Chocolate@Bruxelles) → deliver(Cheese@Dublin)
+      // Stop 0 is unaffordable (pickup at Bruxelles needs $30M track, bot has $10M)
+      // Stop 1 is deliverable (Cheese on train, Dublin on network)
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Chocolate', city: 'Bruxelles' },
+          { action: 'deliver', loadType: 'Cheese', city: 'Dublin', demandCardId: 2, payment: 12 },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 10;
+      snapshot.bot.loads = ['Cheese'];
+
+      const context = makeContext({
+        money: 10,
+        loads: ['Cheese'],
+        citiesOnNetwork: ['Dublin'],
+        canBuild: true,
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Chocolate',
+          supplyCity: 'Bruxelles',
+          deliveryCity: 'Paris',
+          payout: 20,
+          isSupplyReachable: false,
+          isDeliveryReachable: false,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 30,
+          estimatedTrackCostToDelivery: 40,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
+          estimatedTurns: 5,
+          demandScore: 2,
+          efficiencyPerTurn: 1,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
+          isAffordable: false,
+        }],
+      });
+
+      // When execute is called recursively for stop 1 (Dublin, on network), it will MOVE
+      mockResolve.mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 11 }], targetCity: 'Dublin' },
+      });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      // Should NOT abandon — should move toward Dublin
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.plan.type).toBe(AIActionType.MoveTrain);
+    });
+
+    it('should still abandon when no later stops are viable', async () => {
+      // Route: pickup(Chocolate@Bruxelles) → pickup(Wine@Bordeaux)
+      // Both stops need expensive track, neither has a carried load
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Chocolate', city: 'Bruxelles' },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+        ],
+        currentStopIndex: 0,
+      });
+
+      const snapshot = makeSnapshot();
+      snapshot.bot.money = 10;
+
+      const context = makeContext({
+        money: 10,
+        loads: [],
+        citiesOnNetwork: [],
+        canBuild: true,
+        demands: [{
+          cardIndex: 1,
+          loadType: 'Chocolate',
+          supplyCity: 'Bruxelles',
+          deliveryCity: 'Paris',
+          payout: 20,
+          isSupplyReachable: false,
+          isDeliveryReachable: false,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 30,
+          estimatedTrackCostToDelivery: 40,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
+          estimatedTurns: 5,
+          demandScore: 2,
+          efficiencyPerTurn: 1,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
+          isAffordable: false,
+        }],
+      });
+
+      const result = await PlanExecutor.execute(route, snapshot, context);
+
+      expect(result.routeAbandoned).toBe(true);
+      expect(result.plan.type).toBe(AIActionType.PassTurn);
+    });
+  });
 });
