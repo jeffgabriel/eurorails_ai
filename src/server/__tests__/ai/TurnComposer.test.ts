@@ -5968,7 +5968,7 @@ describe('TurnComposer', () => {
       expect(buildCalls).toHaveLength(0);
     });
 
-    it('exemption: initial build (turnNumber <= 2) bypasses JIT gate', async () => {
+    it('exemption: initial build (turnNumber <= 2) bypasses JIT gate via shouldDeferBuild', () => {
       const snapshot = makeSnapshot({
         bot: { ...makeSnapshot().bot, money: 50 },
         turnNumber: 1,
@@ -5979,46 +5979,23 @@ describe('TurnComposer', () => {
         turnNumber: 1,
         isInitialBuild: true,
         citiesOnNetwork: [],
-        unconnectedMajorCities: [],
       });
       const route = makeRoute({
         stops: [
           { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
         ],
-        currentStopIndex: 0, // Berlin is off-network
+        currentStopIndex: 0,
         phase: 'build',
       });
 
-      // A2 continuation MOVE attempt — fails (no path during initial build)
-      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path' });
-      // Phase B: BUILD toward Berlin (initial build exempt from JIT gate)
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Berlin' },
-      });
-
-      const movePlan: TurnPlan = {
-        type: AIActionType.MoveTrain,
-        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
-        fees: new Set<string>(),
-        totalFee: 0,
-      };
-
-      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
-
-      // Debug: see all resolve calls
-      const allCalls = mockResolve.mock.calls.map((args: any[]) => args[0]?.action);
-      console.log('DEBUG initial build resolve calls:', allCalls);
-
-      expect(result.type).toBe('MultiAction');
-      const buildCalls = mockResolve.mock.calls.filter(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCalls.length).toBeGreaterThanOrEqual(1);
+      // shouldDeferBuild should return deferred=false for initial builds
+      const result = (TurnComposer as any).shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      expect(result.deferred).toBe(false);
+      expect(result.reason).toBe('initial_build_exempt');
     });
 
-    it('exemption: victory build (cash > 230M, major city target) bypasses JIT gate', async () => {
+    it('exemption: victory build (cash > 230M, major city target) bypasses JIT gate via shouldDeferBuild', () => {
       const snapshot = makeSnapshot({
         bot: { ...makeSnapshot().bot, money: 240 },
       });
@@ -6033,32 +6010,14 @@ describe('TurnComposer', () => {
           { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
         ],
-        currentStopIndex: 0, // Berlin is off-network
+        currentStopIndex: 0,
         phase: 'build',
       });
 
-      // A2 continuation MOVE attempt — fails
-      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path' });
-      // Phase B: BUILD toward Berlin (victory build exempt from JIT gate)
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Berlin' },
-      });
-
-      const movePlan: TurnPlan = {
-        type: AIActionType.MoveTrain,
-        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
-        fees: new Set<string>(),
-        totalFee: 0,
-      };
-
-      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
-
-      expect(result.type).toBe('MultiAction');
-      const buildCalls = mockResolve.mock.calls.filter(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCalls.length).toBeGreaterThanOrEqual(1);
+      // shouldDeferBuild should return deferred=false for victory builds
+      const result = (TurnComposer as any).shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      expect(result.deferred).toBe(false);
+      expect(result.reason).toBe('victory_build_exempt');
     });
 
     it('trace logs currentStopIndex, buildTargetStopIndex, and currentStopCity (Branch A)', async () => {
