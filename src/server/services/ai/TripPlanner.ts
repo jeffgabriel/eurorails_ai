@@ -95,7 +95,7 @@ export class TripPlanner {
   async planTrip(
     snapshot: WorldSnapshot,
     context: GameContext,
-    gridPoints: Map<string, GridPoint>,
+    gridPoints: GridPoint[],
     memory: BotMemoryState,
   ): Promise<TripPlanResult | null> {
     const config = this.brain.strategyConfig;
@@ -201,7 +201,7 @@ export class TripPlanner {
       const fallback = await this.brain.planRoute(
         snapshot,
         context,
-        Array.from(gridPoints.values()),
+        gridPoints,
         memory.lastAbandonedRouteKey,
         memory.previousRouteStops,
       );

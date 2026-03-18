@@ -47,6 +47,7 @@ import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 import { TurnValidator } from './TurnValidator';
+import { TripPlanner } from './TripPlanner';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 
 /**
@@ -263,15 +264,19 @@ export class AIStrategyEngine {
             retried: false,
           };
         } else {
-        // ── No active route — consult LLM for a new strategic route ──
+        // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
         const brain = AIStrategyEngine.createBrain(botConfig!);
+        const tripPlanner = new TripPlanner(brain);
 
-        // Try to plan a route first (BE-010: pass previous route context)
-        const routeResult = await brain.planRoute(snapshot, context, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
+        const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+        // Wrap tripResult into routeResult-compatible shape for downstream code
+        const routeResult = tripResult
+          ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog }
+          : { route: null as StrategicRoute | null, llmLog: [] as LlmAttempt[] };
 
         if (routeResult.route) {
           activeRoute = routeResult.route;
-          console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
+          console.log(`${tag} Trip planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
 
           // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
           if (activeRoute.upgradeOnRoute) {
@@ -312,58 +317,8 @@ export class AIStrategyEngine {
             }
           }
 
-          // Calculate effective cargo after potential dead load drops (snapshot already mutated by splice above)
-          const effectiveLoads = snapshot.bot.loads.length;
-
-          // Secondary delivery: only if capacity available and not Easy bot
-          if (
-            effectiveLoads < trainCapacity &&
-            botConfig!.skillLevel !== BotSkillLevel.Easy &&
-            AIStrategyEngine.hasLLMApiKey(botConfig)
-          ) {
-            try {
-              const enRoutePickups = ContextBuilder.computeEnRoutePickups(snapshot, activeRoute.stops, gridPoints);
-              const userPrompt = ContextBuilder.serializeSecondaryDeliveryPrompt(snapshot, activeRoute.stops, context.demands, enRoutePickups);
-              const secondaryResult = await brain.findSecondaryDelivery(userPrompt, snapshot, context);
-
-              if (secondaryResult?.action === 'add_secondary' && secondaryResult.pickupCity && secondaryResult.loadType && secondaryResult.deliveryCity) {
-                console.log(`${tag} JIRA-89: Secondary delivery — pickup ${secondaryResult.loadType} at ${secondaryResult.pickupCity}, deliver to ${secondaryResult.deliveryCity}`);
-
-                // Insert pickup + deliver stops
-                const pickupStop: RouteStop = { action: 'pickup', loadType: secondaryResult.loadType, city: secondaryResult.pickupCity };
-                const deliverStop: RouteStop = { action: 'deliver', loadType: secondaryResult.loadType, city: secondaryResult.deliveryCity };
-                const combinedStops = [...activeRoute.stops, pickupStop, deliverStop];
-
-                // Reorder by proximity if bot has a position
-                if (snapshot.bot.position) {
-                  const gridPointsMap = loadGridPointsMap();
-                  activeRoute = {
-                    ...activeRoute,
-                    stops: RouteValidator.reorderStopsByProximity(combinedStops, snapshot.bot.position, gridPointsMap),
-                  };
-                } else {
-                  activeRoute = { ...activeRoute, stops: combinedStops };
-                }
-
-                console.log(`${tag} JIRA-89: Route amended with secondary delivery — ${activeRoute.stops.length} stops`);
-                secondaryDeliveryLog = {
-                  ...secondaryDeliveryLog,
-                  action: 'add_secondary',
-                  reasoning: secondaryResult.reasoning,
-                  pickupCity: secondaryResult.pickupCity,
-                  loadType: secondaryResult.loadType,
-                  deliveryCity: secondaryResult.deliveryCity,
-                };
-              } else {
-                console.log(`${tag} JIRA-89: No secondary delivery opportunity — ${secondaryResult?.reasoning ?? 'LLM returned null'}`);
-                if (!secondaryDeliveryLog) {
-                  secondaryDeliveryLog = { action: 'none', reasoning: secondaryResult?.reasoning ?? 'no opportunity' };
-                }
-              }
-            } catch (err) {
-              console.warn(`${tag} JIRA-89: Secondary delivery LLM call failed:`, err instanceof Error ? err.message : err);
-            }
-          }
+          // JIRA-126: Secondary delivery logic removed — TripPlanner already includes
+          // multi-stop trip planning with all demand cards considered simultaneously.
 
           // ── JIRA-92: Cargo conflict check — drop carried loads blocking planned pickups ──
           const routePickupCount = (() => {
@@ -656,11 +611,9 @@ export class AIStrategyEngine {
         activeRoute = null;
       }
 
-      // ── Stage 3d: Post-delivery LLM call ──
-      // After any delivery, the bot has a new demand card and needs strategic direction
-      // for both remaining movement AND build targeting.
-      // JIRA-86: Route completed → call planRoute() for a fresh strategy (not reEvaluateRoute,
-      // which asks about a dead route). Route still active → call reEvaluateRoute().
+      // ── Stage 3d: Post-delivery TripPlanner call (JIRA-126) ──
+      // After any delivery, the bot has a new demand card. TripPlanner generates a fresh
+      // multi-stop trip plan from scratch, replacing the old re-eval system.
       let reEvalHandled = false;
       let earlyExecutedSteps: TurnPlan[] = [];
       if (
@@ -687,65 +640,27 @@ export class AIStrategyEngine {
           const freshSnap = await capture(gameId, botPlayerId);
           const freshContext = await ContextBuilder.build(freshSnap, skillLevel, gridPoints);
           const brain = AIStrategyEngine.createBrain(botConfig!);
+          const postDeliveryTripPlanner = new TripPlanner(brain);
           const llmStart = Date.now();
 
           let newRoute: StrategicRoute | null = null;
-          let reEvalReasoning: string | null = null; // JIRA-109: capture re-eval reasoning for debug overlay
+          let reEvalReasoning: string | null = null;
 
-          if (routeWasCompleted) {
-            // Route is done — ask LLM for a brand new strategic plan
-            console.log(`${tag} JIRA-86: Route completed after delivery — calling planRoute() for fresh strategy`);
-            const routeResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops);
-            const llmMs = Date.now() - llmStart;
-            // Thread llmLog from post-delivery planRoute into decision for NDJSON observability
-            if (routeResult.llmLog?.length) {
-              decision.llmLog = [...(decision.llmLog ?? []), ...routeResult.llmLog];
+          // JIRA-126: Use TripPlanner for all post-delivery planning (both route-completed and mid-route)
+          console.log(`${tag} JIRA-126: Post-delivery trip planning with fresh state`);
+          const tripResult = await postDeliveryTripPlanner.planTrip(freshSnap, freshContext, gridPoints, memory);
+          const llmMs = Date.now() - llmStart;
+
+          if (tripResult) {
+            if (tripResult.llmLog?.length) {
+              decision.llmLog = [...(decision.llmLog ?? []), ...tripResult.llmLog];
             }
-            if (routeResult.route) {
-              newRoute = routeResult.route;
-              reEvalReasoning = newRoute.reasoning ?? null;
-              console.log(`${tag} JIRA-86: Post-delivery planRoute: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
-              logPhase('reeval', [], null, null, { llmReasoning: `new-route: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
-            } else {
-              // JIRA-103: Retry once with budget hint when all inner attempts failed
-              console.warn(`${tag} JIRA-103: Post-delivery planRoute returned no route (${llmMs}ms) — retrying with budget hint`);
-              const budgetHint = `Previous route plans were rejected for budget infeasibility. Prioritize routes where supply and delivery cities are on or near existing track. Available cash: ${freshSnap.bot.money}M. Avoid routes requiring expensive mountain/Alpine track construction.`;
-              const retryResult = await brain.planRoute(freshSnap, freshContext, gridPoints, memory.lastAbandonedRouteKey, memory.previousRouteStops, budgetHint);
-              const retryMs = Date.now() - llmStart - llmMs;
-              if (retryResult.llmLog?.length) {
-                decision.llmLog = [...(decision.llmLog ?? []), ...retryResult.llmLog];
-              }
-              if (retryResult.route) {
-                newRoute = retryResult.route;
-                reEvalReasoning = newRoute.reasoning ?? null;
-                console.log(`${tag} JIRA-103: Budget-hint retry succeeded: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${retryMs}ms)`);
-                logPhase('reeval', [], null, null, { llmReasoning: `budget-retry: ${newRoute.reasoning}`, llmLatencyMs: llmMs + retryMs });
-              } else {
-                console.warn(`${tag} JIRA-103: Budget-hint retry also failed (${retryMs}ms) — falling through to heuristic`);
-              }
-            }
+            newRoute = tripResult.route;
+            reEvalReasoning = newRoute.reasoning ?? null;
+            console.log(`${tag} JIRA-126: Post-delivery trip plan: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
+            logPhase('trip-planning', [], null, null, { llmReasoning: `trip-plan: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
           } else {
-            // Route still active — ask LLM whether to continue, amend, or abandon
-            const routeForReEval = preDeliveryRoute ?? activeRoute;
-            if (routeForReEval) {
-              const reEvalResult = await brain.reEvaluateRoute(freshSnap, freshContext, routeForReEval, gridPoints);
-              const llmMs = Date.now() - llmStart;
-
-              if (reEvalResult) {
-                console.log(`${tag} JIRA-86: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${llmMs}ms)`);
-                logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: llmMs });
-                reEvalReasoning = reEvalResult.reasoning ?? null;
-
-                if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
-                  newRoute = { ...routeForReEval, stops: reEvalResult.amendedStops, currentStopIndex: 0 };
-                } else if (reEvalResult.decision === 'continue') {
-                  newRoute = routeForReEval;
-                }
-                // abandon or null → keep existing plan as-is
-              } else {
-                console.log(`${tag} JIRA-86: Re-evaluation returned null, keeping existing plan (${Date.now() - llmStart}ms)`);
-              }
-            }
+            console.warn(`${tag} JIRA-126: Post-delivery trip planning failed (${llmMs}ms) — falling through to heuristic`);
           }
 
           if (newRoute) {
@@ -1068,50 +983,12 @@ export class AIStrategyEngine {
           }
         }
 
-        // JIRA-64 Part 2: Post-delivery LLM re-evaluation
-        // JIRA-83: Skip if already handled during post-composition re-eval (Stage 3d).
-        // Use preDeliveryRoute since activeRoute was cleared at line 301 for next-turn re-planning.
-        const routeForReEval = activeRoute ?? preDeliveryRoute;
-        if (!reEvalHandled && routeForReEval && AIStrategyEngine.hasLLMApiKey(botConfig)) {
-          try {
-            const brain = AIStrategyEngine.createBrain(botConfig!);
-            const reEvalStart = Date.now();
-            const reEvalResult = await brain.reEvaluateRoute(snapshot, context, routeForReEval, gridPoints);
-            const reEvalMs = Date.now() - reEvalStart;
-
-            if (reEvalResult) {
-              console.log(`${tag} JIRA-64: Post-delivery re-eval: decision=${reEvalResult.decision}, reasoning=${reEvalResult.reasoning} (${reEvalMs}ms)`);
-              logPhase('reeval', [], null, null, { llmReasoning: `${reEvalResult.decision}: ${reEvalResult.reasoning}`, llmLatencyMs: reEvalMs });
-
-              if (reEvalResult.decision === 'amend' && reEvalResult.amendedStops) {
-                activeRoute = {
-                  ...routeForReEval,
-                  stops: reEvalResult.amendedStops,
-                  currentStopIndex: 0,
-                };
-                memoryPatch.activeRoute = activeRoute;
-              } else if (reEvalResult.decision === 'continue') {
-                // Restore the route that was cleared for next-turn re-planning
-                activeRoute = routeForReEval;
-                memoryPatch.activeRoute = activeRoute;
-              } else if (reEvalResult.decision === 'abandon') {
-                console.log(`${tag} JIRA-64: Abandoning route after re-evaluation`);
-                memoryPatch.activeRoute = null;
-                memoryPatch.turnsOnRoute = 0;
-                activeRoute = null;
-              }
-            } else {
-              console.log(`${tag} JIRA-64: Re-evaluation failed, continuing with current route (${reEvalMs}ms)`);
-              // Restore the route on failure
-              activeRoute = routeForReEval;
-              memoryPatch.activeRoute = activeRoute;
-            }
-          } catch (reEvalError) {
-            console.warn(`${tag} JIRA-64: Re-evaluation error, continuing with current route:`, reEvalError instanceof Error ? reEvalError.message : reEvalError);
-            // Restore the route on error
-            activeRoute = routeForReEval;
-            memoryPatch.activeRoute = activeRoute;
-          }
+        // JIRA-126: Post-delivery route re-evaluation replaced by TripPlanner.
+        // Stage 3d now handles all post-delivery planning via TripPlanner.planTrip().
+        // If Stage 3d didn't handle it (reEvalHandled=false), restore previous route.
+        if (!reEvalHandled && activeRoute == null && preDeliveryRoute) {
+          activeRoute = preDeliveryRoute;
+          memoryPatch.activeRoute = activeRoute;
         }
       }
 
