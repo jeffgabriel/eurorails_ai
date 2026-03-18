@@ -3020,7 +3020,7 @@ describe('ActionResolver', () => {
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
     });
 
-    it('JIRA-120: should force discard after 3+ consecutive LLM failures', async () => {
+    it('JIRA-120: should force discard immediately when LLM fails (even with delivery and pickup available)', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -3035,10 +3035,9 @@ describe('ActionResolver', () => {
 
       const context = makeGameContext({
         money: 30,
-        canDeliver: [],
-        canPickup: [],
+        canDeliver: [{ loadType: 'Coal', deliveryCity: 'TestCity', payout: 50 }] as any,
+        canPickup: [{ loadType: 'Wine', supplyCity: 'TestCity', bestPayout: 20 }] as any,
         isInitialBuild: false,
-        consecutiveLlmFailures: 3,
         demands: [
           {
             cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen',
@@ -3055,8 +3054,9 @@ describe('ActionResolver', () => {
       });
 
       const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
-      const result = await ActionResolver.heuristicFallback(context, snapshot);
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
 
+      // Discard fires immediately — overrides available delivery (50M payout) and pickup
       expect(result.success).toBe(true);
       expect(result.plan!.type).toBe(AIActionType.DiscardHand);
       expect(warnSpy).toHaveBeenCalledWith(
@@ -3065,7 +3065,7 @@ describe('ActionResolver', () => {
       warnSpy.mockRestore();
     });
 
-    it('JIRA-120: should NOT discard when consecutiveLlmFailures < 3', async () => {
+    it('JIRA-120: should force discard even with no delivery/pickup available', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -3081,17 +3081,19 @@ describe('ActionResolver', () => {
         canDeliver: [],
         canPickup: [],
         isInitialBuild: false,
-        consecutiveLlmFailures: 2,
         demands: [],
       });
 
-      const result = await ActionResolver.heuristicFallback(context, snapshot);
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
 
-      // Should NOT discard — counter below threshold, falls through to later steps
-      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
+      // LLM failed — discard immediately
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
+      warnSpy.mockRestore();
     });
 
-    it('JIRA-120: should NOT discard during initial build even with 3+ LLM failures', async () => {
+    it('JIRA-120: should NOT discard during initial build even when LLM failed', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -3107,17 +3109,16 @@ describe('ActionResolver', () => {
         canDeliver: [],
         canPickup: [],
         isInitialBuild: true,
-        consecutiveLlmFailures: 5,
         demands: [],
       });
 
-      const result = await ActionResolver.heuristicFallback(context, snapshot);
+      const result = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
 
-      // Initial build — discard gate skipped even with high failure count
+      // Initial build — discard gate skipped, fall through to other heuristics
       expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
     });
 
-    it('JIRA-120: should NOT discard when consecutiveLlmFailures is undefined (backward compat)', async () => {
+    it('JIRA-120: should NOT discard when called for continuation (llmFailed=false)', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'TestCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -3135,12 +3136,10 @@ describe('ActionResolver', () => {
         isInitialBuild: false,
         demands: [],
       });
-      // Do NOT set consecutiveLlmFailures — simulates legacy context
-      delete (context as any).consecutiveLlmFailures;
 
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
-      // Should not discard — undefined defaults to 0 via ?? operator
+      // No llmFailed flag — this is a continuation call, should not force discard
       expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
     });
   });
@@ -3558,43 +3557,7 @@ describe('ActionResolver', () => {
       });
     });
 
-    describe('forbidden combination: UPGRADE + BUILD', () => {
-      it('should reject UPGRADE + BUILD combination', async () => {
-        const intent = makeMultiIntent(
-          { action: 'UPGRADE', details: { to: 'fast_freight' } },
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-
-      it('should reject BUILD + UPGRADE combination (order reversed)', async () => {
-        const intent = makeMultiIntent(
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-          { action: 'UPGRADE', details: { to: 'fast_freight' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-
-      it('should reject using AIActionType enum values for UPGRADE + BUILD', async () => {
-        const intent = makeMultiIntent(
-          { action: AIActionType.UpgradeTrain, details: { to: 'fast_freight' } },
-          { action: AIActionType.BuildTrack, details: { toward: 'Berlin' } },
-        );
-
-        const result = await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
-    });
+    // BUILD+UPGRADE exclusion tests removed — now validated by TurnValidator (JIRA-126)
 
     describe('forbidden combination: DISCARD_HAND exclusivity', () => {
       it('should reject DISCARD_HAND + MOVE', async () => {
@@ -3824,35 +3787,6 @@ describe('ActionResolver', () => {
         }
       });
 
-      it('should reject UPGRADE + BUILD even with crossgrade cost of 5M', async () => {
-        // Even a 5M crossgrade + BUILD is forbidden per game rules
-        const intent = makeMultiIntent(
-          { action: 'UPGRADE', details: { to: 'heavy_freight' } },
-          { action: 'BUILD', details: { toward: 'Berlin' } },
-        );
-
-        const snapshot = makeWorldSnapshot({
-          bot: {
-            playerId: 'bot-1',
-            userId: 'user-bot',
-            money: 50,
-            position: { row: 5, col: 5 },
-            existingSegments: [makeSegment(5, 5, 5, 6)],
-            demandCards: [],
-            resolvedDemands: [],
-            trainType: TrainType.FastFreight,
-            loads: [],
-            botConfig: null,
-            ferryHalfSpeed: false,
-            connectedMajorCityCount: 0,
-          } as WorldSnapshot['bot'],
-        });
-
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
-
-        expect(result.success).toBe(false);
-        expect(result.error).toContain('Cannot upgrade and build track in the same turn');
-      });
     });
 
     describe('cumulative movement budget', () => {
