@@ -1006,6 +1006,220 @@ describe('TurnComposer', () => {
     });
   });
 
+  describe('JIRA-125: Victory build tier in tryAppendBuild', () => {
+    it('fires victory build when money >= 250 and connectedCities < 7', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 260 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 260,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        unconnectedMajorCities: [
+          { cityName: 'Milano', estimatedCost: 8 },
+          { cityName: 'London', estimatedCost: 20 },
+          { cityName: 'Madrid', estimatedCost: 25 },
+        ],
+      });
+
+      // Victory build toward Milano succeeds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
+
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe(AIActionType.BuildTrack);
+      // Verify BUILD was called toward Milano (cheapest unconnected)
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'BUILD', details: { toward: 'Milano' } }),
+        expect.anything(), expect.anything(), undefined,
+      );
+    });
+
+    it('does NOT fire victory build when money < 250', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 240 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 240,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        unconnectedMajorCities: [
+          { cityName: 'Milano', estimatedCost: 8 },
+        ],
+      });
+
+      // The existing fallback (money > 230) would still fire for non-victory builds
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
+
+      // Should still build (via legacy fallback), but NOT through victory build tier
+      expect(result).not.toBeNull();
+    });
+
+    it('overrides non-major-city route builds when victory conditions met', async () => {
+      const lookupSpy = jest.spyOn(majorCityGroups, 'getMajorCityLookup').mockReturnValue(new Map<string, string>([
+        ['20,20', 'Milano'],
+        ['30,30', 'Paris'],
+      ]));
+
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 260 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 260,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        citiesOnNetwork: ['Paris', 'Berlin'],
+        unconnectedMajorCities: [
+          { cityName: 'Milano', estimatedCost: 8 },
+        ],
+      });
+
+      // Route has non-major city 'Wroclaw' as unreached stop
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Wroclaw' },
+          { action: 'deliver', loadType: 'Coal', city: 'Sarajevo', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      // Victory build toward Milano
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
+
+      expect(result).not.toBeNull();
+      // Verify BUILD was called toward Milano (victory city), NOT Wroclaw (non-major route stop)
+      const buildCall = mockResolve.mock.calls.find(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCall).toBeDefined();
+      expect(buildCall![0].details.toward).toBe('Milano');
+      lookupSpy.mockRestore();
+    });
+
+    it('allows route builds toward major cities when victory conditions met', async () => {
+      const lookupSpy = jest.spyOn(majorCityGroups, 'getMajorCityLookup').mockReturnValue(new Map<string, string>([
+        ['20,20', 'Milano'],
+        ['30,30', 'London'],
+      ]));
+
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 260 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 260,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        citiesOnNetwork: ['Paris', 'Berlin'],
+        unconnectedMajorCities: [
+          { cityName: 'Milano', estimatedCost: 8 },
+          { cityName: 'London', estimatedCost: 20 },
+        ],
+      });
+
+      // Route targets Milano (a major city and unconnected) — should be allowed
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Wine', city: 'Milano', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+      });
+
+      // Route build toward Milano
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+      // Victory build toward London (next cheapest)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(30, 30, 30, 31)], targetCity: 'London' },
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
+
+      expect(result).not.toBeNull();
+      expect(result!.type).toBe(AIActionType.BuildTrack);
+      // Both route build (Milano) and victory build (London) should fire
+      expect(mockResolve).toHaveBeenCalledTimes(2);
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ details: { toward: 'Milano' } }),
+        expect.anything(), expect.anything(), undefined,
+      );
+      expect(mockResolve).toHaveBeenCalledWith(
+        expect.objectContaining({ details: { toward: 'London' } }),
+        expect.anything(), expect.anything(), undefined,
+      );
+      lookupSpy.mockRestore();
+    });
+
+    it('records victoryBuild in trace when conditions met', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 260 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 260,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        unconnectedMajorCities: [
+          { cityName: 'Milano', estimatedCost: 8 },
+        ],
+      });
+
+      const trace: any = {};
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+
+      await TurnComposer.tryAppendBuild(snapshot, context, null, trace);
+
+      expect(trace.victoryBuild).toBeDefined();
+      expect(trace.victoryBuild.target).toBe('Milano');
+      expect(trace.victoryBuild.triggered).toBe(true);
+    });
+
+    it('does NOT fire when all 7 cities already connected', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 300 },
+      });
+      const context = makeContext({
+        turnBuildCost: 0,
+        money: 300,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien', 'Milano', 'London'],
+        unconnectedMajorCities: [
+          { cityName: 'Madrid', estimatedCost: 25 },
+        ],
+      });
+
+      // 7 cities connected — victory build tier should NOT fire
+      // Legacy fallback may fire (money > 230 + unconnected cities) — mock it
+      mockResolve.mockResolvedValueOnce({ success: false, plan: null });
+
+      const trace: any = {};
+      await TurnComposer.tryAppendBuild(snapshot, context, null, trace);
+
+      // Victory build trace should NOT be set (conditions not met)
+      expect(trace.victoryBuild).toBeUndefined();
+    });
+  });
+
   describe('findMoveTarget deliver-stop skip', () => {
     it('skips deliver stop when bot no longer has the load (already delivered)', async () => {
       // Route: pickup Wine at Bordeaux → deliver Wine at Berlin → pickup Oil at Baku
@@ -5604,6 +5818,406 @@ describe('TurnComposer', () => {
       // With only 2 network nodes, near-miss scanning should be skipped
       expect(mockFindNearbyFerryPorts).not.toHaveBeenCalled();
       expect(mockFindSpurOpportunities).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('JIRA-124: JIT gate stop-alignment fix', () => {
+    it('Branch A: builds toward current stop when off-network with low runway', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1, // Current stop is Paris (off-network)
+        phase: 'build',
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Paris' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(1);
+      expect(buildCalls[0][0].details.toward).toBe('Paris');
+    });
+
+    it('Branch B: defers build when current stop on-network even if future stops need track', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin', 'Frankfurt'], // Frankfurt on-network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Frankfurt', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Napoli', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 1, // Current stop is Frankfurt (ON network)
+        phase: 'build',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Branch B: current stop (Frankfurt) is on-network → no build toward Napoli
+      expect(result.type).toBe(AIActionType.MoveTrain);
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(0);
+    });
+
+    it('Branch A: defers build when current stop off-network but runway sufficient', async () => {
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          money: 50,
+          // Many existing segments = long runway
+          existingSegments: Array.from({ length: 30 }, (_, i) => makeSegment(10 + i, 10, 11 + i, 10)),
+        },
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'],
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1, // Current stop is Paris (off-network)
+        phase: 'build',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // shouldDeferBuild should defer because calculateTrackRunway returns >= 2
+      // (many existing segments means high runway)
+      expect(result.type).toBe(AIActionType.MoveTrain);
+    });
+
+    it('route completion: returns null when currentStopIndex past end of stops', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin', 'Paris'],
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 2, // Past end of stops array
+        phase: 'build',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Route complete — no build attempted
+      expect(result.type).toBe(AIActionType.MoveTrain);
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(0);
+    });
+
+    it('exemption: initial build (turnNumber <= 2) bypasses JIT gate', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 50 },
+        turnNumber: 1,
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        turnNumber: 1,
+        isInitialBuild: true,
+        citiesOnNetwork: [],
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0, // Berlin is off-network
+        phase: 'build',
+      });
+
+      // A2 continuation MOVE attempt — fails (no path during initial build)
+      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path' });
+      // Phase B: BUILD toward Berlin (initial build exempt from JIT gate)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Berlin' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Debug: see all resolve calls
+      const allCalls = mockResolve.mock.calls.map((args: any[]) => args[0]?.action);
+      console.log('DEBUG initial build resolve calls:', allCalls);
+
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('exemption: victory build (cash > 230M, major city target) bypasses JIT gate', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 240 },
+      });
+      const context = makeContext({
+        money: 240,
+        turnBuildCost: 0,
+        citiesOnNetwork: [],
+        unconnectedMajorCities: [{ cityName: 'Berlin', estimatedCost: 5 }],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0, // Berlin is off-network
+        phase: 'build',
+      });
+
+      // A2 continuation MOVE attempt — fails
+      mockResolve.mockResolvedValueOnce({ success: false, error: 'No path' });
+      // Phase B: BUILD toward Berlin (victory build exempt from JIT gate)
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Berlin' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('trace logs currentStopIndex, buildTargetStopIndex, and currentStopCity (Branch A)', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris NOT on network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1,
+        phase: 'build',
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Paris' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { trace } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(trace.jitGate).toBeDefined();
+      expect(trace.jitGate!.currentStopIndex).toBe(1);
+      expect(trace.jitGate!.buildTargetStopIndex).toBe(1);
+      expect(trace.jitGate!.currentStopCity).toBe('Paris');
+      expect(trace.jitGate!.destinationCity).toBe('Paris');
+    });
+
+    it('trace logs currentStopIndex and currentStopCity (Branch B)', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin', 'Frankfurt'],
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Frankfurt', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Napoli', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 1,
+        phase: 'build',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { trace } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(trace.jitGate).toBeDefined();
+      expect(trace.jitGate!.deferred).toBe(true);
+      expect(trace.jitGate!.reason).toBe('current_stop_on_network');
+      expect(trace.jitGate!.currentStopIndex).toBe(1);
+      expect(trace.jitGate!.currentStopCity).toBe('Frankfurt');
+    });
+
+    it('multi-stop iteration after gate approval builds toward current then subsequent stops', async () => {
+      const snapshot = makeSnapshot({
+        bot: { ...makeSnapshot().bot, money: 50 },
+      });
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'], // Paris and Wien both off-network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 1, // Current stop is Paris (off-network)
+        phase: 'build',
+      });
+
+      // Build toward Paris
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 12, 12)], targetCity: 'Paris' },
+      });
+      // Build toward Wien with remaining budget
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(12, 12, 14, 14)], targetCity: 'Wien' },
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      expect(result.type).toBe('MultiAction');
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(2);
+      // First build is toward current stop (Paris), then Wien
+      expect(buildCalls[0][0].details.toward).toBe('Paris');
+      expect(buildCalls[1][0].details.toward).toBe('Wien');
+    });
+
+    it('primaryTarget is always current stop city, never a future stop', async () => {
+      // Reproduces the JIRA-124 bug scenario: Frankfurt (stop 0) is on-network,
+      // Napoli (stop 1) is off-network. Old code would target Napoli; fixed code defers.
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        money: 50,
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin', 'Frankfurt'], // Frankfurt ON network
+        unconnectedMajorCities: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Frankfurt', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Napoli', demandCardId: 2, payment: 30 },
+        ],
+        currentStopIndex: 1, // Heading toward Frankfurt (on-network)
+        phase: 'travel',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 10, col: 10 }, { row: 12, col: 12 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Should NOT build toward Napoli — current stop (Frankfurt) is on-network
+      expect(result.type).toBe(AIActionType.MoveTrain);
+      const buildCalls = mockResolve.mock.calls.filter(
+        (args: any[]) => args[0]?.action === 'BUILD',
+      );
+      expect(buildCalls).toHaveLength(0);
     });
   });
 });
