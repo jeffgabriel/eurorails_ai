@@ -652,7 +652,7 @@ describe('TurnComposer', () => {
   });
 
   describe('build phase composition', () => {
-    it('Primary DELIVER + BUILD', async () => {
+    it('Primary DELIVER defers BUILD when current stop on-network (JIRA-124 ADR-3)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ turnBuildCost: 0, money: 50, citiesOnNetwork: ['Berlin', 'Paris'] });
       const route = makeRoute({
@@ -673,30 +673,20 @@ describe('TurnComposer', () => {
       };
 
       // After DELIVER (no MOVE present), findMoveTarget may try MOVE but let that fail.
-      // Then tryAppendBuild should find a build target.
-      // The route has a stop at Bordeaux which is not on network -> build toward it
+      // JIRA-124: current stop (Paris) is on-network, so JIT gate defers build toward Bordeaux
       mockResolve
         // A2: MOVE toward next stop — fails
-        .mockResolvedValueOnce({ success: false, error: 'No path' })
-        // Phase B: BUILD succeeds
-        .mockResolvedValueOnce({
-          success: true,
-          plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
-        });
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context, route);
 
-      expect(result.type).toBe('MultiAction');
-      if (result.type === 'MultiAction') {
-        // DELIVER + BUILD (MOVE failed so not included)
-        expect(result.steps).toHaveLength(2);
-        expect(result.steps[0].type).toBe(AIActionType.DeliverLoad);
-        expect(result.steps[1].type).toBe(AIActionType.BuildTrack);
-      }
+      // JIRA-124: build deferred because current stop (Paris) is on-network — only DELIVER produced
+      expect(result.type).toBe(AIActionType.DeliverLoad);
     });
 
-    it('Post-delivery budget allows BUILD after earning payout', async () => {
-      // Pre-delivery money=5M, can't afford to build. After delivery earns 25M, money=30M.
+    it('Post-delivery defers BUILD when current stop on-network (JIRA-124 ADR-3)', async () => {
+      // Pre-delivery money=5M. After delivery earns 25M, money=30M.
+      // JIRA-124: current stop (Paris) is on-network, so build toward Bordeaux is deferred.
       const snapshot = makeSnapshot({
         bot: {
           ...makeSnapshot().bot,
@@ -732,27 +722,12 @@ describe('TurnComposer', () => {
 
       // A2: MOVE toward next stop — fails
       mockResolve
-        .mockResolvedValueOnce({ success: false, error: 'No path' })
-        // Phase B: BUILD succeeds (budget now 30M > 0)
-        .mockResolvedValueOnce({
-          success: true,
-          plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Bordeaux' },
-        });
+        .mockResolvedValueOnce({ success: false, error: 'No path' });
 
       const { plan: result } = await TurnComposer.compose(deliverPlan, snapshot, context, route);
 
-      expect(result.type).toBe('MultiAction');
-      if (result.type === 'MultiAction') {
-        expect(result.steps).toHaveLength(2);
-        expect(result.steps[0].type).toBe(AIActionType.DeliverLoad);
-        expect(result.steps[1].type).toBe(AIActionType.BuildTrack);
-      }
-
-      // Verify the BUILD resolve was called (meaning tryAppendBuild saw enough budget)
-      const buildCall = mockResolve.mock.calls.find(
-        (args: any[]) => args[0]?.action === 'BUILD',
-      );
-      expect(buildCall).toBeDefined();
+      // JIRA-124: build deferred because current stop (Paris) is on-network — only DELIVER produced
+      expect(result.type).toBe(AIActionType.DeliverLoad);
     });
 
     it('Primary BUILD -> no additional phases', async () => {
@@ -1269,7 +1244,7 @@ describe('TurnComposer', () => {
           { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 
@@ -1348,7 +1323,7 @@ describe('TurnComposer', () => {
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
           { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 
@@ -1406,7 +1381,7 @@ describe('TurnComposer', () => {
           { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 
@@ -1448,7 +1423,7 @@ describe('TurnComposer', () => {
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
           { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 
@@ -1496,7 +1471,7 @@ describe('TurnComposer', () => {
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
           { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 
@@ -1542,7 +1517,7 @@ describe('TurnComposer', () => {
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
           { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
         ],
-        currentStopIndex: 0,
+        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
         phase: 'build',
       });
 

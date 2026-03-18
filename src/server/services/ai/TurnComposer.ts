@@ -51,9 +51,11 @@ export interface CompositionTrace {
   /** Deliveries added during composition */
   deliveries: Array<{ load: string; city: string }>;
   /** JIRA-122: JIT build gate decision */
-  jitGate?: { deferred: boolean; reason: string; trackRunway: number; trainSpeed: number; destinationCity: string };
+  jitGate?: { deferred: boolean; reason: string; trackRunway: number; trainSpeed: number; destinationCity: string; currentStopIndex?: number; buildTargetStopIndex?: number; currentStopCity?: string };
   /** JIRA-122: Ferry-aware BFS search result */
   ferryAwareBFS?: { searched: boolean; ferryHopsUsed: number; nearestPointViaFerry: { row: number; col: number; distance: number; ferryCrossings: number } | null };
+  /** JIRA-125: Victory build decision */
+  victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
 }
 
 /** Result from TurnComposer.compose() — the plan plus a trace of what happened. */
@@ -745,10 +747,20 @@ export class TurnComposer {
       context = { ...context, turnBuildCost: context.turnBuildCost + nearMissCost };
     }
 
-    // Collect ALL unreached route stops for multi-stop look-ahead building
+    // JIRA-124: Align JIT gate build target with current route stop
+    const currentStopIndex = activeRoute?.currentStopIndex ?? 0;
+    const currentStop = activeRoute?.stops[currentStopIndex];
+    const currentStopCity = currentStop?.city;
+
+    // Guard: route complete or invalid stop index
+    if (activeRoute && (!currentStop || currentStopIndex >= activeRoute.stops.length)) {
+      return null;
+    }
+
+    // Collect unreached route stops for multi-stop look-ahead (starting from current stop)
     const unreachedRouteStops: string[] = [];
-    if (activeRoute && !activeRoute.stops.every((_, idx) => idx < activeRoute.currentStopIndex)) {
-      for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
+    if (activeRoute) {
+      for (let i = currentStopIndex; i < activeRoute.stops.length; i++) {
         const city = activeRoute.stops[i].city;
         if (!context.citiesOnNetwork.includes(city)) {
           unreachedRouteStops.push(city);
@@ -756,43 +768,91 @@ export class TurnComposer {
       }
     }
 
-    // JIRA-122: JIT build gate — defer standard builds when not urgently needed
-    if (unreachedRouteStops.length > 0) {
-      const primaryTarget = unreachedRouteStops[0];
+    // JIRA-125: Victory conditions — unconditional victory build tier
+    const victoryConditionsMet = snapshot.bot.money >= 250 &&
+      (context.connectedMajorCities?.length ?? 0) < 7;
+
+    // When victory conditions met, skip route builds toward non-major cities (ADR-1)
+    // Route builds toward major cities still serve both route and victory purposes
+    let routeStopsForBuild = unreachedRouteStops;
+    let victoryOverrodeRoute = false;
+    if (victoryConditionsMet && unreachedRouteStops.length > 0) {
+      const majorCityNames = new Set(getMajorCityLookup().values());
+      routeStopsForBuild = unreachedRouteStops.filter(city => majorCityNames.has(city));
+      victoryOverrodeRoute = routeStopsForBuild.length < unreachedRouteStops.length;
+    }
+
+    // JIRA-124: JIT gate evaluates only the current stop's city as primaryTarget
+    let jitDeferred = false;
+    if (activeRoute && currentStopCity) {
       const trainSpeed = context.speed ?? 9;
-      const jitResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, primaryTarget, trainSpeed);
-      if (trace) {
-        trace.jitGate = {
-          deferred: jitResult.deferred,
-          reason: jitResult.reason,
-          trackRunway: jitResult.trackRunway,
-          trainSpeed,
-          destinationCity: primaryTarget,
-        };
-      }
-      if (jitResult.deferred) {
-        console.log(`[TurnComposer] JIT gate: deferring build toward ${primaryTarget} — ${jitResult.reason} (runway=${jitResult.trackRunway.toFixed(1)} turns)`);
-        return null;
+      const currentStopOnNetwork = context.citiesOnNetwork.includes(currentStopCity);
+
+      if (!currentStopOnNetwork) {
+        // Branch A: current stop city is NOT on network — needs track
+        const primaryTarget = currentStopCity;
+        const jitResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, primaryTarget, trainSpeed);
+        if (trace) {
+          trace.jitGate = {
+            deferred: jitResult.deferred,
+            reason: jitResult.reason,
+            trackRunway: jitResult.trackRunway,
+            trainSpeed,
+            destinationCity: primaryTarget,
+            currentStopIndex,
+            buildTargetStopIndex: currentStopIndex,
+            currentStopCity,
+          };
+        }
+        if (jitResult.deferred) {
+          console.log(`[TurnComposer] JIT gate: deferring build toward ${primaryTarget} — ${jitResult.reason} (runway=${jitResult.trackRunway.toFixed(1)} turns)`);
+          // JIRA-125: When victory conditions met, skip route builds but continue to victory builds
+          if (!victoryConditionsMet) {
+            return null;
+          }
+          jitDeferred = true;
+        }
+      } else {
+        // Branch B: current stop city IS on network — defer all building (ADR-3, Option A)
+        if (trace) {
+          trace.jitGate = {
+            deferred: true,
+            reason: 'current_stop_on_network',
+            trackRunway: 10,
+            trainSpeed,
+            destinationCity: currentStopCity,
+            currentStopIndex,
+            buildTargetStopIndex: currentStopIndex,
+            currentStopCity,
+          };
+        }
+        console.log(`[TurnComposer] JIT gate: current stop ${currentStopCity} already on network, deferring future stop builds`);
+        // JIRA-125: When victory conditions met, skip route builds but continue to victory builds
+        if (!victoryConditionsMet) {
+          return null;
+        }
+        jitDeferred = true;
       }
     }
 
     // Multi-stop look-ahead: build toward each unreached stop, spending remaining budget
-    if (unreachedRouteStops.length > 0) {
-      const allSegments: TrackSegment[] = [];
-      let budgetSpent = context.turnBuildCost;
-      let currentSnapshot = snapshot;
-      let lastTargetCity: string | undefined;
+    // Only reached after JIT gate approves building for the current stop (Branch A, gate approves)
+    const allBuildSegments: TrackSegment[] = [];
+    let buildBudgetSpent = context.turnBuildCost;
+    let buildSnapshot = snapshot;
+    let lastBuildTargetCity: string | undefined;
 
-      for (const city of unreachedRouteStops) {
-        const iterBudget = Math.min(20 - budgetSpent, snapshot.bot.money - (budgetSpent - context.turnBuildCost));
+    if (routeStopsForBuild.length > 0 && !jitDeferred) {
+      for (const city of routeStopsForBuild) {
+        const iterBudget = Math.min(20 - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
         if (iterBudget <= 0) break;
 
-        const iterContext = { ...context, turnBuildCost: budgetSpent };
+        const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
         let result;
         try {
           result = await ActionResolver.resolve(
             { action: 'BUILD', details: { toward: city }, reasoning: '', planHorizon: '' },
-            currentSnapshot, iterContext,
+            buildSnapshot, iterContext,
             activeRoute?.startingCity,
           );
         } catch {
@@ -800,62 +860,98 @@ export class TurnComposer {
         }
 
         if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
-          allSegments.push(...result.plan.segments);
-          lastTargetCity = city;
+          allBuildSegments.push(...result.plan.segments);
+          lastBuildTargetCity = city;
           const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
-          budgetSpent += cost;
+          buildBudgetSpent += cost;
 
           // Update snapshot so track frontier includes new segments for next iteration (AC-5)
-          currentSnapshot = {
-            ...currentSnapshot,
+          buildSnapshot = {
+            ...buildSnapshot,
             bot: {
-              ...currentSnapshot.bot,
-              existingSegments: [...currentSnapshot.bot.existingSegments, ...result.plan.segments],
+              ...buildSnapshot.bot,
+              existingSegments: [...buildSnapshot.bot.existingSegments, ...result.plan.segments],
             },
           };
         } else {
           break; // Can't build toward this stop — stop iterating (AC-4)
         }
       }
-
-      if (allSegments.length > 0) {
-        return {
-          type: AIActionType.BuildTrack,
-          segments: allSegments,
-          targetCity: lastTargetCity,
-        };
-      }
     }
 
-    // Fallback when no route-specific build target exists.
-    // Prefer route-stop targets > victory progress > speculative demand builds.
-    // BUT: skip speculative builds when mid-route (travel/act phase) — the bot should
-    // finish its delivery first to earn money, then build toward victory cities.
-    const routeNeedsBuild = unreachedRouteStops.length > 0;
-    const isMidRoute = activeRoute &&
-      (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
-    let buildTarget: string | null = null;
-    if (!routeNeedsBuild && !isMidRoute) {
-      // Build toward cheapest unconnected major city (victory progress)
-      // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
+    // JIRA-125: Victory build tier — spend remaining budget toward cheapest unconnected major city
+    // Fires regardless of route state when victory conditions are met
+    if (victoryConditionsMet) {
       const unconnected = context.unconnectedMajorCities ?? [];
-      if (unconnected.length > 0 && snapshot.bot.money > 230) {
-        // Already sorted by estimatedCost in ContextBuilder
-        buildTarget = unconnected[0].cityName;
+      const victoryBudget = Math.min(20 - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
+      if (unconnected.length > 0 && victoryBudget > 0) {
+        // Build toward cheapest unconnected city not already targeted by route builds
+        const victoryTarget = unconnected.find(uc => !routeStopsForBuild.includes(uc.cityName));
+        if (victoryTarget) {
+          const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
+          try {
+            const victoryResult = await ActionResolver.resolve(
+              { action: 'BUILD', details: { toward: victoryTarget.cityName }, reasoning: '', planHorizon: '' },
+              buildSnapshot, iterContext,
+              activeRoute?.startingCity,
+            );
+            if (victoryResult?.success && victoryResult.plan?.type === AIActionType.BuildTrack && victoryResult.plan.segments.length > 0) {
+              allBuildSegments.push(...victoryResult.plan.segments);
+              lastBuildTargetCity = victoryTarget.cityName;
+              const cost = victoryResult.plan.segments.reduce((s, seg) => s + seg.cost, 0);
+              if (trace) {
+                trace.victoryBuild = { target: victoryTarget.cityName, cost, triggered: true, overrodeRoute: victoryOverrodeRoute };
+              }
+            }
+          } catch {
+            // Victory build resolve failed — fall through
+          }
+        }
+      }
+      if (trace && !trace.victoryBuild) {
+        trace.victoryBuild = { target: null, cost: 0, triggered: false, overrodeRoute: victoryOverrodeRoute };
       }
     }
 
-    if (!buildTarget) return null;
-
-    const result = await ActionResolver.resolve(
-      { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
-      snapshot, context,
-      activeRoute?.startingCity,
-    );
-
-    if (result.success && result.plan) {
-      return result.plan;
+    if (allBuildSegments.length > 0) {
+      return {
+        type: AIActionType.BuildTrack,
+        segments: allBuildSegments,
+        targetCity: lastBuildTargetCity,
+      };
     }
+
+    // Fallback when no route-specific or victory build target exists.
+    // Prefer victory progress > speculative demand builds.
+    // Skip speculative builds when mid-route (travel/act phase) or when victory conditions handle it.
+    if (!victoryConditionsMet) {
+      const routeNeedsBuild = unreachedRouteStops.length > 0;
+      const isMidRoute = activeRoute &&
+        (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
+      let buildTarget: string | null = null;
+      if (!routeNeedsBuild && !isMidRoute) {
+        // Build toward cheapest unconnected major city (victory progress)
+        // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
+        const unconnected = context.unconnectedMajorCities ?? [];
+        if (unconnected.length > 0 && snapshot.bot.money > 230) {
+          // Already sorted by estimatedCost in ContextBuilder
+          buildTarget = unconnected[0].cityName;
+        }
+      }
+
+      if (buildTarget) {
+        const result = await ActionResolver.resolve(
+          { action: 'BUILD', details: { toward: buildTarget }, reasoning: '', planHorizon: '' },
+          snapshot, context,
+          activeRoute?.startingCity,
+        );
+
+        if (result.success && result.plan) {
+          return result.plan;
+        }
+      }
+    }
+
     return null;
   }
 
