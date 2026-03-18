@@ -152,6 +152,51 @@ export const UPGRADE_BEFORE_DROP_SCHEMA = {
   required: ['action', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the LLM trip planning response (JIRA-126).
+ * Multi-stop trip planner: generates 2-3 candidate trips with stops and reasoning,
+ * then selects the best candidate by index.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const TRIP_PLAN_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    candidates: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        additionalProperties: false as const,
+        properties: {
+          stops: {
+            type: 'array' as const,
+            items: {
+              type: 'object' as const,
+              additionalProperties: false as const,
+              properties: {
+                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+                load: { type: 'string' as const },
+                city: { type: 'string' as const },
+                demandCardId: { type: 'number' as const },
+                payment: { type: 'number' as const },
+              },
+              required: ['action', 'load', 'city'],
+            },
+          },
+          reasoning: { type: 'string' as const },
+        },
+        required: ['stops', 'reasoning'],
+      },
+      minItems: 1,
+      maxItems: 3,
+    },
+    chosenIndex: { type: 'number' as const },
+    reasoning: { type: 'string' as const },
+  },
+  required: ['candidates', 'chosenIndex', 'reasoning'],
+};
+
 export const RE_EVAL_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,
