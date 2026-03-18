@@ -630,6 +630,89 @@ describe('RouteValidator', () => {
     });
   });
 
+  // ── JIRA-123: Same-card conflict detection ──────────────────────────────────
+
+  describe('JIRA-123: same-card conflict detection', () => {
+    it('should reject lower-efficiency deliver when two delivers share the same card', () => {
+      // Card 1 has two demands: Coal→Berlin (5 M/turn) and Wine→Paris (3 M/turn)
+      // Route tries to deliver both — validator should keep Coal (higher efficiency)
+      const coalDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Coal',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        payout: 15,
+        efficiencyPerTurn: 5,
+      });
+      const wineDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Wine',
+        supplyCity: 'Bordeaux',
+        deliveryCity: 'Paris',
+        payout: 12,
+        efficiencyPerTurn: 3,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 1, payment: 12 },
+        ],
+      });
+      const context = makeContext({ demands: [coalDemand, wineDemand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      // Wine deliver should be pruned (lower efficiency), Coal should survive
+      expect(result.valid).toBe(true);
+      expect(result.prunedRoute).toBeDefined();
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Coal' && s.action === 'deliver')).toBe(true);
+      expect(result.prunedRoute!.stops.some(s => s.loadType === 'Wine')).toBe(false);
+      expect(result.errors.some(e => e.includes('card #1'))).toBe(true);
+    });
+
+    it('should pass both delivers when they reference different cards', () => {
+      const coalDemand = makeDemand({
+        cardIndex: 1,
+        loadType: 'Coal',
+        supplyCity: 'Essen',
+        deliveryCity: 'Berlin',
+        payout: 15,
+        efficiencyPerTurn: 5,
+      });
+      const wineDemand = makeDemand({
+        cardIndex: 2,
+        loadType: 'Wine',
+        supplyCity: 'Bordeaux',
+        deliveryCity: 'Paris',
+        payout: 12,
+        efficiencyPerTurn: 3,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          { action: 'pickup', loadType: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+        ],
+      });
+      const context = makeContext({ demands: [coalDemand, wineDemand] });
+      const result = RouteValidator.validate(route, context, makeSnapshot());
+
+      expect(result.valid).toBe(true);
+      // No pruning needed — no same-card conflict
+      const deliverStops = (result.prunedRoute?.stops ?? route.stops).filter(s => s.action === 'deliver');
+      expect(deliverStops).toHaveLength(2);
+    });
+
+    it('should pass single deliver stop without conflict', () => {
+      const route = makeRoute();
+      const result = RouteValidator.validate(route, makeContext(), makeSnapshot());
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+    });
+  });
+
   // ── JIRA-123: Detour-cost threshold ─────────────────────────────────────────
 
   describe('JIRA-123: detour-cost threshold gates carried-load priority', () => {

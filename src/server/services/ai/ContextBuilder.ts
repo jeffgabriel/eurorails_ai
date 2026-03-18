@@ -202,14 +202,19 @@ export class ContextBuilder {
     speed: number,
     network: ReturnType<typeof buildTrackNetwork>,
     gridPoints: GridPoint[],
+    /** Tracks ferry ports already visited via teleportation to prevent infinite recursion
+     *  between paired ports (e.g., Sassnitz ↔ Malmo). Internal parameter — callers omit. */
+    _visitedFerryPorts?: Set<string>,
   ): string[] {
     const startKey = `${position.row},${position.col}`;
+    const visitedFerryPorts = _visitedFerryPorts ?? new Set<string>();
 
     // JIRA-121 Bug 2: If bot starts at a ferry port, model teleportation to the
     // paired port (matching ActionResolver.resolveFerryCrossing behavior).
     // Speed is already halved by WorldSnapshotService, so we BFS from the paired port.
     const ferryStartPoint = gridPoints.find(gp => gp.row === position.row && gp.col === position.col);
-    if (ferryStartPoint?.terrain === TerrainType.FerryPort) {
+    if (ferryStartPoint?.terrain === TerrainType.FerryPort && !visitedFerryPorts.has(startKey)) {
+      visitedFerryPorts.add(startKey);
       const ferryEdges = getFerryEdges();
       const pairedPort = getFerryPairPort(position.row, position.col, ferryEdges);
       if (pairedPort) {
@@ -219,7 +224,7 @@ export class ContextBuilder {
           // BFS from the paired port at the already-halved speed.
           // Also include cities reachable from the original position via non-ferry neighbors.
           const ferryReachable = ContextBuilder.computeReachableCities(
-            pairedPort, speed, network, gridPoints,
+            pairedPort, speed, network, gridPoints, visitedFerryPorts,
           );
           // Include the paired port's city name if it has one
           const pairedPoint = gridPoints.find(gp => gp.row === pairedPort.row && gp.col === pairedPort.col);
@@ -251,7 +256,7 @@ export class ContextBuilder {
       const adjustedSpeed = Math.max(0, speed - bestDist);
       if (adjustedSpeed <= 0) return [];
       return ContextBuilder.computeReachableCities(
-        { row: snapRow, col: snapCol }, adjustedSpeed, network, gridPoints,
+        { row: snapRow, col: snapCol }, adjustedSpeed, network, gridPoints, visitedFerryPorts,
       );
     }
 
@@ -901,6 +906,14 @@ export class ContextBuilder {
         }
       }
 
+      // Build cardIndex → cardNum map for ranking annotation (JIRA-123)
+      const cardIndexToNum = new Map<number, number>();
+      let cardMapNum = 0;
+      for (const [cardIdx] of Array.from(cardGroups.entries())) {
+        cardMapNum++;
+        cardIndexToNum.set(cardIdx, cardMapNum);
+      }
+
       // Demand ranking by score (JIRA-13) — helps LLM prioritize
       const sorted = [...context.demands].sort((a, b) => b.demandScore - a.demandScore);
       lines.push('');
@@ -909,7 +922,8 @@ export class ContextBuilder {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
         const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        const cardLabel = cardIndexToNum.has(d.cardIndex) ? ` (Card ${cardIndexToNum.get(d.cardIndex)})` : '';
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}${cardLabel}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');
@@ -1125,6 +1139,14 @@ export class ContextBuilder {
       lines.push('');
       lines.push(`HAND QUALITY: ${cardBestSummaries.join('. ')}. Hand quality: ${corePlayableCount}/${cardNum} cards playable in core.`);
 
+      // Build cardIndex → cardNum map for ranking annotation (JIRA-123)
+      const cardIndexToNumRP = new Map<number, number>();
+      let cardMapNumRP = 0;
+      for (const [cardIdx] of Array.from(cardGroups.entries())) {
+        cardMapNumRP++;
+        cardIndexToNumRP.set(cardIdx, cardMapNumRP);
+      }
+
       // Demand ranking by score (JIRA-13)
       const sorted = [...context.demands].sort((a, b) => b.demandScore - a.demandScore);
       lines.push('');
@@ -1133,7 +1155,8 @@ export class ContextBuilder {
         const d = sorted[i];
         const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
         const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
+        const cardLabel = cardIndexToNumRP.has(d.cardIndex) ? ` (Card ${cardIndexToNumRP.get(d.cardIndex)})` : '';
+        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}${cardLabel}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
       }
     }
     lines.push('');

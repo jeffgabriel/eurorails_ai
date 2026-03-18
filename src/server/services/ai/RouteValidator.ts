@@ -86,6 +86,11 @@ export class RouteValidator {
       // else: bot position null (initial build) — skip reorder, keep LLM's original stop order
     }
 
+    // ── Same-card conflict detection (JIRA-123) ──
+    // If multiple DELIVER stops reference demands on the same card,
+    // keep only the one with the highest efficiencyPerTurn.
+    RouteValidator.checkSameCardConflicts(validations, context);
+
     // ── Cumulative budget check ──
     // Runs on the full stop sequence; marks later stops infeasible if
     // running cash (accounting for delivery payouts) can't cover track costs.
@@ -306,6 +311,52 @@ export class RouteValidator {
         }
         runningCash -= trackCost;
         runningCash += stop.payment ?? demand?.payout ?? 0;
+      }
+    }
+  }
+
+  /**
+   * Detect same-card conflicts among DELIVER stops.
+   * If multiple delivers reference demands on the same cardIndex, keep the
+   * one with the highest efficiencyPerTurn and mark others infeasible.
+   */
+  private static checkSameCardConflicts(
+    validations: StopValidation[],
+    context: GameContext,
+  ): void {
+    const tag = '[RouteValidator]';
+
+    // Group feasible DELIVER stops by cardIndex
+    const cardGroups = new Map<number, { validation: StopValidation; demand: DemandContext }[]>();
+
+    for (const v of validations) {
+      if (!v.feasible || v.stop.action !== 'deliver') continue;
+
+      const demand = context.demands.find(
+        d => d.loadType === v.stop.loadType &&
+          d.deliveryCity.toLowerCase() === v.stop.city.toLowerCase(),
+      );
+      if (!demand) continue;
+
+      if (!cardGroups.has(demand.cardIndex)) {
+        cardGroups.set(demand.cardIndex, []);
+      }
+      cardGroups.get(demand.cardIndex)!.push({ validation: v, demand });
+    }
+
+    // For groups with 2+ delivers, keep only the highest efficiencyPerTurn
+    for (const [cardIndex, group] of cardGroups) {
+      if (group.length < 2) continue;
+
+      // Sort by efficiencyPerTurn descending
+      group.sort((a, b) => b.demand.efficiencyPerTurn - a.demand.efficiencyPerTurn);
+
+      const kept = group[0];
+      for (let i = 1; i < group.length; i++) {
+        const rejected = group[i];
+        rejected.validation.feasible = false;
+        rejected.validation.error = `Route infeasible: deliver(${rejected.validation.stop.loadType}@${rejected.validation.stop.city}) and deliver(${kept.validation.stop.loadType}@${kept.validation.stop.city}) both reference demands on card #${cardIndex}. Delivering ${kept.validation.stop.loadType} consumes the card, making ${rejected.validation.stop.loadType} delivery impossible. Kept ${kept.validation.stop.loadType} (higher efficiency: ${kept.demand.efficiencyPerTurn.toFixed(1)} M/turn).`;
+        console.warn(`${tag} Same-card conflict on card #${cardIndex}: kept deliver(${kept.validation.stop.loadType}@${kept.validation.stop.city}), rejected deliver(${rejected.validation.stop.loadType}@${rejected.validation.stop.city})`);
       }
     }
   }
