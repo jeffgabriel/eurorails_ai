@@ -120,6 +120,15 @@ export class LLMStrategyBrain {
     this.adapter = LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs);
   }
 
+  /** Expose adapter for TripPlanner (JIRA-126) */
+  get providerAdapter(): ProviderAdapter { return this.adapter; }
+
+  /** Expose resolved model name for TripPlanner (JIRA-126) */
+  get modelName(): string { return this.model; }
+
+  /** Expose config for TripPlanner (JIRA-126) */
+  get strategyConfig(): LLMStrategyConfig { return this.config; }
+
   /** Max LLM retries for decideAction (initial attempt + retries = MAX_LLM_RETRIES+1 total) */
   private static readonly MAX_LLM_RETRIES = 2;
 
@@ -236,7 +245,7 @@ export class LLMStrategyBrain {
     // If all retries fail, use heuristic fallback
     if (!finalPlan) {
       console.warn('[LLMStrategyBrain] All LLM attempts failed. Falling back to heuristic.');
-      const fallback = await ActionResolver.heuristicFallback(context, snapshot);
+      const fallback = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
       if (fallback.success && fallback.plan) {
         finalPlan = fallback.plan;
         finalReasoning = `[heuristic fallback] ${lastError ?? 'LLM failed to provide a valid plan.'}`;
