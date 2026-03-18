@@ -61,6 +61,11 @@ export interface LLMPhaseFields {
   guardrailReason?: string;
   wasFallback?: boolean;
   fallbackReason?: string;
+  turnValidation?: {
+    hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
+    outcome: 'passed' | 'hard_reject';
+    recomposeCount: number;
+  };
 }
 
 /**

@@ -100,6 +100,13 @@ export interface GameTurnLogEntry {
     deadLoadsDropped?: string[];
   };
 
+  // Turn Validation (JIRA-126)
+  turnValidation?: {
+    hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
+    outcome: 'passed' | 'hard_reject';
+    recomposeCount: number;
+  };
+
   // Prompt text for NDJSON observability
   systemPrompt?: string;
   userPrompt?: string;

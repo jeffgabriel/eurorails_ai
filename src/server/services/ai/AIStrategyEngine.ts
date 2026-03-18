@@ -46,6 +46,8 @@ import { gridToPixel, loadGridPoints as loadGridPointsMap } from './MapTopology'
 import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
+import { TurnValidator } from './TurnValidator';
+import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
@@ -116,6 +118,12 @@ export interface BotTurnResult {
   trainSpeed?: number;
   trainCapacity?: number;
   demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
+  // JIRA-126: Turn validation results
+  turnValidation?: {
+    hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
+    outcome: 'passed' | 'hard_reject';
+    recomposeCount: number;
+  };
 }
 
 export class AIStrategyEngine {
@@ -500,7 +508,7 @@ export class AIStrategyEngine {
           console.warn(`${tag} [LLM] Route planning failed — attempting heuristic fallback`);
           // JIRA-120: Thread LLM failure counter into context for discard gate
           const fallbackContext = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
-          const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot);
+          const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot, { llmFailed: true });
           if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
             console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
             decision = {
@@ -558,9 +566,44 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 3b: Compose full turn (fill missing phases) ──
-      const compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
+      let compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
       decision.plan = compositionResult.plan;
-      const compositionTrace = compositionResult.trace;
+      let compositionTrace = compositionResult.trace;
+
+      // ── Stage 3.5: TurnValidator — validate composed plan against hard gates ──
+      let recomposeCount = 0;
+      let validationResult = TurnValidator.validate(decision.plan, context, snapshot);
+
+      while (!validationResult.valid && recomposeCount < MAX_RECOMPOSE_ATTEMPTS) {
+        recomposeCount++;
+        console.warn(`${tag} [TurnValidator] Hard gate violation: ${validationResult.violation} — re-composing (attempt ${recomposeCount}/${MAX_RECOMPOSE_ATTEMPTS})`);
+
+        // Strip the violating Phase B actions (BUILD/UPGRADE) from the primary plan and re-compose
+        const strippedSteps = (decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan])
+          .filter(s => s.type !== AIActionType.BuildTrack && s.type !== AIActionType.UpgradeTrain);
+        const strippedPlan: TurnPlan = strippedSteps.length === 0
+          ? { type: AIActionType.PassTurn as const }
+          : strippedSteps.length === 1
+            ? strippedSteps[0]
+            : { type: 'MultiAction' as const, steps: strippedSteps };
+
+        compositionResult = await TurnComposer.compose(strippedPlan, snapshot, context, activeRoute);
+        decision.plan = compositionResult.plan;
+        compositionTrace = compositionResult.trace;
+        validationResult = TurnValidator.validate(decision.plan, context, snapshot);
+      }
+
+      if (!validationResult.valid) {
+        console.warn(`${tag} [TurnValidator] Exhausted ${MAX_RECOMPOSE_ATTEMPTS} re-composition attempts — proceeding with best-effort plan. Violation: ${validationResult.violation}`);
+      }
+
+      logPhase('Turn Validation', [], null, null, {
+        turnValidation: {
+          hardGates: validationResult.hardGates,
+          outcome: validationResult.valid ? 'passed' : 'hard_reject',
+          recomposeCount,
+        },
+      });
 
       // ── Stage 3c: Sync route after TurnComposer delivery ──
       // TurnComposer.scanPathOpportunities may deliver loads along a MOVE path.
@@ -907,6 +950,7 @@ export class AIStrategyEngine {
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
         consecutiveLlmFailures: decision.model === 'heuristic-fallback' || decision.model === 'llm-failed'
+            || (decision.model === 'route-executor' && decision.llmLog?.length && decision.llmLog.every(e => e.status !== 'success'))
           ? (memory.consecutiveLlmFailures ?? 0) + 1 : 0,
         deliveryCount: (memory.deliveryCount ?? 0) + (hadDelivery ? 1 : 0), // JIRA-60
         totalEarnings: (memory.totalEarnings ?? 0) + (result.payment ?? 0), // JIRA-60
@@ -1212,6 +1256,11 @@ export class AIStrategyEngine {
         trainSpeed: context.speed,
         trainCapacity: context.capacity,
         demandCards: context.demands.map(d => ({ loadType: d.loadType, supplyCity: d.supplyCity, deliveryCity: d.deliveryCity, payout: d.payout, cardIndex: d.cardIndex })),
+        turnValidation: {
+          hardGates: validationResult.hardGates,
+          outcome: validationResult.valid ? 'passed' : 'hard_reject',
+          recomposeCount,
+        },
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;

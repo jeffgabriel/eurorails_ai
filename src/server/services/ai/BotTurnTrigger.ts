@@ -238,6 +238,7 @@ export async function onTurnChange(
         secondaryDelivery: result.secondaryDelivery,
         systemPrompt: result.systemPrompt,
         userPrompt: result.userPrompt,
+        turnValidation: result.turnValidation,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
