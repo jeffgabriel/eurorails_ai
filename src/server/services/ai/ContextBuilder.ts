@@ -26,6 +26,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
+import { getConnectedMajorCities } from './connectedMajorCities';
 import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints, getFerryPairPort } from './MapTopology';
 import { MIN_DELIVERIES_BEFORE_UPGRADE } from './AIStrategyEngine';
 
@@ -647,31 +648,53 @@ export class ContextBuilder {
           }
         }
       } else if (supplyPoints.length > 0 && deliveryPoints.length > 0) {
-        // Non-cold-start: supply→delivery (bot is already on network)
-        let minDist = Infinity;
+        // Non-cold-start: bot→supply + supply→delivery (JIRA-130)
+        const botPos = snapshot.bot.position;
+
+        // Leg 1: bot→supply (when bot position is known)
+        let hopBotToSupply = 0;
+        if (botPos) {
+          hopBotToSupply = Infinity;
+          for (const sp of supplyPoints) {
+            const d = estimateHopDistance(botPos.row, botPos.col, sp.row, sp.col);
+            if (d >= 0 && d < hopBotToSupply) hopBotToSupply = d;
+          }
+          // JIRA-79: Euclidean fallback when BFS can't cross water
+          if (hopBotToSupply === Infinity) {
+            let minEuc = Infinity;
+            for (const sp of supplyPoints) {
+              const d = Math.sqrt((sp.row - botPos.row) ** 2 + (sp.col - botPos.col) ** 2);
+              if (d < minEuc) minEuc = d;
+            }
+            if (minEuc < Infinity) hopBotToSupply = minEuc;
+          }
+          if (hopBotToSupply === Infinity) hopBotToSupply = 0;
+        }
+
+        // Leg 2: supply→delivery
+        let hopSupplyToDelivery = Infinity;
         for (const sp of supplyPoints) {
           for (const dp of deliveryPoints) {
-            const dist = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
-            if (dist > 0) {
-              minDist = Math.min(minDist, dist);
-            }
+            const d = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
+            if (d >= 0 && d < hopSupplyToDelivery) hopSupplyToDelivery = d;
           }
         }
-        if (minDist < Infinity) {
-          travelTurns = Math.ceil(minDist / speed);
-        } else {
-          // JIRA-79: BFS returns 0 for water-separated routes (Ireland, Britain, Scandinavia)
-          // because it skips Water terrain tiles. Use Euclidean hex distance as fallback.
-          let minEuclidean = Infinity;
+        // JIRA-79: Euclidean fallback when BFS can't cross water
+        if (hopSupplyToDelivery === Infinity) {
+          let minEuc = Infinity;
           for (const sp of supplyPoints) {
             for (const dp of deliveryPoints) {
-              const eucDist = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
-              if (eucDist < minEuclidean) minEuclidean = eucDist;
+              const d = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
+              if (d < minEuc) minEuc = d;
             }
           }
-          if (minEuclidean < Infinity) {
-            travelTurns = Math.ceil(minEuclidean / speed);
-          }
+          if (minEuc < Infinity) hopSupplyToDelivery = minEuc;
+        }
+
+        const totalHops = hopBotToSupply
+          + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
+        if (totalHops > 0) {
+          travelTurns = Math.ceil(totalHops / speed);
         }
       }
     } else if (isLoadOnTrain && snapshot.bot.position) {
@@ -1963,29 +1986,14 @@ export class ContextBuilder {
     return point?.city?.name;
   }
 
-  /** Compute connected major cities from the bot's track segments */
+  /** Compute connected major cities from the bot's track segments.
+   *  JIRA-131: Delegates to the BFS-based getConnectedMajorCities() so that
+   *  the AI context and victory check use the same connected-component algorithm. */
   private static computeConnectedMajorCities(
     segments: TrackSegment[],
-    gridPoints: GridPoint[],
+    _gridPoints: GridPoint[],
   ): string[] {
-    if (segments.length === 0) return [];
-
-    const network = buildTrackNetwork(segments);
-    const majorCityPoints = gridPoints.filter(
-      gp => gp.terrain === TerrainType.MajorCity && gp.city,
-    );
-
-    // Find which major cities are on the network
-    const connectedCities: string[] = [];
-    for (const mc of majorCityPoints) {
-      const key = `${mc.row},${mc.col}`;
-      if (network.nodes.has(key)) {
-        connectedCities.push(mc.city!.name);
-      }
-    }
-
-    // Deduplicate (major cities may have multiple mileposts)
-    return Array.from(new Set(connectedCities));
+    return getConnectedMajorCities(segments).map(c => c.name);
   }
 
   /** Summarize track as "N mileposts: City1-City2, City2-City3" */
