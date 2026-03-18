@@ -1945,4 +1945,123 @@ describe('PlanExecutor', () => {
       expect(mockReorderStopsByProximity).not.toHaveBeenCalled();
     });
   });
+
+  // ── JIRA-123: Post-delivery revalidation ─────────────────────────────────
+
+  describe('JIRA-123: revalidateRemainingDeliveries', () => {
+    it('should remove deliver stop when demand card was consumed by prior delivery in route', () => {
+      // Card #1 had two demands. Coal delivery at index 1 consumed card #1.
+      // Wine deliver at index 2 still references card #1 but Wine is still on train.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Roma', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 2, // Past Coal deliver (which consumed card #1)
+      });
+      const context = makeContext({
+        loads: ['Wine'], // Wine still on train
+        demands: [
+          // Card #1 is GONE — consumed by Coal delivery at stop 1
+          { cardIndex: 2, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 } as any,
+        ],
+      });
+
+      const result = PlanExecutor.revalidateRemainingDeliveries(route, context);
+
+      // Wine deliver should be removed — card #1 consumed by prior Coal delivery
+      expect(result.stops.some(s => s.loadType === 'Wine' && s.action === 'deliver')).toBe(false);
+      // Route should be cleared (no valid deliveries remain after pruning)
+      expect(result.currentStopIndex).toBeGreaterThanOrEqual(result.stops.length);
+    });
+
+    it('should keep deliver stop when demand card is still present', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+      const context = makeContext({
+        loads: [],
+        demands: [
+          { cardIndex: 1, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris', payout: 25 } as any,
+        ],
+      });
+
+      const result = PlanExecutor.revalidateRemainingDeliveries(route, context);
+
+      // No change — card #1 is still present
+      expect(result.stops).toHaveLength(2);
+      expect(result).toBe(route); // Same reference — no modification
+    });
+
+    it('should keep deliver stop when card is gone but no prior delivery consumed it', () => {
+      // Card is missing from demands but NO completed delivery on that card
+      // exists in the route — so we can't be sure it was consumed by this route
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0, // No completed delivery stops before this
+      });
+      const context = makeContext({
+        loads: ['Coal'], // Coal on train
+        demands: [], // Card #1 gone (but not by a prior delivery in this route)
+      });
+
+      const result = PlanExecutor.revalidateRemainingDeliveries(route, context);
+
+      // No change — no prior delivery on card #1 in this route
+      expect(result).toBe(route);
+    });
+
+    it('should keep deliver stop when card is gone but load is NOT on train (already delivered)', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 0,
+      });
+      const context = makeContext({
+        loads: [], // Coal NOT on train — already delivered
+        demands: [], // Card #1 gone
+      });
+
+      const result = PlanExecutor.revalidateRemainingDeliveries(route, context);
+
+      // No change — load is not on train, so skipCompletedStops will handle this
+      expect(result).toBe(route);
+    });
+
+    it('should preserve valid deliveries when only some are invalidated by prior delivery', () => {
+      // Route: deliver(Coal@Paris, card#1) → deliver(Wine@Roma, card#1) → deliver(Steel@Berlin, card#2)
+      // Coal delivery at index 0 consumed card #1
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+          { action: 'deliver', loadType: 'Wine', city: 'Roma', demandCardId: 1, payment: 15 },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 2, payment: 20 },
+        ],
+        currentStopIndex: 1, // Past Coal deliver (consumed card #1)
+      });
+      const context = makeContext({
+        loads: ['Wine', 'Steel'],
+        demands: [
+          // Card #1 is gone (consumed by Coal delivery at stop 0), card #2 is present
+          { cardIndex: 2, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 } as any,
+        ],
+      });
+
+      const result = PlanExecutor.revalidateRemainingDeliveries(route, context);
+
+      // Wine deliver removed (card #1 consumed by prior Coal delivery, Wine on train)
+      // Steel deliver kept (card #2 present)
+      expect(result.stops.some(s => s.loadType === 'Wine')).toBe(false);
+      expect(result.stops.some(s => s.loadType === 'Steel' && s.action === 'deliver')).toBe(true);
+    });
+  });
 });

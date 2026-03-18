@@ -84,6 +84,13 @@ export class PlanExecutor {
       }
     }
 
+    // ── JIRA-123: Post-delivery revalidation ──
+    // Only run when stops were actually skipped (a delivery likely completed),
+    // which means a demand card may have been consumed.
+    if (route.currentStopIndex > prevIndex) {
+      route = PlanExecutor.revalidateRemainingDeliveries(route, context);
+    }
+
     const currentStop = route.stops[route.currentStopIndex];
     if (!currentStop) {
       // All stops completed — route is done
@@ -697,6 +704,91 @@ export class PlanExecutor {
   // ── Route State Management ────────────────────────────────────────────────
 
   /** Advance to the next stop, reset phase to 'build' */
+  /**
+   * JIRA-123: Revalidate remaining DELIVER stops after a delivery may have
+   * consumed a shared demand card. If a stop's demandCardId is no longer
+   * present in the current demand cards AND the load IS still on the train,
+   * the card was consumed by a different delivery — remove the invalidated stop.
+   * If no valid DELIVER stops remain after pruning, clear the route entirely.
+   */
+  static revalidateRemainingDeliveries(
+    route: StrategicRoute,
+    context: GameContext,
+  ): StrategicRoute {
+    const tag = '[PlanExecutor]';
+    const demandCardIds = new Set(context.demands.map(d => d.cardIndex));
+
+    // Collect demandCardIds from completed deliver stops (before currentStopIndex).
+    // These are the cards that were actually consumed by prior deliveries in this route.
+    const completedDeliveryCards = new Set<number>();
+    for (let i = 0; i < route.currentStopIndex; i++) {
+      const stop = route.stops[i];
+      if (stop.action === 'deliver' && stop.demandCardId != null) {
+        completedDeliveryCards.add(stop.demandCardId);
+      }
+    }
+
+    const remainingStops = route.stops.slice(route.currentStopIndex);
+
+    const invalidatedIndices: number[] = [];
+    for (let i = 0; i < remainingStops.length; i++) {
+      const stop = remainingStops[i];
+      if (stop.action !== 'deliver' || stop.demandCardId == null) continue;
+
+      const cardPresent = demandCardIds.has(stop.demandCardId);
+      const loadOnTrain = context.loads.includes(stop.loadType);
+      const cardConsumedByPriorDelivery = completedDeliveryCards.has(stop.demandCardId);
+
+      // Only invalidate if: card is gone, load is on train, AND a prior
+      // delivery in this route consumed the same card
+      if (!cardPresent && loadOnTrain && cardConsumedByPriorDelivery) {
+        console.warn(
+          `${tag} JIRA-123: deliver(${stop.loadType}@${stop.city}) invalid — ` +
+          `demand card #${stop.demandCardId} consumed by prior delivery, ` +
+          `but ${stop.loadType} still on train. Removing stop.`,
+        );
+        invalidatedIndices.push(route.currentStopIndex + i);
+      }
+    }
+
+    if (invalidatedIndices.length === 0) return route;
+
+    // Remove invalidated stops and their corresponding pickups
+    const invalidatedLoadTypes = new Set(
+      invalidatedIndices.map(i => route.stops[i].loadType),
+    );
+    const keepSet = new Set<number>(
+      route.stops.map((_, i) => i),
+    );
+    for (const idx of invalidatedIndices) {
+      keepSet.delete(idx);
+    }
+    // Also remove any future pickup stops for invalidated load types
+    for (let i = route.currentStopIndex; i < route.stops.length; i++) {
+      const stop = route.stops[i];
+      if (stop.action === 'pickup' && invalidatedLoadTypes.has(stop.loadType)) {
+        keepSet.delete(i);
+      }
+    }
+
+    const prunedStops = route.stops.filter((_, i) => keepSet.has(i));
+
+    // Check if any DELIVER stops remain after pruning
+    const hasDelivery = prunedStops
+      .slice(route.currentStopIndex)
+      .some(s => s.action === 'deliver');
+
+    if (!hasDelivery) {
+      console.warn(
+        `${tag} JIRA-123: No valid DELIVER stops remain after revalidation — clearing route for re-plan.`,
+      );
+      // Return route with currentStopIndex past end to trigger route completion
+      return { ...route, stops: prunedStops, currentStopIndex: prunedStops.length };
+    }
+
+    return { ...route, stops: prunedStops };
+  }
+
   private static advanceStop(route: StrategicRoute): StrategicRoute {
     return {
       ...route,
