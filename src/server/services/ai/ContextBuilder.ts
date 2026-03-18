@@ -2403,6 +2403,17 @@ export class ContextBuilder {
    * For cities with multiple mileposts (e.g. major cities with 5-7 gridpoints),
    * checks ALL mileposts and uses the one closest to the bot's track.
    */
+  /**
+   * JIRA-127: Apply multi-turn budget penalty when estimated cost exceeds
+   * the single-turn build budget ($20M). Multi-turn builds restart from new
+   * frontier each turn, taking suboptimal continuation paths.
+   */
+  private static applyBudgetPenalty(cost: number): number {
+    if (cost <= 20) return cost;
+    const extraTurns = Math.ceil(cost / 20) - 1;
+    return cost * (1 + 0.15 * extraTurns);
+  }
+
   private static estimateTrackCost(
     cityName: string,
     segments: TrackSegment[],
@@ -2441,7 +2452,9 @@ export class ContextBuilder {
           if (minDist === Infinity || minDist <= 1) return 0;
           const pathCost = estimatePathCost(bestFrom.row, bestFrom.col, bestTo.row, bestTo.col);
           // JIRA-102: Fall back to conservative estimate with terrain multiplier + city cost
-          return pathCost > 0 ? pathCost : Math.round(minDist * 3.0) + cityCost;
+          // JIRA-127: Increased fallback multiplier from 3.0 to 4.0, added budget penalty
+          const rawCost = pathCost > 0 ? pathCost : Math.round(minDist * 4.0) + cityCost;
+          return Math.round(ContextBuilder.applyBudgetPenalty(rawCost));
         }
       }
 
@@ -2467,7 +2480,9 @@ export class ContextBuilder {
       if (minDist === Infinity || minDist <= 1) return 0; // City IS a major city
       const pathCost2 = estimatePathCost(bestMajor.row, bestMajor.col, bestCity.row, bestCity.col);
       // JIRA-102: Conservative fallback with terrain multiplier + city cost
-      return pathCost2 > 0 ? pathCost2 : Math.round(minDist * 3.0) + cityCost;
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0, added budget penalty
+      const rawCost2 = pathCost2 > 0 ? pathCost2 : Math.round(minDist * 4.0) + cityCost;
+      return Math.round(ContextBuilder.applyBudgetPenalty(rawCost2));
     }
 
     // Collect unique track endpoints for landmass detection
@@ -2494,34 +2509,49 @@ export class ContextBuilder {
     );
 
     if (targetOnSourceLandmass) {
-      // Same landmass — find closest segment endpoint and use Dijkstra estimate
-      let bestSeg = { row: 0, col: 0 };
-      let bestCity = cityPoints[0];
-      let minDist = Infinity;
+      // JIRA-127: Multi-source frontier estimation — use top 5 closest frontier
+      // nodes by hexDistance instead of single closest, then take minimum cost.
+      // This better approximates the multi-source Dijkstra used by computeBuildSegments.
+      const MAX_FRONTIER_SOURCES = 5;
+
+      // Score each (endpoint, cityPoint) pair by hexDistance
+      const candidates: Array<{ ep: { row: number; col: number }; cp: typeof cityPoints[0]; dist: number }> = [];
       for (const cityPoint of cityPoints) {
-        for (const seg of segments) {
-          const distFrom = hexDistance(
-            cityPoint.row, cityPoint.col, seg.from.row, seg.from.col,
-          );
-          if (distFrom < minDist) {
-            minDist = distFrom;
-            bestSeg = { row: seg.from.row, col: seg.from.col };
-            bestCity = cityPoint;
-          }
-          const distTo = hexDistance(
-            cityPoint.row, cityPoint.col, seg.to.row, seg.to.col,
-          );
-          if (distTo < minDist) {
-            minDist = distTo;
-            bestSeg = { row: seg.to.row, col: seg.to.col };
-            bestCity = cityPoint;
-          }
+        for (const ep of trackEndpoints) {
+          const dist = hexDistance(cityPoint.row, cityPoint.col, ep.row, ep.col);
+          candidates.push({ ep, cp: cityPoint, dist });
         }
       }
-      if (minDist === Infinity) return 0;
-      const sameLandCost = estimatePathCost(bestSeg.row, bestSeg.col, bestCity.row, bestCity.col);
-      // JIRA-102: Conservative fallback with terrain multiplier + city cost
-      return sameLandCost > 0 ? sameLandCost : Math.round(minDist * 3.0) + cityCost;
+      candidates.sort((a, b) => a.dist - b.dist);
+
+      // Take top N unique endpoints by position
+      const usedKeys = new Set<string>();
+      const topSources: typeof candidates = [];
+      for (const c of candidates) {
+        const key = `${c.ep.row},${c.ep.col}`;
+        if (!usedKeys.has(key)) {
+          usedKeys.add(key);
+          topSources.push(c);
+          if (topSources.length >= MAX_FRONTIER_SOURCES) break;
+        }
+      }
+
+      if (topSources.length === 0) return 0;
+
+      // Run estimatePathCost from each source, take minimum non-zero cost
+      let minCost = Infinity;
+      let bestHexDist = topSources[0].dist;
+      for (const src of topSources) {
+        const cost = estimatePathCost(src.ep.row, src.ep.col, src.cp.row, src.cp.col);
+        if (cost > 0 && cost < minCost) {
+          minCost = cost;
+          bestHexDist = src.dist;
+        }
+      }
+
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0, added budget penalty
+      const rawCost = minCost < Infinity ? minCost : Math.round(bestHexDist * 4.0) + cityCost;
+      return Math.round(ContextBuilder.applyBudgetPenalty(rawCost));
     }
 
     // Cross-water target — check ferry state
@@ -2547,7 +2577,9 @@ export class ContextBuilder {
       if (minFarDist === Infinity) return 0;
       const ferryCrossCost = estimatePathCost(bestArrival.row, bestArrival.col, bestCity.row, bestCity.col);
       // JIRA-102: Conservative fallback with terrain multiplier + city cost
-      return ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 3.0) + cityCost;
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0, added budget penalty
+      const rawFerryCost = ferryCrossCost > 0 ? ferryCrossCost : Math.round(minFarDist * 4.0) + cityCost;
+      return Math.round(ContextBuilder.applyBudgetPenalty(rawFerryCost));
     }
 
     // Bot has no ferry access — estimate full route via best ferry
@@ -2567,7 +2599,8 @@ export class ContextBuilder {
       }
       const overlandToDep = estimatePathCost(bestEp.row, bestEp.col, dep.row, dep.col);
       // JIRA-102: Conservative multiplier (no city cost — destination is a ferry port)
-      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 3.0);
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0
+      const nearSideCost = overlandToDep > 0 ? overlandToDep : Math.round(nearestTrackDist * 4.0);
 
       // Far-side cost from arrival port to target city (terrain-aware)
       let bestCp = cityPoints[0];
@@ -2581,7 +2614,8 @@ export class ContextBuilder {
       }
       const overlandFromArr = estimatePathCost(arr.row, arr.col, bestCp.row, bestCp.col);
       // JIRA-102: Conservative fallback with terrain multiplier + city cost
-      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 3.0) + cityCost;
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0
+      const farSideCost = overlandFromArr > 0 ? overlandFromArr : Math.round(nearestTargetDist * 4.0) + cityCost;
 
       // Look up the ferry cost for this specific departure port
       let ferryCost = ferryInfo.cheapestFerryCost;
@@ -2607,10 +2641,13 @@ export class ContextBuilder {
         }
       }
       // JIRA-102: Conservative fallback with terrain multiplier + city cost
-      return Math.round(minDist * 3.0) + cityCost;
+      // JIRA-127: Increased fallback multiplier from 3.0 to 4.0, added budget penalty
+      const rawFallback = Math.round(minDist * 4.0) + cityCost;
+      return Math.round(ContextBuilder.applyBudgetPenalty(rawFallback));
     }
 
-    return Math.round(bestTotal);
+    // JIRA-127: Apply budget penalty to cross-water total
+    return Math.round(ContextBuilder.applyBudgetPenalty(bestTotal));
   }
 
   /**
