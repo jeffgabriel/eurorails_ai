@@ -849,20 +849,6 @@ export class ActionResolver {
       };
     }
 
-    // Upfront combination legality: UPGRADE(20M) + BUILD forbidden
-    const hasUpgrade = actionTypes.some(
-      t => t === AIActionType.UpgradeTrain || t === 'UPGRADE',
-    );
-    const hasBuild = actionTypes.some(
-      t => t === AIActionType.BuildTrack || t === 'BUILD',
-    );
-    if (hasUpgrade && hasBuild) {
-      return {
-        success: false,
-        error: 'Cannot upgrade and build track in the same turn.',
-      };
-    }
-
     // Resolve each action sequentially with cumulative state simulation
     const plans: TurnPlan[] = [];
     let currentSnapshot = ActionResolver.cloneSnapshot(snapshot);
