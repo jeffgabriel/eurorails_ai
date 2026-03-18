@@ -481,43 +481,6 @@ export function getTripPlanningPrompt(
   return `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${dynamicContext}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
-// ── Secondary Delivery Prompt (JIRA-89) ──
-
-const SECONDARY_DELIVERY_SYSTEM_SUFFIX = `
-You are evaluating whether a bot can add a profitable SECONDARY pickup to its planned route.
-
-The bot just planned a primary delivery route. It has unused cargo capacity. Your job: check if any other demand card offers a load that can be picked up along (or near) the planned route with minimal detour.
-
-EVALUATION CRITERIA:
-1. The pickup city must be ON or NEAR the planned route (within 3 mileposts)
-2. A demand card must match the loadType + deliveryCity pair
-3. The load must be available at the pickup city
-4. Same-destination deliveries are ESPECIALLY valuable (deliver 2 loads in one stop)
-5. The detour cost (extra turns) must be justified by the payout
-6. Prefer loads where both pickup AND delivery are near the existing route
-
-RESPONSE FORMAT (JSON only, no markdown):
-{
-  "action": "none" | "add_secondary",
-  "reasoning": "Brief explanation",
-  "pickupCity": "city name (required if add_secondary)",
-  "loadType": "load type (required if add_secondary)",
-  "deliveryCity": "city name (required if add_secondary)"
-}
-
-Choose "none" if no secondary pickup is worth the detour.
-Choose "add_secondary" only if the opportunity clearly improves the trip.
-`;
-
-/**
- * Get the system prompt for secondary delivery evaluation (JIRA-89).
- *
- * Lightweight prompt for evaluating whether a second load can be added to a planned route.
- */
-export function getSecondaryDeliveryPrompt(): string {
-  return SECONDARY_DELIVERY_SYSTEM_SUFFIX;
-}
-
 // ── Cargo Conflict Prompt (JIRA-92) ──
 
 const CARGO_CONFLICT_SYSTEM_SUFFIX = `
@@ -586,42 +549,3 @@ export function getUpgradeBeforeDropPrompt(): string {
   return UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX;
 }
 
-// ── Route Re-evaluation Prompt (JIRA-64) ──
-
-const ROUTE_REEVAL_SYSTEM_SUFFIX = `
-You are evaluating whether a bot's current delivery route should change after a new demand card was drawn (from a mid-turn delivery).
-
-You will receive:
-- The bot's current route (remaining stops)
-- The bot's refreshed demand cards (including the newly drawn card)
-- The bot's position, cash, and train type
-
-Your task: Decide whether the current route is still the best plan, or whether the new demand card changes things.
-
-RESPONSE FORMAT (JSON):
-{
-  "decision": "continue" | "amend" | "abandon",
-  "amendedStops": [{"action": "PICKUP"|"DELIVER", "load": "...", "city": "...", "demandCardId": N, "payment": N}],
-  "reasoning": "Brief explanation"
-}
-
-DECISION GUIDELINES:
-- "continue": The current route is still the best plan. The new card doesn't improve on it.
-- "amend": The new card offers an opportunity that can be incorporated into the current route with minimal detour. Provide the full amended stop list.
-- "abandon": The new card is significantly better than the current route. The bot should drop the current plan entirely and re-plan next turn.
-
-Only choose "amend" if the detour adds fewer turns than the payout justifies.
-Only choose "abandon" if the current route is clearly suboptimal compared to alternatives.
-When in doubt, choose "continue" — stability is better than constant re-planning.
-
-The "amendedStops" field is only required when decision is "amend".
-`;
-
-/**
- * Get the system prompt for post-delivery route re-evaluation (JIRA-64).
- *
- * Lightweight prompt for focused continue/amend/abandon decision.
- */
-export function getRouteReEvaluationPrompt(): string {
-  return ROUTE_REEVAL_SYSTEM_SUFFIX;
-}
