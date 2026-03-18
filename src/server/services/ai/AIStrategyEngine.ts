@@ -119,6 +119,22 @@ export interface BotTurnResult {
   trainSpeed?: number;
   trainCapacity?: number;
   demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
+  // JIRA-126: Trip planning results
+  tripPlanning?: {
+    trigger: string;
+    candidates: Array<{
+      stops: string[];
+      score: number;
+      netValue: number;
+      estimatedTurns: number;
+      buildCostEstimate: number;
+      usageFeeEstimate: number;
+    }>;
+    chosen: number;
+    llmLatencyMs: number;
+    llmTokens: { input: number; output: number };
+    llmReasoning: string;
+  };
   // JIRA-126: Turn validation results
   turnValidation?: {
     hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;

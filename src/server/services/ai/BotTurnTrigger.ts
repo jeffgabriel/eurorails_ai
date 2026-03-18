@@ -189,6 +189,8 @@ export async function onTurnChange(
       movementPath: result.movementPath,
       // Structured action timeline for animated partial turn movements
       actionTimeline: result.actionTimeline,
+      // JIRA-126: Trip planning data for debug overlay
+      tripPlanning: result.tripPlanning,
       // Debug overlay: active route snapshot (or null if cleared)
       activeRoute: result.activeRoute ?? null,
     });

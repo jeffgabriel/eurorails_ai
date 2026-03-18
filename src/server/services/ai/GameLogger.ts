@@ -100,6 +100,23 @@ export interface GameTurnLogEntry {
     deadLoadsDropped?: string[];
   };
 
+  // Trip Planning (JIRA-126)
+  tripPlanning?: {
+    trigger: string;
+    candidates: Array<{
+      stops: string[];
+      score: number;
+      netValue: number;
+      estimatedTurns: number;
+      buildCostEstimate: number;
+      usageFeeEstimate: number;
+    }>;
+    chosen: number;
+    llmLatencyMs: number;
+    llmTokens: { input: number; output: number };
+    llmReasoning: string;
+  };
+
   // Turn Validation (JIRA-126)
   turnValidation?: {
     hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
