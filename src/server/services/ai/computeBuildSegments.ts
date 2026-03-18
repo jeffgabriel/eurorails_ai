@@ -21,6 +21,9 @@ import {
 import { getMajorCityLookup, getMajorCityGroups, getFerryEdges, isIntraCityEdge } from '../../../shared/services/majorCityGroups';
 import waterCrossingsData from '../../../../configuration/waterCrossings.json';
 
+/** Cost multiplier applied to edges near existing track to discourage parallel building. */
+const PARALLEL_COST_MULTIPLIER = 2;
+
 // Precompute water crossing costs for O(1) edge lookup.
 // River = +2M, Lake/Ocean inlet = +3M (additive to terrain cost).
 const _waterCrossingCosts = new Map<string, number>();
@@ -50,6 +53,21 @@ interface DijkstraNode {
 
 function makeKey(row: number, col: number): string {
   return `${row},${col}`;
+}
+
+/**
+ * Check if a grid position is within 1 hex hop of existing track
+ * (but not ON existing track). Used during Dijkstra expansion to
+ * apply a proximity penalty that discourages parallel building.
+ * @internal Exported for unit testing only.
+ */
+export function isNearExistingTrack(row: number, col: number, existingTrackIndex: Set<string>): boolean {
+  if (existingTrackIndex.size === 0) return false;
+  const neighbors = getHexNeighbors(row, col);
+  for (const nb of neighbors) {
+    if (existingTrackIndex.has(makeKey(nb.row, nb.col))) return true;
+  }
+  return false;
 }
 
 /**
@@ -199,6 +217,10 @@ export function computeBuildSegments(
    *  but NOT used as Dijkstra sources. Used by continuation builds to avoid
    *  duplicating the bot's existing track while starting from a specific point. */
   knownSegments?: TrackSegment[],
+  /** Set of grid keys ("row,col") for the bot's existing track nodes.
+   *  When provided, edges near existing track (within 1 hex) incur a cost
+   *  penalty to discourage building parallel to the bot's own network. */
+  existingTrackIndex?: Set<string>,
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
@@ -405,8 +427,16 @@ export function computeBuildSegments(
         continue;
       }
 
+      // Proximity penalty: if this neighbor is near existing track but not ON
+      // the network, multiply terrain cost to discourage parallel building.
+      const effectiveTerrainCost = (
+        existingTrackIndex && existingTrackIndex.size > 0 &&
+        !onNetwork.has(nbKey) &&
+        isNearExistingTrack(nb.row, nb.col, existingTrackIndex)
+      ) ? terrainCost * PARALLEL_COST_MULTIPLIER : terrainCost;
+
       const waterExtra = getWaterCrossingCost(current.row, current.col, nb.row, nb.col);
-      const newCost = current.cost + terrainCost + waterExtra;
+      const newCost = current.cost + effectiveTerrainCost + waterExtra;
       if (!hasTargets && newCost > budget) continue; // over budget (only for untargeted builds)
 
       const existingCost = minCost.get(nbKey);

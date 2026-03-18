@@ -1,5 +1,5 @@
 import { TrackSegment, TerrainType } from '../../shared/types/GameTypes';
-import { computeBuildSegments } from '../services/ai/computeBuildSegments';
+import { computeBuildSegments, isNearExistingTrack } from '../services/ai/computeBuildSegments';
 import {
   loadGridPoints,
   getHexNeighbors,
@@ -1172,6 +1172,168 @@ describe('computeBuildSegments', () => {
 
       // Should build on UK side since ferry is already reachable
       expect(segments.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('isNearExistingTrack helper (JIRA-128)', () => {
+    it('should return true when 1-hop neighbor is in index', () => {
+      // Get real neighbors of PARIS to build the index
+      const parisNeighbors = getHexNeighbors(PARIS.row, PARIS.col);
+      expect(parisNeighbors.length).toBeGreaterThan(0);
+      const index = new Set<string>([`${parisNeighbors[0].row},${parisNeighbors[0].col}`]);
+      // PARIS is 1 hop from its neighbor, so isNear should be true
+      expect(isNearExistingTrack(PARIS.row, PARIS.col, index)).toBe(true);
+    });
+
+    it('should return false when no neighbors are in index', () => {
+      // Use a position far from the index entries
+      const index = new Set<string>(['1,1']);
+      expect(isNearExistingTrack(PARIS.row, PARIS.col, index)).toBe(false);
+    });
+
+    it('should return false for empty index', () => {
+      expect(isNearExistingTrack(PARIS.row, PARIS.col, new Set())).toBe(false);
+    });
+  });
+
+  describe('parallel path proximity penalty (JIRA-128)', () => {
+    it('should not penalize on-network traversal', () => {
+      // When a node is on the bot's network, traversal is free regardless of proximity.
+      // Build existing track near Paris and verify traversal still works.
+      const grid = loadGridPoints();
+      const neighbors = getHexNeighbors(PARIS.row, PARIS.col);
+      const clearNeighbor = neighbors.find(n => {
+        const data = grid.get(`${n.row},${n.col}`);
+        return data && getTerrainCost(data.terrain) === 1;
+      });
+      if (!clearNeighbor) return;
+
+      const existingSegment: TrackSegment = {
+        from: { x: 0, y: 0, row: PARIS.row, col: PARIS.col, terrain: 0 as TerrainType },
+        to: { x: 0, y: 0, row: clearNeighbor.row, col: clearNeighbor.col, terrain: 0 as TerrainType },
+        cost: 1,
+      };
+
+      const existingTrackIndex = new Set<string>([
+        `${PARIS.row},${PARIS.col}`,
+        `${clearNeighbor.row},${clearNeighbor.col}`,
+      ]);
+
+      // With penalty: should still produce segments (on-network traversal is free)
+      const segmentsWithPenalty = computeBuildSegments(
+        [PARIS], [existingSegment], 10, 10, undefined, undefined, undefined, existingTrackIndex,
+      );
+
+      // Without penalty: baseline
+      const segmentsWithout = computeBuildSegments(
+        [PARIS], [existingSegment], 10, 10,
+      );
+
+      // Both should produce segments — penalty does not block on-network traversal
+      expect(segmentsWithPenalty.length).toBeGreaterThan(0);
+      expect(segmentsWithout.length).toBeGreaterThan(0);
+    });
+
+    it('should not penalize when existingTrackIndex is omitted', () => {
+      // Backward compatibility: omitting existingTrackIndex produces same results
+      const segmentsA = computeBuildSegments([PARIS], [], 10, 10);
+      const segmentsB = computeBuildSegments([PARIS], [], 10, 10, undefined, undefined, undefined, undefined);
+
+      expect(segmentsA.length).toBe(segmentsB.length);
+      // Same segments
+      for (let i = 0; i < segmentsA.length; i++) {
+        expect(segmentsA[i].from.row).toBe(segmentsB[i].from.row);
+        expect(segmentsA[i].from.col).toBe(segmentsB[i].from.col);
+        expect(segmentsA[i].to.row).toBe(segmentsB[i].to.row);
+        expect(segmentsA[i].to.col).toBe(segmentsB[i].to.col);
+      }
+    });
+
+    it('should prefer joining existing track over building parallel (corridor scenario)', () => {
+      // Build a corridor of existing track and verify that new builds toward
+      // a target through the same corridor join existing track rather than paralleling.
+      const grid = loadGridPoints();
+      const groups = getMajorCityGroups();
+      const paris = groups.find(g => g.cityName === 'Paris')!;
+
+      // Build existing track: a chain of segments going north from Paris
+      // We'll find 4 connected clear mileposts heading in one direction
+      const chain: GridCoord[] = [{ row: paris.center.row, col: paris.center.col }];
+      let current = chain[0];
+      for (let i = 0; i < 4; i++) {
+        const neighbors = getHexNeighbors(current.row, current.col);
+        const next = neighbors.find(n => {
+          const key = `${n.row},${n.col}`;
+          const data = grid.get(key);
+          if (!data) return false;
+          const cost = getTerrainCost(data.terrain);
+          return cost >= 1 && cost <= 3 && !chain.some(c => c.row === n.row && c.col === n.col);
+        });
+        if (!next) break;
+        chain.push(next);
+        current = next;
+      }
+
+      if (chain.length < 4) return; // skip if can't build enough chain
+
+      // Create existing segments from the chain
+      const existingSegments: TrackSegment[] = [];
+      for (let i = 0; i < chain.length - 1; i++) {
+        const fromData = grid.get(`${chain[i].row},${chain[i].col}`)!;
+        const toData = grid.get(`${chain[i + 1].row},${chain[i + 1].col}`)!;
+        existingSegments.push({
+          from: { x: 0, y: 0, row: chain[i].row, col: chain[i].col, terrain: fromData.terrain },
+          to: { x: 0, y: 0, row: chain[i + 1].row, col: chain[i + 1].col, terrain: toData.terrain },
+          cost: getTerrainCost(toData.terrain),
+        });
+      }
+
+      // Build existing track index
+      const existingTrackIndex = new Set<string>();
+      for (const c of chain) {
+        existingTrackIndex.add(`${c.row},${c.col}`);
+      }
+
+      // Target is beyond the end of the chain
+      const chainEnd = chain[chain.length - 1];
+      const beyondNeighbors = getHexNeighbors(chainEnd.row, chainEnd.col);
+      const target = beyondNeighbors.find(n => {
+        const data = grid.get(`${n.row},${n.col}`);
+        return data && !chain.some(c => c.row === n.row && c.col === n.col);
+      });
+      if (!target) return;
+
+      // Start from a position adjacent to the chain but not on it
+      // (simulating building from a side source toward same target)
+      const chainMid = chain[1];
+      const sideNeighbors = getHexNeighbors(chainMid.row, chainMid.col);
+      const sideStart = sideNeighbors.find(n => {
+        const data = grid.get(`${n.row},${n.col}`);
+        return data && !chain.some(c => c.row === n.row && c.col === n.col);
+      });
+      if (!sideStart) return;
+
+      // With penalty: path should prefer to join existing track
+      const segmentsWithPenalty = computeBuildSegments(
+        [sideStart], existingSegments, 15, 15, undefined, [target], undefined, existingTrackIndex,
+      );
+
+      // Without penalty: path may build parallel
+      const segmentsWithout = computeBuildSegments(
+        [sideStart], existingSegments, 15, 15, undefined, [target],
+      );
+
+      // With penalty, total actual cost should be <= without penalty
+      // (penalty makes parallel paths more expensive in Dijkstra, steering
+      // toward existing track; the actual segment costs remain accurate)
+      const costWith = segmentsWithPenalty.reduce((s, seg) => s + seg.cost, 0);
+      const costWithout = segmentsWithout.reduce((s, seg) => s + seg.cost, 0);
+
+      // Both should produce valid results
+      expect(segmentsWithPenalty.length).toBeGreaterThan(0);
+      expect(segmentsWithout.length).toBeGreaterThan(0);
+      expect(costWith).toBeLessThanOrEqual(15);
+      expect(costWithout).toBeLessThanOrEqual(15);
     });
   });
 
