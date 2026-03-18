@@ -5,7 +5,7 @@
  * followed by a skill-level modifier.
  */
 
-import { BotSkillLevel } from '../../../../shared/types/GameTypes';
+import { BotSkillLevel, GameContext, BotMemoryState } from '../../../../shared/types/GameTypes';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
@@ -295,6 +295,190 @@ export function getRoutePlanningPrompt(skillLevel: BotSkillLevel): string {
  */
 export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
+}
+
+// ── Trip Planning Prompt (JIRA-126) ──
+
+const TRIP_PLANNING_SYSTEM_SUFFIX = `
+GAME RULES REFERENCE:
+- Victory: 250M+ ECU cash AND track connecting 7 of 8 major cities
+- Turn actions (in order): Move train → Pick up/deliver loads → Build track → End turn
+- Demand cards: 3 cards, 3 demands each, only 1 per card can be fulfilled
+- Track building: up to 20M per turn. Terrain costs: Clear 1M, Mountain 2M, Alpine 5M
+- Track usage fee: 4M to use opponent's track per opponent per turn
+- Loads: Globally limited (3-4 copies). If all on trains, no one can pick up.
+
+TRIP PLANNING:
+You are planning multi-stop TRIP CANDIDATES. A trip is a sequence of pickup and delivery stops
+that maximizes earnings per turn. You must generate 2-3 candidate trips, then choose the best one.
+
+Each candidate should consider ALL 3 demand cards simultaneously — not just one at a time.
+The goal is to find the trip loop that earns the most money per turn invested.
+
+SCORING — How candidates will be evaluated:
+  trip_score = (total payout - build costs - usage fees) / estimated turns
+Pick candidates that maximize this score. A 30M trip completed in 4 turns (7.5M/turn)
+beats a 60M trip that takes 12 turns (5M/turn).
+
+TRIP PLANNING RULES:
+1. SEQUENCE MATTERS: Always PICKUP before DELIVER for each load. You must physically carry the load.
+2. LOAD CAPACITY: Respect your train's capacity. Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3.
+3. COMBINE CORRIDORS: Look for demands that share pickup/delivery corridors. Two deliveries on one route beat two separate routes.
+4. EXISTING TRACK FIRST: Prefer stops reachable via your existing network (zero build cost). On-network pickups and deliveries are essentially free turns.
+5. BUILD COST REALITY: Factor in track building costs. A high-payout delivery that requires 30M in track may be worse than a lower-payout delivery that's on-network.
+6. BUDGET CHECK: Do NOT plan trips that require more track building than your current cash allows (leave 5M reserve).
+7. VICTORY ROUTING: Prefer trips that pass through unconnected major cities when payout differences are within 30%.
+8. SUPPLY SCARCITY: If a load shows low availability (0-1 copies free), it may be taken before you arrive. Prefer available loads.
+9. ACHIEVABLE LENGTH: Keep trips to 2-6 stops. Very long trips risk becoming stale.
+10. CARRIED CARGO: If you already carry loads, incorporate them — deliver carried loads first if a matching demand exists, or plan around them.
+
+GEOGRAPHIC STRATEGY:
+- CORE NETWORK (cheap): Paris—Ruhr—Holland—Berlin—Wien. Build here first.
+- PERIPHERAL (expensive): London (ferry), Madrid (mountains), Scandinavia (ferry), deep Italy (alpine).
+- Early game: Stay in core. Mid game: Expand to ONE peripheral region. Late game: Connect remaining major cities for victory.
+
+RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
+{
+  "candidates": [
+    {
+      "stops": [
+        { "action": "PICKUP", "load": "<load type>", "city": "<city name>" },
+        { "action": "DELIVER", "load": "<load type>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> }
+      ],
+      "reasoning": "<why this trip is good>"
+    }
+  ],
+  "chosenIndex": <0-based index of the best candidate>,
+  "reasoning": "<why you chose this candidate over the others>"
+}
+
+EXAMPLE — 3-candidate trip plan:
+{
+  "candidates": [
+    {
+      "stops": [
+        { "action": "PICKUP", "load": "Steel", "city": "Ruhr" },
+        { "action": "DELIVER", "load": "Steel", "city": "Paris", "demandCardId": 31, "payment": 15 },
+        { "action": "PICKUP", "load": "Wine", "city": "Paris" },
+        { "action": "DELIVER", "load": "Wine", "city": "Wien", "demandCardId": 42, "payment": 22 }
+      ],
+      "reasoning": "Core network double-delivery. Steel pickup is free (on-network), delivers to Paris, then picks up Wine for Wien."
+    },
+    {
+      "stops": [
+        { "action": "PICKUP", "load": "Coal", "city": "Ruhr" },
+        { "action": "DELIVER", "load": "Coal", "city": "Berlin", "demandCardId": 55, "payment": 9 }
+      ],
+      "reasoning": "Quick single delivery, all on-network. Low payout but completed in 2 turns."
+    },
+    {
+      "stops": [
+        { "action": "PICKUP", "load": "Potatoes", "city": "Szczecin" },
+        { "action": "DELIVER", "load": "Potatoes", "city": "Milano", "demandCardId": 12, "payment": 38 }
+      ],
+      "reasoning": "High payout but requires building through mountains. Estimated 8 turns."
+    }
+  ],
+  "chosenIndex": 0,
+  "reasoning": "Candidate 0 earns 37M in ~5 turns (7.4M/turn) on existing track, beating candidate 1 (4.5M/turn) and candidate 2 (4.75M/turn after build costs)."
+}`;
+
+/**
+ * Build the dynamic trip planning context from current game state.
+ */
+function buildTripPlanningContext(context: GameContext, memory: BotMemoryState): string {
+  const lines: string[] = [];
+
+  // Position and cargo
+  const posStr = context.position?.city
+    ? `at ${context.position.city}`
+    : context.position
+      ? `at (${context.position.row},${context.position.col})`
+      : 'unknown';
+  lines.push(`CURRENT STATE:`);
+  lines.push(`- Position: ${posStr}`);
+  lines.push(`- Cash: ${context.money}M ECU`);
+  lines.push(`- Train: ${context.trainType} (speed ${context.speed}, capacity ${context.capacity})`);
+  lines.push(`- Carried loads: ${context.loads.length > 0 ? context.loads.join(', ') : 'none'}`);
+  lines.push(`- Turn: ${context.turnNumber}`);
+  lines.push(`- Deliveries completed: ${memory.deliveryCount}`);
+  lines.push('');
+
+  // Victory progress
+  lines.push(`VICTORY PROGRESS:`);
+  lines.push(`- Connected major cities (${context.connectedMajorCities.length}/${context.totalMajorCities}): ${context.connectedMajorCities.join(', ') || 'none'}`);
+  if (context.unconnectedMajorCities.length > 0) {
+    const unconnected = context.unconnectedMajorCities
+      .map(c => `${c.cityName} (~${c.estimatedCost}M to connect)`)
+      .join(', ');
+    lines.push(`- Unconnected: ${unconnected}`);
+  }
+  lines.push('');
+
+  // Network topology
+  lines.push(`NETWORK TOPOLOGY:`);
+  lines.push(`- Track summary: ${context.trackSummary}`);
+  lines.push(`- Cities on network: ${context.citiesOnNetwork.length > 0 ? context.citiesOnNetwork.join(', ') : 'none'}`);
+  lines.push(`- Track built this turn so far: ${context.turnBuildCost}M`);
+  lines.push('');
+
+  // All 3 demand cards with details
+  lines.push(`DEMAND CARDS (all 3 — evaluate simultaneously):`);
+  for (const d of context.demands) {
+    const onNetwork = d.isSupplyOnNetwork && d.isDeliveryOnNetwork ? ' [ON-NETWORK]' : '';
+    const affordable = d.isAffordable ? '' : ' [UNAFFORDABLE]';
+    const available = d.isLoadAvailable ? '' : (d.isLoadOnTrain ? ' [ON TRAIN]' : ' [UNAVAILABLE]');
+    const ferry = d.ferryRequired ? ' [FERRY]' : '';
+    lines.push(`  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M)${onNetwork}${affordable}${available}${ferry}`);
+    lines.push(`    Build cost: supply ~${d.estimatedTrackCostToSupply}M, delivery ~${d.estimatedTrackCostToDelivery}M`);
+    lines.push(`    Estimated turns: ${d.estimatedTurns} | Score: ${d.demandScore.toFixed(1)} | Efficiency: ${d.efficiencyPerTurn.toFixed(1)}M/turn`);
+    lines.push(`    Supply availability: ${d.loadChipTotal - d.loadChipCarried}/${d.loadChipTotal} free`);
+  }
+  lines.push('');
+
+  // Available pickups
+  if (context.canPickup.length > 0) {
+    lines.push(`AVAILABLE PICKUPS (at current location):`);
+    for (const p of context.canPickup) {
+      lines.push(`  - ${p.loadType} at ${p.supplyCity} (best payout: ${p.bestPayout}M → ${p.bestDeliveryCity})`);
+    }
+    lines.push('');
+  }
+
+  // Immediate deliveries
+  if (context.canDeliver.length > 0) {
+    lines.push(`IMMEDIATE DELIVERIES (can complete this turn):`);
+    for (const d of context.canDeliver) {
+      lines.push(`  - ${d.loadType} at ${d.deliveryCity} for ${d.payout}M (card ${d.cardIndex})`);
+    }
+    lines.push('');
+  }
+
+  // Upgrade info
+  if (context.canUpgrade) {
+    lines.push(`UPGRADE AVAILABLE: You can upgrade your train for 20M (replaces track building this turn).`);
+    if (context.upgradeAdvice) {
+      lines.push(`Upgrade advice: ${context.upgradeAdvice}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Get the system prompt for multi-stop trip planning (JIRA-126).
+ *
+ * Builds a rich context from game state and instructs the LLM to generate
+ * 2-3 candidate trips scored by netValue/estimatedTurns.
+ */
+export function getTripPlanningPrompt(
+  skillLevel: BotSkillLevel,
+  context: GameContext,
+  memory: BotMemoryState,
+): string {
+  const dynamicContext = buildTripPlanningContext(context, memory);
+  return `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${dynamicContext}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
 // ── Secondary Delivery Prompt (JIRA-89) ──
