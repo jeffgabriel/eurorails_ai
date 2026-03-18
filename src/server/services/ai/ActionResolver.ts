@@ -34,6 +34,7 @@ import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } fr
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 export class ActionResolver {
   /**
@@ -1217,7 +1218,6 @@ export class ActionResolver {
 
   // ─── Helper Utilities ────────────────────────────────────────────────────
 
-  private static readonly TURN_BUILD_BUDGET = 20;
   private static readonly MONEY_RESERVE = 5;
 
   /**
@@ -1453,7 +1453,7 @@ export class ActionResolver {
 
   /** Compute remaining build budget for this turn. */
   private static getBuildBudget(snapshot: WorldSnapshot, turnBuildCost: number = 0): number {
-    return Math.min(ActionResolver.TURN_BUILD_BUDGET - turnBuildCost, snapshot.bot.money);
+    return Math.min(TURN_BUILD_BUDGET - turnBuildCost, snapshot.bot.money);
   }
 
   /**

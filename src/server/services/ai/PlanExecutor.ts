@@ -32,6 +32,7 @@ import { loadGridPoints } from './MapTopology';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { ContextBuilder } from './ContextBuilder';
 import { RouteValidator } from './RouteValidator';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 export interface PlanExecutorResult {
   plan: TurnPlan;
@@ -535,8 +536,6 @@ export class PlanExecutor {
 
   // ── JIRA-73: Continuation build loop ─────────────────────────────────────
 
-  private static readonly MAX_BUILD_BUDGET = 20;
-
   /**
    * After a primary build during initialBuild, spend remaining budget building
    * toward subsequent route stops. Returns a combined TurnPlanBuildTrack with
@@ -553,7 +552,7 @@ export class PlanExecutor {
     tag: string,
   ): Promise<TurnPlanBuildTrack> {
     const primaryCost = primaryPlan.segments.reduce((sum, s) => sum + s.cost, 0);
-    if (primaryCost >= PlanExecutor.MAX_BUILD_BUDGET) {
+    if (primaryCost >= TURN_BUILD_BUDGET) {
       return primaryPlan; // Budget fully spent
     }
 
@@ -576,7 +575,7 @@ export class PlanExecutor {
     let spentSoFar = primaryCost;
 
     for (const stop of route.stops) {
-      if (spentSoFar >= PlanExecutor.MAX_BUILD_BUDGET) break;
+      if (spentSoFar >= TURN_BUILD_BUDGET) break;
 
       // JIRA-114: Skip deliver stops whose card will be discarded by an earlier delivery.
       // If an earlier deliver stop shares this stop's demandCardId, that delivery discards
@@ -592,7 +591,7 @@ export class PlanExecutor {
       // JIRA-80: Don't skip startingCity — it's a valid build target when it needs track
       if (simContext.citiesOnNetwork.includes(stop.city)) continue;
 
-      const remaining = PlanExecutor.MAX_BUILD_BUDGET - spentSoFar;
+      const remaining = TURN_BUILD_BUDGET - spentSoFar;
       if (remaining <= 0) break;
 
       console.log(`${tag} JIRA-73: Continuation build toward ${stop.city}, remaining budget ${remaining}M`);
@@ -616,7 +615,7 @@ export class PlanExecutor {
 
           combinedSegments.push(...contPlan.segments);
           spentSoFar += contCost;
-          console.log(`${tag} JIRA-73: Continuation build ${contCost}M toward ${stop.city} (total ${spentSoFar}M/${PlanExecutor.MAX_BUILD_BUDGET}M)`);
+          console.log(`${tag} JIRA-73: Continuation build ${contCost}M toward ${stop.city} (total ${spentSoFar}M/${TURN_BUILD_BUDGET}M)`);
         }
       } else {
         console.log(`${tag} JIRA-73: Continuation build toward ${stop.city} failed, skipping`);

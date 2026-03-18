@@ -29,6 +29,7 @@ import { ActionResolver } from './ActionResolver';
 import { loadGridPoints, makeKey, getHexNeighbors } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 /** JIRA-32: Structured trace of what TurnComposer did during composition. */
 export interface CompositionTrace {
@@ -473,10 +474,10 @@ export class TurnComposer {
     if (!skipBuildPhase && !hasUpgradeInSteps) {
       try {
         // INF-002: Log when upgrade would be preferred over building
-        const canAffordUpgrade = simContext.canUpgrade && simSnapshot.bot.money >= 20;
+        const canAffordUpgrade = simContext.canUpgrade && simSnapshot.bot.money >= TURN_BUILD_BUDGET;
         if (canAffordUpgrade) {
           trace.build.upgradeConsidered = true;
-          const buildBudget = Math.min(20 - simContext.turnBuildCost, simSnapshot.bot.money);
+          const buildBudget = Math.min(TURN_BUILD_BUDGET - simContext.turnBuildCost, simSnapshot.bot.money);
           // Upgrade is preferred when no meaningful build target exists or budget is too low for useful track
           if (buildBudget < 5) {
             console.log(`[TurnComposer] Phase B: upgrade preferred over build (cash=${simSnapshot.bot.money}, buildBudget=${buildBudget}, train=${simSnapshot.bot.trainType})`);
@@ -736,7 +737,7 @@ export class TurnComposer {
     trace?: CompositionTrace,
   ): Promise<TurnPlan | null> {
     // Check budget: need money and build capacity remaining
-    const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
+    const remainingBudget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
     if (remainingBudget <= 0) return null;
 
     // ── Near-miss opportunity scanning ──────────────────────────────────
@@ -844,7 +845,7 @@ export class TurnComposer {
 
     if (routeStopsForBuild.length > 0 && !jitDeferred) {
       for (const city of routeStopsForBuild) {
-        const iterBudget = Math.min(20 - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
+        const iterBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
         if (iterBudget <= 0) break;
 
         const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
@@ -883,7 +884,7 @@ export class TurnComposer {
     // Fires regardless of route state when victory conditions are met
     if (victoryConditionsMet) {
       const unconnected = context.unconnectedMajorCities ?? [];
-      const victoryBudget = Math.min(20 - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
+      const victoryBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
       if (unconnected.length > 0 && victoryBudget > 0) {
         // Build toward cheapest unconnected city not already targeted by route builds
         const victoryTarget = unconnected.find(uc => !routeStopsForBuild.includes(uc.cityName));
@@ -977,7 +978,7 @@ export class TurnComposer {
     if (networkNodeKeys.size < 3) return null;
 
     const gridPoints = loadGridPoints();
-    const remainingBudget = Math.min(20 - context.turnBuildCost, snapshot.bot.money);
+    const remainingBudget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
 
     // Scan for ferry port opportunities
     const ferryOpps = NetworkBuildAnalyzer.findNearbyFerryPorts(networkNodeKeys, gridPoints);
