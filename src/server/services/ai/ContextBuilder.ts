@@ -595,9 +595,9 @@ export class ContextBuilder {
     // Travel distance: BFS hop count through actual hex grid (JIRA-66)
     // JIRA-75: On cold-start, travel is startingCity→supply + supply→delivery (not just supply→delivery)
     let travelTurns = 0;
+    const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
     if (supplyCity) {
       const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
-      const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
 
       if (isColdStart && optimalStartingCity) {
         // Cold-start: bot starts at optimalStartingCity, must travel to supply then delivery
@@ -674,6 +674,31 @@ export class ContextBuilder {
           }
         }
       }
+    } else if (isLoadOnTrain && snapshot.bot.position) {
+      // On-train case: compute travel from bot position to delivery city
+      const botPos = snapshot.bot.position as { row: number; col: number };
+      if (deliveryPoints.length > 0) {
+        let minDist = Infinity;
+        for (const dp of deliveryPoints) {
+          const dist = estimateHopDistance(botPos.row, botPos.col, dp.row, dp.col);
+          if (dist > 0) {
+            minDist = Math.min(minDist, dist);
+          }
+        }
+        if (minDist < Infinity) {
+          travelTurns = Math.ceil(minDist / speed);
+        } else {
+          // Euclidean fallback for cross-water routes (consistent with JIRA-79)
+          let minEuc = Infinity;
+          for (const dp of deliveryPoints) {
+            const eucDist = Math.sqrt((dp.row - botPos.row) ** 2 + (dp.col - botPos.col) ** 2);
+            if (eucDist < minEuc) minEuc = eucDist;
+          }
+          if (minEuc < Infinity) {
+            travelTurns = Math.ceil(minEuc / speed);
+          }
+        }
+      }
     }
     // JIRA-88: Add ferry penalty — each crossing costs ~2 turns
     // (1 turn mandatory stop at port + ~1 turn half-rate movement)
@@ -695,9 +720,16 @@ export class ContextBuilder {
       snapshot.bot.existingSegments, gridPoints, connectedMajorCities,
       optimalStartingCity,
     );
+    // JIRA-125: Amplify victory bonus in endgame — demands routing through
+    // unconnected major cities become significantly more attractive when
+    // the bot already has enough cash but needs city connections.
+    let victoryMajorCitiesForScoring = corridorValue.victoryMajorCities;
+    if (snapshot.bot.money >= 250 && connectedMajorCities.length < 7) {
+      victoryMajorCitiesForScoring = corridorValue.victoryMajorCities * 3;
+    }
     const demandScore = ContextBuilder.scoreDemand(
       demand.payment, totalTrackCost,
-      corridorValue.networkCities, corridorValue.victoryMajorCities,
+      corridorValue.networkCities, victoryMajorCitiesForScoring,
       estimatedTurns,
       affordability.affordable, affordability.projectedFunds,
     );
@@ -858,6 +890,8 @@ export class ContextBuilder {
       const cheapestCost = nearest.estimatedCost;
       if (context.money >= 250 && context.connectedMajorCities.length < 7) {
         lines.push(`- STRATEGIC PRIORITY: You have enough cash — focus ALL building budget on connecting [${context.unconnectedMajorCities.map(u => u.cityName).join(', ')}].`);
+        // JIRA-125: Dynamic route selection directive for endgame
+        lines.push(`- ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city. Building track toward these cities happens automatically — choose routes that take you there. Do NOT chase high-payout deliveries to non-major cities.`);
       } else if (cheapestCost > context.money) {
         lines.push(`- STRATEGIC PRIORITY: Earn more before connecting — cheapest unconnected city costs ~${cheapestCost}M, you have ${context.money}M.`);
       } else {
@@ -1092,6 +1126,10 @@ export class ContextBuilder {
         .map(u => `${u.cityName} (~${u.estimatedCost}M to connect)`)
         .join(', ');
       lines.push(`- Cities NOT connected: ${unconnectedStr}`);
+      // JIRA-125: Dynamic route selection directive for endgame (route planning)
+      if (context.money >= 250 && context.connectedMajorCities.length < 7) {
+        lines.push(`- ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city. Building track toward these cities happens automatically — choose routes that take you there. Do NOT chase high-payout deliveries to non-major cities.`);
+      }
     }
     lines.push('');
 
@@ -1886,7 +1924,9 @@ export class ContextBuilder {
     connectedMajorCities: string[],
   ): string {
     if (snapshot.gameStatus === 'initialBuild') return 'Initial Build';
+    // JIRA-125: 5+ cities with 250M+ is functionally in victory mode — needs cities, not cash
     if (connectedMajorCities.length >= 6 && snapshot.bot.money >= 230) return 'Victory Imminent';
+    if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 250) return 'Victory Imminent';
     if (connectedMajorCities.length >= 5 && snapshot.bot.money >= 150) return 'Late Game';
     if (connectedMajorCities.length >= 3 || snapshot.bot.money >= 80) return 'Mid Game';
     return 'Early Game';

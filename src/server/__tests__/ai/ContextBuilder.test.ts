@@ -1178,6 +1178,148 @@ describe('ContextBuilder.build — demand context computation', () => {
   });
 });
 
+// ── TEST: on-train travel distance included in estimatedTurns ─────────────────
+
+describe('ContextBuilder.build — on-train travel distance in estimatedTurns', () => {
+
+  function makeTestGridWithNetwork() {
+    // Network: Lyon(0,0) - (0,1) - Paris(0,2)
+    const segments = [
+      makeSegment(0, 0, 0, 1),
+      makeSegment(0, 1, 0, 2),
+    ];
+
+    const gridPoints: GridPoint[] = [
+      makeCityPoint(0, 0, 'Lyon', TerrainType.MajorCity, ['Wine']),
+      makeGridPoint(0, 1),
+      makeCityPoint(0, 2, 'Paris', TerrainType.MajorCity, ['Cheese']),
+      // Off-network cities
+      makeCityPoint(5, 5, 'Berlin', TerrainType.MajorCity, ['Steel']),
+      makeCityPoint(8, 8, 'London', TerrainType.MajorCity, ['Coal']),
+    ];
+
+    return { segments, gridPoints };
+  }
+
+  it('on-train load with distant delivery should have estimatedTurns > 1', async () => {
+    const { segments, gridPoints } = makeTestGridWithNetwork();
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Wine'],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Wine', payment: 48 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(true);
+    // With the fix, estimatedTurns should be > 1 because Berlin(5,5) is far from bot at (0,0)
+    // Previously this was always 1 because travelTurns was never computed for on-train loads
+    expect(demand!.estimatedTurns).toBeGreaterThan(1);
+  });
+
+  it('on-train load with nearby delivery on network should reflect short travel', async () => {
+    const { segments, gridPoints } = makeTestGridWithNetwork();
+    // Bot at Lyon(0,0), delivering Wine to Paris(0,2) — only 2 hops away on network
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Wine'],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Paris', loadType: 'Wine', payment: 20 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(true);
+    // Paris is close — estimatedTurns should be small but still include travel
+    // Even for close cities, estimatedTurns >= 2 (1 travel turn + 1 base)
+    expect(demand!.estimatedTurns).toBeGreaterThanOrEqual(2);
+  });
+
+  it('load NOT on train should compute travelTurns from supply to delivery (regression)', async () => {
+    const { segments, gridPoints } = makeTestGridWithNetwork();
+    // Bot does NOT carry Wine — normal supply→delivery path
+    const snapshot = makeWorldSnapshot({
+      botLoads: [],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Paris', loadType: 'Wine', payment: 20 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(false);
+    // Supply city is Lyon(0,0), delivery is Paris(0,2) — should have valid estimatedTurns
+    expect(demand!.estimatedTurns).toBeGreaterThanOrEqual(1);
+  });
+
+  it('on-train load with null bot position should fallback to estimatedTurns=1', async () => {
+    const { segments, gridPoints } = makeTestGridWithNetwork();
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Wine'],
+      botPosition: null,
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'Berlin', loadType: 'Wine', payment: 48 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(true);
+    // With null position, travelTurns should be 0, so estimatedTurns = buildTurns + 0 + 1
+    // Berlin is off-network so buildTurns > 0, but travelTurns should be 0 (graceful fallback)
+    expect(demand!.estimatedTurns).toBeGreaterThanOrEqual(1);
+  });
+
+  it('on-train load to off-network city should include build turns AND travel turns', async () => {
+    const { segments, gridPoints } = makeTestGridWithNetwork();
+    // Bot at Lyon(0,0) carrying Wine, delivering to London(8,8) which is off-network
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Wine'],
+      botPosition: { row: 0, col: 0 },
+      botSegments: segments,
+      resolvedDemands: [{
+        cardId: 1,
+        demands: [{ city: 'London', loadType: 'Wine', payment: 55 }],
+      }],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+    const demand = context.demands.find(d => d.loadType === 'Wine');
+
+    expect(demand).toBeDefined();
+    expect(demand!.isLoadOnTrain).toBe(true);
+    // London is off-network: needs track build (buildTurns > 0) AND travel (travelTurns > 0)
+    // estimatedTurns should be significantly > 1
+    expect(demand!.estimatedTurns).toBeGreaterThan(1);
+    expect(demand!.estimatedTrackCostToDelivery).toBeGreaterThan(0);
+  });
+});
+
 // ── TEST: serializePrompt — previous turn summary and DELIVER clarity ────────
 
 describe('ContextBuilder.serializePrompt', () => {
@@ -3352,5 +3494,94 @@ describe('ContextBuilder.serializeUpgradeBeforeDropPrompt', () => {
 
     expect(prompt).toContain('DECISION:');
     expect(prompt).toContain('UPGRADE your train or SKIP');
+  });
+});
+
+// ── JIRA-125: Endgame demand scoring boost and context shaping ────────────
+
+describe('JIRA-125: Endgame victory context shaping', () => {
+  function makeEndgameContext(overrides: Record<string, any> = {}) {
+    return {
+      position: { row: 10, col: 10 },
+      money: 260,
+      trainType: 'Superfreight',
+      speed: 12,
+      capacity: 3,
+      loads: [] as string[],
+      connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+      unconnectedMajorCities: [
+        { cityName: 'Milano', estimatedCost: 8 },
+        { cityName: 'London', estimatedCost: 20 },
+        { cityName: 'Madrid', estimatedCost: 25 },
+      ],
+      totalMajorCities: 8,
+      trackSummary: '120 mileposts',
+      turnBuildCost: 0,
+      demands: [],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: [],
+      citiesOnNetwork: ['Paris', 'Berlin'],
+      canUpgrade: false,
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'Victory Imminent',
+      turnNumber: 55,
+      ...overrides,
+    };
+  }
+
+  it('includes ROUTE SELECTION directive when money >= 250 and cities < 7', () => {
+    const context = makeEndgameContext();
+    const output = ContextBuilder.serializePrompt(context as any, BotSkillLevel.Medium);
+    expect(output).toContain('ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city');
+  });
+
+  it('does NOT include ROUTE SELECTION directive when money < 250', () => {
+    const context = makeEndgameContext({ money: 200 });
+    const output = ContextBuilder.serializePrompt(context as any, BotSkillLevel.Medium);
+    expect(output).not.toContain('ROUTE SELECTION: Prefer demands');
+  });
+
+  it('does NOT include ROUTE SELECTION directive when 7 cities connected', () => {
+    const context = makeEndgameContext({
+      connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien', 'Milano', 'London'],
+    });
+    const output = ContextBuilder.serializePrompt(context as any, BotSkillLevel.Medium);
+    expect(output).not.toContain('ROUTE SELECTION: Prefer demands');
+  });
+
+  it('includes ROUTE SELECTION directive in route planning prompt', () => {
+    const context = makeEndgameContext();
+    const output = ContextBuilder.serializeRoutePlanningPrompt(
+      context as any, BotSkillLevel.Medium, [], [],
+    );
+    expect(output).toContain('ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city');
+  });
+
+  it('computePhase returns Victory Imminent for 5 cities / 250M', () => {
+    // Access private method via any-cast for testing
+    const phase = (ContextBuilder as any).computePhase(
+      { gameStatus: 'active', bot: { money: 260 } },
+      ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+    );
+    expect(phase).toBe('Victory Imminent');
+  });
+
+  it('computePhase returns Late Game for 5 cities / 200M (below 250M threshold)', () => {
+    const phase = (ContextBuilder as any).computePhase(
+      { gameStatus: 'active', bot: { money: 200 } },
+      ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+    );
+    expect(phase).toBe('Late Game');
+  });
+
+  it('computePhase returns Victory Imminent for 6 cities / 230M (original threshold)', () => {
+    const phase = (ContextBuilder as any).computePhase(
+      { gameStatus: 'active', bot: { money: 235 } },
+      ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien', 'Milano'],
+    );
+    expect(phase).toBe('Victory Imminent');
   });
 });

@@ -56,7 +56,7 @@ CRITICAL RULES — ALWAYS FOLLOW:
 11. DROP USELESS LOADS: If carrying a load with no matching demand card, DROP it at the next city you pass through. Do not waste cargo capacity on undeliverable loads.
 12. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
 13. BUDGET AWARENESS: Before committing to a chain, verify you can afford the build cost AND have 5M+ remaining.
-14. VICTORY ROUTING: When payouts are similar, prefer deliveries that pass through or near unconnected major cities. Every major city you connect counts toward victory (7 of 8 required).
+14. VICTORY ROUTING: When payouts are within 30% of each other, ALWAYS prefer the delivery that passes through or near an unconnected major city. Every major city you connect counts toward victory (7 of 8 required). A 15M delivery through an unconnected major city is worth more than a 20M delivery to a non-major city — the city connection has compounding strategic value.
 15. GAME PACE: Games typically last ~100 turns. Don't play as if the game goes on forever. Upgrades (20M) and expensive track that cut travel time in half are often correct — turn savings compound. At turn 40+, prioritize velocity over hoarding cash.
 
 SUPPLY RARITY STRATEGY:
@@ -125,7 +125,7 @@ ROUTE PLANNING CRITERIA:
 5. LOAD CAPACITY: Freight/Fast Freight carry 2 loads, Heavy Freight/Superfreight carry 3. Don't plan more simultaneous pickups than your capacity allows.
 6. STARTING CITY: Your train MUST start at one of the 8 major cities (Paris, Holland, Milano, Ruhr, Berlin, London, Wien, Madrid). Pick the major city nearest to your first planned pickup's supply city. You will build track FROM that major city TOWARD the supply city. If the supply city IS a major city, start there.
 7. ACHIEVABLE ROUTES: Keep routes to 2-4 stops. Overly ambitious routes risk failure.
-8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, prefer it. Connecting major cities is required for victory.
+8. VICTORY CONNECTIONS: If a route can detour through an unconnected major city for ≤10M extra track cost, ALWAYS prefer it over a shorter route that skips the city. Connecting major cities is required for victory. When payouts are within 30% of alternatives, choose the route that passes through an unconnected major city — the city connection has compounding strategic value beyond the immediate delivery.
 9. SCARCITY: If a load is marked SCARCE, avoid building expensive track to reach it — the last copy may be taken before you arrive. Prefer abundant loads.
 9b. SUPPLY RARITY: Loads with only 1 supply city (UNIQUE SOURCE) are high-value targets when near your network — no alternative pickup exists. Loads with 2 supply cities (LIMITED) offer moderate flexibility. Loads with 3-4 supply cities (COMMON) let you choose the most convenient source. Prioritize rare-source demands that are accessible over common-source demands that require major track investment.
 10. CORRIDORS: When a DEMAND CORRIDORS section is shown, prefer corridor routes over standalone demands. Combined routes earn more per turn of building.
@@ -199,10 +199,10 @@ UPGRADE OPTIONS (20M each, replaces track building for that turn):
   The endgame train. 12 speed + 3 cargo is dominant. Plan to reach Superfreight by turn 25-35.
 
 WHEN TO UPGRADE:
-- After your FIRST delivery, if you have 30M+ cash, UPGRADE. The 20M pays for itself in 2-3 deliveries.
+- After completing 4 deliveries, if you have 30M+ cash, UPGRADE. The 20M pays for itself in 2-3 deliveries.
 - When you have a guaranteed delivery queued (a loaded train heading to a demand city), upgrade NOW — you know income is coming.
-- DON'T upgrade before your first delivery. You need cash flow first.
-- If you're still on Freight past turn 10, you are falling behind. Upgrade immediately.
+- DON'T upgrade before completing 4 deliveries. You need cash flow and track network first. Build routes, not trains.
+- If you're still on Freight past turn 15, you are falling behind. Upgrade immediately.
 
 CROSSGRADE:
 You can switch between Fast Freight and Heavy Freight for only 5M (and still build up to 15M of track that turn). Consider this when your strategy shifts.
