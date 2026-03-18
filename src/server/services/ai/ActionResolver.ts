@@ -188,18 +188,24 @@ export class ActionResolver {
 
     const occupiedEdges = ActionResolver.getOccupiedEdges(snapshot);
 
+    // Build network node key set from existing segments (JIRA-128: reused as existingTrackIndex).
+    // Hoisted above the analysis block so it's available for all computeBuildSegments calls.
+    let networkNodeKeys: Set<string> | undefined;
+    const shouldAnalyze = hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments);
+    if (shouldAnalyze) {
+      networkNodeKeys = new Set<string>();
+      for (const seg of snapshot.bot.existingSegments) {
+        networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+        networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+      }
+    }
+
     // ── Pre-build network analysis (JIRA-113 + JIRA-122) ──────────────
     // If the bot has enough track, check if a nearby network point can serve
     // as a shorter start position for building toward the target city.
-    if (hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments)) {
+    if (shouldAnalyze && networkNodeKeys) {
       try {
         const gridPoints = loadGridPoints();
-        // Build network node key set from existing segments
-        const networkNodeKeys = new Set<string>();
-        for (const seg of snapshot.bot.existingSegments) {
-          networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
-          networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
-        }
 
         // Use the first (closest) target position for nearest-point search
         const targetPos = targetPositions[0];
@@ -258,12 +264,14 @@ export class ActionResolver {
       budget, // maxSegments = budget (cheapest segment costs 1M)
       occupiedEdges,
       targetPositions,
+      undefined, // knownSegments
+      networkNodeKeys, // JIRA-128: proximity penalty for parallel track prevention
     );
 
     // ── Post-build parallel path validation (JIRA-113) ─────────────────
     // After computing a path, check if it runs parallel to existing track.
     // If so, reroute through existing track to avoid redundant construction.
-    if (segments.length > 0 && hasTrack && !NetworkBuildAnalyzer.shouldSkipAnalysis(snapshot.bot.existingSegments)) {
+    if (segments.length > 0 && shouldAnalyze) {
       try {
         const gridPoints = loadGridPoints();
         const proposedPath: GridCoord[] = segments.map(seg => ({ row: seg.to.row, col: seg.to.col }));
@@ -273,8 +281,10 @@ export class ActionResolver {
         NetworkBuildAnalyzer.logParallelDetection(detection);
 
         if (detection.isParallel && detection.suggestedWaypoint) {
-          // Re-run with suggested waypoint as additional start position
-          const rerouteStartPositions = [...startPositions, detection.suggestedWaypoint];
+          // JIRA-128: REPLACE sources with waypoint only (not append).
+          // Appending allows Dijkstra to ignore the waypoint entirely.
+          // Replacing forces the build to start FROM existing track.
+          const rerouteStartPositions = [detection.suggestedWaypoint];
           NetworkBuildAnalyzer.logRerouteDecision(detection.suggestedWaypoint, detection.parallelSegmentCount);
 
           const reroutedSegments = computeBuildSegments(
@@ -284,6 +294,8 @@ export class ActionResolver {
             budget,
             occupiedEdges,
             targetPositions,
+            undefined, // knownSegments
+            networkNodeKeys, // JIRA-128: proximity penalty
           );
 
           // Use rerouted path only if it's within budget and non-empty
@@ -317,6 +329,8 @@ export class ActionResolver {
               budget,
               occupiedEdges,
               targetPositions,
+              undefined, // knownSegments
+              networkNodeKeys, // JIRA-128: proximity penalty
             );
 
             const reroutedCost = reroutedSegments.reduce((sum, seg) => sum + seg.cost, 0);
@@ -1022,7 +1036,17 @@ export class ActionResolver {
   static async heuristicFallback(
     context: GameContext,
     snapshot: WorldSnapshot,
+    { llmFailed = false }: { llmFailed?: boolean } = {},
   ): Promise<ResolvedAction> {
+    // 0. JIRA-120: If the LLM failed to produce a valid plan, discard immediately.
+    // The LLM's inability to plan IS the discard signal — no fallback busywork.
+    if (llmFailed && !context.isInitialBuild) {
+      console.warn(
+        `[heuristicFallback] JIRA-120: LLM planning failed — forcing DiscardHand`,
+      );
+      return ActionResolver.resolveDiscard(snapshot);
+    }
+
     // 1. Try to DELIVER if there are immediate opportunities
     if (context.canDeliver && context.canDeliver.length > 0) {
       // Pick the highest-payout delivery
@@ -1061,13 +1085,7 @@ export class ActionResolver {
       return ActionResolver.resolveDiscard(snapshot);
     }
 
-    // 1d. JIRA-120: Force discard after 3+ consecutive LLM route planning failures
-    if (!context.isInitialBuild && (context.consecutiveLlmFailures ?? 0) >= 3) {
-      console.warn(
-        `[heuristicFallback] JIRA-120: ${context.consecutiveLlmFailures} consecutive LLM failures — forcing DiscardHand`,
-      );
-      return ActionResolver.resolveDiscard(snapshot);
-    }
+    // 1d. (moved to step 0 above — JIRA-120 forced discard is now first check)
 
     // 2. Try to MOVE toward a pickup or delivery city on the network
     if (snapshot.bot.position && !context.isInitialBuild) {

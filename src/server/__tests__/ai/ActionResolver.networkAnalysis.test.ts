@@ -285,6 +285,68 @@ describe('ActionResolver.resolveBuild — network analysis integration', () => {
     });
   });
 
+  describe('JIRA-128: parallel track prevention wiring', () => {
+    it('passes networkNodeKeys as existingTrackIndex to computeBuildSegments', async () => {
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 8, 6, 8)]);
+
+      const intent: LLMActionIntent = { action: AIActionType.BuildTrack, details: { toward: 'Berlin' }, reasoning: '', planHorizon: '' };
+      await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
+
+      expect(mockComputeBuildSegments).toHaveBeenCalled();
+      const callArgs = mockComputeBuildSegments.mock.calls[0];
+      // existingTrackIndex is the 8th parameter (index 7)
+      const existingTrackIndex = callArgs[7] as Set<string> | undefined;
+      expect(existingTrackIndex).toBeInstanceOf(Set);
+      // Should contain all network node keys from existing segments (5,5 5,6 5,7 5,8)
+      expect(existingTrackIndex!.has('5,5')).toBe(true);
+      expect(existingTrackIndex!.has('5,6')).toBe(true);
+      expect(existingTrackIndex!.has('5,7')).toBe(true);
+      expect(existingTrackIndex!.has('5,8')).toBe(true);
+    });
+
+    it('does not pass existingTrackIndex when analysis is skipped', async () => {
+      mockShouldSkipAnalysis.mockReturnValue(true);
+      mockComputeBuildSegments.mockReturnValue([makeSegment(5, 5, 6, 6)]);
+
+      const snapshot = makeWorldSnapshot({ existingSegments: [makeSegment(5, 5, 5, 6)] });
+      const intent: LLMActionIntent = { action: AIActionType.BuildTrack, details: { toward: 'Berlin' }, reasoning: '', planHorizon: '' };
+      await ActionResolver.resolve(intent, snapshot, makeGameContext());
+
+      const callArgs = mockComputeBuildSegments.mock.calls[0];
+      const existingTrackIndex = callArgs[7];
+      expect(existingTrackIndex).toBeUndefined();
+    });
+
+    it('replaces sources with waypoint-only on parallel reroute (not append)', async () => {
+      const originalSegments = [makeSegment(5, 8, 6, 8, 3), makeSegment(6, 8, 7, 8, 3)];
+      const reroutedSegments = [makeSegment(5, 7, 6, 7, 2)];
+
+      mockComputeBuildSegments
+        .mockReturnValueOnce(originalSegments)
+        .mockReturnValueOnce(reroutedSegments);
+
+      mockDetectParallelPath.mockReturnValue({
+        isParallel: true,
+        parallelSegmentCount: 4,
+        suggestedWaypoint: { row: 6, col: 7 },
+        existingTrackNearby: [{ row: 6, col: 7 }],
+      });
+
+      const intent: LLMActionIntent = { action: AIActionType.BuildTrack, details: { toward: 'Berlin' }, reasoning: '', planHorizon: '' };
+      await ActionResolver.resolve(intent, makeWorldSnapshot(), makeGameContext());
+
+      // Second call is the reroute
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(2);
+      const rerouteCallArgs = mockComputeBuildSegments.mock.calls[1];
+      const rerouteStartPositions = rerouteCallArgs[0];
+      // Should be ONLY the waypoint, not appended to original sources
+      expect(rerouteStartPositions).toEqual([{ row: 6, col: 7 }]);
+      // Should also pass existingTrackIndex
+      const rerouteExistingTrackIndex = rerouteCallArgs[7] as Set<string> | undefined;
+      expect(rerouteExistingTrackIndex).toBeInstanceOf(Set);
+    });
+  });
+
   describe('graceful degradation', () => {
     it('continues normally when findNearestNetworkPoint throws', async () => {
       mockFindNearestNetworkPoint.mockImplementation(() => { throw new Error('BFS exploded'); });
