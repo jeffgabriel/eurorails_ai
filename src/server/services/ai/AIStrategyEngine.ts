@@ -141,6 +141,12 @@ export interface BotTurnResult {
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
   };
+  // JIRA-129: Build Advisor fields
+  advisorAction?: string;
+  advisorWaypoints?: [number, number][];
+  advisorReasoning?: string;
+  advisorLatencyMs?: number;
+  solvencyRetries?: number;
 }
 
 export class AIStrategyEngine {
