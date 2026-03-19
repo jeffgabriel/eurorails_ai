@@ -1913,7 +1913,7 @@ describe('PlanExecutor', () => {
         ]),
         { row: 15, col: 15 },
         expect.anything(),  // gridPoints
-        ['Coal'],           // carriedLoads
+        ['Coal', 'Coal'],   // JIRA-132: effectiveLoads = context.loads + completed pickup(Coal)
       );
     });
 

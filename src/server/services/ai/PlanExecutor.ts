@@ -67,11 +67,18 @@ export class PlanExecutor {
       const remainingStops = route.stops.slice(route.currentStopIndex);
       if (remainingStops.length > 1) {
         const gridPoints = loadGridPoints();
+        // JIRA-132: Compute effective carried loads including pickups completed this turn.
+        // context.loads is stale (start-of-turn); completed pickups aren't reflected.
+        const completedPickups = route.stops
+          .slice(prevIndex, route.currentStopIndex)
+          .filter(s => s.action === 'pickup')
+          .map(s => s.loadType);
+        const effectiveLoads = [...(context.loads ?? []), ...completedPickups];
         const reordered = RouteValidator.reorderStopsByProximity(
           remainingStops,
           { row: context.position.row, col: context.position.col },
           gridPoints,
-          context.loads,
+          effectiveLoads,
         );
         const oldOrder = remainingStops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
         const newOrder = reordered.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
