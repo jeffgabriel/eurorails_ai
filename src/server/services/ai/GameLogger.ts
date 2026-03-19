@@ -124,6 +124,13 @@ export interface GameTurnLogEntry {
     recomposeCount: number;
   };
 
+  // Build Advisor (JIRA-129)
+  advisorAction?: string;
+  advisorWaypoints?: [number, number][];
+  advisorReasoning?: string;
+  advisorLatencyMs?: number;
+  solvencyRetries?: number;
+
   // Prompt text for NDJSON observability
   systemPrompt?: string;
   userPrompt?: string;

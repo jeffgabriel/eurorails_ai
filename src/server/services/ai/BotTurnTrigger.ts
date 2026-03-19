@@ -185,6 +185,12 @@ export async function onTurnChange(
       retried: result.retried,
       // JIRA-31: LLM attempt log for debug overlay
       llmLog: result.llmLog,
+      // JIRA-131: LLM prompt observability for debug overlay
+      systemPrompt: result.systemPrompt,
+      userPrompt: result.userPrompt,
+      // JIRA-131: Pipeline success/error
+      success: result.success,
+      error: result.error,
       // JIRA-36: Movement path for animated bot train movement
       movementPath: result.movementPath,
       // Structured action timeline for animated partial turn movements
@@ -241,6 +247,12 @@ export async function onTurnChange(
         systemPrompt: result.systemPrompt,
         userPrompt: result.userPrompt,
         turnValidation: result.turnValidation,
+        // JIRA-129: Build Advisor data
+        advisorAction: result.advisorAction,
+        advisorWaypoints: result.advisorWaypoints,
+        advisorReasoning: result.advisorReasoning,
+        advisorLatencyMs: result.advisorLatencyMs,
+        solvencyRetries: result.solvencyRetries,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
@@ -253,11 +265,14 @@ export async function onTurnChange(
       console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
     }
 
+    // JIRA-131: Check if this was the final turn and resolve victory
+    // Must run BEFORE advanceTurnAfterBot — isFinalTurn() checks
+    // current_player_index === final_turn_player_index, and advancing
+    // the turn changes current_player_index, making the check always fail.
+    await checkAndResolveFinalTurn(gameId);
+
     // Advance to next player
     await advanceTurnAfterBot(gameId);
-
-    // JIRA-106: Check if this was the final turn and resolve victory
-    await checkAndResolveFinalTurn(gameId);
   } catch (error) {
     console.error(`[BotTurnTrigger] Error executing bot turn for game ${gameId}:`, error);
   } finally {
