@@ -5,7 +5,7 @@
  * followed by a skill-level modifier.
  */
 
-import { BotSkillLevel, GameContext, BotMemoryState } from '../../../../shared/types/GameTypes';
+import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap } from '../../../../shared/types/GameTypes';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
@@ -328,14 +328,65 @@ TRIP PLANNING RULES:
 5. BUILD COST REALITY: Factor in track building costs. A high-payout delivery that requires 30M in track may be worse than a lower-payout delivery that's on-network.
 6. BUDGET CHECK: Do NOT plan trips that require more track building than your current cash allows (leave 5M reserve).
 7. VICTORY ROUTING: Prefer trips that pass through unconnected major cities when payout differences are within 30%.
-8. SUPPLY SCARCITY: If a load shows low availability (0-1 copies free), it may be taken before you arrive. Prefer available loads.
+8. SUPPLY SCARCITY: If a load shows low availability (0-1 copies free), it may be taken before you arrive. Prefer available loads. Loads with only 1 supply city (UNIQUE SOURCE) are high-value targets when near your network — no alternative pickup exists. Loads with 3-4 supply cities (COMMON) let you choose the most convenient source.
 9. ACHIEVABLE LENGTH: Keep trips to 2-6 stops. Very long trips risk becoming stale.
 10. CARRIED CARGO: If you already carry loads, incorporate them — deliver carried loads first if a matching demand exists, or plan around them.
 
 GEOGRAPHIC STRATEGY:
-- CORE NETWORK (cheap): Paris—Ruhr—Holland—Berlin—Wien. Build here first.
-- PERIPHERAL (expensive): London (ferry), Madrid (mountains), Scandinavia (ferry), deep Italy (alpine).
-- Early game: Stay in core. Mid game: Expand to ONE peripheral region. Late game: Connect remaining major cities for victory.
+The map has a cheap, dense core and expensive peripheral regions. Understanding this geography is critical to not going bankrupt.
+
+CORE NETWORK (cheap to build, high track reuse):
+Paris — Ruhr — Holland — Berlin form a tight rectangle in northwest Europe, mostly clear terrain (1M/segment). Wien is reachable southeast of Berlin through moderate terrain. The northwest rectangle (Paris-Ruhr-Holland-Berlin) costs ~15-20M to interconnect; extending to Wien adds another ~15-20M. Track built here serves dozens of future deliveries because most demand cards route through central Europe.
+
+PERIPHERAL REGIONS (expensive, low early reuse):
+- London/Britain: Requires English Channel ferry (8M+). Island track only serves British deliveries.
+- Madrid/Spain: Mountain and Alpine terrain through the Pyrenees. 20-30M to connect from Paris. Isolated — track only serves Iberian deliveries.
+- Scandinavia (Oslo, Stockholm): Requires ferry from Denmark. 15-25M to connect. Very few loads originate here.
+- Italy south of Milano: Alpine passes from Wien or France cost 5M/segment. Milano itself is reachable but Roma/Napoli are deep extensions.
+- Ireland (Dublin, Belfast): Requires TWO ferry crossings — Channel ferry (continent→Britain) then Irish Sea ferry (Britain→Ireland). Each ferry burns a full turn of movement. Almost never worth it before mid-game.
+
+EXPANSION PHILOSOPHY:
+- Early game (under 80M cash, under 4 major cities connected): Stay in the core. Build the Paris-Ruhr-Holland-Berlin-Wien rectangle. Make fast, cheap deliveries to accumulate capital. A 17M delivery in the core completed in 4 turns is far better than a 42M delivery to Oslo that takes 12 turns and costs 30M in track.
+- Mid game (80-180M cash, 4-5 major cities connected): Expand to ONE peripheral region when you have (a) 80M+ cash, (b) 2+ demand cards pointing to that region, and (c) the track would connect a major city you still need for victory. Don't expand to two peripheral regions simultaneously.
+- Late game (180M+ cash, 5-6 major cities connected): You need 7 of 8 major cities connected. Plan your remaining expansions around which 1 city you can skip (usually Madrid or London, whichever is most expensive to reach from your network).
+
+CAPITAL VELOCITY:
+A 9M delivery completed on turn 4 generates capital that funds the NEXT delivery, which funds the next. A 42M delivery that takes until turn 12 means 8 turns of zero income. Always ask: "How many turns until I get PAID?" not "Which demand pays the most?"
+
+WHEN TO BREAK THESE GUIDELINES:
+- A peripheral demand is your ONLY affordable option (all core demands need track you can't afford)
+- You already have partial track toward a peripheral region from a previous route
+- A corridor of 2-3 demands all point to the same peripheral region, making the total payout justify the investment
+- You're in late game and MUST connect London or Madrid for victory
+
+HAND EVALUATION — THINK IN CARDS, NOT DEMANDS:
+You hold 3 demand cards with 3 demands each (9 total), but only 1 demand per card can ever be fulfilled. When you deliver a load, that card is discarded and replaced. This changes everything about how you evaluate your options.
+
+EVALUATE EACH CARD'S BEST OPTION:
+For each of your 3 cards, identify the single best demand — the one that's cheapest to reach, fits within your budget, and ideally stays in the core network. Ignore the other 2 demands on that card. Your real choice is between 3 options (one per card), not 9.
+
+Example: If Card A's best demand is Steel→Paris (9M, core), Card B's best is Wheat→Ruhr (13M, core), and Card C's best is Iron→Praha (17M, near-core) — that's a strong hand. But if Card A's only affordable demand is Machinery→Dublin (25M, double ferry) and Card B's only affordable demand is Tourists→Sevilla (48M, deep Spain) — those cards are dead weight.
+
+WHEN TO DISCARD YOUR ENTIRE HAND:
+Discarding costs a full turn but gives you 3 fresh cards. Consider it when:
+- 2 or more cards have NO affordable demand in or near the core network
+- Your best available demand requires 25M+ in track building with cash under 40M
+- All demands point to peripheral regions you have no track toward
+- You've just completed a delivery and the new hand is terrible
+A bad hand played stubbornly wastes 5-10 turns. A discard wastes 1 turn. Compare that 1 lost turn against the estimated turns shown for your best available demand — if your best option takes 8+ turns to complete, discarding is almost certainly better.
+
+SECONDARY DELIVERY — FILL YOUR CARGO SLOTS:
+Your train carries 2 loads (Freight/Fast Freight) or 3 loads (Heavy Freight/Superfreight). Picking up and carrying loads is FREE — no movement cost, no money cost. Dropping a load at any city is also free.
+
+After choosing your primary delivery, ALWAYS look for a secondary pickup from a DIFFERENT card. The primary card gets discarded on delivery, so the secondary must come from a card that stays in your hand.
+
+Look for secondary pickups that are:
+- On or very near the primary route (zero or minimal detour)
+- From a supply city you'll pass through anyway
+- For a demand you can deliver after the primary, or carry until a future route
+Even if you can't deliver the secondary load immediately, carrying it costs nothing. You can deliver it later or drop it at any city. An empty cargo slot is a wasted opportunity.
+
+Pick up a load with no matching demand card if it's at a remote city you're already passing through AND your train has a free slot.
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
@@ -547,5 +598,100 @@ Choose "skip" only if the bot cannot afford the upgrade, or the dropped load is 
  */
 export function getUpgradeBeforeDropPrompt(): string {
   return UPGRADE_BEFORE_DROP_SYSTEM_SUFFIX;
+}
+
+// ── Build Advisor Prompt (JIRA-129) ────────────────────────────────────
+
+/**
+ * Generate system and user prompts for the Build Advisor LLM call.
+ *
+ * System prompt: game rules for track building, opponent track usage, victory conditions.
+ * User prompt: corridor map, connected cities, active route, cash, loads, game state, demands, unconnected cities.
+ */
+export function getBuildAdvisorPrompt(
+  context: GameContext,
+  activeRoute: StrategicRoute | null,
+  corridorMap: CorridorMap,
+): { system: string; user: string } {
+  const system = `You are a railroad track building advisor for the board game Eurorails.
+
+TRACK BUILDING RULES:
+- You may spend up to 20M ECU per turn on track building.
+- Terrain costs: Clear 1M, Mountain 2M, Alpine 5M, Small City 3M, Medium City 3M, Major City 5M.
+- Water crossing additional costs: River +2M, Lake +3M, Ocean Inlet +3M.
+- You may NOT both build track and upgrade your train in the same turn.
+- Track must connect to your existing network or start from a major city.
+- No more than 2 track sections from a major city milepost per turn.
+
+OPPONENT TRACK USAGE:
+- You may use an opponent's track by paying 4M ECU per opponent per turn.
+- This can be cheaper than building your own track in some cases.
+
+VICTORY CONDITIONS:
+- Connect 7 of 8 major cities with continuous track AND have 250M+ ECU cash.
+- Cash spent on track does NOT count toward the 250M threshold.
+
+Your task: Given the corridor map and game state below, recommend the best track building strategy.
+Answer with waypoints (row, col coordinates) that the track should pass through — the pathfinding algorithm will determine the exact route between waypoints.
+
+Actions you can recommend:
+- "build": Build track toward the target via waypoints.
+- "buildAlternative": Suggest a cheaper or more strategic alternative build target.
+- "replan": Abandon current route and propose a new delivery route.
+- "useOpponentTrack": Use an opponent's existing track instead of building.
+
+What is the best way to connect these locations?`;
+
+  // Build user prompt sections
+  const sections: string[] = [];
+
+  // (1) Corridor map
+  sections.push(`CORRIDOR MAP:\n${corridorMap.rendered}`);
+
+  // (2) Connected major cities + track endpoints
+  sections.push(`CONNECTED MAJOR CITIES: ${context.connectedMajorCities.join(', ') || 'None'}`);
+  sections.push(`CITIES ON NETWORK: ${context.citiesOnNetwork.join(', ') || 'None'}`);
+
+  // (3) Active route
+  if (activeRoute) {
+    const stops = activeRoute.stops.map((s, i) => {
+      const marker = i === activeRoute.currentStopIndex ? ' [CURRENT]' : '';
+      return `  ${i + 1}. ${s.action} ${s.loadType} at ${s.city}${s.payment ? ` (${s.payment}M)` : ''}${marker}`;
+    }).join('\n');
+    sections.push(`ACTIVE ROUTE (phase: ${activeRoute.phase}):\n${stops}`);
+  } else {
+    sections.push('ACTIVE ROUTE: None (no current route)');
+  }
+
+  // (4) Cash on hand
+  sections.push(`CASH: ${context.money}M ECU`);
+
+  // (5) Carried loads
+  sections.push(`CARRIED LOADS: ${context.loads.length > 0 ? context.loads.join(', ') : 'None'}`);
+
+  // (6) Game phase + turn number + estimated turns
+  sections.push(`GAME PHASE: ${context.phase} | Turn ${context.turnNumber}`);
+
+  // (7) Demand cards
+  if (context.demands.length > 0) {
+    const demandLines = context.demands.map(d =>
+      `  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns)`
+    ).join('\n');
+    sections.push(`DEMAND CARDS:\n${demandLines}`);
+  } else {
+    sections.push('DEMAND CARDS: None');
+  }
+
+  // (8) Unconnected major cities
+  if (context.unconnectedMajorCities.length > 0) {
+    const unconnected = context.unconnectedMajorCities
+      .map(c => `${c.cityName} (~${c.estimatedCost}M to connect)`)
+      .join(', ');
+    sections.push(`UNCONNECTED MAJOR CITIES: ${unconnected}`);
+  }
+
+  const user = sections.join('\n\n');
+
+  return { system, user };
 }
 
