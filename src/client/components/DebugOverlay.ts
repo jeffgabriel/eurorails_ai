@@ -52,6 +52,17 @@ export interface BotTurnEntry {
   retried?: boolean;
   // JIRA-31: LLM attempt log
   llmLog?: LlmAttempt[];
+  // JIRA-131: Pipeline success/error tracking
+  success?: boolean;
+  error?: string;
+  // JIRA-131: LLM prompt observability
+  systemPrompt?: string;
+  userPrompt?: string;
+  // JIRA-129: Build Advisor
+  advisorAction?: string;
+  advisorReasoning?: string;
+  advisorLatencyMs?: number;
+  solvencyRetries?: number;
 }
 
 /**
@@ -286,10 +297,21 @@ export class DebugOverlay {
       entry.llmLatencyMs = payload?.llmLatencyMs;
       entry.tokenUsage = payload?.tokenUsage;
       entry.retried = payload?.retried;
+      // JIRA-131: Pipeline success/error tracking
+      entry.success = payload?.success ?? true;
+      entry.error = payload?.error;
+      // JIRA-131: LLM prompt observability
+      if (payload?.systemPrompt) entry.systemPrompt = payload.systemPrompt;
+      if (payload?.userPrompt) entry.userPrompt = payload.userPrompt;
       // JIRA-31: LLM attempt log
       if (payload?.llmLog?.length) {
         entry.llmLog = payload.llmLog;
       }
+      // JIRA-129: Build Advisor
+      if (payload?.advisorAction) entry.advisorAction = payload.advisorAction;
+      if (payload?.advisorReasoning) entry.advisorReasoning = payload.advisorReasoning;
+      if (payload?.advisorLatencyMs) entry.advisorLatencyMs = payload.advisorLatencyMs;
+      if (payload?.solvencyRetries) entry.solvencyRetries = payload.solvencyRetries;
 
       this.botTurnHistory.set(botId, history);
     } else if (eventName === 'bot:demandRankingUpdate') {
@@ -489,10 +511,29 @@ export class DebugOverlay {
       const time = new Date(latest.startTime).toLocaleTimeString('en-US', { hour12: false });
       latestDetail = `<div style="color:#fbbf24;font-size:15px;">Bot ${latest.name} turn started at ${time}</div>`;
     } else {
-      latestDetail = `<div style="color:${color};font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
+      const statusColor = latest.success === false ? '#f87171' : color;
+      latestDetail = `<div style="color:${statusColor};font-size:15px;">Bot ${latest.name} turn completed: ${latest.action} (${latest.durationMs}ms)</div>`;
+      // JIRA-131: Show pipeline error prominently
+      if (latest.success === false && latest.error) {
+        latestDetail += `<div style="margin-top:6px;padding:8px 12px;background:rgba(248,113,113,0.15);border:1px solid rgba(248,113,113,0.4);border-radius:4px;"><div style="color:#f87171;font-size:14px;font-weight:bold;">Pipeline Error</div><div style="color:#fca5a5;font-size:13px;margin-top:4px;white-space:pre-wrap;word-break:break-all;">${DebugOverlay.escapeHtml(latest.error)}</div></div>`;
+      }
       latestDetail += this.renderLlmMetadata(latest);
-      if (latest.llmLog && latest.llmLog.length > 0) {
-        latestDetail += this.renderLlmLog(latest.llmLog);
+      // JIRA-131: Auto-open LLM attempts when there are failures; fall back to previous turn if latest has none
+      const llmLogSource = (latest.llmLog && latest.llmLog.length > 0)
+        ? latest.llmLog
+        : entries.find(e => e.llmLog && e.llmLog.length > 0)?.llmLog;
+      if (llmLogSource && llmLogSource.length > 0) {
+        const hasFailures = llmLogSource.some(a => a.status !== 'success');
+        const isFromPrevTurn = llmLogSource !== latest.llmLog;
+        latestDetail += this.renderLlmLog(llmLogSource, hasFailures, isFromPrevTurn);
+      }
+      // JIRA-131: LLM prompt viewer (fall back to previous turn)
+      const promptSource = (latest.systemPrompt || latest.userPrompt)
+        ? latest
+        : entries.find(e => e.systemPrompt || e.userPrompt);
+      if (promptSource && (promptSource.systemPrompt || promptSource.userPrompt)) {
+        const isStalePrompt = promptSource !== latest;
+        latestDetail += this.renderPromptViewer(promptSource.systemPrompt, promptSource.userPrompt, isStalePrompt);
       }
       if (latest.reasoning) {
         latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
@@ -514,8 +555,13 @@ export class DebugOverlay {
       if (latest.guardrailOverride) {
         latestDetail += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${latest.guardrailReason || 'unknown'}</div>`;
       }
-      if (latest.demandRanking && latest.demandRanking.length > 0) {
-        latestDetail += this.renderDemandRanking(latest.demandRanking, color);
+      // JIRA-131: Fall back to most recent entry with ranking if latest has none (e.g. pipeline-error)
+      const rankingSource = (latest.demandRanking && latest.demandRanking.length > 0)
+        ? latest.demandRanking
+        : entries.find(e => e.demandRanking && e.demandRanking.length > 0)?.demandRanking;
+      if (rankingSource && rankingSource.length > 0) {
+        const isStale = rankingSource !== latest.demandRanking;
+        latestDetail += this.renderDemandRanking(rankingSource, color, isStale);
       }
       if (latest.handQuality) {
         const hq = latest.handQuality;
@@ -524,6 +570,16 @@ export class DebugOverlay {
       }
       if (latest.upgradeAdvice) {
         latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.08);border-radius:4px;border-left:3px solid #fbbf24;"><div style="color:#fbbf24;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Path</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeAdvice}</div></div>`;
+      }
+      // JIRA-129: Build Advisor section
+      if (latest.advisorAction) {
+        const retryInfo = latest.solvencyRetries ? ` | Retries: ${latest.solvencyRetries}` : '';
+        const latencyInfo = latest.advisorLatencyMs ? ` | ${latest.advisorLatencyMs}ms` : '';
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(34,197,94,0.08);border-radius:4px;border-left:3px solid #22c55e;"><div style="color:#22c55e;font-size:14px;font-weight:bold;margin-bottom:2px;">Build Advisor: ${latest.advisorAction}${latencyInfo}${retryInfo}</div>`;
+        if (latest.advisorReasoning) {
+          latestDetail += `<div style="color:#e5e7eb;font-size:13px;">${latest.advisorReasoning}</div>`;
+        }
+        latestDetail += `</div>`;
       }
       if (latest.loadsPickedUp || latest.loadsDelivered) {
         latestDetail += this.renderLoadDetails(latest.loadsPickedUp, latest.loadsDelivered);
@@ -585,8 +641,9 @@ export class DebugOverlay {
       : '';
     const duration = `${(entry.durationMs / 1000).toFixed(1)}s`;
     const grTag = entry.guardrailOverride ? ' <span style="color:#f87171;">[GR]</span>' : '';
+    const errorTag = entry.success === false ? ' <span style="color:#f87171;font-weight:bold;">[ERROR]</span>' : '';
     const llmTag = DebugOverlay.llmLogSummary(entry.llmLog);
-    const summaryLine = `${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${grTag}${llmTag}`;
+    const summaryLine = `${turn}: ${entry.action} <span style="color:#6b7280;">"${reasoning}"</span> (${duration})${errorTag}${grTag}${llmTag}`;
     const key = `${botId}-${entry.turnNumber ?? entry.startTime}`;
     const isOpen = this.expandedHistoryEntries.has(key);
     const expanded = this.renderExpandedHistoryEntry(entry);
@@ -599,9 +656,17 @@ export class DebugOverlay {
   /** Render expanded details for a past turn history entry */
   private renderExpandedHistoryEntry(entry: BotTurnEntry): string {
     let html = '';
+    // JIRA-131: Show pipeline error in expanded history
+    if (entry.success === false && entry.error) {
+      html += `<div style="margin-top:4px;padding:6px 10px;background:rgba(248,113,113,0.15);border:1px solid rgba(248,113,113,0.4);border-radius:4px;"><div style="color:#f87171;font-size:13px;font-weight:bold;">Pipeline Error</div><div style="color:#fca5a5;font-size:12px;margin-top:2px;white-space:pre-wrap;word-break:break-all;">${DebugOverlay.escapeHtml(entry.error)}</div></div>`;
+    }
     html += this.renderLlmMetadata(entry);
     if (entry.llmLog && entry.llmLog.length > 0) {
-      html += this.renderLlmLog(entry.llmLog, true);
+      const hasFailures = entry.llmLog.some(a => a.status !== 'success');
+      html += this.renderLlmLog(entry.llmLog, hasFailures);
+    }
+    if (entry.systemPrompt || entry.userPrompt) {
+      html += this.renderPromptViewer(entry.systemPrompt, entry.userPrompt);
     }
     if (entry.reasoning) {
       html += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${entry.reasoning}</div>`;
@@ -623,6 +688,16 @@ export class DebugOverlay {
     if (entry.guardrailOverride) {
       html += `<div style="color:#f87171;font-size:14px;margin-top:4px;font-weight:bold;">Guardrail override: ${entry.guardrailReason || 'unknown'}</div>`;
     }
+    // JIRA-129: Build Advisor in history
+    if (entry.advisorAction) {
+      const retryInfo = entry.solvencyRetries ? ` | Retries: ${entry.solvencyRetries}` : '';
+      const latencyInfo = entry.advisorLatencyMs ? ` | ${entry.advisorLatencyMs}ms` : '';
+      html += `<div style="margin-top:4px;padding:4px 8px;background:rgba(34,197,94,0.08);border-radius:4px;border-left:3px solid #22c55e;"><span style="color:#22c55e;font-size:13px;font-weight:bold;">Advisor: ${entry.advisorAction}${latencyInfo}${retryInfo}</span>`;
+      if (entry.advisorReasoning) {
+        html += `<div style="color:#d1d5db;font-size:12px;">${entry.advisorReasoning}</div>`;
+      }
+      html += `</div>`;
+    }
     if (entry.loadsPickedUp || entry.loadsDelivered) {
       html += this.renderLoadDetails(entry.loadsPickedUp, entry.loadsDelivered);
     }
@@ -635,7 +710,7 @@ export class DebugOverlay {
     return html;
   }
 
-  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>, playerColor: string): string {
+  private renderDemandRanking(ranking: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>, playerColor: string, isStale = false): string {
     const rows = ranking.map(d => {
       const rowColor = d.rank === 1 ? playerColor : d.score < 0 ? '#f87171' : '#e5e7eb';
       const turns = d.estimatedTurns != null ? `${d.estimatedTurns}` : '—';
@@ -644,9 +719,10 @@ export class DebugOverlay {
       const ferryIcon = d.ferryRequired ? '\u26F4' : '';
       return `<tr style="color:${rowColor};"><td style="padding:2px 8px;">#${d.rank}</td><td style="padding:2px 8px;">${d.loadType}</td><td style="padding:2px 8px;">${d.supplyCity}\u2192${d.deliveryCity}</td><td style="padding:2px 8px;text-align:right;">${d.payout}M</td><td style="padding:2px 8px;text-align:right;">${buildDisplay}</td><td style="padding:2px 8px;text-align:right;">${turns}</td><td style="padding:2px 4px;text-align:center;">${ferryIcon}</td><td style="padding:2px 8px;text-align:right;font-weight:bold;">${d.score.toFixed(2)}</td></tr>`;
     }).join('');
+    const staleLabel = isStale ? ' <span style="color:#fbbf24;font-weight:normal;font-size:12px;">(from previous turn)</span>' : '';
     return `
       <div style="margin-top:8px;padding:6px 10px;background:rgba(52,211,153,0.08);border-radius:4px;border-left:3px solid ${playerColor};">
-        <div style="color:${playerColor};font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking</div>
+        <div style="color:${playerColor};font-size:14px;font-weight:bold;margin-bottom:4px;">Demand Ranking${staleLabel}</div>
         <table style="font-size:13px;border-collapse:collapse;width:100%;">
           <tr style="color:#6b7280;"><th style="text-align:left;padding:2px 8px;">Rank</th><th style="text-align:left;padding:2px 8px;">Load</th><th style="text-align:left;padding:2px 8px;">Route</th><th style="text-align:right;padding:2px 8px;">Payout</th><th style="text-align:right;padding:2px 8px;">Build</th><th style="text-align:right;padding:2px 8px;">Turns</th><th style="text-align:center;padding:2px 4px;">F</th><th style="text-align:right;padding:2px 8px;">Score</th></tr>
           ${rows}
@@ -662,6 +738,26 @@ export class DebugOverlay {
       : `<div style="color:#f87171;font-size:15px;margin-top:6px;">No build target (undirected)</div>`;
     const costLine = `<div style="color:#e5e7eb;font-size:15px;">Segments: ${data.segmentsBuilt} | Cost: ${data.totalCost}M | Remaining: ${data.remainingMoney}M</div>`;
     return `${targetLine}${costLine}`;
+  }
+
+  /** Render collapsible LLM prompt viewer with system and user prompts */
+  private renderPromptViewer(systemPrompt?: string, userPrompt?: string, isStale = false): string {
+    if (!systemPrompt && !userPrompt) return '';
+    const staleTag = isStale ? ' <span style="color:#fbbf24;font-weight:normal;font-size:12px;">(from previous turn)</span>' : '';
+    const preStyle = 'color:#d1d5db;font-size:12px;margin:4px 0 0 0;padding:8px;background:rgba(255,255,255,0.04);border-radius:3px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;line-height:1.4;';
+    let content = '';
+    if (systemPrompt) {
+      content += `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#60a5fa;font-size:13px;font-weight:bold;">System Prompt <span style="color:#6b7280;font-weight:normal;">(${systemPrompt.length.toLocaleString()} chars)</span></summary><pre style="${preStyle}">${DebugOverlay.escapeHtml(systemPrompt)}</pre></details>`;
+    }
+    if (userPrompt) {
+      content += `<details style="margin-top:4px;"><summary style="cursor:pointer;color:#34d399;font-size:13px;font-weight:bold;">User Prompt <span style="color:#6b7280;font-weight:normal;">(${userPrompt.length.toLocaleString()} chars)</span></summary><pre style="${preStyle}">${DebugOverlay.escapeHtml(userPrompt)}</pre></details>`;
+    }
+    return `
+      <details style="margin-top:8px;padding:6px 10px;background:rgba(96,165,250,0.06);border-radius:4px;border-left:3px solid #60a5fa;">
+        <summary style="cursor:pointer;color:#60a5fa;font-size:14px;font-weight:bold;">LLM Prompts${staleTag}</summary>
+        <div style="margin-top:4px;">${content}</div>
+      </details>
+    `;
   }
 
   private renderMovementDetails(data: BotTurnEntry['movementData']): string {
@@ -696,11 +792,11 @@ export class DebugOverlay {
   }
 
   /** Render collapsible LLM Attempts panel for a bot turn */
-  private renderLlmLog(log: LlmAttempt[], autoOpen: boolean = false): string {
+  private renderLlmLog(log: LlmAttempt[], autoOpen: boolean = false, isFromPrevTurn: boolean = false): string {
     const failed = log.filter(a => a.status !== 'success').length;
-    const summaryLabel = failed > 0
-      ? `LLM Attempts (${log.length}) — ${failed} failed`
-      : `LLM Attempts (${log.length})`;
+    const staleTag = isFromPrevTurn ? ' <span style="color:#fbbf24;font-weight:normal;font-size:12px;">(from previous turn)</span>' : '';
+    const failTag = failed > 0 ? ` — <span style="color:#f87171;">${failed} failed</span>` : '';
+    const summaryLabel = `LLM Attempts (${log.length})${failTag}${staleTag}`;
 
     const STATUS_COLORS: Record<string, string> = {
       success: '#34d399',
