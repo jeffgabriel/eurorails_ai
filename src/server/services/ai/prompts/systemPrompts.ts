@@ -99,7 +99,21 @@ For multiple actions in one turn:
   ],
   "reasoning": "...",
   "planHorizon": "..."
-}`;
+}
+
+PLAN PERSISTENCE:
+You MUST continue your existing plan unless:
+(a) The delivery was completed, or
+(b) The load is no longer available (taken by opponent), or
+(c) A dramatically better opportunity appeared (2x+ payout with less track needed).
+Switching plans mid-execution wastes track already built. Stay the course.
+
+MOVEMENT REMINDERS:
+- Use ALL your movement points each turn. Stopping early wastes your turn. Loading/unloading costs ZERO movement.
+- Only use DELIVER if a delivery is available at your position. You must be AT the delivery city with the matching load.
+- You can PICKUP then BUILD in the same turn using a multi-action sequence.
+- After DELIVER, you can BUILD track in the same turn (up to 20M).
+- Use MOVE to travel along your track toward cities for pickup/delivery.`;
 
 // ── Route Planning Suffix ────────────────────────────────────────────
 

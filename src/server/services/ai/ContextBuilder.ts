@@ -870,11 +870,6 @@ export class ContextBuilder {
     if (context.previousTurnSummary) {
       lines.push('PREVIOUS TURN:');
       lines.push(`- ${context.previousTurnSummary}`);
-      lines.push('⚠️ PLAN PERSISTENCE: You MUST continue your existing plan unless:');
-      lines.push('  (a) The delivery was completed, or');
-      lines.push('  (b) The load is no longer available (taken by opponent), or');
-      lines.push('  (c) A dramatically better opportunity appeared (2x+ payout with less track needed).');
-      lines.push('  Switching plans mid-execution wastes track already built. Stay the course.');
       lines.push('');
     }
 
@@ -910,30 +905,10 @@ export class ContextBuilder {
       const nearest = context.unconnectedMajorCities[0];
       lines.push(`- Nearest unconnected city: ${nearest.cityName} (~${nearest.estimatedCost}M from your network)`);
 
-      const cheapestCost = nearest.estimatedCost;
+      // JIRA-125: Dynamic route selection directive for endgame
       if (context.money >= 250 && context.connectedMajorCities.length < 7) {
-        lines.push(`- STRATEGIC PRIORITY: You have enough cash — focus ALL building budget on connecting [${context.unconnectedMajorCities.map(u => u.cityName).join(', ')}].`);
-        // JIRA-125: Dynamic route selection directive for endgame
         lines.push(`- ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city. Building track toward these cities happens automatically — choose routes that take you there. Do NOT chase high-payout deliveries to non-major cities.`);
-      } else if (cheapestCost > context.money) {
-        lines.push(`- STRATEGIC PRIORITY: Earn more before connecting — cheapest unconnected city costs ~${cheapestCost}M, you have ${context.money}M.`);
-      } else {
-        lines.push(`- STRATEGIC PRIORITY: Connect ${nearest.cityName} (cheapest) while pursuing deliveries through that corridor.`);
       }
-    }
-
-    // Phase-appropriate victory directive
-    if (context.phase === 'Victory Imminent' && context.unconnectedMajorCities.length > 0) {
-      const last = context.unconnectedMajorCities[0];
-      const cashNeeded = Math.max(0, 250 - context.money);
-      lines.push(`- LATE-GAME DIRECTIVE: VICTORY IS IMMINENT: Connect ${last.cityName} (~${last.estimatedCost}M) and earn ${cashNeeded}M more. Take calculated risks \u2014 upgrades and expensive track that cut travel time in half are justified to close the gap.`);
-    } else if (context.phase === 'Late Game' && context.unconnectedMajorCities.length > 0) {
-      const citiesNeeded = 7 - context.connectedMajorCities.length;
-      const cashNeeded = Math.max(0, 250 - context.money);
-      const cheapest = context.unconnectedMajorCities[0];
-      lines.push(`- LATE-GAME DIRECTIVE: You need ${citiesNeeded} more cities and ${cashNeeded}M more cash. Connect ${cheapest.cityName} (~${cheapest.estimatedCost}M) before chasing deliveries. Victory is within reach.`);
-    } else if (context.phase === 'Mid Game' && context.unconnectedMajorCities.length > 0) {
-      lines.push('- MID-GAME DIRECTIVE: Start routing deliveries through unconnected major cities when possible. Every major city you pass through counts toward victory.');
     }
     lines.push('');
 
@@ -941,7 +916,7 @@ export class ContextBuilder {
     lines.push(ContextBuilder.formatDemandView(context.demands, context));
     lines.push('');
 
-    // ── IMMEDIATE OPPORTUNITIES ──
+    // ── IMMEDIATE OPPORTUNITIES (always shown — even during Initial Build for pickups at starting city) ──
     lines.push('IMMEDIATE OPPORTUNITIES:');
     if (context.canDeliver.length > 0) {
       for (const opp of context.canDeliver) {
@@ -956,59 +931,48 @@ export class ContextBuilder {
     if (context.canDeliver.length === 0 && context.canPickup.length === 0) {
       lines.push('- No deliveries or pickups available at your position.');
     }
-    // Multi-action turn hints
-    if (context.canPickup.length > 0) {
-      // Check if any pickup's delivery city is reachable this turn (PICKUP → MOVE → DELIVER in one turn!)
+    // Combo hints (suppress during Initial Build — no movement)
+    if (!context.isInitialBuild && context.canPickup.length > 0) {
       for (const opp of context.canPickup) {
         if (context.reachableCities.includes(opp.bestDeliveryCity)) {
           lines.push(`⚡ COMBO: PICKUP ${opp.loadType} here → MOVE to ${opp.bestDeliveryCity} → DELIVER for ${opp.bestPayout}M — all in ONE turn!`);
         }
       }
-      if (context.canBuild) {
-        lines.push('TIP: You can PICKUP then BUILD in the same turn using a multi-action sequence.');
-      }
     }
-    if (context.canDeliver.length > 0 && context.canBuild) {
-      lines.push('TIP: After DELIVER, you can BUILD track in the same turn (up to 20M).');
-    }
-    lines.push('IMPORTANT: Only use DELIVER if a delivery is listed above. You must be AT the delivery city with the matching load to deliver.');
-    if (context.loads.length > 0 && context.canDeliver.length === 0) {
+    // Cargo warning (suppress when no cargo)
+    if (!context.isInitialBuild && context.loads.length > 0 && context.canDeliver.length === 0) {
       lines.push(`WARNING: You are carrying [${context.loads.join(', ')}] but cannot deliver here. MOVE toward a delivery city — do NOT pass your turn!`);
     }
-    // Remind about using full movement
-    if (context.speed > 0 && !context.isInitialBuild) {
-      lines.push(`REMINDER: Use ALL ${context.speed} movement points each turn. Stopping early wastes your turn. Loading/unloading costs ZERO movement.`);
-    }
     lines.push('');
 
-    // ── EN-ROUTE PICKUPS (JIRA-87) ──
-    if (context.enRoutePickups && context.enRoutePickups.length > 0) {
-      lines.push('EN-ROUTE PICKUPS (near your route):');
-      for (const p of context.enRoutePickups) {
-        const detour = p.onRoute ? 'on route' : `${p.detourMileposts} mp detour`;
-        lines.push(`- ${p.city}: ${p.load} → ${p.demandCity} ${p.payoff}M (${detour})`);
+    // ── Phase-aware sections: suppress movement-related sections during Initial Build ──
+    if (!context.isInitialBuild) {
+      // ── EN-ROUTE PICKUPS (JIRA-87) ──
+      if (context.enRoutePickups && context.enRoutePickups.length > 0) {
+        lines.push('EN-ROUTE PICKUPS (near your route):');
+        for (const p of context.enRoutePickups) {
+          const detour = p.onRoute ? 'on route' : `${p.detourMileposts} mp detour`;
+          lines.push(`- ${p.city}: ${p.load} → ${p.demandCity} ${p.payoff}M (${detour})`);
+        }
+        lines.push('');
       }
-      lines.push('');
-    }
 
-    // ── CITIES REACHABLE ──
-    if (context.reachableCities.length > 0) {
-      lines.push(`CITIES REACHABLE THIS TURN (within speed ${context.speed} on existing track):`);
-      lines.push(context.reachableCities.join(', '));
-    } else {
-      lines.push('CITIES REACHABLE THIS TURN: None (no track or no position).');
-    }
-    lines.push('');
+      // ── CITIES REACHABLE (suppress when ≤1 city) ──
+      if (context.reachableCities.length > 1) {
+        lines.push(`CITIES REACHABLE THIS TURN (within speed ${context.speed} on existing track):`);
+        lines.push(context.reachableCities.join(', '));
+        lines.push('');
+      }
 
-    // ── CITIES ON YOUR TRACK NETWORK (multi-turn destinations) ──
-    const networkOnlyCities = context.citiesOnNetwork.filter(
-      c => !context.reachableCities.includes(c),
-    );
-    if (networkOnlyCities.length > 0) {
-      lines.push('CITIES ON YOUR TRACK NETWORK (reachable by MOVE in multiple turns):');
-      lines.push(networkOnlyCities.join(', '));
-      lines.push('TIP: Use MOVE to travel along your track toward these cities for pickup/delivery.');
-      lines.push('');
+      // ── CITIES ON YOUR TRACK NETWORK (multi-turn destinations) ──
+      const networkOnlyCities = context.citiesOnNetwork.filter(
+        c => !context.reachableCities.includes(c),
+      );
+      if (networkOnlyCities.length > 0) {
+        lines.push('CITIES ON YOUR TRACK NETWORK (reachable by MOVE in multiple turns):');
+        lines.push(networkOnlyCities.join(', '));
+        lines.push('');
+      }
     }
 
     // ── UPGRADE OPTIONS (JIRA-55 Part B, JIRA-105: lowered gates) ──
@@ -2002,6 +1966,27 @@ export class ContextBuilder {
   }
 
   /** Summarize track as "N mileposts: City1-City2, City2-City3" */
+  /** Map center for compass direction computation (~row 30, col 40) */
+  private static readonly MAP_CENTER_ROW = 30;
+  private static readonly MAP_CENTER_COL = 40;
+
+  /**
+   * Compute compass direction of a city relative to map center.
+   */
+  private static compassDirection(row: number, col: number): string {
+    const dr = row - ContextBuilder.MAP_CENTER_ROW;
+    const dc = col - ContextBuilder.MAP_CENTER_COL;
+    if (Math.abs(dr) < 5 && Math.abs(dc) < 5) return 'central';
+    const ns = dr > 5 ? 'south' : dr < -5 ? 'north' : '';
+    const ew = dc > 5 ? 'east' : dc < -5 ? 'west' : '';
+    return `${ns}${ns && ew ? '' : ''}${ew}` || 'central';
+  }
+
+  /**
+   * JIRA-133: Geographic backbone description replacing alphabetical city-pair list.
+   * Finds the longest path through connected major cities (backbone),
+   * labels remaining cities as spurs with their connection point.
+   */
   private static computeTrackSummary(
     segments: TrackSegment[],
     gridPoints: GridPoint[],
@@ -2010,33 +1995,74 @@ export class ContextBuilder {
 
     const mileposts = segments.length;
 
-    // Collect city names touched by the track
-    const cityNames = new Set<string>();
+    // Collect city names and positions touched by the track
+    const cityPositions = new Map<string, { row: number; col: number; isMajor: boolean }>();
     for (const seg of segments) {
-      const fromPoint = gridPoints.find(
-        gp => gp.row === seg.from.row && gp.col === seg.from.col,
-      );
-      const toPoint = gridPoints.find(
-        gp => gp.row === seg.to.row && gp.col === seg.to.col,
-      );
-      if (fromPoint?.city?.name) cityNames.add(fromPoint.city.name);
-      if (toPoint?.city?.name) cityNames.add(toPoint.city.name);
+      for (const endpoint of [seg.from, seg.to]) {
+        const gp = gridPoints.find(p => p.row === endpoint.row && p.col === endpoint.col);
+        if (gp?.city?.name && !cityPositions.has(gp.city.name)) {
+          cityPositions.set(gp.city.name, {
+            row: gp.row,
+            col: gp.col,
+            isMajor: gp.terrain === TerrainType.MajorCity,
+          });
+        }
+      }
     }
 
-    if (cityNames.size === 0) {
+    if (cityPositions.size === 0) {
       return `${mileposts} mileposts (no cities connected yet)`;
     }
 
-    const cities = Array.from(cityNames).sort();
-    // Build corridor pairs from consecutive cities in the sorted list
-    const corridors: string[] = [];
-    for (let i = 0; i < cities.length - 1; i++) {
-      corridors.push(`${cities[i]}\u2013${cities[i + 1]}`);
+    // Find major cities on the track
+    const majorCities = Array.from(cityPositions.entries())
+      .filter(([, info]) => info.isMajor)
+      .map(([name, info]) => ({ name, ...info }));
+
+    if (majorCities.length === 0) {
+      const allCities = Array.from(cityPositions.keys());
+      return `${mileposts} mileposts covering ${allCities.join(', ')}`;
     }
 
-    return corridors.length > 0
-      ? `${mileposts} mileposts: ${corridors.join(', ')}`
-      : `${mileposts} mileposts covering ${cities.join(', ')}`;
+    // Build backbone: order major cities by geographic sweep (west to east, north to south)
+    majorCities.sort((a, b) => a.col !== b.col ? a.col - b.col : a.row - b.row);
+
+    // Find non-major cities as spurs
+    const majorCityNames = new Set(majorCities.map(c => c.name));
+    const spurs: Array<{ name: string; nearestMajor: string; direction: string }> = [];
+    for (const [name, info] of cityPositions) {
+      if (majorCityNames.has(name)) continue;
+      // Find nearest major city for spur label
+      let nearest = majorCities[0];
+      let bestDist = Infinity;
+      for (const mc of majorCities) {
+        const dist = hexDistance(info.row, info.col, mc.row, mc.col);
+        if (dist < bestDist) {
+          bestDist = dist;
+          nearest = mc;
+        }
+      }
+      const dir = ContextBuilder.compassDirection(info.row, info.col);
+      spurs.push({ name, nearestMajor: nearest.name, direction: dir });
+    }
+
+    const backboneStr = majorCities.map(c => c.name).join(' → ');
+    const backboneDir = majorCities.length > 0
+      ? ContextBuilder.compassDirection(
+          Math.round(majorCities.reduce((s, c) => s + c.row, 0) / majorCities.length),
+          Math.round(majorCities.reduce((s, c) => s + c.col, 0) / majorCities.length),
+        )
+      : '';
+
+    let result = `${mileposts} mileposts. Backbone: ${backboneStr}`;
+    if (backboneDir) result += ` (${backboneDir})`;
+
+    if (spurs.length > 0) {
+      const spurStrs = spurs.map(s => `${s.name} (${s.direction} via ${s.nearestMajor})`);
+      result += `. Spurs: ${spurStrs.join(', ')}`;
+    }
+
+    return result;
   }
 
   // ── Demand scoring (JIRA-13) ────────────────────────────────────────────
