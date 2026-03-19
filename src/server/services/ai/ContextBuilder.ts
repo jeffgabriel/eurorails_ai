@@ -937,52 +937,8 @@ export class ContextBuilder {
     }
     lines.push('');
 
-    // ── YOUR DEMAND CARDS ──
-    lines.push('YOUR DEMAND CARDS:');
-    if (context.demands.length === 0) {
-      lines.push('  No demand cards.');
-    } else {
-      // Group demands by cardIndex
-      const cardGroups = new Map<number, typeof context.demands>();
-      for (const d of context.demands) {
-        if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
-        cardGroups.get(d.cardIndex)!.push(d);
-      }
-      let cardNum = 0;
-      for (const [, demands] of Array.from(cardGroups.entries())) {
-        cardNum++;
-        lines.push(`Card ${cardNum} (pick at most one):`);
-        const labels = ['a', 'b', 'c', 'd', 'e'];
-        for (let i = 0; i < demands.length; i++) {
-          const d = demands[i];
-          const label = labels[i] ?? `${i + 1}`;
-          const note = ContextBuilder.formatReachabilityNote(d, skillLevel);
-          const victoryBonus = ContextBuilder.formatVictoryBonus(d, context.unconnectedMajorCities);
-          const suffix = victoryBonus ? ` \u2014 ${note} \u2014 ${victoryBonus}` : ` \u2014 ${note}`;
-          lines.push(`  ${label}) ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M)${suffix}`);
-        }
-      }
-
-      // Build cardIndex → cardNum map for ranking annotation (JIRA-123)
-      const cardIndexToNum = new Map<number, number>();
-      let cardMapNum = 0;
-      for (const [cardIdx] of Array.from(cardGroups.entries())) {
-        cardMapNum++;
-        cardIndexToNum.set(cardIdx, cardMapNum);
-      }
-
-      // Demand ranking by score (JIRA-13) — helps LLM prioritize
-      const sorted = [...context.demands].sort((a, b) => b.demandScore - a.demandScore);
-      lines.push('');
-      lines.push('DEMAND RANKING (by investment value):');
-      for (let i = 0; i < sorted.length; i++) {
-        const d = sorted[i];
-        const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
-        const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        const cardLabel = cardIndexToNum.has(d.cardIndex) ? ` (Card ${cardIndexToNum.get(d.cardIndex)})` : '';
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}${cardLabel}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
-      }
-    }
+    // ── YOUR DEMANDS (unified view — JIRA-133) ──
+    lines.push(ContextBuilder.formatDemandView(context.demands, context));
     lines.push('');
 
     // ── IMMEDIATE OPPORTUNITIES ──
@@ -1156,70 +1112,9 @@ export class ContextBuilder {
     }
     lines.push('');
 
-    // ── YOUR DEMAND CARDS (with turn estimates and scarcity) ──
-    lines.push('=== YOUR DEMAND CARDS (cards in your hand) ===');
-    lines.push('You may ONLY plan deliveries for demands listed below. Do not reference loads or cities not shown here.');
-    if (context.demands.length === 0) {
-      lines.push('  No demand cards.');
-    } else {
-      const cardGroups = new Map<number, typeof context.demands>();
-      for (const d of context.demands) {
-        if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
-        cardGroups.get(d.cardIndex)!.push(d);
-      }
-      let cardNum = 0;
-      const cardBestSummaries: string[] = [];
-      let corePlayableCount = 0;
-      for (const [, demands] of Array.from(cardGroups.entries())) {
-        cardNum++;
-        const best = ContextBuilder.bestDemandForCard(demands);
-        const bestRegion = ContextBuilder.cityRegionTag(best.deliveryCity);
-        const ferryTag = best.ferryRequired ? ', ferry' : '';
-        cardBestSummaries.push(
-          `Card ${cardNum}: best=${best.loadType}\u2192${best.deliveryCity} ${best.payout}M (${bestRegion}${ferryTag})`,
-        );
-        if (bestRegion === 'core' && !best.ferryRequired) corePlayableCount++;
-
-        lines.push(`Card ${cardNum} (pick at most one):`);
-        const labels = ['a', 'b', 'c', 'd', 'e'];
-        for (let i = 0; i < demands.length; i++) {
-          const d = demands[i];
-          const label = labels[i] ?? `${i + 1}`;
-          const isBest = d === best;
-          const bestTag = isBest ? ' \u2605 BEST' : '';
-          const note = ContextBuilder.formatReachabilityNote(d, skillLevel);
-          const turnEst = `~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn`;
-          const victoryBonus = ContextBuilder.formatVictoryBonus(d, context.unconnectedMajorCities);
-          let suffix = ` \u2014 ${note}, ${turnEst}`;
-          if (victoryBonus) suffix += ` \u2014 ${victoryBonus}`;
-          lines.push(`  ${label}) ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M)${suffix}${bestTag}`);
-        }
-      }
-
-      // HAND QUALITY summary (JIRA-16)
-      lines.push('');
-      lines.push(`HAND QUALITY: ${cardBestSummaries.join('. ')}. Hand quality: ${corePlayableCount}/${cardNum} cards playable in core.`);
-
-      // Build cardIndex → cardNum map for ranking annotation (JIRA-123)
-      const cardIndexToNumRP = new Map<number, number>();
-      let cardMapNumRP = 0;
-      for (const [cardIdx] of Array.from(cardGroups.entries())) {
-        cardMapNumRP++;
-        cardIndexToNumRP.set(cardIdx, cardMapNumRP);
-      }
-
-      // Demand ranking by score (JIRA-13)
-      const sorted = [...context.demands].sort((a, b) => b.demandScore - a.demandScore);
-      lines.push('');
-      lines.push('DEMAND RANKING (by investment value):');
-      for (let i = 0; i < sorted.length; i++) {
-        const d = sorted[i];
-        const tag = i === 0 ? ' ← RECOMMENDED' : (d.demandScore < 0 ? ' (low priority)' : '');
-        const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-        const cardLabel = cardIndexToNumRP.has(d.cardIndex) ? ` (Card ${cardIndexToNumRP.get(d.cardIndex)})` : '';
-        lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}${cardLabel}: score ${d.demandScore} (payout: ${d.payout}M, build: ~${buildCost}M, ROI: ${d.payout - buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn, network: +${d.networkCitiesUnlocked} cities, victory: +${d.victoryMajorCitiesEnRoute} major)${tag}`);
-      }
-    }
+    // ── YOUR DEMANDS (unified view — JIRA-133) ──
+    lines.push(ContextBuilder.formatDemandView(context.demands, context));
+    lines.push('You may ONLY plan deliveries for demands listed above. Do not reference loads or cities not shown here.');
     lines.push('');
 
     // ── DEMAND CORRIDORS ──
@@ -1421,6 +1316,122 @@ export class ContextBuilder {
     }
     const totalCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
     return `Supply not reachable${affordabilityTag(totalCost)}.${ferry}${scarcitySuffix}`;
+  }
+
+  /**
+   * JIRA-133: Unified demand view — replaces separate card section + demand ranking.
+   * Filters to viable demands (on-train, reachable, or positive ROI; cap 5),
+   * presents in card order, annotates card conflicts, and summarizes excluded demands.
+   */
+  static formatDemandView(
+    demands: DemandContext[],
+    context: { loads: string[]; unconnectedMajorCities: Array<{ cityName: string; estimatedCost: number }> },
+  ): string {
+    if (demands.length === 0) return 'YOUR DEMANDS:\n  No demand cards.';
+
+    // Determine viability for each demand
+    const viable: DemandContext[] = [];
+    const excluded: DemandContext[] = [];
+    for (const d of demands) {
+      const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+      const roi = d.payout - buildCost;
+      if (d.isLoadOnTrain || d.isSupplyReachable || d.isSupplyOnNetwork || roi > 0) {
+        viable.push(d);
+      } else {
+        excluded.push(d);
+      }
+    }
+
+    // Cap at 5 viable demands (keep card order)
+    const shown = viable.slice(0, 5);
+    const cappedExcluded = [...excluded, ...viable.slice(5)];
+
+    // Build cardIndex → card number map for display
+    const seenCards = new Map<number, number>();
+    let cardCounter = 0;
+    for (const d of demands) {
+      if (!seenCards.has(d.cardIndex)) {
+        cardCounter++;
+        seenCards.set(d.cardIndex, cardCounter);
+      }
+    }
+
+    const lines: string[] = ['YOUR DEMANDS:'];
+
+    // Render each viable demand
+    for (const d of shown) {
+      const cardNum = seenCards.get(d.cardIndex) ?? 0;
+      const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
+      const supplyNote = d.isLoadOnTrain ? 'OnTrain' : d.supplyCity;
+
+      let detail: string;
+      if (d.isLoadOnTrain || buildCost === 0) {
+        detail = `${d.payout}M, no build needed, ~${d.estimatedTurns} turns`;
+      } else {
+        const roi = d.payout - buildCost;
+        detail = `${d.payout}M, build ~${buildCost}M, ROI ${roi}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn`;
+      }
+
+      // Victory city note
+      const victoryNote = ContextBuilder.formatDemandVictoryNote(d, context.unconnectedMajorCities);
+
+      lines.push(`${d.loadType} ${supplyNote}→${d.deliveryCity} [Card ${cardNum}]: ${detail}${victoryNote}`);
+    }
+
+    // Detect and annotate card conflicts among shown demands
+    const cardGroups = new Map<number, DemandContext[]>();
+    for (const d of shown) {
+      if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
+      cardGroups.get(d.cardIndex)!.push(d);
+    }
+    for (const [, group] of cardGroups) {
+      if (group.length >= 2) {
+        const names = group.map(d => `${d.loadType}→${d.deliveryCity}`);
+        lines.push(`  ↳ NOTE: ${names.join(' and ')} are on the same card — delivering one discards the other.`);
+      }
+    }
+
+    // Excluded demands summary
+    if (cappedExcluded.length > 0) {
+      const costs = cappedExcluded.map(d => d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery);
+      const minCost = Math.min(...costs);
+      const maxCost = Math.max(...costs);
+      const costRange = minCost === maxCost ? `${minCost}M` : `${minCost}-${maxCost}M`;
+      lines.push(`${cappedExcluded.length} other demands need ${costRange} track (not viable).`);
+    }
+
+    // Cargo cross-reference: when the bot carries loads, show which demands they fulfill
+    if (context.loads.length > 0) {
+      lines.push('');
+      lines.push('CARGO:');
+      for (const load of context.loads) {
+        const matching = demands.find(d => d.loadType === load && d.isLoadOnTrain);
+        if (matching) {
+          const cardNum = seenCards.get(matching.cardIndex) ?? 0;
+          const label = String.fromCharCode(96 + (demands.filter(dd => dd.cardIndex === matching.cardIndex).indexOf(matching) + 1)); // a, b, c
+          lines.push(`- ${load} → deliver at ${matching.deliveryCity} for ${matching.payout}M [Card ${cardNum}${label}] (~${matching.estimatedTurns} turns away)`);
+        } else {
+          lines.push(`- ${load} → no matching demand (consider dropping at next city)`);
+        }
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * JIRA-133: Format a short victory city annotation for the demand view.
+   */
+  private static formatDemandVictoryNote(
+    d: DemandContext,
+    unconnectedMajorCities: Array<{ cityName: string; estimatedCost: number }>,
+  ): string {
+    const unconnected = unconnectedMajorCities.filter(
+      u => u.cityName === d.supplyCity || u.cityName === d.deliveryCity,
+    );
+    if (unconnected.length === 0) return '';
+    const names = unconnected.map(u => u.cityName);
+    return ` — routes near ${names.join(', ')} (unconnected)`;
   }
 
   /**
@@ -1781,14 +1792,8 @@ export class ContextBuilder {
     }
     lines.push('');
 
-    // Full demand ranking for context
-    lines.push('YOUR DEMAND CARDS:');
-    for (let i = 0; i < demands.length; i++) {
-      const d = demands[i];
-      const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-      const tag = d.isLoadOnTrain ? ' [ON TRAIN]' : '';
-      lines.push(`  #${i + 1} ${d.loadType} ${d.supplyCity}→${d.deliveryCity}: ${d.payout}M, build ~${buildCost}M, ~${d.estimatedTurns} turns, ${d.efficiencyPerTurn.toFixed(1)}M/turn${tag}`);
-    }
+    // Unified demand view (JIRA-133)
+    lines.push(ContextBuilder.formatDemandView(demands, { loads: snapshot.bot.loads, unconnectedMajorCities: [] }));
     lines.push('');
 
     lines.push(`CARGO CONFLICT: Your planned route needs ${pickupCount} pickup slots but you only have ${freeSlots} free.`);

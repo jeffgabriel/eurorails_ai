@@ -2192,7 +2192,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     };
   }
 
-  it('should label best demand per card with BEST tag', () => {
+  it('should show unified demand view with card labels in route planning prompt', () => {
     const ctx = makeCtx({
       demands: [
         makeD({ cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
@@ -2201,14 +2201,13 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     });
 
     const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
-    // Coal should be best (both on network, core delivery)
+    expect(output).toContain('YOUR DEMANDS:');
     expect(output).toContain('Coal');
-    expect(output).toMatch(/Coal.*BEST/);
-    // Wine should NOT be best
-    expect(output).not.toMatch(/Wine.*BEST/);
+    // Both demands are on the same card, should get a conflict note
+    expect(output).toContain('same card');
   });
 
-  it('should include HAND QUALITY summary line', () => {
+  it('should show demands from multiple cards in unified view', () => {
     const ctx = makeCtx({
       demands: [
         makeD({ cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
@@ -2218,26 +2217,16 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     });
 
     const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
-    expect(output).toContain('HAND QUALITY:');
-    // Berlin and Paris are core; London is peripheral+ferry
-    expect(output).toContain('cards playable in core');
+    expect(output).toContain('YOUR DEMANDS:');
+    expect(output).toContain('[Card 1]');
+    expect(output).toContain('[Card 2]');
+    expect(output).toContain('[Card 3]');
+    // No HAND QUALITY or DEMAND RANKING in new format
+    expect(output).not.toContain('HAND QUALITY');
+    expect(output).not.toContain('DEMAND RANKING');
   });
 
-  it('should count core-playable cards correctly (2/3)', () => {
-    const ctx = makeCtx({
-      demands: [
-        makeD({ cardIndex: 0, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Paris', payout: 9 }),
-        makeD({ cardIndex: 1, loadType: 'Wheat', supplyCity: 'München', deliveryCity: 'Ruhr', payout: 13 }),
-        makeD({ cardIndex: 2, loadType: 'Machinery', supplyCity: 'Hamburg', deliveryCity: 'London', payout: 25, ferryRequired: true }),
-      ],
-    });
-
-    const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
-    // Cards 0 and 1 deliver to core (Paris, Ruhr); Card 2 delivers to London (peripheral+ferry)
-    expect(output).toContain('2/3 cards playable in core');
-  });
-
-  it('should include payout, build cost, and turns in demand ranking line', () => {
+  it('should include payout, build cost, and turns in unified demand view', () => {
     const ctx = makeCtx({
       demands: [
         makeD({
@@ -2257,14 +2246,14 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     });
 
     const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
-    expect(output).toContain('payout: 17M');
-    expect(output).toContain('build: ~5M');
-    expect(output).toContain('ROI: 12M');
+    expect(output).toContain('17M');
+    expect(output).toContain('build ~5M');
+    expect(output).toContain('ROI 12M');
     expect(output).toContain('~4 turns');
     expect(output).toContain('M/turn');
   });
 
-  it('should show enhanced ranking format in serializePrompt too', () => {
+  it('should show unified demand view in serializePrompt with no build needed', () => {
     const ctx = makeCtx({
       demands: [
         makeD({
@@ -2282,13 +2271,14 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
     });
 
     const output = ContextBuilder.serializePrompt(ctx, BotSkillLevel.Medium);
-    expect(output).toContain('payout: 20M');
-    expect(output).toContain('build: ~0M');
+    expect(output).toContain('YOUR DEMANDS:');
+    expect(output).toContain('20M, no build needed');
     expect(output).toContain('~2 turns');
-    expect(output).toContain('M/turn');
+    expect(output).not.toContain('DEMAND RANKING');
+    expect(output).not.toContain('RECOMMENDED');
   });
 
-  it('should handle empty demands without HAND QUALITY line', () => {
+  it('should handle empty demands in unified view', () => {
     const ctx = makeCtx({ demands: [] });
     const output = ContextBuilder.serializeRoutePlanningPrompt(ctx, BotSkillLevel.Medium, [], []);
     expect(output).not.toContain('HAND QUALITY');
@@ -2297,6 +2287,145 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
 });
 
 // ── JIRA-13: Demand scoring tests ──────────────────────────────────────────
+
+// ── JIRA-133: formatDemandView — card conflict detection and cargo cross-reference ──
+
+describe('ContextBuilder.formatDemandView (JIRA-133)', () => {
+  function makeD(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
+    supplyCity: string;
+    deliveryCity: string;
+    loadType: string;
+    payout: number;
+  }): import('../../../shared/types/GameTypes').DemandContext {
+    return {
+      cardIndex: 0,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0,
+      estimatedTrackCostToDelivery: 0,
+      isLoadAvailable: true,
+      isLoadOnTrain: false,
+      ferryRequired: false,
+      loadChipTotal: 4,
+      loadChipCarried: 0,
+      estimatedTurns: 3,
+      demandScore: 0,
+      efficiencyPerTurn: 2.0,
+      networkCitiesUnlocked: 0,
+      victoryMajorCitiesEnRoute: 0,
+      isAffordable: true,
+      projectedFundsAfterDelivery: 50,
+      ...overrides,
+    };
+  }
+
+  it('should detect same-card conflicts and annotate them in plain English', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'Firenze', deliveryCity: 'London', payout: 31 }),
+      makeD({ cardIndex: 0, loadType: 'Wine', supplyCity: 'Wien', deliveryCity: 'Szczecin', payout: 12 }),
+      makeD({ cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: [], unconnectedMajorCities: [] });
+    expect(output).toContain('same card');
+    expect(output).toContain('Marble→London');
+    expect(output).toContain('Wine→Szczecin');
+    expect(output).toContain('delivering one discards the other');
+    // Different card demand should NOT be part of conflict note
+    expect(output).not.toContain('Cattle→Berlin and');
+  });
+
+  it('should NOT show card conflict note when demands are on different cards', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'Firenze', deliveryCity: 'London', payout: 31 }),
+      makeD({ cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: [], unconnectedMajorCities: [] });
+    expect(output).not.toContain('same card');
+  });
+
+  it('should show cargo cross-reference when bot carries loads matching demands', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'OnTrain', deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
+      makeD({ cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: ['Marble'], unconnectedMajorCities: [] });
+    expect(output).toContain('CARGO:');
+    expect(output).toContain('Marble → deliver at London for 31M');
+    expect(output).toContain('turns away');
+  });
+
+  it('should show "no matching demand" for carried loads without demand match', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: ['Imports'], unconnectedMajorCities: [] });
+    expect(output).toContain('CARGO:');
+    expect(output).toContain('Imports → no matching demand');
+  });
+
+  it('should NOT show CARGO section when bot carries nothing', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: [], unconnectedMajorCities: [] });
+    expect(output).not.toContain('CARGO:');
+  });
+
+  it('should filter to viable demands and summarize excluded ones', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20, isSupplyReachable: true }),
+      makeD({ cardIndex: 1, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Madrid', payout: 8, isSupplyReachable: false, isSupplyOnNetwork: false, estimatedTrackCostToSupply: 30, estimatedTrackCostToDelivery: 20 }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: [], unconnectedMajorCities: [] });
+    expect(output).toContain('Coal');
+    // Wine is not viable (negative ROI, not reachable)
+    expect(output).toContain('1 other demands need');
+    expect(output).toContain('not viable');
+  });
+
+  it('should cap at 5 viable demands and add extras to excluded', () => {
+    const demands = Array.from({ length: 7 }, (_, i) =>
+      makeD({ cardIndex: i, loadType: `Load${i}`, supplyCity: 'A', deliveryCity: 'B', payout: 20, isSupplyReachable: true }),
+    );
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: [], unconnectedMajorCities: [] });
+    // Should show exactly 5 demands
+    expect(output).toContain('Load0');
+    expect(output).toContain('Load4');
+    // Load5 and Load6 should be excluded
+    expect(output).toContain('2 other demands need');
+  });
+
+  it('should annotate victory city notes for demands near unconnected cities', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 20, isSupplyReachable: true }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, {
+      loads: [],
+      unconnectedMajorCities: [{ cityName: 'Berlin', estimatedCost: 15 }],
+    });
+    expect(output).toContain('routes near Berlin (unconnected)');
+  });
+
+  it('should show "no build needed" for on-train demands', () => {
+    const demands = [
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'OnTrain', deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
+    ];
+
+    const output = ContextBuilder.formatDemandView(demands, { loads: ['Marble'], unconnectedMajorCities: [] });
+    expect(output).toContain('no build needed');
+    expect(output).toContain('OnTrain→London');
+  });
+});
 
 describe('ContextBuilder demand scoring (JIRA-13)', () => {
   /** Build a DemandContext for scoring tests */
@@ -2394,13 +2523,15 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     } as any;
 
     const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
-    expect(output).toContain('DEMAND RANKING');
-    expect(output).toContain('RECOMMENDED');
-    expect(output).toContain('score 15');
-    expect(output).toContain('score -14');
+    // JIRA-133: unified demand view replaces DEMAND RANKING
+    expect(output).toContain('YOUR DEMANDS:');
+    expect(output).toContain('Coal');
+    // Wine has negative ROI and no reachability — should be excluded
+    expect(output).not.toContain('DEMAND RANKING');
+    expect(output).not.toContain('RECOMMENDED');
   });
 
-  it('all demands negative ROI — best one still marked RECOMMENDED', () => {
+  it('all demands negative ROI — excluded as not viable', () => {
     const demands = [
       makeScoringDemand({
         loadType: 'Coal',
@@ -2409,7 +2540,7 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
         payout: 10,
         estimatedTrackCostToSupply: 20,
         estimatedTrackCostToDelivery: 15,
-        demandScore: -10, // -25 ROI + 5 network cities * 3 = -10
+        demandScore: -10,
         networkCitiesUnlocked: 5,
         victoryMajorCitiesEnRoute: 0,
       }),
@@ -2421,7 +2552,7 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
         payout: 8,
         estimatedTrackCostToSupply: 30,
         estimatedTrackCostToDelivery: 20,
-        demandScore: -33, // -42 ROI + 3 network * 3 = -33
+        demandScore: -33,
         networkCitiesUnlocked: 3,
         victoryMajorCitiesEnRoute: 0,
       }),
@@ -2452,27 +2583,25 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     } as any;
 
     const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
-    // Even with all negative scores, best one gets RECOMMENDED
-    expect(output).toContain('RECOMMENDED');
+    // JIRA-133: with all negative ROI and no reachability, demands are excluded
+    expect(output).toContain('YOUR DEMANDS:');
+    expect(output).toContain('not viable');
+    expect(output).not.toContain('RECOMMENDED');
     expect(output).not.toContain('DO NOT pursue');
-    // Coal (-10) should rank higher than Wine (-33)
-    expect(output).toContain('#1 Coal');
-    expect(output).toContain('#2 Wine');
   });
 
-  it('demand near unconnected major city should score higher via victory bonus', () => {
-    // Demand A: simple, payout 20, no track cost, no network value
+  it('demand with supply reachable shows in unified view even with negative ROI', () => {
     const demandA = makeScoringDemand({
       loadType: 'Coal',
       supplyCity: 'Essen',
       deliveryCity: 'Berlin',
       payout: 20,
-      demandScore: 20, // pure ROI
+      isSupplyReachable: true,
+      demandScore: 20,
       networkCitiesUnlocked: 0,
       victoryMajorCitiesEnRoute: 0,
     });
 
-    // Demand B: negative ROI but passes near 2 unconnected major cities
     const demandB = makeScoringDemand({
       cardIndex: 1,
       loadType: 'Wine',
@@ -2480,7 +2609,8 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
       deliveryCity: 'München',
       payout: 10,
       estimatedTrackCostToSupply: 20,
-      demandScore: 21, // -10 ROI + 1 network * 3 + 2 victory * 10 = 21
+      isSupplyReachable: true, // reachable, so should be included
+      demandScore: 21,
       networkCitiesUnlocked: 1,
       victoryMajorCitiesEnRoute: 2,
     });
@@ -2510,13 +2640,11 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     } as any;
 
     const output = ContextBuilder.serializePrompt(context, BotSkillLevel.Medium);
-    // Wine (score 21) should rank higher than Coal (score 20) due to victory bonus
-    const rankingSection = output.split('DEMAND RANKING')[1];
-    const wineRankPos = rankingSection.indexOf('#1 Wine');
-    const coalRankPos = rankingSection.indexOf('#2 Coal');
-    expect(wineRankPos).toBeGreaterThan(-1);
-    expect(coalRankPos).toBeGreaterThan(-1);
-    expect(wineRankPos).toBeLessThan(coalRankPos);
+    // JIRA-133: unified demand view — both demands visible (both supply reachable)
+    expect(output).toContain('YOUR DEMANDS:');
+    expect(output).toContain('Coal');
+    expect(output).toContain('Wine');
+    expect(output).not.toContain('DEMAND RANKING');
   });
 
   it('demand scoring formula: baseROI + corridorMultiplier * baseROI + victoryBonus', () => {
