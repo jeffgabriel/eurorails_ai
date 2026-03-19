@@ -134,6 +134,66 @@ export const UPGRADE_BEFORE_DROP_SCHEMA = {
  *
  * Note: Anthropic requires additionalProperties: false on all object types.
  */
+/**
+ * JSON Schema for the Build Advisor LLM response (JIRA-129).
+ * Structured output: action (build/buildAlternative/replan/useOpponentTrack),
+ * target city, waypoints as [row, col] pairs, optional newRoute for replan,
+ * optional alternativeBuild, and reasoning.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const BUILD_ADVISOR_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    action: { type: 'string' as const, enum: ['build', 'buildAlternative', 'replan', 'useOpponentTrack'] },
+    target: { type: 'string' as const },
+    waypoints: {
+      type: 'array' as const,
+      items: {
+        type: 'array' as const,
+        items: { type: 'number' as const },
+        minItems: 2,
+        maxItems: 2,
+      },
+    },
+    newRoute: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        additionalProperties: false as const,
+        properties: {
+          action: { type: 'string' as const, enum: ['pickup', 'deliver'] },
+          load: { type: 'string' as const },
+          city: { type: 'string' as const },
+          demandCardId: { type: 'number' as const },
+          payment: { type: 'number' as const },
+        },
+        required: ['action', 'load', 'city'],
+      },
+    },
+    alternativeBuild: {
+      type: 'object' as const,
+      additionalProperties: false as const,
+      properties: {
+        target: { type: 'string' as const },
+        waypoints: {
+          type: 'array' as const,
+          items: {
+            type: 'array' as const,
+            items: { type: 'number' as const },
+            minItems: 2,
+            maxItems: 2,
+          },
+        },
+      },
+      required: ['target', 'waypoints'],
+    },
+    reasoning: { type: 'string' as const },
+  },
+  required: ['action', 'target', 'waypoints', 'reasoning'],
+};
+
 export const TRIP_PLAN_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,
@@ -163,8 +223,6 @@ export const TRIP_PLAN_SCHEMA = {
         },
         required: ['stops', 'reasoning'],
       },
-      minItems: 1,
-      maxItems: 3,
     },
     chosenIndex: { type: 'number' as const },
     reasoning: { type: 'string' as const },
