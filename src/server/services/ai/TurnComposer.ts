@@ -24,11 +24,17 @@ import {
   StrategicRoute,
   TerrainType,
   TrackSegment,
+  BuildAdvisorResult,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints, makeKey, getHexNeighbors } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
+import { BuildAdvisor } from './BuildAdvisor';
+import { SolvencyCheck } from './SolvencyCheck';
+import { RouteValidator } from './RouteValidator';
+import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 /** JIRA-32: Structured trace of what TurnComposer did during composition. */
@@ -57,6 +63,19 @@ export interface CompositionTrace {
   ferryAwareBFS?: { searched: boolean; ferryHopsUsed: number; nearestPointViaFerry: { row: number; col: number; distance: number; ferryCrossings: number } | null };
   /** JIRA-125: Victory build decision */
   victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
+  /** JIRA-129: Build Advisor decision */
+  advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean };
+}
+
+/** JIRA-129: Extended result from tryAppendBuild, may include an updated route from replan */
+export interface BuildResult {
+  plan: TurnPlan | null;
+  updatedRoute?: StrategicRoute;
+  advisorAction?: string;
+  advisorWaypoints?: [number, number][];
+  advisorReasoning?: string;
+  advisorLatencyMs?: number;
+  solvencyRetries?: number;
 }
 
 /** Result from TurnComposer.compose() — the plan plus a trace of what happened. */
@@ -484,14 +503,14 @@ export class TurnComposer {
           }
         }
 
-        const buildPlan = await TurnComposer.tryAppendBuild(
+        const buildResult = await TurnComposer.tryAppendBuild(
           simSnapshot, simContext, activeRoute, trace,
         );
-        if (buildPlan) {
-          steps.push(buildPlan);
-          if (buildPlan.type === AIActionType.BuildTrack) {
-            trace.build.target = buildPlan.targetCity ?? null;
-            trace.build.cost = buildPlan.segments.reduce((s, seg) => s + seg.cost, 0);
+        if (buildResult.plan) {
+          steps.push(buildResult.plan);
+          if (buildResult.plan.type === AIActionType.BuildTrack) {
+            trace.build.target = buildResult.plan.targetCity ?? null;
+            trace.build.cost = buildResult.plan.segments.reduce((s, seg) => s + seg.cost, 0);
           }
         } else if (canAffordUpgrade) {
           console.log(`[TurnComposer] Phase B: upgrade preferred over build (cash=${simSnapshot.bot.money}, no build target found, train=${simSnapshot.bot.trainType})`);
@@ -729,36 +748,26 @@ export class TurnComposer {
 
   /**
    * Attempt to append a build step using the current (post-operation) budget.
+   * JIRA-129: Integrates BuildAdvisor when brain is provided. Falls back to
+   * existing logic when brain is null/undefined or advisor returns null.
    */
   static async tryAppendBuild(
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
     trace?: CompositionTrace,
-  ): Promise<TurnPlan | null> {
+    brain?: LLMStrategyBrain | null,
+    gridPoints?: import('../../../shared/types/GameTypes').GridPoint[],
+  ): Promise<BuildResult> {
+    const emptyResult: BuildResult = { plan: null };
+
     // Check budget: need money and build capacity remaining
     const remainingBudget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
-    if (remainingBudget <= 0) return null;
+    if (remainingBudget <= 0) return emptyResult;
 
-    // ── Near-miss opportunity scanning ──────────────────────────────────
-    const nearMissPlan = await TurnComposer.tryNearMissBuild(snapshot, context);
-    if (nearMissPlan && nearMissPlan.type === AIActionType.BuildTrack) {
-      // Near-miss build consumed budget — update context for subsequent builds
-      const nearMissCost = nearMissPlan.segments.reduce((s, seg) => s + seg.cost, 0);
-      context = { ...context, turnBuildCost: context.turnBuildCost + nearMissCost };
-    }
-
-    // JIRA-124: Align JIT gate build target with current route stop
+    // Collect unreached route stops for multi-stop look-ahead
     const currentStopIndex = activeRoute?.currentStopIndex ?? 0;
     const currentStop = activeRoute?.stops[currentStopIndex];
-    const currentStopCity = currentStop?.city;
-
-    // Guard: route complete or invalid stop index
-    if (activeRoute && (!currentStop || currentStopIndex >= activeRoute.stops.length)) {
-      return null;
-    }
-
-    // Collect unreached route stops for multi-stop look-ahead (starting from current stop)
     const unreachedRouteStops: string[] = [];
     if (activeRoute) {
       for (let i = currentStopIndex; i < activeRoute.stops.length; i++) {
@@ -769,12 +778,16 @@ export class TurnComposer {
       }
     }
 
+    // Guard: route complete or invalid stop index
+    if (activeRoute && (!currentStop || currentStopIndex >= activeRoute.stops.length)) {
+      return emptyResult;
+    }
+
     // JIRA-125: Victory conditions — unconditional victory build tier
     const victoryConditionsMet = snapshot.bot.money >= 250 &&
       (context.connectedMajorCities?.length ?? 0) < 7;
 
-    // When victory conditions met, skip route builds toward non-major cities (ADR-1)
-    // Route builds toward major cities still serve both route and victory purposes
+    // Victory override: filter route stops to major cities only
     let routeStopsForBuild = unreachedRouteStops;
     let victoryOverrodeRoute = false;
     if (victoryConditionsMet && unreachedRouteStops.length > 0) {
@@ -783,110 +796,212 @@ export class TurnComposer {
       victoryOverrodeRoute = routeStopsForBuild.length < unreachedRouteStops.length;
     }
 
-    // JIRA-124: JIT gate evaluates only the current stop's city as primaryTarget
-    let jitDeferred = false;
-    if (activeRoute && currentStopCity) {
-      const trainSpeed = context.speed ?? 9;
-      const currentStopOnNetwork = context.citiesOnNetwork.includes(currentStopCity);
+    // ── JIRA-129: Build Advisor integration ─────────────────────────────
+    // Exemptions: bypass advisor for victory builds, initial build phase, zero budget, or no brain
+    const isInitialBuild = context.isInitialBuild === true;
+    const useAdvisor = brain && gridPoints && !isInitialBuild && !victoryConditionsMet && remainingBudget > 0;
 
-      if (!currentStopOnNetwork) {
-        // Branch A: current stop city is NOT on network — needs track
-        const primaryTarget = currentStopCity;
-        const jitResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, primaryTarget, trainSpeed);
-        if (trace) {
-          trace.jitGate = {
-            deferred: jitResult.deferred,
-            reason: jitResult.reason,
-            trackRunway: jitResult.trackRunway,
-            trainSpeed,
-            destinationCity: primaryTarget,
-            currentStopIndex,
-            buildTargetStopIndex: currentStopIndex,
-            currentStopCity,
-          };
-        }
-        if (jitResult.deferred) {
-          console.log(`[TurnComposer] JIT gate: deferring build toward ${primaryTarget} — ${jitResult.reason} (runway=${jitResult.trackRunway.toFixed(1)} turns)`);
-          // JIRA-125: When victory conditions met, skip route builds but continue to victory builds
-          if (!victoryConditionsMet) {
-            return null;
-          }
-          jitDeferred = true;
-        }
-      } else {
-        // Branch B: current stop city IS on network — defer all building (ADR-3, Option A)
-        if (trace) {
-          trace.jitGate = {
-            deferred: true,
-            reason: 'current_stop_on_network',
-            trackRunway: 10,
-            trainSpeed,
-            destinationCity: currentStopCity,
-            currentStopIndex,
-            buildTargetStopIndex: currentStopIndex,
-            currentStopCity,
-          };
-        }
-        console.log(`[TurnComposer] JIT gate: current stop ${currentStopCity} already on network, deferring future stop builds`);
-        // JIRA-125: When victory conditions met, skip route builds but continue to victory builds
-        if (!victoryConditionsMet) {
-          return null;
-        }
-        jitDeferred = true;
-      }
-    }
-
-    // Multi-stop look-ahead: build toward each unreached stop, spending remaining budget
-    // Only reached after JIT gate approves building for the current stop (Branch A, gate approves)
     const allBuildSegments: TrackSegment[] = [];
     let buildBudgetSpent = context.turnBuildCost;
     let buildSnapshot = snapshot;
     let lastBuildTargetCity: string | undefined;
+    let advisorResult: BuildAdvisorResult | null = null;
+    let solvencyRetries = 0;
+    let advisorLatencyMs = 0;
+    let updatedRoute: StrategicRoute | undefined;
 
-    if (routeStopsForBuild.length > 0 && !jitDeferred) {
-      for (const city of routeStopsForBuild) {
-        const iterBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
-        if (iterBudget <= 0) break;
+    if (useAdvisor) {
+      // Call BuildAdvisor
+      const advisorStart = Date.now();
+      advisorResult = await BuildAdvisor.advise(
+        snapshot, context, activeRoute ?? null, gridPoints, brain,
+      );
+      advisorLatencyMs = Date.now() - advisorStart;
 
-        const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
-        let result;
-        try {
-          result = await ActionResolver.resolve(
-            { action: 'BUILD', details: { toward: city }, reasoning: '', planHorizon: '' },
-            buildSnapshot, iterContext,
-            activeRoute?.startingCity,
-          );
-        } catch {
-          break; // Resolve error — stop iterating
+      if (advisorResult) {
+        // ── Solvency retry loop (max 2 retries) ────────────────────────
+        const MAX_SOLVENCY_RETRIES = 2;
+        let currentAdvisorResult: BuildAdvisorResult | null = advisorResult;
+
+        for (let attempt = 0; attempt <= MAX_SOLVENCY_RETRIES; attempt++) {
+          if (!currentAdvisorResult) break;
+
+          const buildCity = TurnComposer.getAdvisorBuildTarget(currentAdvisorResult);
+          const buildWaypoints = TurnComposer.getAdvisorWaypoints(currentAdvisorResult);
+
+          if (currentAdvisorResult.action === 'useOpponentTrack') {
+            // Skip building for this corridor; use alternativeBuild if present
+            if (currentAdvisorResult.alternativeBuild) {
+              const altCity = currentAdvisorResult.alternativeBuild.target;
+              const altWaypoints = currentAdvisorResult.alternativeBuild.waypoints;
+              const altResult = await TurnComposer.resolveAdvisorBuild(
+                altCity, altWaypoints, buildSnapshot, context, buildBudgetSpent, activeRoute,
+              );
+              if (altResult.segments.length > 0) {
+                allBuildSegments.push(...altResult.segments);
+                lastBuildTargetCity = altCity;
+                buildBudgetSpent += altResult.cost;
+              }
+            }
+            break;
+          }
+
+          if (currentAdvisorResult.action === 'replan' && currentAdvisorResult.newRoute) {
+            // Validate the replan route
+            const newStops: RouteStop[] = currentAdvisorResult.newRoute;
+            const candidateRoute: StrategicRoute = {
+              stops: newStops,
+              currentStopIndex: 0,
+              phase: 'build',
+              createdAtTurn: context.turnNumber,
+              reasoning: currentAdvisorResult.reasoning,
+              startingCity: activeRoute?.startingCity,
+            };
+            const validation = RouteValidator.validate(candidateRoute, context, snapshot);
+            if (validation.valid) {
+              updatedRoute = candidateRoute;
+              // Build toward new route's first unbuilt stop using waypoints
+              const firstStop = newStops[0]?.city;
+              if (firstStop && buildWaypoints.length > 0) {
+                const replanResult = await TurnComposer.resolveAdvisorBuild(
+                  firstStop, buildWaypoints, buildSnapshot, context, buildBudgetSpent, activeRoute,
+                );
+                if (replanResult.segments.length > 0) {
+                  allBuildSegments.push(...replanResult.segments);
+                  lastBuildTargetCity = firstStop;
+                  buildBudgetSpent += replanResult.cost;
+                }
+              }
+            } else {
+              console.log(`[TurnComposer] Advisor replan route rejected by RouteValidator — falling back`);
+              // Fall back to alternativeBuild or existing logic
+              if (currentAdvisorResult.alternativeBuild) {
+                const altCity = currentAdvisorResult.alternativeBuild.target;
+                const altWaypoints = currentAdvisorResult.alternativeBuild.waypoints;
+                const altResult = await TurnComposer.resolveAdvisorBuild(
+                  altCity, altWaypoints, buildSnapshot, context, buildBudgetSpent, activeRoute,
+                );
+                if (altResult.segments.length > 0) {
+                  allBuildSegments.push(...altResult.segments);
+                  lastBuildTargetCity = altCity;
+                  buildBudgetSpent += altResult.cost;
+                }
+              }
+            }
+            break;
+          }
+
+          // build or buildAlternative
+          if (buildCity) {
+            const buildResult = await TurnComposer.resolveAdvisorBuild(
+              buildCity, buildWaypoints, buildSnapshot, context, buildBudgetSpent, activeRoute,
+            );
+
+            if (buildResult.segments.length > 0) {
+              // Solvency check
+              const solvency = SolvencyCheck.check(buildResult.segments, buildSnapshot, context);
+              if (solvency.canAfford) {
+                allBuildSegments.push(...buildResult.segments);
+                lastBuildTargetCity = buildCity;
+                buildBudgetSpent += buildResult.cost;
+                buildSnapshot = {
+                  ...buildSnapshot,
+                  bot: {
+                    ...buildSnapshot.bot,
+                    existingSegments: [...buildSnapshot.bot.existingSegments, ...buildResult.segments],
+                  },
+                };
+                break; // Success — exit retry loop
+              }
+
+              // Insolvent — retry if attempts remain
+              if (attempt < MAX_SOLVENCY_RETRIES) {
+                solvencyRetries++;
+                const retryStart = Date.now();
+                currentAdvisorResult = await BuildAdvisor.retryWithSolvencyFeedback(
+                  currentAdvisorResult, solvency.actualCost, solvency.availableForBuild,
+                  snapshot, context, activeRoute ?? null, gridPoints, brain,
+                );
+                advisorLatencyMs += Date.now() - retryStart;
+                continue; // Re-run with new advisor result
+              }
+
+              // Max retries exhausted — use whatever segments we have if buildable
+              if (buildResult.cost <= remainingBudget) {
+                allBuildSegments.push(...buildResult.segments);
+                lastBuildTargetCity = buildCity;
+                buildBudgetSpent += buildResult.cost;
+              }
+            }
+          }
+          break; // Exit retry loop
         }
+      }
 
-        if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
-          allBuildSegments.push(...result.plan.segments);
-          lastBuildTargetCity = city;
-          const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
-          buildBudgetSpent += cost;
+      // Record advisor trace
+      if (trace) {
+        trace.advisor = {
+          action: advisorResult?.action ?? null,
+          reasoning: advisorResult?.reasoning ?? null,
+          waypoints: advisorResult?.waypoints ?? [],
+          solvencyRetries,
+          latencyMs: advisorLatencyMs,
+          fallback: !advisorResult || (allBuildSegments.length === 0 && routeStopsForBuild.length > 0),
+        };
+      }
 
-          // Update snapshot so track frontier includes new segments for next iteration (AC-5)
-          buildSnapshot = {
-            ...buildSnapshot,
-            bot: {
-              ...buildSnapshot.bot,
-              existingSegments: [...buildSnapshot.bot.existingSegments, ...result.plan.segments],
-            },
-          };
-        } else {
-          break; // Can't build toward this stop — stop iterating (AC-4)
+      // Fallback to pre-advisor logic if advisor produced nothing
+      if (allBuildSegments.length === 0 && advisorResult === null) {
+        console.log('[TurnComposer] BuildAdvisor returned null — falling back to pre-advisor logic');
+        // Fall through to existing route-based build logic below
+      }
+    }
+
+    // ── Pre-advisor fallback / non-advisor path ────────────────────────
+    // Only run if advisor wasn't used or produced nothing
+    if (allBuildSegments.length === 0 && (!useAdvisor || advisorResult === null)) {
+      if (routeStopsForBuild.length > 0) {
+        for (const city of routeStopsForBuild) {
+          const iterBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
+          if (iterBudget <= 0) break;
+
+          const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
+          let result;
+          try {
+            result = await ActionResolver.resolve(
+              { action: 'BUILD', details: { toward: city }, reasoning: '', planHorizon: '' },
+              buildSnapshot, iterContext,
+              activeRoute?.startingCity,
+            );
+          } catch {
+            break;
+          }
+
+          if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
+            allBuildSegments.push(...result.plan.segments);
+            lastBuildTargetCity = city;
+            const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
+            buildBudgetSpent += cost;
+
+            buildSnapshot = {
+              ...buildSnapshot,
+              bot: {
+                ...buildSnapshot.bot,
+                existingSegments: [...buildSnapshot.bot.existingSegments, ...result.plan.segments],
+              },
+            };
+          } else {
+            break;
+          }
         }
       }
     }
 
     // JIRA-125: Victory build tier — spend remaining budget toward cheapest unconnected major city
-    // Fires regardless of route state when victory conditions are met
     if (victoryConditionsMet) {
       const unconnected = context.unconnectedMajorCities ?? [];
       const victoryBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
       if (unconnected.length > 0 && victoryBudget > 0) {
-        // Build toward cheapest unconnected city not already targeted by route builds
         const victoryTarget = unconnected.find(uc => !routeStopsForBuild.includes(uc.cityName));
         if (victoryTarget) {
           const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
@@ -916,26 +1031,29 @@ export class TurnComposer {
 
     if (allBuildSegments.length > 0) {
       return {
-        type: AIActionType.BuildTrack,
-        segments: allBuildSegments,
-        targetCity: lastBuildTargetCity,
+        plan: {
+          type: AIActionType.BuildTrack,
+          segments: allBuildSegments,
+          targetCity: lastBuildTargetCity,
+        },
+        updatedRoute,
+        advisorAction: advisorResult?.action,
+        advisorWaypoints: advisorResult?.waypoints,
+        advisorReasoning: advisorResult?.reasoning,
+        advisorLatencyMs: advisorLatencyMs > 0 ? advisorLatencyMs : undefined,
+        solvencyRetries: solvencyRetries > 0 ? solvencyRetries : undefined,
       };
     }
 
     // Fallback when no route-specific or victory build target exists.
-    // Prefer victory progress > speculative demand builds.
-    // Skip speculative builds when mid-route (travel/act phase) or when victory conditions handle it.
     if (!victoryConditionsMet) {
       const routeNeedsBuild = unreachedRouteStops.length > 0;
       const isMidRoute = activeRoute &&
         (activeRoute.phase === 'travel' || activeRoute.phase === 'act');
       let buildTarget: string | null = null;
       if (!routeNeedsBuild && !isMidRoute) {
-        // Build toward cheapest unconnected major city (victory progress)
-        // Only invest in victory builds when cash > 230M (within striking distance of 250M win)
         const unconnected = context.unconnectedMajorCities ?? [];
         if (unconnected.length > 0 && snapshot.bot.money > 230) {
-          // Already sorted by estimatedCost in ContextBuilder
           buildTarget = unconnected[0].cityName;
         }
       }
@@ -948,12 +1066,61 @@ export class TurnComposer {
         );
 
         if (result.success && result.plan) {
-          return result.plan;
+          return { plan: result.plan };
         }
       }
     }
 
+    return emptyResult;
+  }
+
+  /**
+   * JIRA-129: Resolve a build toward a target city using advisor waypoints.
+   */
+  private static async resolveAdvisorBuild(
+    targetCity: string,
+    waypoints: [number, number][],
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    buildBudgetSpent: number,
+    activeRoute?: StrategicRoute | null,
+  ): Promise<{ segments: TrackSegment[]; cost: number }> {
+    const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
+    const details: Record<string, string> & { waypoints?: [number, number][] } = { toward: targetCity };
+    if (waypoints.length > 0) {
+      details.waypoints = waypoints;
+    }
+    try {
+      const result = await ActionResolver.resolve(
+        { action: 'BUILD', details: details as Record<string, string>, reasoning: '', planHorizon: '' },
+        snapshot, iterContext,
+        activeRoute?.startingCity,
+      );
+      if (result?.success && result.plan?.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
+        const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
+        return { segments: result.plan.segments, cost };
+      }
+    } catch {
+      // Resolve error
+    }
+    return { segments: [], cost: 0 };
+  }
+
+  /**
+   * JIRA-129: Extract the build target city from an advisor result.
+   */
+  private static getAdvisorBuildTarget(result: BuildAdvisorResult): string | null {
+    if (result.action === 'build' || result.action === 'buildAlternative') {
+      return result.target;
+    }
     return null;
+  }
+
+  /**
+   * JIRA-129: Extract waypoints from an advisor result.
+   */
+  private static getAdvisorWaypoints(result: BuildAdvisorResult): [number, number][] {
+    return result.waypoints ?? [];
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

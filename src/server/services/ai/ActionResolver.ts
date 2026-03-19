@@ -63,7 +63,7 @@ export class ActionResolver {
    */
   private static async resolveSingleAction(
     action: string,
-    details: Record<string, string> & { waypoints?: [number, number][] },
+    details: Record<string, any> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,
@@ -111,7 +111,7 @@ export class ActionResolver {
    *   5. Return the resulting segments or a descriptive error.
    */
   private static async resolveBuild(
-    details: Record<string, string> & { waypoints?: [number, number][] },
+    details: Record<string, any> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,

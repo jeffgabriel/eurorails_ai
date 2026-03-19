@@ -4282,7 +4282,7 @@ describe('ActionResolver', () => {
 
       const intent: LLMActionIntent = {
         action: AIActionType.BuildTrack,
-        details: { toward: 'Paris', waypoints: [[15, 15]] } as Record<string, string> & { waypoints?: [number, number][] },
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as any,
         reasoning: 'Build through waypoint',
         planHorizon: 'short',
       };
@@ -4317,7 +4317,7 @@ describe('ActionResolver', () => {
 
       const intent: LLMActionIntent = {
         action: AIActionType.BuildTrack,
-        details: { toward: 'Paris', waypoints: [[15, 15]] } as Record<string, string> & { waypoints?: [number, number][] },
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as any,
         reasoning: 'Build through waypoint',
         planHorizon: 'short',
       };

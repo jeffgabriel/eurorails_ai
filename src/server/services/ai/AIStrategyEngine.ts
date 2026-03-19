@@ -772,8 +772,8 @@ export class AIStrategyEngine {
             // JIRA-105: Skip build if upgrade is pending (game rule: upgrade replaces build)
             const reCompHasBuild = reCompSteps.some(s => s.type === AIActionType.BuildTrack);
             const skipBuildForUpgrade = postDeliveryUpgrade !== null;
-            const reBuild = (reCompHasBuild || skipBuildForUpgrade) ? null : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
-            const phaseBAction = postDeliveryUpgrade ?? reBuild;
+            const reBuildResult = (reCompHasBuild || skipBuildForUpgrade) ? { plan: null } : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            const phaseBAction = postDeliveryUpgrade ?? reBuildResult.plan;
             if (phaseBAction) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);
               decision.plan = { type: 'MultiAction' as const, steps: [...nonBuildSteps, ...reCompSteps, phaseBAction] };

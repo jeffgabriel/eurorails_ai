@@ -169,7 +169,7 @@ jest.mock('../../services/ai/TripPlanner', () => ({
 jest.mock('../../services/ai/TurnComposer', () => ({
   TurnComposer: {
     compose: jest.fn((plan: any) => Promise.resolve({ plan, trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] } })),
-    tryAppendBuild: jest.fn(() => Promise.resolve(null)),
+    tryAppendBuild: jest.fn(() => Promise.resolve({ plan: null })),
   },
 }));
 
@@ -3901,7 +3901,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
       }));
 
-      (TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>).mockResolvedValue(null);
+      (TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>).mockResolvedValue({ plan: null });
 
       // JIRA-64 rebuilds demands post-delivery and invalidates route if demands don't match.
       (ContextBuilder.rebuildDemands as jest.Mock).mockImplementation(() => [

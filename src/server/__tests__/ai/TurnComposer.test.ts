@@ -1030,8 +1030,8 @@ describe('TurnComposer', () => {
 
       const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe(AIActionType.BuildTrack);
+      expect(result.plan).not.toBeNull();
+      expect(result.plan!.type).toBe(AIActionType.BuildTrack);
       // Verify BUILD was called toward Milano (cheapest unconnected)
       expect(mockResolve).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'BUILD', details: { toward: 'Milano' } }),
@@ -1061,7 +1061,7 @@ describe('TurnComposer', () => {
       const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
 
       // Should still build (via legacy fallback), but NOT through victory build tier
-      expect(result).not.toBeNull();
+      expect(result.plan).not.toBeNull();
     });
 
     it('overrides non-major-city route builds when victory conditions met', async () => {
@@ -1101,7 +1101,7 @@ describe('TurnComposer', () => {
 
       const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
 
-      expect(result).not.toBeNull();
+      expect(result.plan).not.toBeNull();
       // Verify BUILD was called toward Milano (victory city), NOT Wroclaw (non-major route stop)
       const buildCall = mockResolve.mock.calls.find(
         (args: any[]) => args[0]?.action === 'BUILD',
@@ -1153,8 +1153,8 @@ describe('TurnComposer', () => {
 
       const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
 
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe(AIActionType.BuildTrack);
+      expect(result.plan).not.toBeNull();
+      expect(result.plan!.type).toBe(AIActionType.BuildTrack);
       // Both route build (Milano) and victory build (London) should fire
       expect(mockResolve).toHaveBeenCalledTimes(2);
       expect(mockResolve).toHaveBeenCalledWith(
@@ -5685,7 +5685,9 @@ describe('TurnComposer', () => {
 
   // ── JIRA-113 P2: Near-Miss Optimizer Integration Tests ──────────────────
 
-  describe('JIRA-113: Near-miss optimizer in tryAppendBuild', () => {
+  // JIRA-129: Near-miss optimizer was replaced by BuildAdvisor. These tests are disabled.
+  // The tryNearMissBuild method definition is preserved but no longer called from tryAppendBuild.
+  describe.skip('JIRA-113: Near-miss optimizer in tryAppendBuild (legacy — replaced by JIRA-129 BuildAdvisor)', () => {
     beforeEach(() => {
       mockFindNearbyFerryPorts.mockReturnValue([]);
       mockFindSpurOpportunities.mockReturnValue([]);
@@ -5704,7 +5706,7 @@ describe('TurnComposer', () => {
         },
       });
       const context = makeContext({ turnNumber: 40 });
-      const route = makeRoute({ stops: [{ city: 'Berlin', type: 'pickup' as const }] });
+      const route = makeRoute({ stops: [{ action: 'pickup' as const, loadType: 'Coal', city: 'Berlin' }] });
 
       // Standard build returns a plan
       mockResolve.mockResolvedValueOnce({
@@ -5714,7 +5716,7 @@ describe('TurnComposer', () => {
 
       const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
       // Should still produce a build plan via standard path
-      expect(result).not.toBeNull();
+      expect(result.plan).not.toBeNull();
       expect(mockFindNearbyFerryPorts).toHaveBeenCalled();
       expect(mockFindSpurOpportunities).toHaveBeenCalled();
     });
@@ -5741,6 +5743,8 @@ describe('TurnComposer', () => {
           estimatedTrackCostToSupply: 3, estimatedTrackCostToDelivery: 20,
           isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
           loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
+          demandScore: 2, efficiencyPerTurn: 2, networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 50,
         }],
       });
 
@@ -5753,7 +5757,7 @@ describe('TurnComposer', () => {
       });
 
       // Near-miss build succeeds with 5M cost
-      const spurSegment = makeSegment(10, 13, 10, 14, 5);
+      const spurSegment = makeSegment(10, 13, 10, 14);
       mockResolve.mockResolvedValueOnce({
         success: true,
         plan: { type: AIActionType.BuildTrack, segments: [spurSegment], targetCity: 'NearCity' },
@@ -5761,10 +5765,10 @@ describe('TurnComposer', () => {
       // Standard build also called with remaining budget
       mockResolve.mockResolvedValueOnce({
         success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 14, 10, 15, 3)], targetCity: 'Berlin' },
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 14, 10, 15)], targetCity: 'Berlin' },
       });
 
-      const route = makeRoute({ stops: [{ city: 'Berlin', type: 'pickup' as const }] });
+      const route = makeRoute({ stops: [{ action: 'pickup' as const, loadType: 'Coal', city: 'Berlin' }] });
       const result = await TurnComposer.tryAppendBuild(snapshot, context, route);
 
       // Near-miss build should have been attempted
@@ -5802,7 +5806,7 @@ describe('TurnComposer', () => {
 
       const result = await TurnComposer.tryAppendBuild(snapshot, context, null);
       // Budget too low for any build — should return null
-      expect(result).toBeNull();
+      expect(result.plan).toBeNull();
     });
 
     it('network too small (<3 nodes) → near-miss scanning skipped', async () => {
@@ -5821,7 +5825,9 @@ describe('TurnComposer', () => {
     });
   });
 
-  describe('JIRA-124: JIT gate stop-alignment fix', () => {
+  // JIRA-129: JIT gate was replaced by BuildAdvisor. These tests are disabled.
+  // The shouldDeferBuild method definition is preserved but no longer called from tryAppendBuild.
+  describe.skip('JIRA-124: JIT gate stop-alignment fix (legacy — replaced by JIRA-129 BuildAdvisor)', () => {
     it('Branch A: builds toward current stop when off-network with low runway', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({
