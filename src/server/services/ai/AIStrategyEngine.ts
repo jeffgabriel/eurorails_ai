@@ -234,6 +234,8 @@ export class AIStrategyEngine {
       // JIRA-131: Always serialize context prompt for debug overlay observability
       const debugUserPrompt = ContextBuilder.serializePrompt(context, skillLevel);
       let decision: LLMDecisionResult;
+      // JIRA-129: Create brain at outer scope so BuildAdvisor can use it during Phase B composition
+      const brain = AIStrategyEngine.hasLLMApiKey(botConfig) ? AIStrategyEngine.createBrain(botConfig!) : null;
       let activeRoute = memory.activeRoute;
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
@@ -289,8 +291,7 @@ export class AIStrategyEngine {
           };
         } else {
         // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
-        const brain = AIStrategyEngine.createBrain(botConfig!);
-        const tripPlanner = new TripPlanner(brain);
+        const tripPlanner = new TripPlanner(brain!);
 
         const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
         // Wrap tripResult into routeResult-compatible shape for downstream code
@@ -398,7 +399,7 @@ export class AIStrategyEngine {
                   const upgradePrompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
                     snapshot, activeRoute, upgradeOptions, totalRoutePayout, context.demands,
                   );
-                  const upgradeResult = await brain.evaluateUpgradeBeforeDrop(upgradePrompt, snapshot, context);
+                  const upgradeResult = await brain!.evaluateUpgradeBeforeDrop(upgradePrompt, snapshot, context);
 
                   if (upgradeResult?.action === 'upgrade' && upgradeResult.targetTrain) {
                     // Validate the target train is in our options
@@ -434,7 +435,7 @@ export class AIStrategyEngine {
               if (conflictingLoads.length > 0) {
                 try {
                   const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
-                  const conflictResult = await brain.evaluateCargoConflict(cargoPrompt, snapshot, context);
+                  const conflictResult = await brain!.evaluateCargoConflict(cargoPrompt, snapshot, context);
 
                   if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
                     console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
@@ -551,7 +552,7 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 3b: Compose full turn (fill missing phases) ──
-      let compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute);
+      let compositionResult = await TurnComposer.compose(decision.plan, snapshot, context, activeRoute, brain, gridPoints);
       decision.plan = compositionResult.plan;
       let compositionTrace = compositionResult.trace;
 
@@ -572,7 +573,7 @@ export class AIStrategyEngine {
             ? strippedSteps[0]
             : { type: 'MultiAction' as const, steps: strippedSteps };
 
-        compositionResult = await TurnComposer.compose(strippedPlan, snapshot, context, activeRoute);
+        compositionResult = await TurnComposer.compose(strippedPlan, snapshot, context, activeRoute, brain, gridPoints);
         decision.plan = compositionResult.plan;
         compositionTrace = compositionResult.trace;
         validationResult = TurnValidator.validate(decision.plan, context, snapshot);
@@ -669,8 +670,7 @@ export class AIStrategyEngine {
           // Now capture() returns real DB state with new demand card, updated money, correct loads
           const freshSnap = await capture(gameId, botPlayerId);
           const freshContext = await ContextBuilder.build(freshSnap, skillLevel, gridPoints);
-          const brain = AIStrategyEngine.createBrain(botConfig!);
-          const postDeliveryTripPlanner = new TripPlanner(brain);
+          const postDeliveryTripPlanner = new TripPlanner(brain!);
           const llmStart = Date.now();
 
           let newRoute: StrategicRoute | null = null;
@@ -744,7 +744,7 @@ export class AIStrategyEngine {
             if (wastedMovement > 0) {
               const routeExec = await PlanExecutor.execute(newRoute, simSnapshot, simContext);
               if (routeExec.plan.type !== AIActionType.PassTurn) {
-                const reComposition = await TurnComposer.compose(routeExec.plan, simSnapshot, simContext, newRoute);
+                const reComposition = await TurnComposer.compose(routeExec.plan, simSnapshot, simContext, newRoute, brain, gridPoints);
                 reCompSteps = reComposition.plan.type === 'MultiAction'
                   ? reComposition.plan.steps : [reComposition.plan];
 
@@ -772,7 +772,7 @@ export class AIStrategyEngine {
             // JIRA-105: Skip build if upgrade is pending (game rule: upgrade replaces build)
             const reCompHasBuild = reCompSteps.some(s => s.type === AIActionType.BuildTrack);
             const skipBuildForUpgrade = postDeliveryUpgrade !== null;
-            const reBuildResult = (reCompHasBuild || skipBuildForUpgrade) ? { plan: null } : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute);
+            const reBuildResult = (reCompHasBuild || skipBuildForUpgrade) ? { plan: null } : await TurnComposer.tryAppendBuild(simSnapshot, simContext, newRoute, undefined, brain, gridPoints);
             const phaseBAction = postDeliveryUpgrade ?? reBuildResult.plan;
             if (phaseBAction) {
               const nonBuildSteps = coreSteps.filter(s => s.type !== AIActionType.BuildTrack);

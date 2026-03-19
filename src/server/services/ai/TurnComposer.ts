@@ -99,6 +99,8 @@ export class TurnComposer {
     snapshot: WorldSnapshot,
     context: GameContext,
     activeRoute?: StrategicRoute | null,
+    brain?: import('./LLMStrategyBrain').LLMStrategyBrain | null,
+    gridPoints?: import('../../../shared/types/GameTypes').GridPoint[],
   ): Promise<CompositionResult> {
     // JIRA-32: Initialize composition trace
     const trace: CompositionTrace = {
@@ -504,7 +506,7 @@ export class TurnComposer {
         }
 
         const buildResult = await TurnComposer.tryAppendBuild(
-          simSnapshot, simContext, activeRoute, trace,
+          simSnapshot, simContext, activeRoute, trace, brain, gridPoints,
         );
         if (buildResult.plan) {
           steps.push(buildResult.plan);
