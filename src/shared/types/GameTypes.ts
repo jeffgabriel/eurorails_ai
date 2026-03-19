@@ -853,3 +853,24 @@ export interface LLMDecisionResult {
     systemPrompt?: string;
     userPrompt?: string;
 }
+
+// ─── Build Advisor Types (JIRA-129) ─────────────────────────────────────────
+
+/** Corridor map bounding box and rendered ASCII for LLM prompt */
+export interface CorridorMap {
+    rendered: string;        // ASCII map string
+    minRow: number;
+    maxRow: number;
+    minCol: number;
+    maxCol: number;
+}
+
+/** Result from BuildAdvisor LLM call — structured build/replan decision */
+export interface BuildAdvisorResult {
+    action: 'build' | 'buildAlternative' | 'replan' | 'useOpponentTrack';
+    target: string;
+    waypoints: [number, number][];
+    newRoute?: RouteStop[];
+    alternativeBuild?: { target: string; waypoints: [number, number][] };
+    reasoning: string;
+}
