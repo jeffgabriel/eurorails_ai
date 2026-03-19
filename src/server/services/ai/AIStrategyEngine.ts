@@ -225,6 +225,8 @@ export class AIStrategyEngine {
       // ── Stage 3: Decision Gate — activeRoute check ──
       // If the bot has an active route, auto-execute the next step.
       // If not, consult LLM for a new strategic route.
+      // JIRA-131: Always serialize context prompt for debug overlay observability
+      const debugUserPrompt = ContextBuilder.serializePrompt(context, skillLevel);
       let decision: LLMDecisionResult;
       let activeRoute = memory.activeRoute;
       let routeWasCompleted = false;
@@ -287,8 +289,8 @@ export class AIStrategyEngine {
         const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
         // Wrap tripResult into routeResult-compatible shape for downstream code
         const routeResult = tripResult
-          ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog }
-          : { route: null as StrategicRoute | null, llmLog: [] as LlmAttempt[] };
+          ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog, systemPrompt: tripResult.systemPrompt, userPrompt: tripResult.userPrompt }
+          : { route: null as StrategicRoute | null, llmLog: [] as LlmAttempt[], systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
 
         if (routeResult.route) {
           activeRoute = routeResult.route;
@@ -460,11 +462,13 @@ export class AIStrategyEngine {
             plan: routePlan,
             reasoning: `[route-planned] ${activeRoute.reasoning}. ${execResult.description}`,
             planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-            model: routeResult.model,
-            latencyMs: routeResult.latencyMs,
+            model: routeResult.model ?? 'unknown',
+            latencyMs: routeResult.latencyMs ?? 0,
             tokenUsage: routeResult.tokenUsage,
             retried: false,
             llmLog: routeResult.llmLog,
+            systemPrompt: routeResult.systemPrompt,
+            userPrompt: routeResult.userPrompt,
           };
 
           if (execResult.routeComplete) {
@@ -490,6 +494,8 @@ export class AIStrategyEngine {
               latencyMs: 0,
               retried: false,
               llmLog: routeResult.llmLog,
+              systemPrompt: routeResult.systemPrompt,
+              userPrompt: routeResult.userPrompt,
             };
           } else {
             // Heuristic also failed — pass turn
@@ -502,6 +508,8 @@ export class AIStrategyEngine {
               latencyMs: 0,
               retried: false,
               llmLog: routeResult.llmLog,
+              systemPrompt: routeResult.systemPrompt,
+              userPrompt: routeResult.userPrompt,
             };
           }
         }
@@ -680,6 +688,10 @@ export class AIStrategyEngine {
           }
 
           if (newRoute) {
+            // JIRA-129: Update activeRoute IMMEDIATELY so Phase B composition
+            // (tryAppendBuild, upgrade logic) sees the new route, not stale state.
+            activeRoute = newRoute;
+
             const planSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
             let wastedMovement = compositionTrace.moveBudget?.wasted ?? 0;
 
@@ -769,7 +781,6 @@ export class AIStrategyEngine {
             }
 
             console.log(`${tag} JIRA-90: Post-delivery re-composed with ${reCompSteps.length} movement steps + build retarget (reclaimed ${wastedMovement}mp)`);
-            activeRoute = newRoute;
             reEvalHandled = true;
 
             // JIRA-109: Update debug overlay fields to reflect post-re-eval route
@@ -891,8 +902,8 @@ export class AIStrategyEngine {
       };
 
       // Update route state in memory
-      // JIRA-99: When reEvalHandled is true, Stage 3d already set activeRoute to the
-      // replacement route (line 617). Don't clear it — let the else-if branch save it.
+      // JIRA-99/JIRA-129: When reEvalHandled is true, Stage 3d already set activeRoute to the
+      // replacement route immediately after TripPlanner validation. Don't clear it — let the else-if branch save it.
       if ((routeWasCompleted || routeWasAbandoned) && !reEvalHandled) {
         const outcome = routeWasCompleted ? 'completed' : 'abandoned';
         const routeToLog = memory.activeRoute ?? activeRoute;
@@ -1136,9 +1147,9 @@ export class AIStrategyEngine {
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
-        // Prompt text for NDJSON observability
+        // Prompt text for NDJSON + debug overlay observability
         systemPrompt: decision.systemPrompt,
-        userPrompt: decision.userPrompt,
+        userPrompt: decision.userPrompt ?? debugUserPrompt,
         // Enriched debugging fields
         positionStart,
         positionEnd: movementPath.length > 0
