@@ -40,10 +40,30 @@ jest.mock('../../services/ai/NetworkBuildAnalyzer', () => ({
     loadFerryData: jest.fn(() => []),
   },
 }));
+// JIRA-129: Build Advisor pipeline mocks
+jest.mock('../../services/ai/BuildAdvisor', () => ({
+  BuildAdvisor: {
+    advise: jest.fn(() => Promise.resolve(null)),
+    retryWithSolvencyFeedback: jest.fn(() => Promise.resolve(null)),
+  },
+}));
+jest.mock('../../services/ai/SolvencyCheck', () => ({
+  SolvencyCheck: {
+    check: jest.fn(() => ({ canAfford: true, actualCost: 5, availableForBuild: 50, incomeBefore: 0 })),
+  },
+}));
+jest.mock('../../services/ai/RouteValidator', () => ({
+  RouteValidator: {
+    validate: jest.fn(() => ({ valid: true, errors: [] })),
+  },
+}));
 
 import { TurnComposer } from '../../services/ai/TurnComposer';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
+import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
+import { SolvencyCheck } from '../../services/ai/SolvencyCheck';
+import { RouteValidator } from '../../services/ai/RouteValidator';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import * as majorCityGroups from '../../../shared/services/majorCityGroups';
 import {
@@ -55,6 +75,7 @@ import {
   TerrainType,
   TrackSegment,
   TurnPlan,
+  BuildAdvisorResult,
 } from '../../../shared/types/GameTypes';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;
@@ -68,6 +89,12 @@ const { NetworkBuildAnalyzer: MockNetworkBuildAnalyzer } = require('../../servic
 const mockFindNearbyFerryPorts = MockNetworkBuildAnalyzer.findNearbyFerryPorts as jest.Mock;
 const mockFindSpurOpportunities = MockNetworkBuildAnalyzer.findSpurOpportunities as jest.Mock;
 const mockEvaluateBuildOption = MockNetworkBuildAnalyzer.evaluateBuildOption as jest.Mock;
+
+// JIRA-129: Build Advisor pipeline mocks
+const mockAdvise = BuildAdvisor.advise as jest.Mock;
+const mockRetryWithSolvencyFeedback = BuildAdvisor.retryWithSolvencyFeedback as jest.Mock;
+const mockSolvencyCheck = SolvencyCheck.check as jest.Mock;
+const mockRouteValidate = RouteValidator.validate as jest.Mock;
 
 function makeSegment(fromRow: number, fromCol: number, toRow: number, toCol: number): TrackSegment {
   return {
@@ -6183,6 +6210,229 @@ describe('TurnComposer', () => {
         (args: any[]) => args[0]?.action === 'BUILD',
       );
       expect(buildCalls).toHaveLength(0);
+    });
+  });
+
+  // ─── JIRA-129: Build Advisor pipeline integration tests ───────────────────
+
+  describe('JIRA-129: Build Advisor pipeline in tryAppendBuild', () => {
+    const mockBrain = {} as any; // Stub brain — BuildAdvisor is fully mocked
+    const mockGridPoints = [{ row: 10, col: 10, id: '10,10', terrain: TerrainType.Clear, x: 0, y: 0 }] as any;
+
+    beforeEach(() => {
+      mockAdvise.mockReset().mockResolvedValue(null);
+      mockRetryWithSolvencyFeedback.mockReset().mockResolvedValue(null);
+      mockSolvencyCheck.mockReset().mockReturnValue({ canAfford: true, actualCost: 5, availableForBuild: 50, incomeBefore: 0 });
+      mockRouteValidate.mockReset().mockReturnValue({ valid: true, errors: [] });
+    });
+
+    it('calls BuildAdvisor.advise and uses waypoints for build action', async () => {
+      const advisorResult: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[12, 12]],
+        reasoning: 'Build through waypoint toward Paris',
+      };
+      mockAdvise.mockResolvedValueOnce(advisorResult);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 12, 12)], targetCity: 'Paris' },
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0 });
+      const route = makeRoute({ stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }] });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(mockAdvise).toHaveBeenCalledTimes(1);
+      expect(result.plan).not.toBeNull();
+      expect(result.advisorAction).toBe('build');
+      expect(result.advisorReasoning).toBe('Build through waypoint toward Paris');
+    });
+
+    it('falls back to pre-advisor logic when advise returns null', async () => {
+      mockAdvise.mockResolvedValueOnce(null);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)], targetCity: 'Paris' },
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, citiesOnNetwork: ['Berlin'] });
+      const route = makeRoute({
+        stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }],
+        currentStopIndex: 0,
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(result.plan).not.toBeNull();
+      // Falls back to route-based build
+      expect(mockResolve).toHaveBeenCalled();
+    });
+
+    it('bypasses advisor for victory builds (cash >= 250)', async () => {
+      const snapshot = makeSnapshot({ bot: { ...makeSnapshot().bot, money: 260 } });
+      const context = makeContext({
+        money: 260,
+        turnBuildCost: 0,
+        connectedMajorCities: ['Paris', 'Berlin', 'Holland', 'Ruhr', 'Wien'],
+        unconnectedMajorCities: [{ cityName: 'Milano', estimatedCost: 8 }],
+      });
+
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(20, 20, 20, 21)], targetCity: 'Milano' },
+      });
+
+      await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
+
+      // Advisor should NOT be called for victory builds
+      expect(mockAdvise).not.toHaveBeenCalled();
+    });
+
+    it('bypasses advisor for initial build phase', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, isInitialBuild: true });
+
+      await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
+
+      expect(mockAdvise).not.toHaveBeenCalled();
+    });
+
+    it('handles useOpponentTrack with alternativeBuild', async () => {
+      const advisorResult: BuildAdvisorResult = {
+        action: 'useOpponentTrack',
+        target: 'Paris',
+        waypoints: [],
+        reasoning: 'Use opponent track to Paris',
+        alternativeBuild: { target: 'Berlin', waypoints: [[15, 15]] },
+      };
+      mockAdvise.mockResolvedValueOnce(advisorResult);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 15, 15)], targetCity: 'Berlin' },
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0 });
+      const route = makeRoute({ stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }] });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(result.plan).not.toBeNull();
+      expect(result.advisorAction).toBe('useOpponentTrack');
+    });
+
+    it('retries with solvency feedback when insolvent (max 2 retries)', async () => {
+      const advisorResult: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[12, 12]],
+        reasoning: 'Expensive build',
+      };
+      const cheaperResult: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[11, 11]],
+        reasoning: 'Cheaper route',
+      };
+
+      mockAdvise.mockResolvedValueOnce(advisorResult);
+      // First build attempt: too expensive
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 12, 12)], targetCity: 'Paris' },
+      });
+      mockSolvencyCheck.mockReturnValueOnce({ canAfford: false, actualCost: 30, availableForBuild: 20, incomeBefore: 0 });
+
+      // Solvency retry returns cheaper waypoints
+      mockRetryWithSolvencyFeedback.mockResolvedValueOnce(cheaperResult);
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 11, 11)], targetCity: 'Paris' },
+      });
+      mockSolvencyCheck.mockReturnValueOnce({ canAfford: true, actualCost: 10, availableForBuild: 20, incomeBefore: 0 });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0 });
+      const route = makeRoute({ stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }] });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(result.plan).not.toBeNull();
+      expect(result.solvencyRetries).toBe(1);
+      expect(mockRetryWithSolvencyFeedback).toHaveBeenCalledTimes(1);
+    });
+
+    it('handles replan with valid route', async () => {
+      const advisorResult: BuildAdvisorResult = {
+        action: 'replan',
+        target: 'Berlin',
+        waypoints: [[15, 15]],
+        reasoning: 'Replan to cheaper route',
+        newRoute: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Steel', city: 'Wien', demandCardId: 2, payment: 20 },
+        ],
+      };
+      mockAdvise.mockResolvedValueOnce(advisorResult);
+      mockRouteValidate.mockReturnValueOnce({ valid: true, errors: [] });
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 15, 15)], targetCity: 'Berlin' },
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0 });
+      const route = makeRoute({ stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }] });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(result.plan).not.toBeNull();
+      expect(result.updatedRoute).toBeDefined();
+      expect(result.updatedRoute!.stops[0].city).toBe('Berlin');
+      expect(result.advisorAction).toBe('replan');
+    });
+
+    it('rejects invalid replan and falls back', async () => {
+      const advisorResult: BuildAdvisorResult = {
+        action: 'replan',
+        target: 'Berlin',
+        waypoints: [[15, 15]],
+        reasoning: 'Bad replan',
+        newRoute: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+        ],
+      };
+      mockAdvise.mockResolvedValueOnce(advisorResult);
+      mockRouteValidate.mockReturnValueOnce({ valid: false, errors: ['Invalid stop'] });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0 });
+      const route = makeRoute({ stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }] });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
+
+      expect(result.updatedRoute).toBeUndefined();
+    });
+
+    it('does not call advisor when no brain provided', async () => {
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)], targetCity: 'Paris' },
+      });
+
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, citiesOnNetwork: ['Berlin'] });
+      const route = makeRoute({
+        stops: [{ action: 'deliver' as const, loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 }],
+      });
+
+      await TurnComposer.tryAppendBuild(snapshot, context, route);
+
+      expect(mockAdvise).not.toHaveBeenCalled();
     });
   });
 });
