@@ -4249,4 +4249,101 @@ describe('ActionResolver', () => {
     });
   });
 
+  // ─── JIRA-129: Waypoint-chained building ──────────────────────────────────
+
+  describe('resolveBuild with waypoints (JIRA-129)', () => {
+    beforeEach(() => {
+      setupMajorCityGroups([
+        { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [{ row: 10, col: 11 }] },
+        { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [{ row: 20, col: 21 }] },
+      ]);
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Berlin' },
+        { row: 10, col: 11, name: 'Berlin' },
+        { row: 20, col: 20, name: 'Paris' },
+        { row: 20, col: 21, name: 'Paris' },
+        { row: 15, col: 15, name: 'Waypoint1', terrain: TerrainType.Clear },
+      ]);
+      mockHexDistance.mockReturnValue(5);
+    });
+
+    it('should chain computeBuildSegments through waypoints in sequence', async () => {
+      const snapshot = makeWorldSnapshot();
+      const context = makeGameContext();
+
+      // First leg: start -> waypoint
+      const leg1Seg = makeSegment(5, 6, 15, 15, 5);
+      // Second leg: waypoint -> target
+      const leg2Seg = makeSegment(15, 15, 20, 20, 8);
+
+      mockComputeBuildSegments
+        .mockReturnValueOnce([leg1Seg])
+        .mockReturnValueOnce([leg2Seg]);
+
+      const intent: LLMActionIntent = {
+        action: AIActionType.BuildTrack,
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as Record<string, string> & { waypoints?: [number, number][] },
+        reasoning: 'Build through waypoint',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(2);
+
+      // First call targets waypoint
+      const firstCallTargets = mockComputeBuildSegments.mock.calls[0][5];
+      expect(firstCallTargets).toEqual([{ row: 15, col: 15 }]);
+
+      // Second call targets Paris
+      const secondCallTargets = mockComputeBuildSegments.mock.calls[1][5];
+      expect(secondCallTargets).toEqual(expect.arrayContaining([
+        expect.objectContaining({ row: 20 }),
+      ]));
+
+      const plan = result.plan as TurnPlanBuildTrack;
+      expect(plan.segments).toHaveLength(2);
+      expect(plan.segments).toEqual([leg1Seg, leg2Seg]);
+    });
+
+    it('should stop chaining when budget is exhausted', async () => {
+      const snapshot = makeWorldSnapshot({ bot: { money: 15 } as WorldSnapshot['bot'] });
+      const context = makeGameContext({ money: 15, turnBuildCost: 0 });
+
+      // First leg costs entire budget
+      const leg1Seg = makeSegment(5, 6, 15, 15, 15);
+      mockComputeBuildSegments.mockReturnValueOnce([leg1Seg]);
+
+      const intent: LLMActionIntent = {
+        action: AIActionType.BuildTrack,
+        details: { toward: 'Paris', waypoints: [[15, 15]] } as Record<string, string> & { waypoints?: [number, number][] },
+        reasoning: 'Build through waypoint',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      // Only 1 call — budget exhausted after first leg
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(1);
+      const plan = result.plan as TurnPlanBuildTrack;
+      expect(plan.segments).toHaveLength(1);
+    });
+
+    it('should fall back to standard build when no waypoints provided', async () => {
+      const snapshot = makeWorldSnapshot();
+      const context = makeGameContext();
+
+      const seg = makeSegment(5, 6, 20, 20, 10);
+      mockComputeBuildSegments.mockReturnValue([seg]);
+
+      const intent = makeBuildIntent('Paris');
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      expect(result.success).toBe(true);
+      expect(mockComputeBuildSegments).toHaveBeenCalledTimes(1);
+    });
+  });
+
 });

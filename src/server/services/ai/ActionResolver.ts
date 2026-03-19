@@ -63,7 +63,7 @@ export class ActionResolver {
    */
   private static async resolveSingleAction(
     action: string,
-    details: Record<string, string>,
+    details: Record<string, string> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,
@@ -111,7 +111,7 @@ export class ActionResolver {
    *   5. Return the resulting segments or a descriptive error.
    */
   private static async resolveBuild(
-    details: Record<string, string>,
+    details: Record<string, string> & { waypoints?: [number, number][] },
     snapshot: WorldSnapshot,
     context: GameContext,
     startingCity?: string,
@@ -258,16 +258,57 @@ export class ActionResolver {
       ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position)
       : snapshot.bot.existingSegments;
 
-    let segments = computeBuildSegments(
-      startPositions,
-      connectedSegments,
-      budget,
-      budget, // maxSegments = budget (cheapest segment costs 1M)
-      occupiedEdges,
-      targetPositions,
-      undefined, // knownSegments
-      networkNodeKeys, // JIRA-128: proximity penalty for parallel track prevention
-    );
+    // JIRA-129: Waypoint-chained building — iterate through each waypoint in sequence
+    const waypoints = details.waypoints;
+    let segments: TrackSegment[];
+    if (waypoints && waypoints.length > 0) {
+      segments = [];
+      let remainingBudget = budget;
+      let currentStartPositions = startPositions;
+      let currentConnectedSegments = connectedSegments;
+
+      // Build through each waypoint in sequence, then to the final target
+      const waypointTargets: GridCoord[][] = waypoints.map(([row, col]) => [{ row, col }]);
+      waypointTargets.push(targetPositions);
+
+      for (const legTargets of waypointTargets) {
+        if (remainingBudget <= 0) break;
+
+        const legSegments = computeBuildSegments(
+          currentStartPositions,
+          currentConnectedSegments,
+          remainingBudget,
+          remainingBudget,
+          occupiedEdges,
+          legTargets,
+          undefined,
+          networkNodeKeys,
+        );
+
+        if (legSegments.length === 0) break;
+
+        segments.push(...legSegments);
+        const legCost = legSegments.reduce((sum, seg) => sum + seg.cost, 0);
+        remainingBudget -= legCost;
+
+        // Next leg starts from the end of the segments just built
+        const lastSeg = legSegments[legSegments.length - 1];
+        currentStartPositions = [{ row: lastSeg.to.row, col: lastSeg.to.col }];
+        // Include newly built segments as existing for the next leg
+        currentConnectedSegments = [...currentConnectedSegments, ...legSegments];
+      }
+    } else {
+      segments = computeBuildSegments(
+        startPositions,
+        connectedSegments,
+        budget,
+        budget, // maxSegments = budget (cheapest segment costs 1M)
+        occupiedEdges,
+        targetPositions,
+        undefined, // knownSegments
+        networkNodeKeys, // JIRA-128: proximity penalty for parallel track prevention
+      );
+    }
 
     // ── Post-build parallel path validation (JIRA-113) ─────────────────
     // After computing a path, check if it runs parallel to existing track.
