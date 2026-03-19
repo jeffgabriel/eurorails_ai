@@ -3780,4 +3780,196 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.movementPath).toBeUndefined();
     });
   });
+
+  // ── JIRA-129: activeRoute timing fix in Stage 3d ──
+  describe('JIRA-129: activeRoute timing fix — Stage 3d re-eval', () => {
+    const oldRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Oil', city: 'Holland', demandCardId: 1, payment: 20 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 2,
+      reasoning: 'Deliver oil to Holland',
+    };
+
+    const newRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Cars', city: 'München' },
+        { action: 'deliver', loadType: 'Cars', city: 'Manchester', demandCardId: 5, payment: 30 },
+      ],
+      currentStopIndex: 0,
+      phase: 'travel' as const,
+      createdAtTurn: 5,
+      reasoning: 'Pick up cars for Manchester',
+    };
+
+    function setupDeliveryScenario() {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: oldRoute,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 1,
+        totalEarnings: 20,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor reports delivery + route complete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Oil to Holland',
+      });
+
+      return { snapshot, context };
+    }
+
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should update activeRoute immediately after successful re-eval (before Phase B)', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      // Override TripPlanner to directly return the new route for the post-delivery call.
+      // This bypasses the LLMStrategyBrain → planRoute chain entirely, isolating the test
+      // to just verify the activeRoute timing in Stage 3d.
+      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
+      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
+        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue({
+          candidates: [],
+          chosen: 0,
+          route: newRoute,
+          llmLatencyMs: 0,
+          llmTokens: { input: 0, output: 0 },
+          llmLog: [],
+        }),
+      }));
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 4,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: oldRoute,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 1,
+        totalEarnings: 20,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+      } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // PlanExecutor reports delivery + route complete
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Oil to Holland',
+      });
+
+      // Reset TurnComposer.compose to passthrough (previous tests may have overridden it
+      // with mockResolvedValue, which clearAllMocks does NOT reset).
+      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
+        plan,
+        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
+      }));
+
+      (TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>).mockResolvedValue(null);
+
+      // JIRA-64 rebuilds demands post-delivery and invalidates route if demands don't match.
+      (ContextBuilder.rebuildDemands as jest.Mock).mockImplementation(() => [
+        { loadType: 'Cars', destinationCity: 'Manchester', demandCardId: 5, payout: 30, pickupCity: 'München', estimatedTurns: 3 },
+      ]);
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Verify the BotTurnResult's activeRoute field reflects the new route
+      expect(result.activeRoute).toBeDefined();
+      expect(result.activeRoute).not.toBeNull();
+      expect(result.activeRoute!.stops[0].city).toBe('München');
+      expect(result.activeRoute!.stops[0].loadType).toBe('Cars');
+      expect(result.activeRoute!.reasoning).toBe('Pick up cars for Manchester');
+    });
+
+    it('should NOT update activeRoute when TripPlanner returns null', async () => {
+      setupDeliveryScenario();
+
+      // Reset TurnComposer.compose to passthrough (may be overridden by prior tests)
+      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
+        plan,
+        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
+      }));
+
+      // TripPlanner returns null — post-delivery re-eval fails
+      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
+      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
+        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue(null),
+      }));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // activeRoute should be the old route (preDeliveryRoute restoration) or null
+      // Since TripPlanner failed, reEvalHandled=false, and preDeliveryRoute gets restored
+      // The old route had only delivery stops which are now completed, so JIRA-64
+      // demand check will clear it since rebuildDemands returns [] by default.
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      // The route should NOT be the newRoute (TripPlanner failed)
+      if (patch.activeRoute) {
+        expect(patch.activeRoute.stops[0].city).not.toBe('München');
+      }
+    });
+
+    it('should NOT update activeRoute when TripPlanner throws an error', async () => {
+      setupDeliveryScenario();
+
+      // Reset TurnComposer.compose to passthrough (may be overridden by prior tests)
+      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
+        plan,
+        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
+      }));
+
+      // TripPlanner throws — post-delivery re-eval errors out
+      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
+      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
+        planTrip: jest.fn<() => Promise<any>>().mockRejectedValue(new Error('LLM API timeout')),
+      }));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // activeRoute should NOT be the newRoute (TripPlanner errored)
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      if (patch.activeRoute) {
+        expect(patch.activeRoute.stops[0].city).not.toBe('München');
+      }
+    });
+  });
 });
