@@ -710,7 +710,7 @@ describe('TripPlanner', () => {
   // ── 6. Total failure ──────────────────────────────────────────────────
 
   describe('total failure', () => {
-    it('should return null when LLM and planRoute() both fail', async () => {
+    it('should return failure result with llmLog when LLM and planRoute() both fail', async () => {
       const { brain, chatFn, planRouteFn } = makeMockBrain();
       chatFn.mockRejectedValue(new Error('API down'));
       planRouteFn.mockRejectedValue(new Error('Fallback also failed'));
@@ -718,12 +718,15 @@ describe('TripPlanner', () => {
       const planner = new TripPlanner(brain);
       const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
 
-      expect(result).toBeNull();
+      expect(result.route).toBeNull();
+      expect(result.llmLog).toHaveLength(3);
+      expect(result.llmLog[0].status).toBe('api_error');
+      expect(result.llmLog[0].error).toContain('API down');
       expect(chatFn).toHaveBeenCalledTimes(3);
       expect(planRouteFn).toHaveBeenCalledTimes(1);
     });
 
-    it('should return null when planRoute() returns null route', async () => {
+    it('should return failure result with llmLog when planRoute() returns null route', async () => {
       const { brain, chatFn, planRouteFn } = makeMockBrain();
       chatFn.mockRejectedValue(new Error('API error'));
       planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
@@ -731,10 +734,11 @@ describe('TripPlanner', () => {
       const planner = new TripPlanner(brain);
       const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
 
-      expect(result).toBeNull();
+      expect(result.route).toBeNull();
+      expect(result.llmLog).toHaveLength(3);
     });
 
-    it('should return null when all candidates are invalid and fallback fails', async () => {
+    it('should return failure result with llmLog when all candidates are invalid and fallback fails', async () => {
       (RouteValidator.validate as jest.Mock).mockReturnValue({
         valid: false,
         errors: ['All stops infeasible'],
@@ -757,7 +761,8 @@ describe('TripPlanner', () => {
       const planner = new TripPlanner(brain);
       const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
 
-      expect(result).toBeNull();
+      expect(result.route).toBeNull();
+      expect(result.llmLog.length).toBeGreaterThan(0);
     });
   });
 

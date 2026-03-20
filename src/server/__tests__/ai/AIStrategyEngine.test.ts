@@ -152,7 +152,7 @@ jest.mock('../../services/ai/TripPlanner', () => ({
         memory?.lastAbandonedRouteKey,
         memory?.previousRouteStops,
       );
-      if (!result || !result.route) return null;
+      if (!result || !result.route) return { route: null, llmLog: result?.llmLog ?? [] };
       return {
         candidates: [],
         chosen: -1,
@@ -3930,7 +3930,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // TripPlanner returns null — post-delivery re-eval fails
       const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
       (TripPlannerMock as jest.Mock).mockImplementation(() => ({
-        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue(null),
+        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue({ route: null, llmLog: [] }),
       }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');

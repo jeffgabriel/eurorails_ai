@@ -47,7 +47,7 @@ import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 import { TurnValidator } from './TurnValidator';
-import { TripPlanner } from './TripPlanner';
+import { TripPlanner, TripPlanResult } from './TripPlanner';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 
 /**
@@ -295,9 +295,9 @@ export class AIStrategyEngine {
 
         const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
         // Wrap tripResult into routeResult-compatible shape for downstream code
-        const routeResult = tripResult
-          ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog, systemPrompt: tripResult.systemPrompt, userPrompt: tripResult.userPrompt }
-          : { route: null as StrategicRoute | null, llmLog: [] as LlmAttempt[], systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
+        const routeResult = tripResult.route
+          ? { route: (tripResult as TripPlanResult).route, model: 'trip-planner', latencyMs: (tripResult as TripPlanResult).llmLatencyMs, tokenUsage: (tripResult as TripPlanResult).llmTokens, llmLog: tripResult.llmLog, systemPrompt: (tripResult as TripPlanResult).systemPrompt, userPrompt: (tripResult as TripPlanResult).userPrompt }
+          : { route: null as StrategicRoute | null, llmLog: tripResult.llmLog, systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
 
         if (routeResult.route) {
           activeRoute = routeResult.route;
@@ -487,7 +487,9 @@ export class AIStrategyEngine {
           }
         } else {
           // Route planning failed — try heuristic fallback before passing
-          console.warn(`${tag} [LLM] Route planning failed — attempting heuristic fallback`);
+          const failedAttempts = routeResult.llmLog.length;
+          const failedErrors = routeResult.llmLog.filter(a => a.status !== 'success').map(a => `#${a.attemptNumber}:${a.status}${a.error ? `(${a.error.substring(0, 100)})` : ''}`).join(', ');
+          console.warn(`${tag} [LLM] Route planning failed — ${failedAttempts} attempts: [${failedErrors}]. Attempting heuristic fallback`);
           // JIRA-120: Thread LLM failure counter into context for discard gate
           const fallbackContext = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
           const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot, { llmFailed: true });
@@ -681,16 +683,17 @@ export class AIStrategyEngine {
           const tripResult = await postDeliveryTripPlanner.planTrip(freshSnap, freshContext, gridPoints, memory);
           const llmMs = Date.now() - llmStart;
 
-          if (tripResult) {
-            if (tripResult.llmLog?.length) {
-              decision.llmLog = [...(decision.llmLog ?? []), ...tripResult.llmLog];
-            }
+          // Always capture llmLog from tripResult (even on failure)
+          if (tripResult.llmLog?.length) {
+            decision.llmLog = [...(decision.llmLog ?? []), ...tripResult.llmLog];
+          }
+          if (tripResult.route) {
             newRoute = tripResult.route;
             reEvalReasoning = newRoute.reasoning ?? null;
             // Fix: surface LLM model/latency so NDJSON log reflects the actual LLM call
             decision.model = 'trip-planner';
             decision.latencyMs = llmMs;
-            if (tripResult.llmTokens) decision.tokenUsage = tripResult.llmTokens;
+            if ((tripResult as TripPlanResult).llmTokens) decision.tokenUsage = (tripResult as TripPlanResult).llmTokens;
             console.log(`${tag} JIRA-126: Post-delivery trip plan: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
             logPhase('trip-planning', [], null, null, { llmReasoning: `trip-plan: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
           } else {

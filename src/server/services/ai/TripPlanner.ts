@@ -93,14 +93,15 @@ export class TripPlanner {
   }
 
   /**
-   * Plan a multi-stop trip. Returns null on total failure (LLM + fallback both fail).
+   * Plan a multi-stop trip. On total failure (LLM + fallback both fail),
+   * returns a failure result with route=null and the llmLog preserved for diagnostics.
    */
   async planTrip(
     snapshot: WorldSnapshot,
     context: GameContext,
     gridPoints: GridPoint[],
     memory: BotMemoryState,
-  ): Promise<TripPlanResult | null> {
+  ): Promise<TripPlanResult | { route: null; llmLog: LlmAttempt[] }> {
     const config = this.brain.strategyConfig;
     const adapter = this.brain.providerAdapter;
     const model = this.brain.modelName;
@@ -227,11 +228,13 @@ export class TripPlanner {
           userPrompt: successResult.userPrompt,
         };
       }
-    } catch {
-      console.warn('[TripPlanner] planRoute() fallback also failed');
+    } catch (fallbackErr) {
+      const errMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      console.warn(`[TripPlanner] planRoute() fallback also failed: ${errMsg}`);
     }
 
-    return null;
+    // Return failure with preserved llmLog for diagnostics
+    return { route: null, llmLog };
   }
 
   /**
