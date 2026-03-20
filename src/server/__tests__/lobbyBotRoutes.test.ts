@@ -230,7 +230,7 @@ describe('LobbyBotRoutes', () => {
         const response = await request(app)
           .post(`/api/lobby/games/${game.id}/bots`)
           .set('Authorization', 'Bearer valid.token')
-          .send({ skillLevel: 'medium', provider: 'openai' })
+          .send({ skillLevel: 'medium', provider: 'invalid_provider' })
           .expect(400);
 
         expect(response.body.error).toBe('VALIDATION_ERROR');

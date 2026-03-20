@@ -25,6 +25,7 @@ export enum BotSkillLevel {
 export enum LLMProvider {
     Anthropic = 'anthropic',
     Google = 'google',
+    OpenAI = 'openai',
 }
 
 /** Default model per provider and skill level */
@@ -38,6 +39,11 @@ export const LLM_DEFAULT_MODELS: Record<LLMProvider, Record<BotSkillLevel, strin
         [BotSkillLevel.Easy]: 'gemini-3-flash-preview',
         [BotSkillLevel.Medium]: 'gemini-3-pro-preview',
         [BotSkillLevel.Hard]: 'gemini-3.1-pro-preview',
+    },
+    [LLMProvider.OpenAI]: {
+        [BotSkillLevel.Easy]: 'gpt-5.4-nano',
+        [BotSkillLevel.Medium]: 'gpt-5.4-mini',
+        [BotSkillLevel.Hard]: 'gpt-5.4-mini',
     },
 };
 

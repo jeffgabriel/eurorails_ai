@@ -21,6 +21,11 @@ function defaultBotName(provider: string, skillLevel: string): string {
     if (model.includes('flash')) return 'Flash';
     if (model.includes('pro')) return 'Pro';
   }
+  if (provider === LLMProvider.OpenAI) {
+    if (model.includes('nano')) return 'Nano';
+    if (model.includes('mini')) return 'Mini';
+    if (model.includes('gpt-5.4')) return 'GPT-5.4';
+  }
   return '';
 }
 
@@ -126,7 +131,7 @@ export function BotConfigPopover({ gameId, onAddBot, disabled }: BotConfigPopove
               <SelectContent>
                 {Object.values(LLMProvider).map((p) => (
                   <SelectItem key={p} value={p}>
-                    {p === LLMProvider.Anthropic ? 'Anthropic (Claude)' : 'Google (Gemini)'}
+                    {p === LLMProvider.Anthropic ? 'Anthropic (Claude)' : p === LLMProvider.Google ? 'Google (Gemini)' : 'OpenAI (GPT)'}
                   </SelectItem>
                 ))}
               </SelectContent>

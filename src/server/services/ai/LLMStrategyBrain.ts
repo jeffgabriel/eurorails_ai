@@ -31,6 +31,7 @@ import { ContextBuilder } from './ContextBuilder';
 import { getSystemPrompt, getRoutePlanningPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
+import { OpenAIAdapter } from './providers/OpenAIAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
@@ -576,6 +577,8 @@ export class LLMStrategyBrain {
         return new AnthropicAdapter(apiKey, timeoutMs);
       case LLMProvider.Google:
         return new GoogleAdapter(apiKey, timeoutMs);
+      case LLMProvider.OpenAI:
+        return new OpenAIAdapter(apiKey, timeoutMs);
       default:
         throw new Error(`Unsupported LLM provider: ${provider}`);
     }

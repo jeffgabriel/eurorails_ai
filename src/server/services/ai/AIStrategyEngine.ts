@@ -1459,10 +1459,16 @@ export class AIStrategyEngine {
     return { type: AIActionType.UpgradeTrain, targetTrain, cost };
   }
 
+  private static readonly ENV_KEY_MAP: Record<LLMProvider, string> = {
+    [LLMProvider.Anthropic]: 'ANTHROPIC_API_KEY',
+    [LLMProvider.Google]: 'GOOGLE_AI_API_KEY',
+    [LLMProvider.OpenAI]: 'OPENAI_API_KEY',
+  };
+
   private static hasLLMApiKey(botConfig: BotConfig | null): boolean {
     if (!botConfig) return false;
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
-    const envKey = provider === LLMProvider.Google ? 'GOOGLE_AI_API_KEY' : 'ANTHROPIC_API_KEY';
+    const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
     return !!process.env[envKey];
   }
 
@@ -1472,7 +1478,7 @@ export class AIStrategyEngine {
   private static createBrain(botConfig: BotConfig): LLMStrategyBrain {
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
     const skillLevel = (botConfig.skillLevel as BotSkillLevel) ?? BotSkillLevel.Medium;
-    const envKey = provider === LLMProvider.Google ? 'GOOGLE_AI_API_KEY' : 'ANTHROPIC_API_KEY';
+    const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
     const apiKey = process.env[envKey] ?? '';
 
     return new LLMStrategyBrain({
