@@ -724,3 +724,33 @@ What is the best way to connect these locations?`;
   return { system, user };
 }
 
+/**
+ * Build a compact extraction prompt for two-pass structured extraction.
+ * When the advisor's first pass returns prose instead of JSON (thinking models),
+ * this prompt asks the model to extract structured data from the prose.
+ */
+export function getBuildAdvisorExtractionPrompt(
+  rawText: string,
+  targetCity: { row: number; col: number },
+  frontier: Array<{ row: number; col: number }>,
+): { system: string; user: string } {
+  const frontierStr = frontier.slice(0, 5).map(f => `(${f.row},${f.col})`).join(', ');
+
+  const system = `You are a structured data extractor. Given a track building advisor's text response, extract the structured recommendation.
+
+OUTPUT FORMAT (JSON):
+- action: one of "build", "buildAlternative", "replan", "useOpponentTrack"
+- target: city name string
+- waypoints: array of [row, col] coordinate pairs (integers)
+- reasoning: brief summary of the recommendation
+
+Target city is at coordinates (${targetCity.row},${targetCity.col}).
+Network frontier points: ${frontierStr || 'none'}.
+
+Extract the advisor's recommended action and any coordinate waypoints mentioned in the text. If no specific coordinates are mentioned, infer waypoints between the frontier and target city.`;
+
+  const user = rawText;
+
+  return { system, user };
+}
+

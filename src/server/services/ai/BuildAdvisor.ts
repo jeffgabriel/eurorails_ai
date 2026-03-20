@@ -6,7 +6,7 @@ import {
   BuildAdvisorResult,
 } from '../../../shared/types/GameTypes';
 import { MapRenderer } from './MapRenderer';
-import { getBuildAdvisorPrompt } from './prompts/systemPrompts';
+import { getBuildAdvisorPrompt, getBuildAdvisorExtractionPrompt } from './prompts/systemPrompts';
 import { BUILD_ADVISOR_SCHEMA } from './schemas';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 
@@ -15,6 +15,9 @@ export interface BuildAdvisorDiagnostics {
   rawResponse?: string;
   rawWaypoints?: [number, number][];
   error?: string;
+  extractionUsed?: boolean;
+  extractionLatencyMs?: number;
+  extractionError?: string;
 }
 
 /**
@@ -82,8 +85,13 @@ export class BuildAdvisor {
         parsed = JSON.parse(response.text) as BuildAdvisorResult;
       } catch (parseErr) {
         const msg = `JSON parse failed: ${(parseErr as Error).message}`;
-        BuildAdvisor.lastDiagnostics.error = msg;
         console.warn(`[BuildAdvisor] ${msg}, raw: ${response.text.substring(0, 200)}`);
+        // Two-pass extraction fallback: ask the same model to extract structured data from prose
+        const extracted = await BuildAdvisor.extractFromProse(
+          response.text, targetCity, frontier, brain, gridPoints,
+        );
+        if (extracted) return extracted;
+        BuildAdvisor.lastDiagnostics.error = msg;
         return null;
       }
       BuildAdvisor.lastDiagnostics.rawWaypoints = parsed.waypoints ? [...parsed.waypoints] : [];
@@ -118,6 +126,7 @@ export class BuildAdvisor {
     gridPoints: GridPoint[],
     brain: LLMStrategyBrain,
   ): Promise<BuildAdvisorResult | null> {
+    BuildAdvisor.lastDiagnostics = {};
     try {
       // 1. Render map (same as advise)
       const targetCity = BuildAdvisor.getTargetCoord(activeRoute, context, gridPoints);
@@ -152,12 +161,76 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
         timeoutMs: 30000,
       });
 
-      const parsed = JSON.parse(response.text) as BuildAdvisorResult;
+      BuildAdvisor.lastDiagnostics.rawResponse = response.text.substring(0, 1000);
+
+      let parsed: BuildAdvisorResult;
+      try {
+        parsed = JSON.parse(response.text) as BuildAdvisorResult;
+      } catch (parseErr) {
+        const msg = `JSON parse failed: ${(parseErr as Error).message}`;
+        console.warn(`[BuildAdvisor] retryWithSolvencyFeedback ${msg}, raw: ${response.text.substring(0, 200)}`);
+        const extracted = await BuildAdvisor.extractFromProse(
+          response.text, targetCity, frontier, brain, gridPoints,
+        );
+        if (extracted) return extracted;
+        BuildAdvisor.lastDiagnostics.error = msg;
+        return null;
+      }
       return BuildAdvisor.validateWaypoints(parsed, gridPoints);
     } catch (err) {
       const errorType = err instanceof Error ? err.constructor.name : 'Unknown';
       const errorMsg = err instanceof Error ? err.message : String(err);
+      BuildAdvisor.lastDiagnostics.error = `${errorType}: ${errorMsg}`;
       console.warn(`[BuildAdvisor] retryWithSolvencyFeedback failed: ${errorType}: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Two-pass extraction: on JSON parse failure, call the same model with
+   * thinking=false and structured output enforced to extract waypoints from prose.
+   */
+  private static async extractFromProse(
+    rawText: string,
+    targetCity: { row: number; col: number },
+    frontier: { row: number; col: number }[],
+    brain: LLMStrategyBrain,
+    gridPoints: GridPoint[],
+  ): Promise<BuildAdvisorResult | null> {
+    const extractionStart = Date.now();
+    BuildAdvisor.lastDiagnostics.extractionUsed = true;
+    try {
+      const { system, user } = getBuildAdvisorExtractionPrompt(
+        rawText.substring(0, 2000),
+        targetCity,
+        frontier,
+      );
+
+      // Omit `thinking` to disable thinkingConfig — this allows structured output
+      // (responseSchema) on thinking-capable models like Gemini 3
+      const response = await brain.providerAdapter.chat({
+        model: brain.modelName,
+        maxTokens: 512,
+        temperature: 0,
+        systemPrompt: system,
+        userPrompt: user,
+        outputSchema: BUILD_ADVISOR_SCHEMA,
+        timeoutMs: 10000,
+      });
+
+      BuildAdvisor.lastDiagnostics.extractionLatencyMs = Date.now() - extractionStart;
+
+      const parsed = JSON.parse(response.text) as BuildAdvisorResult;
+      const validated = BuildAdvisor.validateWaypoints(parsed, gridPoints);
+      if (!validated) {
+        BuildAdvisor.lastDiagnostics.extractionError = 'extraction waypoints unrecoverable';
+      }
+      return validated;
+    } catch (err) {
+      BuildAdvisor.lastDiagnostics.extractionLatencyMs = Date.now() - extractionStart;
+      const msg = err instanceof Error ? err.message : String(err);
+      BuildAdvisor.lastDiagnostics.extractionError = msg;
+      console.warn(`[BuildAdvisor] extractFromProse failed: ${msg}`);
       return null;
     }
   }

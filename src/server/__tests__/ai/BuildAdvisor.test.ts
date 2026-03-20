@@ -219,6 +219,118 @@ describe('BuildAdvisor', () => {
       expect(result).toBeNull();
     });
 
+    it('should attempt extraction on JSON parse failure and succeed', async () => {
+      const validExtracted: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1], [2, 2]],
+        reasoning: 'Build toward Paris via extraction',
+      };
+      // First call returns prose, second returns valid JSON
+      const mockChat = jest.fn()
+        .mockResolvedValueOnce({ text: 'To build toward Paris, I recommend heading south-east through the corridor...', usage: { input: 100, output: 50 } })
+        .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
+
+      const brain = {
+        providerAdapter: { chat: mockChat },
+        modelName: 'test-model',
+      } as unknown as LLMStrategyBrain;
+
+      const result = await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.action).toBe('build');
+      expect(result!.target).toBe('Paris');
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      expect(BuildAdvisor.lastDiagnostics.extractionUsed).toBe(true);
+      expect(BuildAdvisor.lastDiagnostics.extractionLatencyMs).toBeGreaterThanOrEqual(0);
+      expect(BuildAdvisor.lastDiagnostics.extractionError).toBeUndefined();
+    });
+
+    it('should return null when extraction also fails', async () => {
+      // Both calls return prose (no valid JSON)
+      const mockChat = jest.fn()
+        .mockResolvedValueOnce({ text: 'Build toward Paris via the center corridor', usage: { input: 100, output: 50 } })
+        .mockResolvedValueOnce({ text: 'I suggest building south-east', usage: { input: 50, output: 30 } });
+
+      const brain = {
+        providerAdapter: { chat: mockChat },
+        modelName: 'test-model',
+      } as unknown as LLMStrategyBrain;
+
+      const result = await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(result).toBeNull();
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      expect(BuildAdvisor.lastDiagnostics.extractionUsed).toBe(true);
+      expect(BuildAdvisor.lastDiagnostics.extractionError).toBeDefined();
+    });
+
+    it('should skip extraction when pass 1 returns valid JSON', async () => {
+      const validResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Direct route',
+      };
+      const brain = makeMockBrain(JSON.stringify(validResponse));
+
+      const result = await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(result).not.toBeNull();
+      expect((brain.providerAdapter.chat as jest.Mock)).toHaveBeenCalledTimes(1);
+      expect(BuildAdvisor.lastDiagnostics.extractionUsed).toBeUndefined();
+    });
+
+    it('should omit thinking config in extraction call to enable structured output', async () => {
+      const validExtracted: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Extracted',
+      };
+      const mockChat = jest.fn()
+        .mockResolvedValueOnce({ text: 'prose response here', usage: { input: 100, output: 50 } })
+        .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
+
+      const brain = {
+        providerAdapter: { chat: mockChat },
+        modelName: 'test-model',
+      } as unknown as LLMStrategyBrain;
+
+      await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      const secondCall = mockChat.mock.calls[1][0];
+      expect(secondCall.thinking).toBeUndefined();
+      expect(secondCall.maxTokens).toBe(512);
+      expect(secondCall.timeoutMs).toBe(10000);
+      expect(secondCall.outputSchema).toBeDefined();
+    });
+
     it('should pass timeoutMs: 30000 to the chat call', async () => {
       const validResponse: BuildAdvisorResult = {
         action: 'build',
@@ -340,6 +452,39 @@ describe('BuildAdvisor', () => {
       );
 
       expect(result).toBeNull();
+    });
+
+    it('should attempt extraction on JSON parse failure in retry', async () => {
+      const validExtracted: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Cheaper route extracted from prose',
+      };
+      const mockChat = jest.fn()
+        .mockResolvedValueOnce({ text: 'I recommend building a shorter route...', usage: { input: 100, output: 50 } })
+        .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
+
+      const brain = {
+        providerAdapter: { chat: mockChat },
+        modelName: 'test-model',
+      } as unknown as LLMStrategyBrain;
+
+      const result = await BuildAdvisor.retryWithSolvencyFeedback(
+        { action: 'build', target: 'Paris', waypoints: [[1, 1], [2, 2]], reasoning: 'Original' },
+        25,
+        15,
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(result).not.toBeNull();
+      expect(result!.waypoints).toEqual([[1, 1]]);
+      expect(mockChat).toHaveBeenCalledTimes(2);
+      expect(BuildAdvisor.lastDiagnostics.extractionUsed).toBe(true);
     });
   });
 });
