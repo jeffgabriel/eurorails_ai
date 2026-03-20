@@ -11,6 +11,7 @@ import {
 // Mock all provider adapters
 jest.mock('../../services/ai/providers/AnthropicAdapter');
 jest.mock('../../services/ai/providers/GoogleAdapter');
+jest.mock('../../services/ai/providers/OpenAIAdapter');
 
 // Mock ActionResolver
 jest.mock('../../services/ai/ActionResolver', () => ({
@@ -337,6 +338,19 @@ describe('LLMStrategyBrain', () => {
           maxTokens: 8192,
         }),
       );
+    });
+  });
+
+  describe('createAdapter — OpenAI provider', () => {
+    it('should create brain with OpenAI provider without error', () => {
+      const brain = new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Easy,
+        provider: LLMProvider.OpenAI,
+        apiKey: 'test-openai-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+      expect(brain).toBeDefined();
     });
   });
 
