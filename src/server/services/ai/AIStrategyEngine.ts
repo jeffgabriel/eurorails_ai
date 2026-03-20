@@ -687,6 +687,10 @@ export class AIStrategyEngine {
             }
             newRoute = tripResult.route;
             reEvalReasoning = newRoute.reasoning ?? null;
+            // Fix: surface LLM model/latency so NDJSON log reflects the actual LLM call
+            decision.model = 'trip-planner';
+            decision.latencyMs = llmMs;
+            if (tripResult.llmTokens) decision.tokenUsage = tripResult.llmTokens;
             console.log(`${tag} JIRA-126: Post-delivery trip plan: ${newRoute.stops.length} stops, reasoning=${newRoute.reasoning} (${llmMs}ms)`);
             logPhase('trip-planning', [], null, null, { llmReasoning: `trip-plan: ${newRoute.reasoning}`, llmLatencyMs: llmMs });
           } else {
@@ -1149,6 +1153,12 @@ export class AIStrategyEngine {
         loadsDelivered: loadsDelivered.length > 0 ? loadsDelivered : undefined,
         loadsPickedUp: loadsPickedUp.length > 0 ? loadsPickedUp : undefined,
         compositionTrace,
+        // JIRA-129: Extract Build Advisor fields from composition trace
+        advisorAction: compositionTrace?.advisor?.action ?? undefined,
+        advisorWaypoints: compositionTrace?.advisor?.waypoints?.length ? compositionTrace.advisor.waypoints : undefined,
+        advisorReasoning: compositionTrace?.advisor?.reasoning ?? undefined,
+        advisorLatencyMs: compositionTrace?.advisor?.latencyMs ?? undefined,
+        solvencyRetries: compositionTrace?.advisor?.solvencyRetries ?? undefined,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
@@ -1470,7 +1480,7 @@ export class AIStrategyEngine {
       provider,
       model: botConfig.model,
       apiKey,
-      timeoutMs: skillLevel === BotSkillLevel.Easy ? 10000 : 15000,
+      timeoutMs: skillLevel === BotSkillLevel.Easy ? 20000 : 15000,
       maxRetries: 1,
     });
   }
