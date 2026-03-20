@@ -10,11 +10,21 @@ import { getBuildAdvisorPrompt } from './prompts/systemPrompts';
 import { BUILD_ADVISOR_SCHEMA } from './schemas';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 
+/** Diagnostic data from the last advise() or retryWithSolvencyFeedback() call. */
+export interface BuildAdvisorDiagnostics {
+  rawResponse?: string;
+  rawWaypoints?: [number, number][];
+  error?: string;
+}
+
 /**
  * Build Advisor service — asks the LLM for track building strategy (JIRA-129).
  * Static class — no instance state.
  */
 export class BuildAdvisor {
+  /** Diagnostics from the most recent advise/retry call. Read after each call. */
+  static lastDiagnostics: BuildAdvisorDiagnostics = {};
+
   /**
    * Core advisor: render map, build prompt, call LLM, validate waypoints.
    *
@@ -27,10 +37,14 @@ export class BuildAdvisor {
     gridPoints: GridPoint[],
     brain: LLMStrategyBrain,
   ): Promise<BuildAdvisorResult | null> {
+    BuildAdvisor.lastDiagnostics = {};
     try {
       // 1. Determine target and frontier for map rendering
       const targetCity = BuildAdvisor.getTargetCoord(activeRoute, context, gridPoints);
-      if (!targetCity) return null;
+      if (!targetCity) {
+        BuildAdvisor.lastDiagnostics.error = 'no target city';
+        return null;
+      }
 
       const frontier = BuildAdvisor.getNetworkFrontier(snapshot, gridPoints);
       const opponentTracks = snapshot.allPlayerTracks
@@ -60,22 +74,29 @@ export class BuildAdvisor {
         timeoutMs: 30000,
       });
 
+      BuildAdvisor.lastDiagnostics.rawResponse = response.text.substring(0, 1000);
+
       // 5. Parse and validate
       let parsed: BuildAdvisorResult;
       try {
         parsed = JSON.parse(response.text) as BuildAdvisorResult;
       } catch (parseErr) {
-        console.warn(`[BuildAdvisor] JSON parse failed: ${(parseErr as Error).message}, raw: ${response.text.substring(0, 200)}`);
+        const msg = `JSON parse failed: ${(parseErr as Error).message}`;
+        BuildAdvisor.lastDiagnostics.error = msg;
+        console.warn(`[BuildAdvisor] ${msg}, raw: ${response.text.substring(0, 200)}`);
         return null;
       }
+      BuildAdvisor.lastDiagnostics.rawWaypoints = parsed.waypoints ? [...parsed.waypoints] : [];
       const validated = BuildAdvisor.validateWaypoints(parsed, gridPoints);
       if (!validated) {
+        BuildAdvisor.lastDiagnostics.error = `all waypoints unrecoverable: ${JSON.stringify(parsed.waypoints)}`;
         console.warn(`[BuildAdvisor] validateWaypoints returned null for action=${parsed.action}, target=${parsed.target}, waypoints=${JSON.stringify(parsed.waypoints)}`);
       }
       return validated;
     } catch (err) {
       const errorType = err instanceof Error ? err.constructor.name : 'Unknown';
       const errorMsg = err instanceof Error ? err.message : String(err);
+      BuildAdvisor.lastDiagnostics.error = `${errorType}: ${errorMsg}`;
       console.warn(`[BuildAdvisor] advise failed: ${errorType}: ${errorMsg}`);
       return null;
     }

@@ -64,7 +64,7 @@ export interface CompositionTrace {
   /** JIRA-125: Victory build decision */
   victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
   /** JIRA-129: Build Advisor decision */
-  advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean };
+  advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean; rawResponse?: string; rawWaypoints?: [number, number][]; error?: string };
 }
 
 /** JIRA-129: Extended result from tryAppendBuild, may include an updated route from replan */
@@ -940,8 +940,9 @@ export class TurnComposer {
         }
       }
 
-      // Record advisor trace
+      // Record advisor trace (including raw LLM diagnostics)
       if (trace) {
+        const diag = BuildAdvisor.lastDiagnostics;
         trace.advisor = {
           action: advisorResult?.action ?? null,
           reasoning: advisorResult?.reasoning ?? null,
@@ -949,6 +950,9 @@ export class TurnComposer {
           solvencyRetries,
           latencyMs: advisorLatencyMs,
           fallback: !advisorResult || (allBuildSegments.length === 0 && routeStopsForBuild.length > 0),
+          rawResponse: diag.rawResponse,
+          rawWaypoints: diag.rawWaypoints,
+          error: diag.error,
         };
       }
 
