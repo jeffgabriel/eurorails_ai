@@ -18,6 +18,7 @@ import {
   TurnPlan,
   TurnPlanMoveTrain,
   TurnPlanDeliverLoad,
+  TurnPlanBuildTrack,
   WorldSnapshot,
   GameContext,
   AIActionType,
@@ -49,8 +50,8 @@ export interface CompositionTrace {
   a1: { citiesScanned: number; opportunitiesFound: number };
   /** A2: Continuation chaining iterations and termination reason */
   a2: { iterations: number; terminationReason: string };
-  /** A3: Whether a MOVE was prepended before BUILD */
-  a3: { movePreprended: boolean };
+  /** A3: Whether a MOVE was prepended before BUILD, or skipped with reason */
+  a3: { movePreprended: boolean; skipped?: boolean; reason?: string };
   /** Phase B: Build/upgrade target and cost, or why skipped */
   build: { target: string | null; cost: number; skipped: boolean; upgradeConsidered: boolean };
   /** Pickups added during composition */
@@ -435,46 +436,62 @@ export class TurnComposer {
       const primaryType = steps[0]?.type;
       const hasMove = steps.some(s => s.type === AIActionType.MoveTrain);
       if (!hasMove && primaryType === AIActionType.BuildTrack) {
-        const movementUsed = TurnComposer.countMovementUsed(steps);
-        const remainingMovement = context.speed - movementUsed;
-        if (remainingMovement > 0) {
-          // Try multiple targets — the route's build target city is likely
-          // unreachable (that's why PlanExecutor chose BUILD), so fall back
-          // to demand-based cities on the existing track network.
-          const moveTargets = TurnComposer.findMoveTargets(context, activeRoute);
-          for (const moveTarget of moveTargets) {
-            const moveResult = await ActionResolver.resolve(
-              { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
-              snapshot, context,
-            );
-            if (moveResult.success && moveResult.plan) {
-              let chainedMove = moveResult.plan as TurnPlanMoveTrain;
-              // Cap movement at remaining allowance using effective mileposts
-              // (intra-city hops within major city red areas are free and must not consume budget)
-              if (chainedMove.path) {
-                const chainEffective = computeEffectivePathLength(chainedMove.path, getMajorCityLookup());
-                if (chainEffective > remainingMovement) {
-                  chainedMove = {
-                    ...chainedMove,
-                    path: TurnComposer.truncatePathToEffectiveBudget(chainedMove.path, remainingMovement),
-                  };
+        // Extract build target city for frontier guard and directional filter
+        const buildStep = steps.find(s => s.type === AIActionType.BuildTrack) as TurnPlanBuildTrack | undefined;
+        const buildTargetCity = buildStep?.targetCity;
+
+        // Frontier guard: skip A3 if bot is already at the build frontier
+        if (buildTargetCity && TurnComposer.isBotAtBuildFrontier(snapshot, context, buildTargetCity)) {
+          trace.a3 = { movePreprended: false, skipped: true, reason: 'bot at build frontier' };
+          console.log(`[TurnComposer] A3 skipped: bot at build frontier for target "${buildTargetCity}"`);
+        } else {
+          const movementUsed = TurnComposer.countMovementUsed(steps);
+          const remainingMovement = context.speed - movementUsed;
+          if (remainingMovement > 0) {
+            // Try multiple targets — the route's build target city is likely
+            // unreachable (that's why PlanExecutor chose BUILD), so fall back
+            // to demand-based cities on the existing track network.
+            let moveTargets = TurnComposer.findMoveTargets(context, activeRoute);
+
+            // Directional filter: only accept targets closer to the build target
+            if (buildTargetCity) {
+              moveTargets = TurnComposer.filterByDirection(moveTargets, context, buildTargetCity);
+            }
+
+            for (const moveTarget of moveTargets) {
+              const moveResult = await ActionResolver.resolve(
+                { action: 'MOVE', details: { to: moveTarget }, reasoning: '', planHorizon: '' },
+                snapshot, context,
+              );
+              if (moveResult.success && moveResult.plan) {
+                let chainedMove = moveResult.plan as TurnPlanMoveTrain;
+                // Cap movement at remaining allowance using effective mileposts
+                // (intra-city hops within major city red areas are free and must not consume budget)
+                if (chainedMove.path) {
+                  const chainEffective = computeEffectivePathLength(chainedMove.path, getMajorCityLookup());
+                  if (chainEffective > remainingMovement) {
+                    chainedMove = {
+                      ...chainedMove,
+                      path: TurnComposer.truncatePathToEffectiveBudget(chainedMove.path, remainingMovement),
+                    };
+                  }
                 }
+                if (chainedMove.path && chainedMove.path.length > 0) {
+                  const moveSim = ActionResolver.cloneSnapshot(snapshot);
+                  const moveCtx = { ...context };
+                  const splitResult = await TurnComposer.splitMoveForOpportunities(
+                    chainedMove, moveSim, moveCtx, activeRoute,
+                  );
+                  activeRoute = splitResult.route ?? activeRoute;
+                  // Insert move steps before the build step
+                  const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
+                  steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitResult.plans);
+                  trace.a3 = { movePreprended: true };
+                }
+                break; // Successfully prepended a MOVE — stop trying targets
+              } else {
+                console.log(`[TurnComposer] A3 prepend MOVE to ${moveTarget} failed: ${moveResult.error}`);
               }
-              if (chainedMove.path && chainedMove.path.length > 0) {
-                const moveSim = ActionResolver.cloneSnapshot(snapshot);
-                const moveCtx = { ...context };
-                const splitResult = await TurnComposer.splitMoveForOpportunities(
-                  chainedMove, moveSim, moveCtx, activeRoute,
-                );
-                activeRoute = splitResult.route ?? activeRoute;
-                // Insert move steps before the build step
-                const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
-                steps.splice(buildIdx >= 0 ? buildIdx : steps.length, 0, ...splitResult.plans);
-                trace.a3 = { movePreprended: true };
-              }
-              break; // Successfully prepended a MOVE — stop trying targets
-            } else {
-              console.log(`[TurnComposer] A3 prepend MOVE to ${moveTarget} failed: ${moveResult.error}`);
             }
           }
         }
@@ -1501,6 +1518,92 @@ export class TurnComposer {
     }
 
     return targets;
+  }
+
+  /**
+   * Check if bot is at or near the build frontier — the point on its existing
+   * track network closest to the build target. If true, A3 should skip the
+   * move prepend to avoid sending the bot away from the construction area.
+   */
+  private static isBotAtBuildFrontier(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    buildTargetCity: string,
+  ): boolean {
+    if (!context.position || snapshot.bot.existingSegments.length === 0) return false;
+
+    const gridPoints = loadGridPoints();
+    let targetRow = -1, targetCol = -1;
+    for (const [, gp] of gridPoints) {
+      if (gp.name && gp.name === buildTargetCity) {
+        targetRow = gp.row;
+        targetCol = gp.col;
+        break;
+      }
+    }
+    if (targetRow < 0) return false;
+
+    // Find the track endpoint closest to the build target
+    let bestDist = Infinity;
+    for (const seg of snapshot.bot.existingSegments) {
+      for (const pt of [seg.from, seg.to]) {
+        const dist = Math.abs(pt.row - targetRow) + Math.abs(pt.col - targetCol);
+        if (dist < bestDist) bestDist = dist;
+      }
+    }
+
+    // Check if bot position is within Manhattan distance 3 of that closest endpoint
+    const botRow = context.position.row;
+    const botCol = context.position.col;
+    let botToFrontierDist = Infinity;
+    for (const seg of snapshot.bot.existingSegments) {
+      for (const pt of [seg.from, seg.to]) {
+        const ptToTarget = Math.abs(pt.row - targetRow) + Math.abs(pt.col - targetCol);
+        if (ptToTarget <= bestDist + 1) {
+          // This point is near the frontier — check bot distance to it
+          const botToPt = Math.abs(botRow - pt.row) + Math.abs(botCol - pt.col);
+          if (botToPt < botToFrontierDist) botToFrontierDist = botToPt;
+        }
+      }
+    }
+
+    return botToFrontierDist <= 3;
+  }
+
+  /**
+   * Filter move targets to only include cities closer to (or equidistant from)
+   * the build target than the bot's current position. Prevents A3 from sending
+   * the bot in the wrong direction.
+   */
+  private static filterByDirection(
+    targets: string[],
+    context: GameContext,
+    buildTargetCity: string,
+  ): string[] {
+    if (!context.position) return targets;
+
+    const gridPoints = loadGridPoints();
+    let targetRow = -1, targetCol = -1;
+    for (const [, gp] of gridPoints) {
+      if (gp.name && gp.name === buildTargetCity) {
+        targetRow = gp.row;
+        targetCol = gp.col;
+        break;
+      }
+    }
+    if (targetRow < 0) return targets;
+
+    const botDist = Math.abs(context.position.row - targetRow) + Math.abs(context.position.col - targetCol);
+
+    return targets.filter(city => {
+      for (const [, gp] of gridPoints) {
+        if (gp.name && gp.name === city) {
+          const candidateDist = Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
+          return candidateDist <= botDist;
+        }
+      }
+      return false; // City not found in grid — exclude
+    });
   }
 
   /**

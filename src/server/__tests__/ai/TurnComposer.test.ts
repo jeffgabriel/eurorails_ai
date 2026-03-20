@@ -917,6 +917,169 @@ describe('TurnComposer', () => {
       expect(result.type).toBe(AIActionType.BuildTrack);
       expect(mockResolve).not.toHaveBeenCalled();
     });
+
+    it('A3 skipped when bot is at the build frontier', async () => {
+      // Bot at (10,10), track endpoint at (10,11), build target "München" at (10,13)
+      // Bot is within Manhattan distance 3 of the frontier endpoint closest to target
+      const gridPointsMap = new Map([
+        ['10,13', { row: 10, col: 13, name: 'München', terrain: 0 }],
+        ['15,15', { row: 15, col: 15, name: 'Paris', terrain: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridPointsMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          existingSegments: [makeSegment(10, 10, 10, 11)],
+        },
+      });
+      const context = makeContext({
+        position: { row: 10, col: 10 },
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Paris',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 10, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+        ],
+        loads: ['Coal'],
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 11, 10, 12)],
+        targetCity: 'München',
+      };
+
+      const { trace } = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // A3 should be skipped — bot is at the frontier
+      expect(trace.a3.skipped).toBe(true);
+      expect(trace.a3.reason).toBe('bot at build frontier');
+      expect(mockResolve).not.toHaveBeenCalled();
+    });
+
+    it('A3 proceeds with directional filter when bot is far from frontier', async () => {
+      // Bot at (5,5), track from (5,5) to (10,10), build target "München" at (15,15)
+      // Bot is far from frontier endpoint (10,10) — Manhattan distance 10 > 3
+      const gridPointsMap = new Map([
+        ['15,15', { row: 15, col: 15, name: 'München', terrain: 0 }],
+        ['12,12', { row: 12, col: 12, name: 'Hamburg', terrain: 0 }],
+        ['2,2', { row: 2, col: 2, name: 'London', terrain: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridPointsMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 5, col: 5 },
+          existingSegments: [makeSegment(5, 5, 10, 10)],
+        },
+      });
+      const context = makeContext({
+        position: { row: 5, col: 5 },
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'Hamburg',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 10, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+          {
+            cardIndex: 1, loadType: 'Wine', supplyCity: 'Berlin', deliveryCity: 'London',
+            payout: 15, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 5, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+        ],
+        loads: ['Coal'],
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(10, 10, 11, 11)],
+        targetCity: 'München',
+      };
+
+      // Hamburg (12,12) is closer to München (15,15) than bot (5,5) — dist 6 <= 20, should be tried
+      // London (2,2) is farther from München (15,15) than bot (5,5) — dist 26 > 20, should be filtered
+      mockResolve.mockResolvedValueOnce({
+        success: true,
+        plan: {
+          type: AIActionType.MoveTrain,
+          path: [{ row: 5, col: 5 }, { row: 8, col: 8 }],
+          fees: new Set<string>(),
+          totalFee: 0,
+        },
+      });
+
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // Should have tried to resolve a move (directional filter passed Hamburg)
+      expect(mockResolve).toHaveBeenCalled();
+      const resolveCall = mockResolve.mock.calls[0];
+      // First target tried should be Hamburg (closer to build target), not London
+      expect(resolveCall[0].details.to).toBe('Hamburg');
+    });
+
+    it('A3 no move prepended when all targets filtered by direction', async () => {
+      // Bot at (5,5), build target "München" at (6,6)
+      // Only demand city is London at (1,1) — farther from München than bot
+      const gridPointsMap = new Map([
+        ['6,6', { row: 6, col: 6, name: 'München', terrain: 0 }],
+        ['1,1', { row: 1, col: 1, name: 'London', terrain: 0 }],
+      ]);
+      mockLoadGridPoints.mockReturnValue(gridPointsMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 5, col: 5 },
+          existingSegments: [makeSegment(5, 5, 3, 3), makeSegment(3, 3, 1, 1)],
+        },
+      });
+      const context = makeContext({
+        position: { row: 5, col: 5 },
+        demands: [
+          {
+            cardIndex: 0, loadType: 'Coal', supplyCity: 'Berlin', deliveryCity: 'London',
+            payout: 25, isSupplyReachable: false, isDeliveryReachable: false,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+            isLoadAvailable: true, isLoadOnTrain: true, ferryRequired: false,
+            loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+            demandScore: 10, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+            isAffordable: true, projectedFundsAfterDelivery: 50,
+          },
+        ],
+        loads: ['Coal'],
+      });
+
+      const buildPlan: TurnPlan = {
+        type: AIActionType.BuildTrack,
+        segments: [makeSegment(5, 5, 6, 6)],
+        targetCity: 'München',
+      };
+
+      const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context);
+
+      // All targets filtered out — no MOVE attempted
+      expect(result.type).toBe(AIActionType.BuildTrack);
+      expect(mockResolve).not.toHaveBeenCalled();
+    });
   });
 
   describe('Phase B: victory-priority speculative build', () => {
