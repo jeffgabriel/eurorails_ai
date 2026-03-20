@@ -16,6 +16,7 @@ import { DebugOverlay } from "../components/DebugOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
 import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
+import { AutoRunBadge } from "../components/AutoRunBadge";
 import { UI_FONT_FAMILY } from "../config/uiFont";
 import { MAP_BACKGROUND_CALIBRATION, MAP_BOARD_CALIBRATION } from "../config/mapConfig";
 
@@ -57,6 +58,8 @@ export class GameScene extends Phaser.Scene {
   private socketUnsubBotToast?: () => void;
   private socketUnsubDebugAny?: () => void;
   private socketUnsubWhisperTurnHistory?: () => void;
+  private autoRunBadge?: AutoRunBadge;
+  private socketUnsubAutoRunStatus?: () => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -643,6 +646,9 @@ export class GameScene extends Phaser.Scene {
       this.whisperPanel = new WhisperPanel(this, this.gameState.id, this.gameToastManager);
     }
 
+    // Auto-run badge (hidden by default)
+    this.autoRunBadge = new AutoRunBadge(this);
+
     try {
       const { socketService: svc } = await import('../lobby/shared/socket');
       if (svc) {
@@ -652,6 +658,18 @@ export class GameScene extends Phaser.Scene {
         this.socketUnsubBotToast?.();
         this.socketUnsubBotTurnComplete?.();
         this.socketUnsubWhisperTurnHistory?.();
+        this.socketUnsubAutoRunStatus?.();
+
+        // F9 key listener — toggle auto-run
+        this.input.keyboard?.on('keydown-F9', () => {
+          svc.emitAutoRunToggle(this.gameState.id);
+        });
+
+        // Listen for auto-run status response
+        const badge = this.autoRunBadge;
+        this.socketUnsubAutoRunStatus = svc.onAutoRunStatus((data) => {
+          badge.setVisible(data.enabled);
+        });
 
         const overlay = this.debugOverlay;
         this.socketUnsubDebugAny = svc.onAnyEvent((eventName: string, ...args: any[]) => {
@@ -1442,6 +1460,9 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubWhisperTurnHistory?.();
     this.socketUnsubWhisperTurnHistory = undefined;
     this.whisperPanel?.destroy();
+    this.socketUnsubAutoRunStatus?.();
+    this.socketUnsubAutoRunStatus = undefined;
+    this.autoRunBadge?.destroy();
   }
 
   /**

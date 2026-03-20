@@ -421,6 +421,20 @@ class SocketService {
     (this.socket as any).on('whisper:error', callback);
   }
 
+  emitAutoRunToggle(gameId: string): void {
+    if (!this.socket) return;
+    this.socket.emit('autorun:toggle' as any, { gameId });
+  }
+
+  onAutoRunStatus(callback: (data: { enabled: boolean }) => void): () => void {
+    if (!this.socket) return () => {};
+    const handler = callback;
+    (this.socket as any).on('autorun:status', handler);
+    return () => {
+      (this.socket as any)?.off('autorun:status', handler);
+    };
+  }
+
   getServerSeq(): number {
     return this.serverSeq;
   }
