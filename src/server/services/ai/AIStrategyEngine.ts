@@ -1480,7 +1480,7 @@ export class AIStrategyEngine {
       provider,
       model: botConfig.model,
       apiKey,
-      timeoutMs: skillLevel === BotSkillLevel.Easy ? 20000 : 15000,
+      timeoutMs: skillLevel === BotSkillLevel.Easy ? 30000 : 15000,
       maxRetries: 1,
     });
   }
