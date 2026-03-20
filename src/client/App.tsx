@@ -12,6 +12,7 @@ import './lobby/index.css';
 
 // Lazy load the standalone game component
 const StandaloneGame = React.lazy(() => import('./game/StandaloneGame').then(module => ({ default: module.StandaloneGame })));
+const MapViewer = React.lazy(() => import('./mapViewer/MapViewer').then(module => ({ default: module.MapViewer })));
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -147,6 +148,23 @@ export default function App() {
                     </Suspense>
                   </ErrorBoundary>
                 </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/map/:id"
+              element={
+                <ErrorBoundary>
+                  <Suspense fallback={
+                    <div className="size-full flex items-center justify-center bg-background">
+                      <div className="flex flex-col items-center gap-4">
+                        <div className="size-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                        <p className="text-muted-foreground">Loading map viewer...</p>
+                      </div>
+                    </div>
+                  }>
+                    <MapViewer />
+                  </Suspense>
+                </ErrorBoundary>
               }
             />
             <Route path="/" element={<Navigate to="/lobby" replace />} />
