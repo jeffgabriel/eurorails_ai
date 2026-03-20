@@ -226,6 +226,7 @@ export const TRIP_PLAN_SCHEMA = {
     },
     chosenIndex: { type: 'number' as const },
     reasoning: { type: 'string' as const },
+    upgradeOnRoute: { type: 'string' as const, enum: ['FastFreight', 'HeavyFreight', 'Superfreight'] },
   },
   required: ['candidates', 'chosenIndex', 'reasoning'],
 };

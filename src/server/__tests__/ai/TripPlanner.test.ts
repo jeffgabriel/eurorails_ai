@@ -129,11 +129,12 @@ function makeConfig(): LLMStrategyConfig {
 function buildLlmResponse(candidates: Array<{
   stops: Array<{ action: string; load: string; city: string; demandCardId?: number; payment?: number }>;
   reasoning: string;
-}>, chosenIndex = 0): string {
+}>, chosenIndex = 0, upgradeOnRoute?: string): string {
   return JSON.stringify({
     candidates,
     chosenIndex,
     reasoning: 'Chose the best trip',
+    ...(upgradeOnRoute && { upgradeOnRoute }),
   });
 }
 
@@ -806,6 +807,48 @@ describe('TripPlanner', () => {
 
       expect(result).not.toBeNull();
       expect(result!.candidates).toHaveLength(1);
+    });
+
+    it('should propagate upgradeOnRoute from LLM response to StrategicRoute', async () => {
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          ],
+          reasoning: 'Upgrade and deliver',
+        },
+      ], 0, 'FastFreight');
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.route.upgradeOnRoute).toBe('FastFreight');
+    });
+
+    it('should leave upgradeOnRoute undefined when LLM omits it', async () => {
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          ],
+          reasoning: 'No upgrade',
+        },
+      ]);
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.route.upgradeOnRoute).toBeUndefined();
     });
 
     it('should pass memory fields to planRoute() fallback', async () => {

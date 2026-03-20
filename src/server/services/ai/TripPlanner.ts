@@ -40,6 +40,8 @@ export interface TripPlanResult {
   llmLatencyMs: number;
   llmTokens: { input: number; output: number };
   llmLog: LlmAttempt[];
+  systemPrompt?: string;
+  userPrompt?: string;
 }
 
 /** Raw LLM output matching TRIP_PLAN_SCHEMA */
@@ -56,6 +58,7 @@ interface LLMTripPlanResponse {
   }>;
   chosenIndex: number;
   reasoning: string;
+  upgradeOnRoute?: string;
 }
 
 // ── Token budgets (same scale as route planning) ─────────────────────
@@ -123,7 +126,10 @@ export class TripPlanner {
           systemPrompt,
           userPrompt: promptWithError,
           outputSchema: TRIP_PLAN_SCHEMA,
-          effort: TRIP_EFFORT[skillLevel],
+          ...(skillLevel !== BotSkillLevel.Easy && {
+            thinking: { type: 'adaptive' },
+            effort: TRIP_EFFORT[skillLevel],
+          }),
         });
         const latencyMs = Date.now() - startMs;
 
@@ -170,6 +176,7 @@ export class TripPlanner {
           phase: 'build',
           createdAtTurn: context.turnNumber,
           reasoning: chosen.reasoning,
+          upgradeOnRoute: parsed.upgradeOnRoute,
         };
 
         llmLog.push({
@@ -186,6 +193,8 @@ export class TripPlanner {
           llmLatencyMs: latencyMs,
           llmTokens: response.usage,
           llmLog,
+          systemPrompt,
+          userPrompt,
         };
       } catch (error) {
         const latencyMs = Date.now() - startMs;
@@ -206,7 +215,7 @@ export class TripPlanner {
         memory.previousRouteStops,
       );
       if (fallback.route) {
-        const successResult = fallback as { route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[] };
+        const successResult = fallback as { route: StrategicRoute; model: string; latencyMs: number; tokenUsage?: { input: number; output: number }; llmLog: LlmAttempt[]; systemPrompt?: string; userPrompt?: string };
         return {
           candidates: [],
           chosen: -1,
@@ -214,6 +223,8 @@ export class TripPlanner {
           llmLatencyMs: successResult.latencyMs,
           llmTokens: successResult.tokenUsage ?? { input: 0, output: 0 },
           llmLog: [...llmLog, ...successResult.llmLog],
+          systemPrompt: successResult.systemPrompt,
+          userPrompt: successResult.userPrompt,
         };
       }
     } catch {

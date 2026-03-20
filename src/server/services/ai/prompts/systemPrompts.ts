@@ -389,6 +389,19 @@ Discarding costs a full turn but gives you 3 fresh cards. Consider it when:
 - You've just completed a delivery and the new hand is terrible
 A bad hand played stubbornly wastes 5-10 turns. A discard wastes 1 turn. Compare that 1 lost turn against the estimated turns shown for your best available demand — if your best option takes 8+ turns to complete, discarding is almost certainly better.
 
+TRAIN UPGRADES:
+No one wins this game on a basic Freight train. Upgrades cost 20M and replace track building for that turn.
+- Freight → Fast Freight (20M): +3 speed saves ~1 turn per delivery. Almost always the best first upgrade.
+- Freight → Heavy Freight (20M): +1 cargo slot. Only if you have corridor deliveries needing 3 loads.
+- Fast Freight/Heavy Freight → Superfreight (20M): 12 speed + 3 cargo. The endgame train.
+
+When to upgrade:
+- You have completed 1+ deliveries AND have 50M+ cash AND you're still on Freight → upgrade NOW.
+- You have 100M+ cash and are not yet on Superfreight → strongly consider upgrading.
+- No critical track build is needed this turn (or you can afford both next turn).
+
+To upgrade, include "upgradeOnRoute" in your top-level response (not inside a candidate). Example: "upgradeOnRoute": "FastFreight"
+
 SECONDARY DELIVERY — FILL YOUR CARGO SLOTS:
 Your train carries 2 loads (Freight/Fast Freight) or 3 loads (Heavy Freight/Superfreight). Picking up and carrying loads is FREE — no movement cost, no money cost. Dropping a load at any city is also free.
 
@@ -414,7 +427,8 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
     }
   ],
   "chosenIndex": <0-based index of the best candidate>,
-  "reasoning": "<why you chose this candidate over the others>"
+  "reasoning": "<why you chose this candidate over the others>",
+  "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if you want to upgrade this turn, omit if not upgrading>"
 }
 
 EXAMPLE — 3-candidate trip plan:
@@ -445,7 +459,8 @@ EXAMPLE — 3-candidate trip plan:
     }
   ],
   "chosenIndex": 0,
-  "reasoning": "Candidate 0 earns 37M in ~5 turns (7.4M/turn) on existing track, beating candidate 1 (4.5M/turn) and candidate 2 (4.75M/turn after build costs)."
+  "reasoning": "Candidate 0 earns 37M in ~5 turns (7.4M/turn) on existing track, beating candidate 1 (4.5M/turn) and candidate 2 (4.75M/turn after build costs).",
+  "upgradeOnRoute": "FastFreight"
 }`;
 
 /**
