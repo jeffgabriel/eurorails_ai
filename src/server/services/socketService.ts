@@ -9,7 +9,7 @@ import { ChatService } from './chatService';
 import { rateLimitService } from './rateLimitService';
 import { gameChatLimitService } from './gameChatLimitService';
 import { moderationService } from './moderationService';
-import { onTurnChange as triggerBotTurn, onHumanReconnect } from './ai/BotTurnTrigger';
+import { onTurnChange as triggerBotTurn, onHumanReconnect, advanceTurnAfterBot } from './ai/BotTurnTrigger';
 import { WhisperService } from './ai/WhisperService';
 import type { WhisperSubmitPayload } from '../../shared/types/WhisperTypes';
 
@@ -18,6 +18,35 @@ let presenceSweepInterval: NodeJS.Timeout | null = null;
 
 const PRESENCE_HEARTBEAT_MS = 60_000;
 const PRESENCE_STALE_INTERVAL = '5 minutes';
+const AUTO_RUN_DELAY_MS = 2000;
+
+// ====== AUTO-RUN STATE ======
+// In-memory map: gameId → set of playerIds with auto-run enabled
+const autoRunPlayers: Map<string, Set<string>> = new Map();
+
+export function isAutoRunEnabled(gameId: string, playerId: string): boolean {
+  return autoRunPlayers.get(gameId)?.has(playerId) ?? false;
+}
+
+export function toggleAutoRun(gameId: string, playerId: string): boolean {
+  let players = autoRunPlayers.get(gameId);
+  if (!players) {
+    players = new Set();
+    autoRunPlayers.set(gameId, players);
+  }
+  if (players.has(playerId)) {
+    players.delete(playerId);
+    if (players.size === 0) autoRunPlayers.delete(gameId);
+    return false;
+  } else {
+    players.add(playerId);
+    return true;
+  }
+}
+
+export function clearAutoRun(gameId: string): void {
+  autoRunPlayers.delete(gameId);
+}
 
 /**
  * Create deterministic DM room ID (both users join same room)
@@ -159,6 +188,30 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
     // Handle disconnection
     socket.on('disconnect', () => {
       clearInterval(heartbeatInterval);
+
+      // Clean up auto-run state for this user across all joined games
+      if (userId) {
+        for (const gameId of joinedGameIds) {
+          // Look up playerId and remove from auto-run
+          db.query(
+            'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+            [gameId, userId],
+          )
+            .then(result => {
+              const playerId = result.rows[0]?.id;
+              if (playerId) {
+                const players = autoRunPlayers.get(gameId);
+                if (players) {
+                  players.delete(playerId);
+                  if (players.size === 0) autoRunPlayers.delete(gameId);
+                }
+              }
+            })
+            .catch(err => {
+              console.error('[socketService] Auto-run cleanup on disconnect failed:', err);
+            });
+        }
+      }
     });
 
     // Handle join lobby event
@@ -598,6 +651,37 @@ export function initializeSocketIO(server: HTTPServer): SocketIOServer {
         });
       }
     });
+
+    // ====== AUTO-RUN EVENTS ======
+
+    socket.on('autorun:toggle', async (data: { gameId: string }) => {
+      if (!data || !data.gameId || typeof data.gameId !== 'string' || data.gameId.trim() === '') {
+        console.warn(`Invalid gameId from client ${socket.id} for autorun:toggle`);
+        return;
+      }
+      if (!userId) {
+        socket.emit('error', { code: 'UNAUTHORIZED', message: 'Authentication required' });
+        return;
+      }
+
+      const { gameId } = data;
+      try {
+        const playerResult = await db.query(
+          'SELECT id FROM players WHERE game_id = $1 AND user_id = $2',
+          [gameId, userId],
+        );
+        if (playerResult.rows.length === 0) {
+          socket.emit('error', { code: 'NOT_IN_GAME', message: 'You are not a player in this game' });
+          return;
+        }
+        const playerId: string = playerResult.rows[0].id;
+        const enabled = toggleAutoRun(gameId, playerId);
+        socket.emit('autorun:status', { enabled });
+      } catch (err) {
+        console.error('[socketService] autorun:toggle error:', err);
+        socket.emit('error', { code: 'AUTORUN_ERROR', message: 'Failed to toggle auto-run' });
+      }
+    });
   });
 
   return io;
@@ -661,6 +745,23 @@ export function emitTurnChange(gameId: string, currentPlayerIndex: number, curre
     triggerBotTurn(gameId, currentPlayerIndex, currentPlayerId).catch(err => {
       console.error(`[socketService] BotTurnTrigger error for game ${gameId}:`, err);
     });
+
+    // Auto-run: if the current player is a non-bot human with auto-run, advance after delay
+    if (isAutoRunEnabled(gameId, currentPlayerId)) {
+      db.query('SELECT is_bot FROM players WHERE id = $1', [currentPlayerId])
+        .then(result => {
+          if (!result.rows[0]?.is_bot && isAutoRunEnabled(gameId, currentPlayerId)) {
+            setTimeout(() => {
+              advanceTurnAfterBot(gameId).catch(err => {
+                console.error(`[socketService] Auto-run advance error for game ${gameId}:`, err);
+              });
+            }, AUTO_RUN_DELAY_MS);
+          }
+        })
+        .catch(err => {
+          console.error(`[socketService] Auto-run is_bot check error for game ${gameId}:`, err);
+        });
+    }
   }
 }
 
@@ -738,6 +839,8 @@ export function emitGameOver(
     winnerName,
     timestamp: Date.now(),
   });
+  // Clean up auto-run state for completed game
+  clearAutoRun(gameId);
 }
 
 /**
