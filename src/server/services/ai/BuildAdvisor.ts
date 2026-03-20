@@ -61,8 +61,17 @@ export class BuildAdvisor {
       });
 
       // 5. Parse and validate
-      const parsed = JSON.parse(response.text) as BuildAdvisorResult;
+      let parsed: BuildAdvisorResult;
+      try {
+        parsed = JSON.parse(response.text) as BuildAdvisorResult;
+      } catch (parseErr) {
+        console.warn(`[BuildAdvisor] JSON parse failed: ${(parseErr as Error).message}, raw: ${response.text.substring(0, 200)}`);
+        return null;
+      }
       const validated = BuildAdvisor.validateWaypoints(parsed, gridPoints);
+      if (!validated) {
+        console.warn(`[BuildAdvisor] validateWaypoints returned null for action=${parsed.action}, target=${parsed.target}, waypoints=${JSON.stringify(parsed.waypoints)}`);
+      }
       return validated;
     } catch (err) {
       const errorType = err instanceof Error ? err.constructor.name : 'Unknown';
@@ -133,38 +142,75 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
   }
 
   /**
-   * Validate waypoints — remove any [row, col] not in gridPoints.
-   * If all invalid → return null (caller falls back).
+   * Snap a [row, col] to the nearest valid grid point within maxDistance.
+   * Returns the snapped coordinate or null if nothing is close enough.
+   */
+  private static snapToNearest(
+    row: number,
+    col: number,
+    validPoints: Map<string, [number, number]>,
+    maxDistance: number = 2,
+  ): [number, number] | null {
+    const exactKey = `${row},${col}`;
+    if (validPoints.has(exactKey)) return [row, col];
+
+    let best: [number, number] | null = null;
+    let bestDist = Infinity;
+    for (let dr = -maxDistance; dr <= maxDistance; dr++) {
+      for (let dc = -maxDistance; dc <= maxDistance; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        const key = `${row + dr},${col + dc}`;
+        const match = validPoints.get(key);
+        if (match) {
+          const dist = Math.abs(dr) + Math.abs(dc);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = match;
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Validate and snap waypoints — exact matches pass through, near-misses
+   * are snapped to the closest valid grid point (max distance 2).
+   * If all waypoints are unrecoverable → return null (caller falls back).
    */
   private static validateWaypoints(
     result: BuildAdvisorResult,
     gridPoints: GridPoint[],
   ): BuildAdvisorResult | null {
-    const validPoints = new Set<string>();
+    const validPoints = new Map<string, [number, number]>();
     for (const gp of gridPoints) {
-      validPoints.add(`${gp.row},${gp.col}`);
+      validPoints.set(`${gp.row},${gp.col}`, [gp.row, gp.col]);
     }
 
-    const validWaypoints = result.waypoints.filter(
-      ([row, col]) => validPoints.has(`${row},${col}`)
-    );
+    const snappedWaypoints: [number, number][] = [];
+    for (const [row, col] of result.waypoints) {
+      const snapped = BuildAdvisor.snapToNearest(row, col, validPoints);
+      if (snapped) snappedWaypoints.push(snapped);
+    }
 
-    // If all waypoints invalid and action requires waypoints, return null
-    if (validWaypoints.length === 0 && result.action !== 'useOpponentTrack' && result.action !== 'replan') {
-      console.warn(`[BuildAdvisor] All waypoints invalid — attempted: ${JSON.stringify(result.waypoints)}, valid set size: ${validPoints.size}`);
+    // If all waypoints unrecoverable and action requires waypoints, return null
+    if (snappedWaypoints.length === 0 && result.action !== 'useOpponentTrack' && result.action !== 'replan') {
+      console.warn(`[BuildAdvisor] All waypoints unrecoverable — attempted: ${JSON.stringify(result.waypoints)}, valid set size: ${validPoints.size}`);
       return null;
     }
 
-    // Also validate alternativeBuild waypoints if present
+    // Also snap alternativeBuild waypoints if present
     let alternativeBuild = result.alternativeBuild;
     if (alternativeBuild) {
-      const validAltWaypoints = alternativeBuild.waypoints.filter(
-        ([row, col]) => validPoints.has(`${row},${col}`)
-      );
-      alternativeBuild = { ...alternativeBuild, waypoints: validAltWaypoints };
+      const snappedAlt: [number, number][] = [];
+      for (const [row, col] of alternativeBuild.waypoints) {
+        const snapped = BuildAdvisor.snapToNearest(row, col, validPoints);
+        if (snapped) snappedAlt.push(snapped);
+      }
+      alternativeBuild = { ...alternativeBuild, waypoints: snappedAlt };
     }
 
-    return { ...result, waypoints: validWaypoints, alternativeBuild };
+    return { ...result, waypoints: snappedWaypoints, alternativeBuild };
   }
 
   /**
