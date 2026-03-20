@@ -157,6 +157,44 @@ describe('TurnValidator', () => {
       expect(result.hardGates.find(g => g.gate === 'CASH_SUFFICIENCY')?.passed).toBe(true);
     });
 
+    it('should pass when delivery income covers build cost', () => {
+      const plan = multiAction([
+        { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin', cardId: 5, payout: 18 },
+        { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 1, 2, 12)] },
+      ]);
+      const result = TurnValidator.validate(plan, makeContext({ money: 0 }), makeSnapshot(0));
+      expect(result.hardGates.find(g => g.gate === 'CASH_SUFFICIENCY')?.passed).toBe(true);
+    });
+
+    it('should fail when delivery income is insufficient for build cost', () => {
+      const plan = multiAction([
+        { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin', cardId: 5, payout: 5 },
+        { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 1, 2, 12)] },
+      ]);
+      const result = TurnValidator.validate(plan, makeContext({ money: 0 }), makeSnapshot(0));
+      expect(result.hardGates.find(g => g.gate === 'CASH_SUFFICIENCY')?.passed).toBe(false);
+    });
+
+    it('should pass when delivery income plus cash covers build cost', () => {
+      const plan = multiAction([
+        { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin', cardId: 5, payout: 10 },
+        { type: AIActionType.BuildTrack, segments: [makeSegment(1, 1, 1, 2, 12)] },
+      ]);
+      const result = TurnValidator.validate(plan, makeContext({ money: 5 }), makeSnapshot(5));
+      expect(result.hardGates.find(g => g.gate === 'CASH_SUFFICIENCY')?.passed).toBe(true);
+    });
+
+    it('should pass when delivery income covers both movement fees and build cost', () => {
+      const plan = multiAction([
+        { type: AIActionType.MoveTrain, path: [{ row: 1, col: 1 }, { row: 1, col: 2 }], fees: new Set(['p2']), totalFee: 4 },
+        { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin', cardId: 5, payout: 18 },
+        { type: AIActionType.BuildTrack, segments: [makeSegment(1, 2, 1, 3, 12)] },
+      ]);
+      // totalCost = 12 + 4 = 16, availableCash = 0 + 18 = 18 → PASS
+      const result = TurnValidator.validate(plan, makeContext({ money: 0 }), makeSnapshot(0));
+      expect(result.hardGates.find(g => g.gate === 'CASH_SUFFICIENCY')?.passed).toBe(true);
+    });
+
     it('should account for movement fees in cash check', () => {
       const plan = multiAction([
         { type: AIActionType.MoveTrain, path: [{ row: 1, col: 1 }, { row: 1, col: 2 }], fees: new Set(['p2']), totalFee: 4 },

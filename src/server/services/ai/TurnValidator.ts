@@ -262,12 +262,22 @@ export class TurnValidator {
       }
     }
 
+    // Account for delivery income that executes before builds in the same plan
+    let deliveryIncome = 0;
+    for (const step of steps) {
+      if (step.type === AIActionType.DeliverLoad) {
+        deliveryIncome += (step as TurnPlanDeliverLoad).payout;
+      }
+    }
+
     const totalCost = phaseBSpend + movementFees;
-    if (totalCost > snapshot.bot.money) {
+    const availableCash = snapshot.bot.money + deliveryIncome;
+    if (totalCost > availableCash) {
+      const incomeNote = deliveryIncome > 0 ? `, delivery income: ${deliveryIncome}M` : '';
       return {
         gate: 'CASH_SUFFICIENCY',
         passed: false,
-        detail: `Plan costs ${totalCost}M (build/upgrade: ${phaseBSpend}M, fees: ${movementFees}M) but bot only has ${snapshot.bot.money}M`,
+        detail: `Plan costs ${totalCost}M (build/upgrade: ${phaseBSpend}M, fees: ${movementFees}M) but bot only has ${availableCash}M (cash: ${snapshot.bot.money}M${incomeNote})`,
       };
     }
     return { gate: 'CASH_SUFFICIENCY', passed: true };
