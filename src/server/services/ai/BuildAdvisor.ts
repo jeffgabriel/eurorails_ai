@@ -57,13 +57,17 @@ export class BuildAdvisor {
         systemPrompt: system,
         userPrompt: user,
         outputSchema: BUILD_ADVISOR_SCHEMA,
+        timeoutMs: 30000,
       });
 
       // 5. Parse and validate
       const parsed = JSON.parse(response.text) as BuildAdvisorResult;
       const validated = BuildAdvisor.validateWaypoints(parsed, gridPoints);
       return validated;
-    } catch {
+    } catch (err) {
+      const errorType = err instanceof Error ? err.constructor.name : 'Unknown';
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BuildAdvisor] advise failed: ${errorType}: ${errorMsg}`);
       return null;
     }
   }
@@ -115,11 +119,15 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
         systemPrompt: system,
         userPrompt: user + solvencyFeedback,
         outputSchema: BUILD_ADVISOR_SCHEMA,
+        timeoutMs: 30000,
       });
 
       const parsed = JSON.parse(response.text) as BuildAdvisorResult;
       return BuildAdvisor.validateWaypoints(parsed, gridPoints);
-    } catch {
+    } catch (err) {
+      const errorType = err instanceof Error ? err.constructor.name : 'Unknown';
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`[BuildAdvisor] retryWithSolvencyFeedback failed: ${errorType}: ${errorMsg}`);
       return null;
     }
   }
@@ -143,6 +151,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
     // If all waypoints invalid and action requires waypoints, return null
     if (validWaypoints.length === 0 && result.action !== 'useOpponentTrack' && result.action !== 'replan') {
+      console.warn(`[BuildAdvisor] All waypoints invalid — attempted: ${JSON.stringify(result.waypoints)}, valid set size: ${validPoints.size}`);
       return null;
     }
 

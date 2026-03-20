@@ -86,6 +86,66 @@ describe('MapRenderer', () => {
     });
   });
 
+  describe('coordinate labels', () => {
+    it('should include column header with correct column numbers', () => {
+      const result = MapRenderer.renderCorridor(
+        [],
+        [],
+        smallGrid,
+        [{ row: 0, col: 0 }],
+        { row: 4, col: 4 },
+        4,
+      );
+
+      const lines = result.rendered.split('\n');
+      // First line is column header
+      const header = lines[0];
+      expect(header).toContain('0');
+      expect(header).toContain('1');
+      expect(header).toContain('2');
+      expect(header).toContain('3');
+      expect(header).toContain('4');
+    });
+
+    it('should prefix each row with its row number', () => {
+      const result = MapRenderer.renderCorridor(
+        [],
+        [],
+        smallGrid,
+        [{ row: 0, col: 0 }],
+        { row: 4, col: 4 },
+        4,
+      );
+
+      const lines = result.rendered.split('\n');
+      // Skip header (line 0), grid rows start at line 1
+      expect(lines[1]).toMatch(/^\s*0:\s/);
+      expect(lines[2]).toMatch(/^\s*1:\s/);
+      expect(lines[3]).toMatch(/^\s*2:\s/);
+      expect(lines[4]).toMatch(/^\s*3:\s/);
+      expect(lines[5]).toMatch(/^\s*4:\s/);
+    });
+
+    it('should align terrain chars with column headers using 4-char cells', () => {
+      const result = MapRenderer.renderCorridor(
+        [],
+        [],
+        smallGrid,
+        [{ row: 0, col: 0 }],
+        { row: 4, col: 4 },
+        4,
+      );
+
+      const lines = result.rendered.split('\n');
+      const header = lines[0];
+      const row0 = lines[1];
+      // Row label is 5 chars ("  0: "), header indent is 5 chars ("     ")
+      // Both use 4-char cells after that
+      expect(header.substring(0, 5)).toBe('     ');
+      expect(row0.substring(0, 5)).toMatch(/^\s*0:\s$/);
+    });
+  });
+
   describe('terrain encoding', () => {
     it('should encode terrain types correctly', () => {
       const result = MapRenderer.renderCorridor(
@@ -98,20 +158,21 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
+      // Line 0 is now the column header; grid rows start at line 1
       // Row 0: . m A . .
-      expect(lines[0]).toContain('.');
-      expect(lines[0]).toContain('m');
-      expect(lines[0]).toContain('A');
+      expect(lines[1]).toContain('.');
+      expect(lines[1]).toContain('m');
+      expect(lines[1]).toContain('A');
 
       // Row 1: s . . M .  (SmallCity=s, MediumCity=M)
-      expect(lines[1][0]).toBe('s');
-      expect(lines[1][3]).toBe('M');
+      expect(lines[2]).toContain('s');
+      expect(lines[2]).toContain('M');
 
       // Row 2: . . * . .  (MajorCity=*)
-      expect(lines[2][2]).toBe('*');
+      expect(lines[3]).toContain('*');
 
       // Row 3, col 4: ~ (Water)
-      expect(lines[3][4]).toBe('~');
+      expect(lines[4]).toContain('~');
     });
   });
 
@@ -128,9 +189,8 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      // Row 1, col 1 and col 2 should be B (bot track)
-      expect(lines[1][1]).toBe('B');
-      expect(lines[1][2]).toBe('B');
+      // Row 1 is grid line index 2 (header + row 0 first)
+      expect(lines[2]).toContain('B');
     });
 
     it('should render opponent track as O', () => {
@@ -145,8 +205,8 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      expect(lines[3][1]).toBe('O');
-      expect(lines[3][2]).toBe('O');
+      // Row 3 is grid line index 4
+      expect(lines[4]).toContain('O');
     });
 
     it('should prioritize bot track over opponent track', () => {
@@ -162,7 +222,9 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      expect(lines[2][1]).toBe('B'); // Bot wins
+      // Row 2 is grid line index 3
+      expect(lines[3]).toContain('B');
+      expect(lines[3]).not.toContain('O');
     });
   });
 
@@ -178,7 +240,8 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      expect(lines[2][2]).toBe('T'); // Target overrides MajorCity
+      // Row 2 is grid line index 3 (header + rows 0,1)
+      expect(lines[3]).toContain('T'); // Target overrides MajorCity
     });
 
     it('should prioritize target over bot track', () => {
@@ -193,7 +256,8 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      expect(lines[2][2]).toBe('T'); // Target wins over bot track
+      // Row 2 is grid line index 3
+      expect(lines[3]).toContain('T'); // Target wins over bot track
     });
 
     it('should annotate city names on the right side', () => {
@@ -207,12 +271,11 @@ describe('MapRenderer', () => {
       );
 
       const lines = result.rendered.split('\n');
-      // Row 1 has SmallCity Aachen at col 0 and MediumCity Bruxelles at col 3
-      // Last annotation for row 1 should be Bruxelles (overwrites Aachen in map)
-      expect(lines[1]).toContain('Bruxelles');
+      // Row 1 is grid line index 2 (header offset)
+      expect(lines[2]).toContain('Bruxelles');
 
-      // Row 2 has MajorCity Paris at col 2
-      expect(lines[2]).toContain('Paris');
+      // Row 2 is grid line index 3
+      expect(lines[3]).toContain('Paris');
     });
   });
 

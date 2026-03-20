@@ -219,6 +219,27 @@ describe('BuildAdvisor', () => {
       expect(result).toBeNull();
     });
 
+    it('should pass timeoutMs: 30000 to the chat call', async () => {
+      const validResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Build toward Paris',
+      };
+      const brain = makeMockBrain(JSON.stringify(validResponse));
+
+      await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      const chatCall = (brain.providerAdapter.chat as jest.Mock).mock.calls[0][0];
+      expect(chatCall.timeoutMs).toBe(30000);
+    });
+
     it('should allow empty waypoints for useOpponentTrack action', async () => {
       const opponentTrackResponse: BuildAdvisorResult = {
         action: 'useOpponentTrack',
@@ -278,6 +299,30 @@ describe('BuildAdvisor', () => {
       expect(chatCall.userPrompt).toContain('SOLVENCY FEEDBACK');
       expect(chatCall.userPrompt).toContain('25M');
       expect(chatCall.userPrompt).toContain('15M');
+    });
+
+    it('should pass timeoutMs: 30000 to the retry chat call', async () => {
+      const cheaperResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Cheaper route',
+      };
+      const brain = makeMockBrain(JSON.stringify(cheaperResponse));
+
+      await BuildAdvisor.retryWithSolvencyFeedback(
+        { action: 'build', target: 'Paris', waypoints: [[1, 1]], reasoning: 'test' },
+        25,
+        15,
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      const chatCall = (brain.providerAdapter.chat as jest.Mock).mock.calls[0][0];
+      expect(chatCall.timeoutMs).toBe(30000);
     });
 
     it('should return null on retry LLM failure', async () => {

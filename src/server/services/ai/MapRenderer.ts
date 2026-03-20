@@ -69,32 +69,41 @@ export class MapRenderer {
     // 3. City annotations collector
     const cityAnnotations: Map<number, string> = new Map(); // row → city name
 
-    // 4. Render grid
+    // 4. Render grid with coordinate labels
     const lines: string[] = [];
+
+    // Column header row: 5-char left padding + each col number padded to 4 chars
+    let header = '     ';
+    for (let col = minCol; col <= maxCol; col++) {
+      header += String(col).padStart(4, ' ');
+    }
+    lines.push(header);
+
     for (let row = minRow; row <= maxRow; row++) {
-      let line = '';
+      // Row label: row number right-justified in 3 chars + ': '
+      let line = String(row).padStart(3, ' ') + ': ';
       for (let col = minCol; col <= maxCol; col++) {
         const key = `${row},${col}`;
         const gp = pointMap.get(key);
 
+        let ch: string;
         if (!gp) {
-          line += ' ';
-          continue;
+          ch = ' ';
+        } else if (key === targetKey) {
+          ch = 'T';
+        } else if (botTrackSet.has(key)) {
+          ch = 'B';
+        } else if (opponentTrackSet.has(key)) {
+          ch = 'O';
+        } else {
+          ch = MapRenderer.TERRAIN_CHARS[gp.terrain] ?? '.';
         }
 
-        // Priority: target > bot track > opponent track > terrain
-        if (key === targetKey) {
-          line += 'T';
-        } else if (botTrackSet.has(key)) {
-          line += 'B';
-        } else if (opponentTrackSet.has(key)) {
-          line += 'O';
-        } else {
-          line += MapRenderer.TERRAIN_CHARS[gp.terrain] ?? '.';
-        }
+        // Pad each cell to 4 chars to align with column headers
+        line += (' ' + ch).padEnd(4, ' ');
 
         // Collect city names for annotation
-        if (gp.city) {
+        if (gp?.city) {
           cityAnnotations.set(row, gp.city.name);
         }
       }
