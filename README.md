@@ -199,21 +199,81 @@ VITE_SOCKET_URL=https://api.example.com
 
 For complete environment variable documentation, see `example.env` in the project root.
 
+## Hidden Features & Power User Tips
+
+These features aren't surfaced in the UI but are available via keyboard shortcuts or direct URLs.
+
+### Debug Overlay (`` ` `` backtick key)
+
+Press the **backtick** key (`` ` ``) during gameplay to toggle the Debug Overlay. This shows:
+- Real-time game state (current player, turn phase, cash balances)
+- Socket event log (all events sent/received)
+- Bot turn activity and LLM decision metadata
+- Demand card rankings and route evaluation data
+
+Useful for understanding what the AI bots are "thinking" and diagnosing gameplay issues.
+
+### Completed Game Map Viewer (`/map/:gameId`)
+
+After a game ends, you can view a read-only map of the final board state by navigating to:
+
+```
+/map/<gameId>
+```
+
+This renders the full game board with all player tracks drawn in their respective colors, along with a player legend. Supports pan and zoom. No login required — URLs are shareable.
+
+### Auto-Run Mode (`F9`)
+
+Press **F9** during gameplay to toggle **Auto-Run mode**. When enabled, bot turns execute continuously without the normal pause between turns. A badge appears on screen indicating auto-run is active. Press F9 again to disable.
+
+This is useful for fast-forwarding through bot-only games or testing AI behavior over many turns.
+
 ## Project Structure
 
 ```
 src/
-├── client/          # Frontend code
-│   ├── components/  # Game components
-│   ├── scenes/      # Phaser scenes
-│   └── assets/      # Game assets
-├── server/          # Backend code
-│   ├── routes/      # API routes
-│   ├── services/    # Business logic
-│   └── db/          # Database operations
-└── shared/          # Shared code
-    ├── types/       # TypeScript types
-    └── utils/       # Utility functions
+├── client/              # Frontend code
+│   ├── components/      # Game components (MapRenderer, TrackDrawingManager, CameraController, DebugOverlay, etc.)
+│   ├── config/          # API and UI configuration
+│   ├── game/            # Phaser game entry point and React wrapper
+│   ├── lobby/           # React lobby UI (auth, game creation, bot config)
+│   ├── mapViewer/       # Read-only completed game map viewer
+│   ├── scenes/          # Phaser scenes (GameScene, SetupScene, PlayerHandScene, ChatScene)
+│   ├── services/        # Client-side services (TrackService, GameStateService, etc.)
+│   └── utils/           # Client utilities
+├── server/              # Backend code
+│   ├── __tests__/       # Server-side tests
+│   ├── db/              # Database connection and migrations
+│   ├── middleware/       # Express middleware (auth)
+│   ├── routes/          # API routes (game, tracks, lobby, auth, etc.)
+│   └── services/        # Business logic
+│       └── ai/          # AI bot engine
+│           ├── AIStrategyEngine.ts    # Top-level bot turn orchestrator
+│           ├── BotTurnTrigger.ts      # Detects when it's a bot's turn and kicks off AI
+│           ├── ContextBuilder.ts      # Builds LLM prompt context from game state
+│           ├── LLMStrategyBrain.ts    # LLM API calls (Claude/Gemini/GPT)
+│           ├── ResponseParser.ts      # Parses structured LLM responses
+│           ├── TurnComposer.ts        # Composes complete turn actions from LLM decisions
+│           ├── PlanExecutor.ts        # Executes composed turn plans against game state
+│           ├── GuardrailEnforcer.ts   # Validates and corrects LLM decisions against game rules
+│           ├── TurnValidator.ts       # Post-execution turn validation
+│           ├── RouteValidator.ts      # Validates delivery routes are feasible
+│           ├── TripPlanner.ts         # Plans multi-stop delivery trips
+│           ├── BuildAdvisor.ts        # Recommends track building targets
+│           ├── ActionResolver.ts      # Resolves high-level actions to concrete moves
+│           ├── NetworkBuildAnalyzer.ts # Analyzes track network for build opportunities
+│           ├── SolvencyCheck.ts       # Cash sufficiency validation
+│           ├── WorldSnapshotService.ts # Captures game state snapshots for context
+│           ├── WhisperService.ts      # Post-turn analysis and advice generation
+│           ├── providers/             # LLM provider adapters (Anthropic, Google, OpenAI)
+│           ├── prompts/               # System prompt templates
+│           └── schemas.ts             # Structured output schemas
+└── shared/              # Shared code (client + server)
+    ├── config/          # Shared configuration (terrain costs, water crossings)
+    ├── constants/       # Game rule constants
+    ├── services/        # Shared services (TrackBuildingService)
+    └── types/           # TypeScript types (GameTypes, TrackTypes, etc.)
 ```
 
 ## License
