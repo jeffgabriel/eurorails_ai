@@ -206,7 +206,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'high' });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'high' });
     });
 
     it('should default thinkingLevel to medium when effort is not provided for Gemini 3', async () => {
@@ -219,7 +219,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingLevel: 'medium' });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'medium' });
     });
 
     it('should include thinkingBudget: -1 for Gemini 2.5 models when thinking is enabled', async () => {
@@ -232,7 +232,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toEqual({ thinkingBudget: -1 });
+      expect(callBody.generationConfig.thinkingConfig).toEqual({ thinkingBudget: -1 });
     });
 
     it('should not include thinkingConfig when thinking is not enabled', async () => {
@@ -244,7 +244,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toBeUndefined();
+      expect(callBody.generationConfig.thinkingConfig).toBeUndefined();
     });
 
     it('should not include thinkingConfig for non-thinking models', async () => {
@@ -257,7 +257,7 @@ describe('GoogleAdapter', () => {
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(callBody.thinkingConfig).toBeUndefined();
+      expect(callBody.generationConfig.thinkingConfig).toBeUndefined();
     });
   });
 
