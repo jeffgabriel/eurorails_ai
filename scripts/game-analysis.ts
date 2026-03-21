@@ -56,7 +56,7 @@ interface TurnEntry {
   milepostsMoved?: number;
   trackUsageFee?: number;
   durationMs?: number;
-  composition?: object;
+  composition?: { deliveries?: Array<{ load: string; city: string }>; [key: string]: any };
   secondaryDelivery?: object;
   turnValidation?: { hardGates: Array<{ gate: string; passed: boolean; detail?: string }>; outcome: string; recomposeCount: number };
 }
@@ -76,6 +76,54 @@ function fmt(n: number): string {
 function pct(num: number, den: number): string {
   if (den === 0) return 'N/A';
   return (100 * num / den).toFixed(1) + '%';
+}
+
+interface Delivery {
+  loadType: string;
+  city: string;
+  payment: number;
+}
+
+/** Extract deliveries from either loadsDelivered (preferred) or composition.deliveries (fallback) */
+function getDeliveries(entry: TurnEntry, prevCash?: number): Delivery[] {
+  // Prefer top-level loadsDelivered (has payment info)
+  if (entry.loadsDelivered && entry.loadsDelivered.length > 0) {
+    return entry.loadsDelivered.map(d => ({ loadType: d.loadType, city: d.city, payment: d.payment }));
+  }
+  // Fallback: composition.deliveries (no payment — infer from cash delta)
+  const compDeliveries = entry.composition?.deliveries;
+  if (compDeliveries && compDeliveries.length > 0) {
+    const cashDelta = (entry.cash ?? 0) - (prevCash ?? entry.cash ?? 0);
+    // Also account for track cost spent this turn
+    const buildCost = entry.action === 'BuildTrack' ? (entry.cost ?? 0) : 0;
+    const totalPayment = Math.max(0, cashDelta + buildCost);
+    const perDelivery = compDeliveries.length > 0 ? Math.round(totalPayment / compDeliveries.length) : 0;
+    return compDeliveries.map(d => ({ loadType: d.load, city: d.city, payment: perDelivery }));
+  }
+  return [];
+}
+
+/** Build a delivery list for all entries, using previous-turn cash for payment inference */
+function getAllDeliveries(entries: TurnEntry[]): Array<{ turn: number } & Delivery> {
+  const result: Array<{ turn: number } & Delivery> = [];
+  for (let i = 0; i < entries.length; i++) {
+    const prevCash = i > 0 ? entries[i - 1].cash : entries[i].cash;
+    const deliveries = getDeliveries(entries[i], prevCash);
+    for (const d of deliveries) {
+      result.push({ turn: entries[i].turn, ...d });
+    }
+  }
+  return result;
+}
+
+/** Get total income from deliveries across all entries */
+function getTotalIncome(entries: TurnEntry[]): number {
+  return getAllDeliveries(entries).reduce((s, d) => s + d.payment, 0);
+}
+
+/** Check if a turn has deliveries */
+function hasDeliveries(entry: TurnEntry, prevCash?: number): boolean {
+  return getDeliveries(entry, prevCash).length > 0;
 }
 
 function isLlmModel(model: string | undefined): boolean {
@@ -174,9 +222,7 @@ function sectionTrackBuilding(name: string, entries: TurnEntry[]): string[] {
 
   const buildTurns = entries.filter(e => e.action === 'BuildTrack');
   const totalBuildCost = buildTurns.reduce((s, e) => s + (e.cost ?? 0), 0);
-  const totalIncome = entries.reduce((s, e) => {
-    return s + (e.loadsDelivered ?? []).reduce((ds, d) => ds + d.payment, 0);
-  }, 0);
+  const totalIncome = getTotalIncome(entries);
   const underBuilt = buildTurns.filter(e => (e.cost ?? 0) < 20 && (e.cost ?? 0) > 0);
 
   lines.push(`- Total track cost: ${fmt(totalBuildCost)}M`);
@@ -205,12 +251,7 @@ function sectionDemandSelection(name: string, entries: TurnEntry[]): string[] {
   lines.push('');
 
   // Deliveries
-  const deliveries: Array<{ turn: number; loadType: string; city: string; payment: number }> = [];
-  for (const e of entries) {
-    for (const d of e.loadsDelivered ?? []) {
-      deliveries.push({ turn: e.turn, ...d });
-    }
-  }
+  const deliveries = getAllDeliveries(entries);
 
   if (deliveries.length > 0) {
     lines.push('**Deliveries:**');
@@ -257,18 +298,18 @@ function sectionIncome(name: string, entries: TurnEntry[]): string[] {
   lines.push(`#### ${name}`);
   lines.push('');
 
-  const totalPayoffs = entries.reduce((s, e) => {
-    return s + (e.loadsDelivered ?? []).reduce((ds, d) => ds + d.payment, 0);
-  }, 0);
+  const allDeliveries = getAllDeliveries(entries);
+  const totalPayoffs = allDeliveries.reduce((s, d) => s + d.payment, 0);
   const totalTurns = entries.length;
   const avgPerTurn = totalTurns > 0 ? totalPayoffs / totalTurns : 0;
 
   // Turns with income
-  const turnsWithIncome = entries.filter(e => (e.loadsDelivered ?? []).length > 0);
+  const deliveryTurnNumbers = new Set(allDeliveries.map(d => d.turn));
+  const turnsWithIncome = entries.filter(e => deliveryTurnNumbers.has(e.turn));
   const incomeExclZero = turnsWithIncome.length > 0 ? totalPayoffs / turnsWithIncome.length : 0;
 
   // First delivery turn
-  const firstDelivery = entries.find(e => (e.loadsDelivered ?? []).length > 0);
+  const firstDelivery = allDeliveries.length > 0 ? entries.find(e => e.turn === allDeliveries[0].turn) : undefined;
 
   lines.push(`- Total payoffs: ${fmt(totalPayoffs)}M`);
   lines.push(`- Avg income/turn: ${avgPerTurn.toFixed(1)}M`);
@@ -295,7 +336,7 @@ function sectionIncome(name: string, entries: TurnEntry[]): string[] {
   let streakStart = -1;
   let streakActions: string[] = [];
   for (let i = 0; i < entries.length; i++) {
-    const hasIncome = (entries[i].loadsDelivered ?? []).length > 0;
+    const hasIncome = deliveryTurnNumbers.has(entries[i].turn);
     if (!hasIncome) {
       if (streakStart === -1) { streakStart = i; streakActions = []; }
       streakActions.push(entries[i].action);
@@ -330,7 +371,9 @@ function sectionIncome(name: string, entries: TurnEntry[]): string[] {
   for (let t = 1; t <= (entries[entries.length - 1]?.turn ?? 0); t += 5) {
     const nearest = findNearestTurn(entries, t);
     if (nearest && nearest.cash != null) {
-      const delivery = (nearest.loadsDelivered ?? []).map(d => `${d.loadType}(+${d.payment}M)`).join(', ') || '-';
+      const prevCash = findNearestTurn(entries, t - 5)?.cash;
+      const turnDeliveries = getDeliveries(nearest, prevCash);
+      const delivery = turnDeliveries.map(d => `${d.loadType}(+${d.payment}M)`).join(', ') || '-';
       lines.push(`| ${nearest.turn} | ${delivery} | $${nearest.cash}M |`);
     }
   }
@@ -604,8 +647,9 @@ function sectionHeadToHead(playerMap: Map<string, TurnEntry[]>): string[] {
   lines.push('|--------|-----------|--------|------------|----------|----------|------------|--------|-------|-----------|----------|');
 
   for (const [name, entries] of playerMap) {
-    const totalDeliveries = entries.reduce((s, e) => s + (e.loadsDelivered ?? []).length, 0);
-    const totalIncome = entries.reduce((s, e) => s + (e.loadsDelivered ?? []).reduce((ds, d) => ds + d.payment, 0), 0);
+    const playerDeliveries = getAllDeliveries(entries);
+    const totalDeliveries = playerDeliveries.length;
+    const totalIncome = playerDeliveries.reduce((s, d) => s + d.payment, 0);
     const finalCash = entries[entries.length - 1]?.cash ?? 0;
     const avgPerTurn = entries.length > 0 ? (totalIncome / entries.length).toFixed(1) : '0';
     const totalSegments = entries.reduce((s, e) => s + (e.segmentsBuilt ?? 0), 0);
@@ -723,7 +767,8 @@ function sectionSuggestedImprovements(playerMap: Map<string, TurnEntry[]>): stri
     let worstStreak = 0;
     let worstStart = 0;
     for (let i = 0; i < entries.length; i++) {
-      if ((entries[i].loadsDelivered ?? []).length === 0) {
+      const prevCash = i > 0 ? entries[i - 1].cash : entries[i].cash;
+      if (!hasDeliveries(entries[i], prevCash)) {
         streak++;
         if (streak > worstStreak) { worstStreak = streak; worstStart = entries[i - streak + 1]?.turn ?? 0; }
       } else {
