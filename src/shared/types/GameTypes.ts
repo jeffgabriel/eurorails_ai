@@ -567,7 +567,7 @@ export interface LLMStrategyConfig {
     /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */
     model?: string;
     apiKey: string;
-    /** Timeout in ms for LLM API calls. 10000 for Easy, 15000 for Medium/Hard. */
+    /** Timeout in ms for LLM API calls. Default 30000 (30s). */
     timeoutMs: number;
     /** Number of retries with minimal prompt before heuristic fallback. Default 1. */
     maxRetries: number;
