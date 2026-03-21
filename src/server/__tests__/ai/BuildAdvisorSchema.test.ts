@@ -72,14 +72,15 @@ describe('BUILD_ADVISOR_SCHEMA', () => {
     expect(validate(data)).toBe(false);
   });
 
-  it('should reject waypoints with wrong tuple size', () => {
+  it('should accept waypoints with extra elements (validation is at runtime)', () => {
     const data = {
       action: 'build',
       target: 'Paris',
-      waypoints: [[10, 20, 30]], // 3 elements, should be 2
+      waypoints: [[10, 20, 30]], // 3 elements — schema no longer enforces tuple size (Anthropic compat)
       reasoning: 'Bad waypoint',
     };
-    expect(validate(data)).toBe(false);
+    // minItems/maxItems removed for Anthropic compatibility; runtime validateWaypoints handles this
+    expect(validate(data)).toBe(true);
   });
 
   it('should reject newRoute with missing required fields', () => {

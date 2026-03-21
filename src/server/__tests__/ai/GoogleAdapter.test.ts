@@ -278,13 +278,28 @@ describe('GoogleAdapter', () => {
       expect(callBody.generationConfig.responseSchema).toEqual(testSchema);
     });
 
-    it('should NOT include responseMimeType and responseSchema for Gemini 3 models', async () => {
+    it('should include responseMimeType and responseSchema for Gemini 3 models without thinking', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat({
         ...makeRequest(),
         model: 'gemini-3-pro-preview',
         outputSchema: testSchema,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseMimeType).toBe('application/json');
+      expect(callBody.generationConfig.responseSchema).toEqual(testSchema);
+    });
+
+    it('should NOT include responseMimeType and responseSchema for Gemini 3 models with thinking', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: 'gemini-3-pro-preview',
+        outputSchema: testSchema,
+        thinking: { type: 'adaptive' },
       });
 
       const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);

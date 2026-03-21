@@ -153,8 +153,6 @@ export const BUILD_ADVISOR_SCHEMA = {
       items: {
         type: 'array' as const,
         items: { type: 'number' as const },
-        minItems: 2,
-        maxItems: 2,
       },
     },
     newRoute: {
@@ -182,8 +180,6 @@ export const BUILD_ADVISOR_SCHEMA = {
           items: {
             type: 'array' as const,
             items: { type: 'number' as const },
-            minItems: 2,
-            maxItems: 2,
           },
         },
       },

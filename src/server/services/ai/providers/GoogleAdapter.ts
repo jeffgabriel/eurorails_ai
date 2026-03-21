@@ -42,8 +42,8 @@ export class GoogleAdapter implements ProviderAdapter {
         temperature: request.temperature,
       };
 
-      // Add structured output for non-Gemini-3 models (incompatible with thinkingConfig)
-      if (request.outputSchema && !this.isGemini3Model(request.model)) {
+      // Add structured output — skip only when thinkingConfig is active on Gemini 3 (incompatible)
+      if (request.outputSchema && !(this.isGemini3Model(request.model) && request.thinking)) {
         generationConfig.responseMimeType = 'application/json';
         generationConfig.responseSchema = request.outputSchema;
       }
