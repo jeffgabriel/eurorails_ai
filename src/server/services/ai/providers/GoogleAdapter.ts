@@ -11,6 +11,26 @@ export class GoogleAdapter implements ProviderAdapter {
     this.timeoutMs = timeoutMs;
   }
 
+  /**
+   * Recursively strip `additionalProperties` from a JSON schema object.
+   * Gemini's response_schema API doesn't support this field and returns 400.
+   * Returns a deep clone — the original schema is not mutated.
+   */
+  static stripAdditionalProperties(schema: unknown): unknown {
+    if (Array.isArray(schema)) {
+      return schema.map(item => GoogleAdapter.stripAdditionalProperties(item));
+    }
+    if (schema !== null && typeof schema === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(schema as Record<string, unknown>)) {
+        if (key === 'additionalProperties') continue;
+        result[key] = GoogleAdapter.stripAdditionalProperties(value);
+      }
+      return result;
+    }
+    return schema;
+  }
+
   private isGemini3Model(model: string): boolean {
     return model.startsWith('gemini-3');
   }
@@ -45,7 +65,7 @@ export class GoogleAdapter implements ProviderAdapter {
       // Add structured output — skip only when thinkingConfig is active on Gemini 3 (incompatible)
       if (request.outputSchema && !(this.isGemini3Model(request.model) && request.thinking)) {
         generationConfig.responseMimeType = 'application/json';
-        generationConfig.responseSchema = request.outputSchema;
+        generationConfig.responseSchema = GoogleAdapter.stripAdditionalProperties(request.outputSchema);
       }
 
       const body: Record<string, unknown> = {

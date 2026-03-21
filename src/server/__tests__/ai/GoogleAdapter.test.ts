@@ -491,6 +491,105 @@ describe('GoogleAdapter', () => {
     });
   });
 
+  describe('stripAdditionalProperties', () => {
+    it('should remove additionalProperties: false from a flat schema', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: { action: { type: 'string' } },
+        required: ['action'],
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as Record<string, unknown>;
+      expect(result).toEqual({
+        type: 'object',
+        properties: { action: { type: 'string' } },
+        required: ['action'],
+      });
+      // Original not mutated
+      expect(schema.additionalProperties).toBe(false);
+    });
+
+    it('should remove additionalProperties: { type: "string" } (value schema form)', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: { type: 'string' },
+        properties: { details: { type: 'object' } },
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as Record<string, unknown>;
+      expect(result).not.toHaveProperty('additionalProperties');
+    });
+
+    it('should recursively strip from nested objects, arrays, and oneOf branches', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        oneOf: [
+          {
+            properties: {
+              items: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: { name: { type: 'string' } },
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        ],
+      };
+      const result = GoogleAdapter.stripAdditionalProperties(schema) as any;
+      expect(result.additionalProperties).toBeUndefined();
+      expect(result.oneOf[0].additionalProperties).toBeUndefined();
+      expect(result.oneOf[0].properties.items.items.additionalProperties).toBeUndefined();
+      // Preserves other fields
+      expect(result.oneOf[0].properties.items.items.properties.name.type).toBe('string');
+    });
+
+    it('should not mutate the original schema object', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: { nested: { type: 'object', additionalProperties: false } },
+      };
+      const original = JSON.stringify(schema);
+      GoogleAdapter.stripAdditionalProperties(schema);
+      expect(JSON.stringify(schema)).toBe(original);
+    });
+
+    it('should handle primitives and null gracefully', () => {
+      expect(GoogleAdapter.stripAdditionalProperties('string')).toBe('string');
+      expect(GoogleAdapter.stripAdditionalProperties(42)).toBe(42);
+      expect(GoogleAdapter.stripAdditionalProperties(null)).toBe(null);
+      expect(GoogleAdapter.stripAdditionalProperties(true)).toBe(true);
+    });
+
+    it('should strip additionalProperties from schema before sending to Gemini API', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+
+      const schemaWithAdditional = {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          action: { type: 'string' },
+          nested: { type: 'object', additionalProperties: false, properties: { x: { type: 'number' } } },
+        },
+      };
+
+      await adapter.chat({
+        ...makeRequest(),
+        outputSchema: schemaWithAdditional,
+      });
+
+      const callBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(callBody.generationConfig.responseSchema.additionalProperties).toBeUndefined();
+      expect(callBody.generationConfig.responseSchema.properties.nested.additionalProperties).toBeUndefined();
+      // Original not mutated
+      expect(schemaWithAdditional.additionalProperties).toBe(false);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({
