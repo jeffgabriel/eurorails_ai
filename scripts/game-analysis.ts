@@ -84,34 +84,47 @@ interface Delivery {
   payment: number;
 }
 
-/** Extract deliveries from either loadsDelivered (preferred) or composition.deliveries (fallback) */
-function getDeliveries(entry: TurnEntry, prevCash?: number): Delivery[] {
+/**
+ * Extract deliveries from a turn entry, looking up actual payout from previous turn's demand cards.
+ *
+ * Sources (in priority order):
+ * 1. loadsDelivered (has payment built in)
+ * 2. composition.deliveries + previous turn's demandCards for payout lookup
+ */
+function getDeliveries(entry: TurnEntry, prevDemandCards?: TurnEntry['demandCards']): Delivery[] {
   // Prefer top-level loadsDelivered (has payment info)
   if (entry.loadsDelivered && entry.loadsDelivered.length > 0) {
     return entry.loadsDelivered.map(d => ({ loadType: d.loadType, city: d.city, payment: d.payment }));
   }
-  // Fallback: composition.deliveries (no payment — infer from cash delta)
+  // Fallback: composition.deliveries — match payout from previous turn's demand cards
   const compDeliveries = entry.composition?.deliveries;
   if (compDeliveries && compDeliveries.length > 0) {
-    const cashDelta = (entry.cash ?? 0) - (prevCash ?? entry.cash ?? 0);
-    // Also account for track cost spent this turn
-    const buildCost = entry.action === 'BuildTrack' ? (entry.cost ?? 0) : 0;
-    const totalPayment = Math.max(0, cashDelta + buildCost);
-    const perDelivery = compDeliveries.length > 0 ? Math.round(totalPayment / compDeliveries.length) : 0;
-    return compDeliveries.map(d => ({ loadType: d.load, city: d.city, payment: perDelivery }));
+    const prevCards = prevDemandCards ?? [];
+    return compDeliveries.map(d => {
+      const match = prevCards.find(dc => dc.loadType === d.load && dc.deliveryCity === d.city);
+      return { loadType: d.load, city: d.city, payment: match?.payout ?? 0 };
+    });
   }
   return [];
 }
 
-/** Build a delivery list for all entries, using previous-turn cash for payment inference */
+/**
+ * Build a delivery list for all entries.
+ * Uses previous entry FOR THE SAME PLAYER's demand cards for payout lookup
+ * (entries may be interleaved across players).
+ */
 function getAllDeliveries(entries: TurnEntry[]): Array<{ turn: number } & Delivery> {
   const result: Array<{ turn: number } & Delivery> = [];
-  for (let i = 0; i < entries.length; i++) {
-    const prevCash = i > 0 ? entries[i - 1].cash : entries[i].cash;
-    const deliveries = getDeliveries(entries[i], prevCash);
+  const prevByPlayer: Map<string, TurnEntry> = new Map();
+  for (const entry of entries) {
+    const playerId = entry.playerId;
+    const prev = prevByPlayer.get(playerId);
+    const prevDemandCards = prev?.demandCards;
+    const deliveries = getDeliveries(entry, prevDemandCards);
     for (const d of deliveries) {
-      result.push({ turn: entries[i].turn, ...d });
+      result.push({ turn: entry.turn, ...d });
     }
+    prevByPlayer.set(playerId, entry);
   }
   return result;
 }
@@ -122,8 +135,8 @@ function getTotalIncome(entries: TurnEntry[]): number {
 }
 
 /** Check if a turn has deliveries */
-function hasDeliveries(entry: TurnEntry, prevCash?: number): boolean {
-  return getDeliveries(entry, prevCash).length > 0;
+function hasDeliveries(entry: TurnEntry, prevDemandCards?: TurnEntry['demandCards']): boolean {
+  return getDeliveries(entry, prevDemandCards).length > 0;
 }
 
 function isLlmModel(model: string | undefined): boolean {
@@ -371,8 +384,9 @@ function sectionIncome(name: string, entries: TurnEntry[]): string[] {
   for (let t = 1; t <= (entries[entries.length - 1]?.turn ?? 0); t += 5) {
     const nearest = findNearestTurn(entries, t);
     if (nearest && nearest.cash != null) {
-      const prevCash = findNearestTurn(entries, t - 5)?.cash;
-      const turnDeliveries = getDeliveries(nearest, prevCash);
+      const nearestIdx = entries.indexOf(nearest);
+      const prevDemands = nearestIdx > 0 ? entries[nearestIdx - 1].demandCards : undefined;
+      const turnDeliveries = getDeliveries(nearest, prevDemands);
       const delivery = turnDeliveries.map(d => `${d.loadType}(+${d.payment}M)`).join(', ') || '-';
       lines.push(`| ${nearest.turn} | ${delivery} | $${nearest.cash}M |`);
     }
@@ -767,8 +781,8 @@ function sectionSuggestedImprovements(playerMap: Map<string, TurnEntry[]>): stri
     let worstStreak = 0;
     let worstStart = 0;
     for (let i = 0; i < entries.length; i++) {
-      const prevCash = i > 0 ? entries[i - 1].cash : entries[i].cash;
-      if (!hasDeliveries(entries[i], prevCash)) {
+      const prevDemands = i > 0 ? entries[i - 1].demandCards : undefined;
+      if (!hasDeliveries(entries[i], prevDemands)) {
         streak++;
         if (streak > worstStreak) { worstStreak = streak; worstStart = entries[i - streak + 1]?.turn ?? 0; }
       } else {
