@@ -1710,8 +1710,8 @@ describe('TurnComposer', () => {
     });
   });
 
-  describe('JIRA-116: Multi-stop look-ahead building in tryAppendBuild', () => {
-    it('builds toward multiple unreached route stops with remaining budget', async () => {
+  describe('JIRA-139: Conservative JIT build fallback in tryAppendBuild', () => {
+    it('builds toward only the first unreached route stop (not subsequent stops)', async () => {
       const snapshot = makeSnapshot({
         bot: { ...makeSnapshot().bot, money: 50 },
       });
@@ -1731,7 +1731,7 @@ describe('TurnComposer', () => {
         phase: 'build',
       });
 
-      // First BUILD toward Paris costs 5M
+      // Only one BUILD toward Paris (JIT fallback only targets first unreached stop)
       mockResolve.mockResolvedValueOnce({
         success: true,
         plan: {
@@ -1741,15 +1741,6 @@ describe('TurnComposer', () => {
             makeSegment(12, 12, 14, 14),
           ],
           targetCity: 'Paris',
-        },
-      });
-      // Second BUILD toward Wien costs 3M
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: {
-          type: AIActionType.BuildTrack,
-          segments: [makeSegment(14, 14, 16, 16)],
-          targetCity: 'Wien',
         },
       });
 
@@ -1763,13 +1754,12 @@ describe('TurnComposer', () => {
       const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
 
       expect(result.type).toBe('MultiAction');
-      // Verify two BUILD resolve calls were made
+      // JIRA-139: Only ONE BUILD call — JIT fallback targets first unreached stop only
       const buildCalls = mockResolve.mock.calls.filter(
         (args: any[]) => args[0]?.action === 'BUILD',
       );
-      expect(buildCalls).toHaveLength(2);
+      expect(buildCalls).toHaveLength(1);
       expect(buildCalls[0][0].details.toward).toBe('Paris');
-      expect(buildCalls[1][0].details.toward).toBe('Wien');
     });
 
     it('single-stop route behaves identically to previous code (no regression)', async () => {
@@ -1811,14 +1801,14 @@ describe('TurnComposer', () => {
       expect(buildCalls[0][0].details.toward).toBe('Paris');
     });
 
-    it('stops iterating when computeBuildSegments returns empty for subsequent stop', async () => {
+    it('skips build when no unreached route stops exist', async () => {
       const snapshot = makeSnapshot({
         bot: { ...makeSnapshot().bot, money: 50 },
       });
       const context = makeContext({
         money: 50,
         turnBuildCost: 0,
-        citiesOnNetwork: ['Berlin'], // Paris and Wien NOT on network
+        citiesOnNetwork: ['Berlin', 'Paris', 'Wien'], // ALL stops on network
         unconnectedMajorCities: [],
       });
       const route = makeRoute({
@@ -1827,19 +1817,8 @@ describe('TurnComposer', () => {
           { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
           { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
         ],
-        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
+        currentStopIndex: 1,
         phase: 'build',
-      });
-
-      // First BUILD toward Paris succeeds
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 12, 12)], targetCity: 'Paris' },
-      });
-      // Second BUILD toward Wien fails (no path within budget)
-      mockResolve.mockResolvedValueOnce({
-        success: false,
-        error: 'Could not find a path to build toward "Wien" within budget.',
       });
 
       const movePlan: TurnPlan = {
@@ -1849,14 +1828,13 @@ describe('TurnComposer', () => {
         totalFee: 0,
       };
 
-      const { plan: result } = await TurnComposer.compose(movePlan, snapshot, context, route);
+      await TurnComposer.compose(movePlan, snapshot, context, route);
 
-      // Should still have the first build (Paris) even though Wien failed
-      expect(result.type).toBe('MultiAction');
+      // No BUILD calls — all stops already on network
       const buildCalls = mockResolve.mock.calls.filter(
         (args: any[]) => args[0]?.action === 'BUILD',
       );
-      expect(buildCalls).toHaveLength(2); // Attempted both, but Wien failed
+      expect(buildCalls).toHaveLength(0);
     });
 
     it('does not attempt second stop when budget exhausted on first stop', async () => {
@@ -1905,34 +1883,15 @@ describe('TurnComposer', () => {
       expect(buildCalls[0][0].details.toward).toBe('Paris');
     });
 
-    it('updates snapshot existingSegments between iterations for correct frontier (AC-5)', async () => {
+    it('does not build when no active route exists', async () => {
       const snapshot = makeSnapshot({
-        bot: { ...makeSnapshot().bot, money: 50, existingSegments: [makeSegment(10, 10, 10, 11)] },
+        bot: { ...makeSnapshot().bot, money: 50 },
       });
       const context = makeContext({
         money: 50,
         turnBuildCost: 0,
-        citiesOnNetwork: ['Berlin'],
+        citiesOnNetwork: [],
         unconnectedMajorCities: [],
-      });
-      const route = makeRoute({
-        stops: [
-          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
-          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
-          { action: 'deliver', loadType: 'Wine', city: 'Wien', demandCardId: 2, payment: 20 },
-        ],
-        currentStopIndex: 1, // JIRA-124: current stop must be off-network for JIT gate to approve build
-        phase: 'build',
-      });
-
-      const parisSegment = makeSegment(10, 11, 12, 12);
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [parisSegment], targetCity: 'Paris' },
-      });
-      mockResolve.mockResolvedValueOnce({
-        success: true,
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(12, 12, 14, 14)], targetCity: 'Wien' },
       });
 
       const movePlan: TurnPlan = {
@@ -1942,16 +1901,13 @@ describe('TurnComposer', () => {
         totalFee: 0,
       };
 
-      await TurnComposer.compose(movePlan, snapshot, context, route);
+      // No active route passed
+      await TurnComposer.compose(movePlan, snapshot, context, undefined);
 
-      // Second BUILD call should have snapshot with Paris segment added
       const buildCalls = mockResolve.mock.calls.filter(
         (args: any[]) => args[0]?.action === 'BUILD',
       );
-      expect(buildCalls).toHaveLength(2);
-      // The second call's snapshot should include the Paris segment
-      const secondCallSnapshot = buildCalls[1][1] as WorldSnapshot;
-      expect(secondCallSnapshot.bot.existingSegments).toContainEqual(parisSegment);
+      expect(buildCalls).toHaveLength(0);
     });
   });
 

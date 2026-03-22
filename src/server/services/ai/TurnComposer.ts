@@ -27,6 +27,8 @@ import {
   TrackSegment,
   BuildAdvisorResult,
   RouteStop,
+  TrainType,
+  TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints, makeKey, getHexNeighbors } from './MapTopology';
@@ -980,43 +982,41 @@ export class TurnComposer {
       }
     }
 
-    // ── Pre-advisor fallback / non-advisor path ────────────────────────
-    // Only run if advisor wasn't used or produced nothing
+    // ── JIRA-139: Conservative JIT build fallback ──────────────────────
+    // Only build if advisor wasn't used or failed, active route has an
+    // unreached stop, and track runway is < 2 turns (bot will run out soon).
     if (allBuildSegments.length === 0 && (!useAdvisor || advisorResult === null)) {
       if (routeStopsForBuild.length > 0) {
-        for (const city of routeStopsForBuild) {
+        const jitCity = routeStopsForBuild[0];
+        const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+        const runway = TurnComposer.calculateTrackRunway(snapshot, jitCity, trainSpeed, context);
+
+        if (runway >= 2) {
+          console.log(`[TurnComposer] JIT fallback: runway ${runway.toFixed(1)} >= 2 for ${jitCity}, deferring build`);
+        } else {
+          console.log(`[TurnComposer] JIT fallback: runway ${runway.toFixed(1)} < 2 for ${jitCity}, building`);
           const iterBudget = Math.min(TURN_BUILD_BUDGET - buildBudgetSpent, snapshot.bot.money - (buildBudgetSpent - context.turnBuildCost));
-          if (iterBudget <= 0) break;
-
-          const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
-          let result;
-          try {
-            result = await ActionResolver.resolve(
-              { action: 'BUILD', details: { toward: city }, reasoning: '', planHorizon: '' },
-              buildSnapshot, iterContext,
-              activeRoute?.startingCity,
-            );
-          } catch {
-            break;
-          }
-
-          if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
-            allBuildSegments.push(...result.plan.segments);
-            lastBuildTargetCity = city;
-            const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
-            buildBudgetSpent += cost;
-
-            buildSnapshot = {
-              ...buildSnapshot,
-              bot: {
-                ...buildSnapshot.bot,
-                existingSegments: [...buildSnapshot.bot.existingSegments, ...result.plan.segments],
-              },
-            };
-          } else {
-            break;
+          if (iterBudget > 0) {
+            const iterContext = { ...context, turnBuildCost: buildBudgetSpent };
+            try {
+              const result = await ActionResolver.resolve(
+                { action: 'BUILD', details: { toward: jitCity }, reasoning: '', planHorizon: '' },
+                buildSnapshot, iterContext,
+                activeRoute?.startingCity,
+              );
+              if (result?.success && result.plan && result.plan.type === AIActionType.BuildTrack && result.plan.segments.length > 0) {
+                allBuildSegments.push(...result.plan.segments);
+                lastBuildTargetCity = jitCity;
+                const cost = result.plan.segments.reduce((s, seg) => s + seg.cost, 0);
+                buildBudgetSpent += cost;
+              }
+            } catch (err) {
+              console.warn(`[TurnComposer] JIT fallback build failed for ${jitCity}:`, err instanceof Error ? err.message : err);
+            }
           }
         }
+      } else {
+        console.log('[TurnComposer] JIT fallback: no unreached route stops, skipping build');
       }
     }
 
