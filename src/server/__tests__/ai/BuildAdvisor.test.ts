@@ -487,4 +487,55 @@ describe('BuildAdvisor', () => {
       expect(BuildAdvisor.lastDiagnostics.extractionUsed).toBe(true);
     });
   });
+
+  describe('getNetworkFrontier', () => {
+    // Access private static method via bracket notation
+    const getFrontier = (BuildAdvisor as any).getNetworkFrontier.bind(BuildAdvisor);
+
+    it('should return track endpoints when track exists', () => {
+      const snapshot = makeSnapshot();
+      const result = getFrontier(snapshot, testGrid);
+      expect(result.length).toBeGreaterThan(0);
+      expect(result).toContainEqual({ row: 0, col: 0 });
+      expect(result).toContainEqual({ row: 0, col: 1 });
+    });
+
+    it('should return bot position when no track but position exists', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.existingSegments = [];
+      snapshot.bot.position = { row: 5, col: 5 };
+      const result = getFrontier(snapshot, testGrid);
+      expect(result).toEqual([{ row: 5, col: 5 }]);
+    });
+
+    it('should return nearest major city to first route stop when no track and no position', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.existingSegments = [];
+      snapshot.bot.position = null;
+
+      const activeRoute: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris' },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 2,
+        reasoning: 'test',
+      };
+
+      const result = getFrontier(snapshot, testGrid, activeRoute);
+      expect(result.length).toBe(1);
+      // Berlin is at (0,0) in testGrid — nearest major city to itself
+      expect(result[0]).toEqual({ row: 0, col: 0 });
+    });
+
+    it('should return empty frontier when no track, no position, and no route', () => {
+      const snapshot = makeSnapshot();
+      snapshot.bot.existingSegments = [];
+      snapshot.bot.position = null;
+      const result = getFrontier(snapshot, testGrid, null);
+      expect(result).toEqual([]);
+    });
+  });
 });

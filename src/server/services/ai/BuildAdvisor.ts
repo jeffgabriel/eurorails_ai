@@ -4,6 +4,7 @@ import {
   StrategicRoute,
   GridPoint,
   BuildAdvisorResult,
+  TerrainType,
 } from '../../../shared/types/GameTypes';
 import { MapRenderer } from './MapRenderer';
 import { getBuildAdvisorPrompt, getBuildAdvisorExtractionPrompt } from './prompts/systemPrompts';
@@ -49,7 +50,7 @@ export class BuildAdvisor {
         return null;
       }
 
-      const frontier = BuildAdvisor.getNetworkFrontier(snapshot, gridPoints);
+      const frontier = BuildAdvisor.getNetworkFrontier(snapshot, gridPoints, activeRoute);
       const opponentTracks = snapshot.allPlayerTracks
         .filter(pt => pt.playerId !== snapshot.bot.playerId)
         .map(pt => pt.segments);
@@ -132,7 +133,7 @@ export class BuildAdvisor {
       const targetCity = BuildAdvisor.getTargetCoord(activeRoute, context, gridPoints);
       if (!targetCity) return null;
 
-      const frontier = BuildAdvisor.getNetworkFrontier(snapshot, gridPoints);
+      const frontier = BuildAdvisor.getNetworkFrontier(snapshot, gridPoints, activeRoute);
       const opponentTracks = snapshot.allPlayerTracks
         .filter(pt => pt.playerId !== snapshot.bot.playerId)
         .map(pt => pt.segments);
@@ -333,10 +334,12 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
   /**
    * Get network frontier positions — endpoints of bot's track segments.
+   * Falls back to bot position, then to nearest major city to first route stop.
    */
   private static getNetworkFrontier(
     snapshot: WorldSnapshot,
-    _gridPoints: GridPoint[],
+    gridPoints: GridPoint[],
+    activeRoute?: StrategicRoute | null,
   ): { row: number; col: number }[] {
     const positions = new Set<string>();
     const frontier: { row: number; col: number }[] = [];
@@ -354,9 +357,32 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
       }
     }
 
-    // If no track, use bot position
+    // Fallback 1: If no track, use bot position
     if (frontier.length === 0 && snapshot.bot.position) {
       frontier.push(snapshot.bot.position);
+    }
+
+    // Fallback 2: If no track AND no position (initial build turn 2),
+    // seed from nearest major city to first route stop
+    if (frontier.length === 0 && activeRoute?.stops?.length) {
+      const firstStopCity = activeRoute.stops[0].city;
+      const stopPoint = gridPoints.find(gp => gp.city?.name === firstStopCity);
+      if (stopPoint) {
+        // Find nearest major city to this stop
+        const majorPoints = gridPoints.filter(gp => gp.city && gp.terrain === TerrainType.MajorCity);
+        let bestDist = Infinity;
+        let bestPoint: { row: number; col: number } | null = null;
+        for (const mp of majorPoints) {
+          const dist = Math.abs(mp.row - stopPoint.row) + Math.abs(mp.col - stopPoint.col);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestPoint = { row: mp.row, col: mp.col };
+          }
+        }
+        if (bestPoint) {
+          frontier.push(bestPoint);
+        }
+      }
     }
 
     return frontier;
