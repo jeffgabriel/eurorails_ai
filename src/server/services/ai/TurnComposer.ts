@@ -132,8 +132,9 @@ export class TurnComposer {
     if (primaryPlan.type === AIActionType.DiscardHand) return wrapResult(primaryPlan);
     if (primaryPlan.type === AIActionType.PassTurn) return wrapResult(primaryPlan);
 
-    // During initialBuild, no operational enrichment is possible (no train movement)
-    if (context.isInitialBuild) return wrapResult(primaryPlan);
+    // During initialBuild, skip operational enrichment (no train movement)
+    // but still run Phase B (build advisor) for better track placement
+    const skipOperationalPhases = context.isInitialBuild === true;
 
     // ── Extract existing steps ──
     const steps: TurnPlan[] = primaryPlan.type === 'MultiAction'
@@ -141,23 +142,25 @@ export class TurnComposer {
       : [primaryPlan];
 
     // ── Defensive backstop: validate movement budget before enrichment ──
-    const incomingMovement = TurnComposer.countMovementUsed(steps);
-    if (incomingMovement > context.speed) {
-      for (let i = steps.length - 1; i >= 0; i--) {
-        if (steps[i].type === AIActionType.MoveTrain) {
-          const movePlan = steps[i] as TurnPlanMoveTrain;
-          const excess = incomingMovement - context.speed;
-          const newPathLength = movePlan.path.length - excess;
-          console.warn(
-            `[TurnComposer] Movement budget exceeded: ${incomingMovement}mp > ${context.speed}mp limit. ` +
-            `Truncating last MOVE from ${movePlan.path.length - 1}mp to ${Math.max(0, newPathLength - 1)}mp.`,
-          );
-          if (newPathLength > 1) {
-            steps[i] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) } as TurnPlanMoveTrain;
-          } else {
-            steps.splice(i, 1);
+    if (!skipOperationalPhases) {
+      const incomingMovement = TurnComposer.countMovementUsed(steps);
+      if (incomingMovement > context.speed) {
+        for (let i = steps.length - 1; i >= 0; i--) {
+          if (steps[i].type === AIActionType.MoveTrain) {
+            const movePlan = steps[i] as TurnPlanMoveTrain;
+            const excess = incomingMovement - context.speed;
+            const newPathLength = movePlan.path.length - excess;
+            console.warn(
+              `[TurnComposer] Movement budget exceeded: ${incomingMovement}mp > ${context.speed}mp limit. ` +
+              `Truncating last MOVE from ${movePlan.path.length - 1}mp to ${Math.max(0, newPathLength - 1)}mp.`,
+            );
+            if (newPathLength > 1) {
+              steps[i] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) } as TurnPlanMoveTrain;
+            } else {
+              steps.splice(i, 1);
+            }
+            break;
           }
-          break;
         }
       }
     }
@@ -165,8 +168,19 @@ export class TurnComposer {
     // ── Track which action types are already present ──
     const hasType = (type: AIActionType | 'MultiAction') =>
       steps.some(s => s.type === type);
-    const hasBuild = hasType(AIActionType.BuildTrack);
+    let hasBuild = hasType(AIActionType.BuildTrack);
     const hasUpgrade = hasType(AIActionType.UpgradeTrain);
+
+    // During initial build, strip heuristic BuildTrack so Phase B (build advisor) can supply it
+    let heuristicBuildFallback: TurnPlan | null = null;
+    if (skipOperationalPhases && hasBuild) {
+      const buildIdx = steps.findIndex(s => s.type === AIActionType.BuildTrack);
+      if (buildIdx >= 0) {
+        heuristicBuildFallback = steps[buildIdx];
+        steps.splice(buildIdx, 1);
+        hasBuild = false;
+      }
+    }
 
     // Upgrade is mutually exclusive with build — skip build phase if upgrade present
     const skipBuildPhase = hasBuild || hasUpgrade;
@@ -178,6 +192,7 @@ export class TurnComposer {
       ActionResolver.applyPlanToState(step, simSnapshot, simContext);
     }
 
+    if (!skipOperationalPhases) {
     // ── JIRA-39: DropLoad prefix composition ──
     // Per game rules, dropping a load is free — it doesn't consume movement or end the turn.
     // When the primary plan is DropLoad (PlanExecutor couldn't pick up due to full train),
@@ -507,6 +522,7 @@ export class TurnComposer {
         err instanceof Error ? err.stack : '',
       );
     }
+    } // end skipOperationalPhases
 
     // ── Phase B: Build/Upgrade ──
     // JIRA-105: Skip build if plan already contains an UpgradeTrain action (game rule: upgrade replaces building)
@@ -542,6 +558,12 @@ export class TurnComposer {
       }
     } else {
       trace.build.skipped = true;
+    }
+
+    // ── JIRA-140: Restore heuristic build fallback if advisor didn't supply a build ──
+    if (heuristicBuildFallback && !steps.some(s => s.type === AIActionType.BuildTrack)) {
+      steps.push(heuristicBuildFallback);
+      console.log('[TurnComposer] JIRA-140: Build advisor returned no build during initial build — restoring heuristic fallback');
     }
 
     // ── Collect pickups/deliveries added during composition ──
@@ -818,9 +840,8 @@ export class TurnComposer {
     }
 
     // ── JIRA-129: Build Advisor integration ─────────────────────────────
-    // Exemptions: bypass advisor for victory builds, initial build phase, zero budget, or no brain
-    const isInitialBuild = context.isInitialBuild === true;
-    const useAdvisor = brain && gridPoints && !isInitialBuild && !victoryConditionsMet && remainingBudget > 0;
+    // Exemptions: bypass advisor for victory builds, zero budget, or no brain
+    const useAdvisor = brain && gridPoints && !victoryConditionsMet && remainingBudget > 0;
 
     const allBuildSegments: TrackSegment[] = [];
     let buildBudgetSpent = context.turnBuildCost;

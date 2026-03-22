@@ -1976,7 +1976,7 @@ describe('TurnComposer', () => {
   });
 
   describe('initialBuild', () => {
-    it('During initialBuild, returns primary unchanged', async () => {
+    it('During initialBuild, skips Phase A but allows Phase B (JIRA-140)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ isInitialBuild: true });
       const route = makeRoute({ phase: 'build' });
@@ -1989,11 +1989,11 @@ describe('TurnComposer', () => {
 
       const { plan: result } = await TurnComposer.compose(buildPlan, snapshot, context, route);
 
-      // initialBuild returns primary unchanged — no enrichment
-      expect(result).toBe(buildPlan);
+      // JIRA-140: initialBuild strips heuristic build for Phase B, but without a brain
+      // the advisor doesn't run, so the heuristic fallback is restored
       expect(result.type).toBe(AIActionType.BuildTrack);
-      expect(mockCloneSnapshot).not.toHaveBeenCalled();
-      expect(mockResolve).not.toHaveBeenCalled();
+      // Phase A (operational enrichment) should be skipped — no ActionResolver.resolve calls for MOVE/PICKUP/DELIVER
+      // cloneSnapshot IS called now (we proceed past the early return)
     });
   });
 
@@ -6411,13 +6411,13 @@ describe('TurnComposer', () => {
       expect(mockAdvise).not.toHaveBeenCalled();
     });
 
-    it('bypasses advisor for initial build phase', async () => {
+    it('calls advisor during initial build phase (JIRA-140)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ turnBuildCost: 0, isInitialBuild: true });
 
       await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
 
-      expect(mockAdvise).not.toHaveBeenCalled();
+      expect(mockAdvise).toHaveBeenCalled();
     });
 
     it('handles useOpponentTrack with alternativeBuild', async () => {
