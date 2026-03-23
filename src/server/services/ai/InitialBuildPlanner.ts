@@ -1,0 +1,456 @@
+/**
+ * InitialBuildPlanner — Pure computational opening planner for initial build phase.
+ *
+ * Replaces LLM calls during turns 1-2 with deterministic scoring of all viable
+ * demand pairings. Produces a starting city + route for the bot's first moves.
+ *
+ * JIRA-142b
+ */
+
+import {
+  WorldSnapshot,
+  GridPoint,
+  DemandOption,
+  DeliveryPairing,
+  InitialBuildPlan,
+  RouteStop,
+  TRAIN_PROPERTIES,
+  TrainType,
+} from '../../../shared/types/GameTypes';
+import { getMajorCityGroups } from '../../../shared/services/majorCityGroups';
+import { hexDistance, estimatePathCost } from './MapTopology';
+import { LoadService } from '../loadService';
+
+/** Peripheral cities that get a scoring penalty */
+const PERIPHERAL_CITIES = new Set(['London', 'Milano']);
+
+/** Madrid is blocked as a starting city */
+const BLOCKED_STARTING_CITIES = new Set(['Madrid']);
+
+/** Max affordable build cost within 2 initial build turns (2 × 20M) */
+const MAX_BUILD_BUDGET = 40;
+
+/** Chain distance threshold for bonus */
+const CHAIN_DISTANCE_THRESHOLD = 3;
+
+/** Efficiency threshold: double must be >= 70% of single efficiency to be chosen */
+const DOUBLE_VS_SINGLE_THRESHOLD = 0.7;
+
+export class InitialBuildPlanner {
+
+  /**
+   * Top-level entry point. Evaluates all demand options, scores pairings,
+   * and returns the best initial build plan.
+   */
+  static planInitialBuild(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): InitialBuildPlan {
+    const options = InitialBuildPlanner.expandDemandOptions(snapshot, gridPoints);
+
+    if (options.length === 0) {
+      return InitialBuildPlanner.emergencyFallback(snapshot, gridPoints);
+    }
+
+    const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, gridPoints);
+
+    const bestSingle = options.reduce((a, b) => a.efficiency > b.efficiency ? a : b);
+    const bestDouble = pairings.length > 0
+      ? pairings.reduce((a, b) => a.pairingScore > b.pairingScore ? a : b)
+      : null;
+
+    // Choose double if it meets the 70% efficiency threshold
+    if (bestDouble && bestDouble.efficiency >= bestSingle.efficiency * DOUBLE_VS_SINGLE_THRESHOLD) {
+      const route: RouteStop[] = [
+        { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
+        { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
+        { action: 'pickup', loadType: bestDouble.second.loadType, city: bestDouble.second.supplyCity },
+        { action: 'deliver', loadType: bestDouble.second.loadType, city: bestDouble.second.deliveryCity, demandCardId: bestDouble.second.cardId, payment: bestDouble.second.payout },
+      ];
+      return {
+        startingCity: bestDouble.sharedStartingCity ?? bestDouble.first.startingCity,
+        route,
+        buildPriority: `Build toward ${bestDouble.first.supplyCity} for ${bestDouble.first.loadType} pickup`,
+        totalBuildCost: bestDouble.totalBuildCost,
+        totalPayout: bestDouble.totalPayout,
+        estimatedTurns: bestDouble.estimatedTurns,
+      };
+    }
+
+    // Single delivery fallback
+    const route: RouteStop[] = [
+      { action: 'pickup', loadType: bestSingle.loadType, city: bestSingle.supplyCity },
+      { action: 'deliver', loadType: bestSingle.loadType, city: bestSingle.deliveryCity, demandCardId: bestSingle.cardId, payment: bestSingle.payout },
+    ];
+    return {
+      startingCity: bestSingle.startingCity,
+      route,
+      buildPriority: `Build toward ${bestSingle.supplyCity} for ${bestSingle.loadType} pickup`,
+      totalBuildCost: bestSingle.totalBuildCost,
+      totalPayout: bestSingle.payout,
+      estimatedTurns: bestSingle.estimatedTurns,
+    };
+  }
+
+  /**
+   * Expand all 9 demands × supply cities × starting cities into scored options.
+   * Filters out ferry routes, over-budget, Madrid starts, and unavailable loads.
+   */
+  static expandDemandOptions(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): DemandOption[] {
+    const loadSvc = LoadService.getInstance();
+    const majorCityGroups = getMajorCityGroups();
+    const options: DemandOption[] = [];
+
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (let demandIdx = 0; demandIdx < rd.demands.length; demandIdx++) {
+        const demand = rd.demands[demandIdx];
+        const sourceCities = loadSvc.getSourceCitiesForLoad(demand.loadType);
+
+        for (const supplyCity of sourceCities) {
+          // Check load availability at supply city
+          const available = snapshot.loadAvailability[supplyCity];
+          if (!available || !available.includes(demand.loadType)) continue;
+
+          // Check ferry requirement
+          const ferryRequired = InitialBuildPlanner.isFerryBetween(
+            supplyCity, demand.city, gridPoints,
+          );
+          if (ferryRequired) continue;
+
+          // Evaluate each major city as a starting point
+          let bestForPair: DemandOption | null = null;
+
+          for (const group of majorCityGroups) {
+            if (BLOCKED_STARTING_CITIES.has(group.cityName)) continue;
+
+            // Check if ferry needed to reach supply from this starting city
+            const ferryToSupply = InitialBuildPlanner.isFerryBetween(
+              group.cityName, supplyCity, gridPoints,
+            );
+            if (ferryToSupply) continue;
+
+            const costs = InitialBuildPlanner.estimateBuildCostFromCity(
+              group.cityName, supplyCity, demand.city, gridPoints,
+            );
+            if (!costs) continue;
+            if (costs.totalBuildCost > MAX_BUILD_BUDGET) continue;
+
+            const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+            const buildTurns = Math.ceil(costs.totalBuildCost / 20);
+            const travelTurns = Math.ceil(costs.totalBuildCost / speed) + 1;
+            const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
+            const efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+
+            const option: DemandOption = {
+              cardId: rd.cardId,
+              demandIndex: demandIdx,
+              loadType: demand.loadType,
+              supplyCity,
+              deliveryCity: demand.city,
+              payout: demand.payment,
+              startingCity: group.cityName,
+              buildCostToSupply: costs.buildCostToSupply,
+              buildCostSupplyToDelivery: costs.buildCostSupplyToDelivery,
+              totalBuildCost: costs.totalBuildCost,
+              ferryRequired: false,
+              estimatedTurns,
+              efficiency,
+            };
+
+            if (!bestForPair || costs.totalBuildCost < bestForPair.totalBuildCost) {
+              bestForPair = option;
+            }
+          }
+
+          if (bestForPair) {
+            options.push(bestForPair);
+          }
+        }
+      }
+    }
+
+    return options;
+  }
+
+  /**
+   * Score all cross-card pairings for double delivery potential.
+   */
+  static computeDoubleDeliveryPairings(
+    options: DemandOption[],
+    gridPoints: GridPoint[],
+  ): DeliveryPairing[] {
+    const pairings: DeliveryPairing[] = [];
+
+    for (let i = 0; i < options.length; i++) {
+      for (let j = i + 1; j < options.length; j++) {
+        const a = options[i];
+        const b = options[j];
+
+        // Must be from different cards
+        if (a.cardId === b.cardId) continue;
+
+        // Try both orderings (A→B and B→A) and pick the better one
+        const pairingAB = InitialBuildPlanner.scorePairing(a, b, gridPoints);
+        const pairingBA = InitialBuildPlanner.scorePairing(b, a, gridPoints);
+
+        const best = pairingAB.pairingScore >= pairingBA.pairingScore ? pairingAB : pairingBA;
+
+        // Budget cap on combined cost
+        if (best.totalBuildCost > MAX_BUILD_BUDGET) continue;
+
+        pairings.push(best);
+      }
+    }
+
+    // Sort by pairing score descending
+    pairings.sort((a, b) => b.pairingScore - a.pairingScore);
+    return pairings;
+  }
+
+  /**
+   * Estimate build cost from a specific starting major city to supply and delivery.
+   */
+  static estimateBuildCostFromCity(
+    startingCity: string,
+    supplyCity: string,
+    deliveryCity: string,
+    gridPoints: GridPoint[],
+  ): { buildCostToSupply: number; buildCostSupplyToDelivery: number; totalBuildCost: number } | null {
+    const startPoints = gridPoints.filter(gp => gp.city?.name === startingCity);
+    const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+    const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
+
+    if (startPoints.length === 0 || supplyPoints.length === 0 || deliveryPoints.length === 0) {
+      return null;
+    }
+
+    // Cost: starting city → supply city (0 if same city)
+    let buildCostToSupply = Infinity;
+    if (startingCity === supplyCity) {
+      buildCostToSupply = 0;
+    } else {
+      for (const sp of startPoints) {
+        for (const sup of supplyPoints) {
+          const cost = InitialBuildPlanner.costBetween(sp.row, sp.col, sup.row, sup.col);
+          if (cost < buildCostToSupply) buildCostToSupply = cost;
+        }
+      }
+    }
+    if (buildCostToSupply === Infinity) return null;
+
+    // Cost: supply city → delivery city (0 if same city)
+    let buildCostSupplyToDelivery = Infinity;
+    if (supplyCity === deliveryCity) {
+      buildCostSupplyToDelivery = 0;
+    } else {
+      for (const sup of supplyPoints) {
+        for (const dp of deliveryPoints) {
+          const cost = InitialBuildPlanner.costBetween(sup.row, sup.col, dp.row, dp.col);
+          if (cost < buildCostSupplyToDelivery) buildCostSupplyToDelivery = cost;
+        }
+      }
+    }
+    if (buildCostSupplyToDelivery === Infinity) return null;
+
+    return {
+      buildCostToSupply,
+      buildCostSupplyToDelivery,
+      totalBuildCost: buildCostToSupply + buildCostSupplyToDelivery,
+    };
+  }
+
+  // ── Private helpers ──────────────────────────────────────────────────────
+
+  private static scorePairing(
+    first: DemandOption,
+    second: DemandOption,
+    gridPoints: GridPoint[],
+  ): DeliveryPairing {
+    const sharedStartingCity = first.startingCity === second.startingCity
+      ? first.startingCity
+      : null;
+
+    // Chain distance: hex distance from first delivery to second supply
+    const firstDeliveryPoints = gridPoints.filter(gp => gp.city?.name === first.deliveryCity);
+    const secondSupplyPoints = gridPoints.filter(gp => gp.city?.name === second.supplyCity);
+
+    let chainDistance = Infinity;
+    for (const dp of firstDeliveryPoints) {
+      for (const sp of secondSupplyPoints) {
+        const dist = hexDistance(dp.row, dp.col, sp.row, sp.col);
+        if (dist < chainDistance) chainDistance = dist;
+      }
+    }
+    if (chainDistance === Infinity) chainDistance = 99;
+
+    // Estimate combined build cost (approximate shared track deduction)
+    let totalBuildCost: number;
+    if (sharedStartingCity) {
+      // Shared hub: start→supplyA + supplyA→deliveryA + deliveryA→supplyB + supplyB→deliveryB
+      // But first two legs are already in first.totalBuildCost
+      // Additional cost is delivery A → supply B → delivery B, minus any overlap
+      const chainCost = chainDistance * 1.5; // rough cost per hex for chain leg
+      totalBuildCost = first.totalBuildCost + second.buildCostSupplyToDelivery + chainCost;
+    } else {
+      // Different hubs: sum both, no sharing
+      totalBuildCost = first.totalBuildCost + second.totalBuildCost;
+    }
+
+    const totalPayout = first.payout + second.payout;
+    const speed = 9; // Freight default
+    const buildTurns = Math.ceil(totalBuildCost / 20);
+    const travelTurns = Math.ceil(totalBuildCost / speed) + 2; // +2 for two deliveries
+    const estimatedTurns = Math.max(buildTurns + travelTurns, 2);
+    const efficiency = (totalPayout - totalBuildCost) / estimatedTurns;
+
+    // Scoring formula from spec
+    const chainBonus = chainDistance <= CHAIN_DISTANCE_THRESHOLD ? 20 : 0;
+    const hubBonus = sharedStartingCity ? 15 : 0;
+    const peripheralPenalty = PERIPHERAL_CITIES.has(first.startingCity) ? 30 : 0;
+
+    const pairingScore = efficiency * 100 + chainBonus + hubBonus - peripheralPenalty;
+
+    return {
+      first,
+      second,
+      sharedStartingCity,
+      chainDistance,
+      totalBuildCost,
+      totalPayout,
+      estimatedTurns,
+      efficiency,
+      pairingScore,
+    };
+  }
+
+  /**
+   * Estimate path cost between two grid points, with fallback to hex distance.
+   * Mirrors the costBetween helper in ContextBuilder.estimateColdStartRouteCost.
+   */
+  private static costBetween(
+    fromRow: number, fromCol: number, toRow: number, toCol: number,
+  ): number {
+    if (fromRow === toRow && fromCol === toCol) return 0;
+    const pathCost = estimatePathCost(fromRow, fromCol, toRow, toCol);
+    if (pathCost > 0) return pathCost;
+    const dist = hexDistance(fromRow, fromCol, toRow, toCol);
+    return dist <= 1 ? 0 : Math.round(dist * 2.0);
+  }
+
+  /**
+   * Check if a ferry is required between two cities using region classification.
+   * Simplified version of ContextBuilder.isFerryOnRoute.
+   */
+  private static isFerryBetween(
+    cityA: string, cityB: string, gridPoints: GridPoint[],
+  ): boolean {
+    // Check if either city IS a ferry port
+    for (const gp of gridPoints) {
+      if (gp.isFerryCity) {
+        const cityName = gp.city?.name;
+        if (cityName === cityA || cityName === cityB) return true;
+      }
+    }
+    return InitialBuildPlanner.getCityRegion(cityA) !== InitialBuildPlanner.getCityRegion(cityB);
+  }
+
+  /** Classify city into continent/britain/ireland region */
+  private static getCityRegion(city: string): string {
+    const BRITAIN = new Set([
+      'London', 'Birmingham', 'Nottingham', 'Liverpool', 'Manchester',
+      'Edinburgh', 'Glasgow', 'Newcastle', 'Cardiff', 'Southampton',
+      'Bristol', 'Leeds', 'Sheffield', 'Plymouth', 'Norwich',
+    ]);
+    const IRELAND = new Set(['Dublin', 'Belfast', 'Cork', 'Galway', 'Limerick', 'Rosslare']);
+    if (BRITAIN.has(city)) return 'britain';
+    if (IRELAND.has(city)) return 'ireland';
+    return 'continent';
+  }
+
+  /**
+   * Emergency fallback when all options are filtered out.
+   * Relaxes ferry filter and picks the cheapest single delivery.
+   */
+  private static emergencyFallback(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): InitialBuildPlan {
+    const loadSvc = LoadService.getInstance();
+    const majorCityGroups = getMajorCityGroups();
+    let bestOption: DemandOption | null = null;
+
+    for (const rd of snapshot.bot.resolvedDemands) {
+      for (let demandIdx = 0; demandIdx < rd.demands.length; demandIdx++) {
+        const demand = rd.demands[demandIdx];
+        const sourceCities = loadSvc.getSourceCitiesForLoad(demand.loadType);
+
+        for (const supplyCity of sourceCities) {
+          for (const group of majorCityGroups) {
+            if (BLOCKED_STARTING_CITIES.has(group.cityName)) continue;
+            const costs = InitialBuildPlanner.estimateBuildCostFromCity(
+              group.cityName, supplyCity, demand.city, gridPoints,
+            );
+            if (!costs) continue;
+
+            const ferryRequired = InitialBuildPlanner.isFerryBetween(
+              supplyCity, demand.city, gridPoints,
+            );
+            const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+            const buildTurns = Math.ceil(costs.totalBuildCost / 20);
+            const travelTurns = Math.ceil(costs.totalBuildCost / speed) + 1;
+            const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
+            const efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+
+            const option: DemandOption = {
+              cardId: rd.cardId,
+              demandIndex: demandIdx,
+              loadType: demand.loadType,
+              supplyCity,
+              deliveryCity: demand.city,
+              payout: demand.payment,
+              startingCity: group.cityName,
+              buildCostToSupply: costs.buildCostToSupply,
+              buildCostSupplyToDelivery: costs.buildCostSupplyToDelivery,
+              totalBuildCost: costs.totalBuildCost,
+              ferryRequired,
+              estimatedTurns,
+              efficiency,
+            };
+
+            if (!bestOption || costs.totalBuildCost < bestOption.totalBuildCost) {
+              bestOption = option;
+            }
+          }
+        }
+      }
+    }
+
+    // Absolute last resort — pick first major city
+    if (!bestOption) {
+      const fallbackCity = majorCityGroups.find(g => !BLOCKED_STARTING_CITIES.has(g.cityName))?.cityName ?? 'Paris';
+      return {
+        startingCity: fallbackCity,
+        route: [],
+        buildPriority: 'No viable demand found — build opportunistically',
+        totalBuildCost: 0,
+        totalPayout: 0,
+        estimatedTurns: 0,
+      };
+    }
+
+    return {
+      startingCity: bestOption.startingCity,
+      route: [
+        { action: 'pickup', loadType: bestOption.loadType, city: bestOption.supplyCity },
+        { action: 'deliver', loadType: bestOption.loadType, city: bestOption.deliveryCity, demandCardId: bestOption.cardId, payment: bestOption.payout },
+      ],
+      buildPriority: `Build toward ${bestOption.supplyCity} for ${bestOption.loadType} pickup`,
+      totalBuildCost: bestOption.totalBuildCost,
+      totalPayout: bestOption.payout,
+      estimatedTurns: bestOption.estimatedTurns,
+    };
+  }
+}

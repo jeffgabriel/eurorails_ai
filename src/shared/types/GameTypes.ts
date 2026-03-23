@@ -880,3 +880,45 @@ export interface BuildAdvisorResult {
     alternativeBuild?: { target: string; waypoints: [number, number][] };
     reasoning: string;
 }
+
+// ─── Initial Build Planner Types (JIRA-142b) ────────────────────────────────
+
+/** A single demand + supply city option evaluated against a starting major city */
+export interface DemandOption {
+    cardId: number;
+    demandIndex: number;
+    loadType: string;
+    supplyCity: string;
+    deliveryCity: string;
+    payout: number;
+    startingCity: string;
+    buildCostToSupply: number;
+    buildCostSupplyToDelivery: number;
+    totalBuildCost: number;
+    ferryRequired: boolean;
+    estimatedTurns: number;
+    efficiency: number;
+}
+
+/** A cross-card pairing of two demand options for double delivery */
+export interface DeliveryPairing {
+    first: DemandOption;
+    second: DemandOption;
+    sharedStartingCity: string | null;
+    chainDistance: number;
+    totalBuildCost: number;
+    totalPayout: number;
+    estimatedTurns: number;
+    efficiency: number;
+    pairingScore: number;
+}
+
+/** The computed initial build plan output */
+export interface InitialBuildPlan {
+    startingCity: string;
+    route: RouteStop[];
+    buildPriority: string;
+    totalBuildCost: number;
+    totalPayout: number;
+    estimatedTurns: number;
+}
