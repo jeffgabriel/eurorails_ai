@@ -48,6 +48,7 @@ import { getMemory, updateMemory } from './BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionLogger';
 import { TurnValidator } from './TurnValidator';
 import { TripPlanner, TripPlanResult } from './TripPlanner';
+import { InitialBuildPlanner } from './InitialBuildPlanner';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 
 /**
@@ -268,6 +269,30 @@ export class AIStrategyEngine {
           // Save updated route state (advanced stop/phase)
           activeRoute = execResult.updatedRoute;
         }
+      } else if (context.isInitialBuild) {
+        // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
+        const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints);
+        console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
+
+        // Convert to StrategicRoute for PlanExecutor on turn 2+
+        activeRoute = {
+          stops: buildPlan.route,
+          currentStopIndex: 0,
+          phase: 'build',
+          startingCity: buildPlan.startingCity,
+          createdAtTurn: snapshot.turnNumber,
+          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
+        };
+
+        // Produce a BuildTrack decision for turn 1
+        decision = {
+          plan: { type: AIActionType.BuildTrack, segments: [], targetCity: buildPlan.route[0]?.city ?? buildPlan.startingCity },
+          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
+          planHorizon: `Route: ${buildPlan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
+          model: 'initial-build-planner',
+          latencyMs: 0,
+          retried: false,
+        };
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── Pre-LLM discard gate: broke bot with no deliverable hand ──
         // If cash < 5M, no affordable demands, and no immediate delivery,
