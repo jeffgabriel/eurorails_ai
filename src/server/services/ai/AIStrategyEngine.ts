@@ -1209,6 +1209,22 @@ export class AIStrategyEngine {
       // Build structured action timeline for animated partial turn movements
       const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
 
+      // JIRA-143: Build actionBreakdown from composed steps
+      const actionBreakdown: Array<{ action: AIActionType; actor: 'llm' | 'system' | 'heuristic'; detail?: string }> = [];
+      const a1PickupCities = new Set((compositionTrace?.pickups ?? []).map(p => p.city));
+      for (const step of allSteps) {
+        if (step.type === AIActionType.BuildTrack) {
+          const buildActor = compositionTrace?.advisor?.fallback ? 'heuristic' as const : 'llm' as const;
+          actionBreakdown.push({ action: step.type, actor: buildActor, detail: 'build-advisor' });
+        } else if (step.type === AIActionType.PickupLoad && 'city' in step && a1PickupCities.has((step as any).city)) {
+          actionBreakdown.push({ action: step.type, actor: 'system', detail: 'a1-opportunistic' });
+        } else {
+          // Primary plan steps get the decision pathway's actor
+          const primaryActor = actorMeta?.actor === 'llm' || actorMeta?.actor === 'heuristic' ? actorMeta.actor : 'system' as const;
+          actionBreakdown.push({ action: step.type, actor: primaryActor, detail: actorMeta?.actorDetail });
+        }
+      }
+
       // JIRA-143: Map model → actor metadata
       const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
       // For LLM actors, populate llmModel from brain if not already set by the mapping
