@@ -261,7 +261,7 @@ export class MapRenderer {
     }
     const label = cityName ? `${row},${col} (${cityName})` : `${row},${col}`;
     this.coordTooltip = this.scene.add.text(x + 10, y - 20, label, {
-      fontSize: '12px',
+      fontSize: '14px',
       color: '#ffffff',
       backgroundColor: '#000000cc',
       padding: { x: 6, y: 3 },
