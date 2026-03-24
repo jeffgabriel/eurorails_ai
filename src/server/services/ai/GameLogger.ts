@@ -129,6 +129,8 @@ export interface GameTurnLogEntry {
   advisorWaypoints?: [number, number][];
   advisorReasoning?: string;
   advisorLatencyMs?: number;
+  advisorSystemPrompt?: string;
+  advisorUserPrompt?: string;
   solvencyRetries?: number;
 
   // Prompt text for NDJSON observability

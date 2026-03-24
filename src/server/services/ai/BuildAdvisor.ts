@@ -13,6 +13,8 @@ import { LLMStrategyBrain } from './LLMStrategyBrain';
 
 /** Diagnostic data from the last advise() or retryWithSolvencyFeedback() call. */
 export interface BuildAdvisorDiagnostics {
+  systemPrompt?: string;
+  userPrompt?: string;
   rawResponse?: string;
   rawWaypoints?: [number, number][];
   error?: string;
@@ -66,6 +68,8 @@ export class BuildAdvisor {
 
       // 3. Build prompt
       const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap);
+      BuildAdvisor.lastDiagnostics.systemPrompt = system;
+      BuildAdvisor.lastDiagnostics.userPrompt = user;
 
       // 4. Call LLM with structured output
       const response = await brain.providerAdapter.chat({
@@ -151,13 +155,16 @@ export class BuildAdvisor {
       const solvencyFeedback = `\n\nSOLVENCY FEEDBACK:
 Your previous recommendation (${previousResult.action} toward ${previousResult.target}) costs ${actualCost}M ECU to build, but you only have ${availableCash}M available.
 Please suggest a cheaper route with fewer/different waypoints, use opponent track, or propose an alternative target.`;
+      const fullUserPrompt = user + solvencyFeedback;
+      BuildAdvisor.lastDiagnostics.systemPrompt = system;
+      BuildAdvisor.lastDiagnostics.userPrompt = fullUserPrompt;
 
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 2048,
         temperature: 0,
         systemPrompt: system,
-        userPrompt: user + solvencyFeedback,
+        userPrompt: fullUserPrompt,
         outputSchema: BUILD_ADVISOR_SCHEMA,
         timeoutMs: 30000,
       });

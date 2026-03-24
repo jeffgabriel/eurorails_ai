@@ -147,6 +147,8 @@ export interface BotTurnResult {
   advisorWaypoints?: [number, number][];
   advisorReasoning?: string;
   advisorLatencyMs?: number;
+  advisorSystemPrompt?: string;
+  advisorUserPrompt?: string;
   solvencyRetries?: number;
 }
 
@@ -1195,6 +1197,8 @@ export class AIStrategyEngine {
         advisorWaypoints: compositionTrace?.advisor?.waypoints?.length ? compositionTrace.advisor.waypoints : undefined,
         advisorReasoning: compositionTrace?.advisor?.reasoning ?? undefined,
         advisorLatencyMs: compositionTrace?.advisor?.latencyMs ?? undefined,
+        advisorSystemPrompt: compositionTrace?.advisor?.systemPrompt ?? undefined,
+        advisorUserPrompt: compositionTrace?.advisor?.userPrompt ?? undefined,
         solvencyRetries: compositionTrace?.advisor?.solvencyRetries ?? undefined,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
