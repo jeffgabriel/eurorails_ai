@@ -249,6 +249,16 @@ export async function onTurnChange(
         advisorReasoning: result.advisorReasoning,
         advisorLatencyMs: result.advisorLatencyMs,
         solvencyRetries: result.solvencyRetries,
+        // JIRA-143: Actor/action metadata
+        actor: result.actor,
+        actorDetail: result.actorDetail,
+        llmModel: result.llmModel,
+        actionBreakdown: result.actionBreakdown,
+        llmCallIds: result.llmCallIds,
+        llmSummary: result.llmSummary,
+        actionTimeline: result.actionTimeline,
+        originalPlan: result.originalPlan,
+        advisorUsedFallback: result.advisorUsedFallback,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);

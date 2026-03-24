@@ -121,6 +121,7 @@ export class TripPlanner {
 
       const startMs = Date.now();
       try {
+        adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'trip-planner', method: 'planTrip' });
         const response = await adapter.chat({
           model,
           maxTokens: TRIP_MAX_TOKENS[skillLevel],

@@ -249,6 +249,8 @@ export class AIStrategyEngine {
       let decision: LLMDecisionResult;
       // JIRA-129: Create brain at outer scope so BuildAdvisor can use it during Phase B composition
       const brain = AIStrategyEngine.hasLLMApiKey(botConfig) ? AIStrategyEngine.createBrain(botConfig!) : null;
+      // JIRA-143: Reset LLM call tracking at turn start
+      if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
@@ -612,6 +614,8 @@ export class AIStrategyEngine {
       let recomposeCount = 0;
       let validationResult = TurnValidator.validate(decision.plan, context, snapshot);
       const firstValidationViolation = validationResult.valid ? undefined : validationResult.violation;
+      // JIRA-145: Preserve original advisor trace before recomposition overwrites it
+      const firstCompositionTrace = !validationResult.valid ? compositionTrace : undefined;
 
       while (!validationResult.valid && recomposeCount < MAX_RECOMPOSE_ATTEMPTS) {
         recomposeCount++;
@@ -1224,10 +1228,11 @@ export class AIStrategyEngine {
         planHorizon: decision.planHorizon,
         guardrailOverride: guardrailResult.overridden || undefined,
         guardrailReason: guardrailResult.reason,
-        // JIRA-143: Actor metadata
+        // JIRA-143: Actor metadata and LLM call tracking
         actor: actorMeta.actor,
         actorDetail: actorMeta.actorDetail,
         llmModel: actorMeta.llmModel,
+        llmCallIds: brain ? brain.providerAdapter.getCallIds() : undefined,
         demandRanking,
         // JIRA-19: LLM decision metadata
         model: decision.model,
@@ -1247,17 +1252,24 @@ export class AIStrategyEngine {
         loadsDelivered: loadsDelivered.length > 0 ? loadsDelivered : undefined,
         loadsPickedUp: loadsPickedUp.length > 0 ? loadsPickedUp : undefined,
         compositionTrace,
-        // JIRA-129: Extract Build Advisor fields from composition trace
-        advisorAction: compositionTrace?.advisor?.action ?? undefined,
-        advisorWaypoints: compositionTrace?.advisor?.waypoints?.length ? compositionTrace.advisor.waypoints : undefined,
-        advisorReasoning: compositionTrace?.advisor?.reasoning ?? undefined,
-        advisorLatencyMs: compositionTrace?.advisor?.latencyMs ?? undefined,
-        advisorSystemPrompt: compositionTrace?.advisor?.systemPrompt ?? undefined,
-        advisorUserPrompt: compositionTrace?.advisor?.userPrompt ?? undefined,
-        solvencyRetries: compositionTrace?.advisor?.solvencyRetries ?? undefined,
-        // JIRA-143: Original plan capture and advisor fallback
+        // JIRA-129/JIRA-145: Extract Build Advisor fields from composition trace.
+        // When recomposed, use the first (rejected) composition's advisor trace
+        // so we preserve what the LLM originally produced for debugging.
+        ...(() => {
+          const advisorTrace = (recomposeCount > 0 ? firstCompositionTrace : compositionTrace)?.advisor;
+          return {
+            advisorAction: advisorTrace?.action ?? undefined,
+            advisorWaypoints: advisorTrace?.waypoints?.length ? advisorTrace.waypoints : undefined,
+            advisorReasoning: advisorTrace?.reasoning ?? undefined,
+            advisorLatencyMs: advisorTrace?.latencyMs ?? undefined,
+            advisorSystemPrompt: advisorTrace?.systemPrompt ?? undefined,
+            advisorUserPrompt: advisorTrace?.userPrompt ?? undefined,
+            solvencyRetries: advisorTrace?.solvencyRetries ?? undefined,
+            advisorUsedFallback: advisorTrace?.fallback ?? undefined,
+          };
+        })(),
+        // JIRA-143: Original plan capture
         originalPlan,
-        advisorUsedFallback: compositionTrace?.advisor?.fallback ?? undefined,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
