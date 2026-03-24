@@ -27,6 +27,7 @@ import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService'
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
 import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
+import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -129,7 +130,7 @@ export class ContextBuilder {
         ? {
           row: botPosition.row,
           col: botPosition.col,
-          city: ContextBuilder.getCityNameAtPosition(botPosition, gridPoints),
+          city: getCityNameAtPosition(botPosition.row, botPosition.col, loadGridPoints()) ?? undefined,
         }
         : null,
       money: snapshot.bot.money,
@@ -1378,7 +1379,7 @@ export class ContextBuilder {
     gridPoints: GridPoint[],
   ): DeliveryOpportunity[] {
     if (!snapshot.bot.position) return [];
-    const cityName = ContextBuilder.getCityNameAtPosition(snapshot.bot.position, gridPoints);
+    const cityName = getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints());
     if (!cityName) return [];
 
     const opportunities: DeliveryOpportunity[] = [];
@@ -1415,7 +1416,7 @@ export class ContextBuilder {
     const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
     if (snapshot.bot.loads.length >= capacity) return [];
 
-    const cityName = ContextBuilder.getCityNameAtPosition(snapshot.bot.position, gridPoints);
+    const cityName = getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints());
     if (!cityName) return [];
 
     // Find what loads are available at this city using the snapshot's loadAvailability
@@ -1773,17 +1774,6 @@ export class ContextBuilder {
         estimatedCost: ContextBuilder.estimateTrackCost(cityName, segments, gridPoints),
       }))
       .sort((a, b) => a.estimatedCost - b.estimatedCost);
-  }
-
-  /** Get city name at a grid position, or undefined if not a city */
-  private static getCityNameAtPosition(
-    position: { row: number; col: number },
-    gridPoints: GridPoint[],
-  ): string | undefined {
-    const point = gridPoints.find(
-      gp => gp.row === position.row && gp.col === position.col,
-    );
-    return point?.city?.name;
   }
 
   /** Compute connected major cities from the bot's track segments */

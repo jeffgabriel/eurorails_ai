@@ -708,7 +708,6 @@ export class PlanExecutor {
   /** Check if the bot is currently at the named city */
   private static isBotAtCity(context: GameContext, cityName: string): boolean {
     if (!context.position) return false;
-    if (context.position.city === cityName) return true;
-    return false;
+    return context.position.city === cityName;
   }
 }

@@ -29,6 +29,11 @@ jest.mock('../services/ai/MapTopology', () => ({
   gridToPixel: jest.fn(() => ({ x: 500, y: 600 })),
   _resetCache: jest.fn(),
 }));
+jest.mock('../../shared/services/majorCityGroups', () => ({
+  getMajorCityGroups: jest.fn(() => []),
+  getMajorCityLookup: jest.fn(() => new Map()),
+  getFerryEdges: jest.fn(() => []),
+}));
 
 const mockEmitToGame = emitToGame as jest.Mock;
 const mockEmitStatePatch = emitStatePatch as jest.Mock;

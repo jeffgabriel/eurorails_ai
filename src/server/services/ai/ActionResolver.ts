@@ -33,6 +33,7 @@ import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } fr
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
+import { isPositionAtCity } from '../../../shared/services/cityPositionResolver';
 
 export class ActionResolver {
   /**
@@ -1102,14 +1103,12 @@ export class ActionResolver {
    */
   private static isBotAtCity(snapshot: WorldSnapshot, cityName: string): boolean {
     if (!snapshot.bot.position) return false;
-    const grid = loadGridPoints();
-    const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
-    const point = grid.get(posKey);
-    if (point?.name === cityName) return true;
-    // Check major city groups (center + outposts all count)
-    const majorCityLookup = getMajorCityLookup();
-    const botCity = majorCityLookup.get(posKey);
-    return botCity === cityName;
+    return isPositionAtCity(
+      snapshot.bot.position.row,
+      snapshot.bot.position.col,
+      cityName,
+      loadGridPoints(),
+    );
   }
 
   /**

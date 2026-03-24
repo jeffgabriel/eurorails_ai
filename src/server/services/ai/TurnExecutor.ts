@@ -20,6 +20,7 @@ import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from './MapTopology';
 import { getTrainCapacity } from '../../../shared/services/trainProperties';
+import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
 
 export interface ExecutionResult {
   success: boolean;
@@ -473,12 +474,9 @@ export class TurnExecutor {
     }
 
     // Resolve city name for dropped load check
-    const grid = loadGridPoints();
-    const posKey = snapshot.bot.position
-      ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+    const cityName = snapshot.bot.position
+      ? getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints()) ?? ''
       : '';
-    const currentPoint = posKey ? grid.get(posKey) : undefined;
-    const cityName = currentPoint?.name ?? '';
 
     // Server-side capacity check: reject pickup if train is full
     const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
@@ -626,12 +624,9 @@ export class TurnExecutor {
     }
 
     // Resolve city name from bot position
-    const grid = loadGridPoints();
-    const posKey = snapshot.bot.position
-      ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+    const cityName = snapshot.bot.position
+      ? getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints()) ?? ''
       : '';
-    const currentPoint = posKey ? grid.get(posKey) : undefined;
-    const cityName = currentPoint?.name ?? '';
 
     if (!cityName) {
       return {
@@ -759,12 +754,9 @@ export class TurnExecutor {
     }
 
     // Resolve city name
-    const grid = loadGridPoints();
-    const posKey = snapshot.bot.position
-      ? `${snapshot.bot.position.row},${snapshot.bot.position.col}`
+    const cityName = snapshot.bot.position
+      ? getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints()) ?? ''
       : '';
-    const currentPoint = posKey ? grid.get(posKey) : undefined;
-    const cityName = currentPoint?.name ?? '';
 
     console.warn(`[TurnExecutor] DropLoad: dropping "${loadType}" at "${cityName || 'unknown'}" (turn ${snapshot.turnNumber})`);
 

@@ -1281,6 +1281,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
     { cityName: 'Berlin', center: { row: 10, col: 10 }, outposts: [] },
     { cityName: 'Paris', center: { row: 20, col: 20 }, outposts: [] },
   ]),
+  getMajorCityLookup: jest.fn(() => new Map()),
   getFerryEdges: jest.fn(() => []),
 }));
 
