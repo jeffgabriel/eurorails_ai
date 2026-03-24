@@ -116,7 +116,7 @@ export async function onTurnChange(
 
       // Bot turn housekeeping: increment turn number, reset build cost
       await db.query(
-        'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 1) + 1 WHERE id = $1',
+        'UPDATE players SET current_turn_number = COALESCE(current_turn_number, 0) + 1 WHERE id = $1',
         [currentPlayerId],
       );
       await db.query(
