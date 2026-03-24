@@ -33,6 +33,7 @@ import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { OpenAIAdapter } from './providers/OpenAIAdapter';
 import { ProviderAdapter } from './providers/ProviderAdapter';
+import { LoggingProviderAdapter } from './LoggingProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
 import { ACTION_SCHEMA, ROUTE_SCHEMA, CARGO_CONFLICT_SCHEMA, UPGRADE_BEFORE_DROP_SCHEMA } from './schemas';
@@ -98,7 +99,7 @@ const TEMPERATURE_BY_SKILL: Record<BotSkillLevel, number> = {
 
 export class LLMStrategyBrain {
   private readonly config: LLMStrategyConfig;
-  private readonly adapter: ProviderAdapter;
+  private readonly adapter: LoggingProviderAdapter;
   private readonly systemPrompt: string;
   private readonly model: string;
 
@@ -111,12 +112,14 @@ export class LLMStrategyBrain {
     // Build system prompt from skill level
     this.systemPrompt = getSystemPrompt(config.skillLevel);
 
-    // Create provider adapter
-    this.adapter = LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs);
+    // Create provider adapter wrapped with logging decorator
+    this.adapter = new LoggingProviderAdapter(
+      LLMStrategyBrain.createAdapter(config.provider, config.apiKey, config.timeoutMs),
+    );
   }
 
   /** Expose adapter for TripPlanner (JIRA-126) */
-  get providerAdapter(): ProviderAdapter { return this.adapter; }
+  get providerAdapter(): LoggingProviderAdapter { return this.adapter; }
 
   /** Expose resolved model name for TripPlanner (JIRA-126) */
   get modelName(): string { return this.model; }
@@ -185,7 +188,7 @@ export class LLMStrategyBrain {
           llmLog.push({
             attemptNumber: attempt + 1,
             status: 'success',
-            responseText: response.text.slice(0, 500),
+            responseText: response.text,
             latencyMs: attemptLatency,
           });
           finalPlan = resolved.plan;
@@ -197,7 +200,7 @@ export class LLMStrategyBrain {
           llmLog.push({
             attemptNumber: attempt + 1,
             status: 'validation_error',
-            responseText: response.text.slice(0, 500),
+            responseText: response.text,
             error: lastError,
             latencyMs: attemptLatency,
           });
@@ -332,7 +335,7 @@ export class LLMStrategyBrain {
           llmLog.push({
             attemptNumber: attempt + 1,
             status: 'validation_error',
-            responseText: response.text.slice(0, 500),
+            responseText: response.text,
             error: lastError,
             latencyMs: attemptLatency,
           });
@@ -349,7 +352,7 @@ export class LLMStrategyBrain {
           llmLog.push({
             attemptNumber: attempt + 1,
             status: 'validation_error',
-            responseText: response.text.slice(0, 500),
+            responseText: response.text,
             error: lastError,
             latencyMs: attemptLatency,
           });
@@ -371,7 +374,7 @@ export class LLMStrategyBrain {
             llmLog.push({
               attemptNumber: attempt + 1,
               status: 'validation_error',
-              responseText: response.text.slice(0, 500),
+              responseText: response.text,
               error: lastError,
               latencyMs: attemptLatency,
             });
@@ -384,7 +387,7 @@ export class LLMStrategyBrain {
         llmLog.push({
           attemptNumber: attempt + 1,
           status: 'success',
-          responseText: response.text.slice(0, 500),
+          responseText: response.text,
           latencyMs: attemptLatency,
         });
 
