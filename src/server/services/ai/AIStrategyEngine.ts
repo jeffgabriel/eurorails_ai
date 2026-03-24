@@ -275,7 +275,11 @@ export class AIStrategyEngine {
           reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
         };
 
-        const targetCity = buildPlan.route[0]?.city ?? buildPlan.startingCity;
+        // JIRA-145: Skip starting city — when first route stop is a pickup at the starting city,
+        // we need to target the delivery destination, not build toward ourselves.
+        const targetCity = buildPlan.route.find(
+          s => s.city.toLowerCase() !== buildPlan.startingCity.toLowerCase(),
+        )?.city ?? buildPlan.route[0]?.city ?? buildPlan.startingCity;
         const routeSummary = `Route: ${buildPlan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
         decision = {
           plan: { type: AIActionType.BuildTrack, segments: [], targetCity },

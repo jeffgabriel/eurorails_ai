@@ -538,4 +538,78 @@ describe('BuildAdvisor', () => {
       expect(result).toEqual([]);
     });
   });
+
+  describe('getTargetCoord (JIRA-145)', () => {
+    // Access private static method via bracket notation
+    const getTargetCoord = (BuildAdvisor as any).getTargetCoord.bind(BuildAdvisor);
+
+    it('should skip starting city when it equals current stop', () => {
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 2,
+        reasoning: 'test',
+      };
+      const context = makeContext();
+      context.citiesOnNetwork = ['Berlin'];
+
+      const result = getTargetCoord(route, context, testGrid);
+      // Should target Paris (2,2), not Berlin (0,0)
+      expect(result).toEqual({ row: 2, col: 2 });
+    });
+
+    it('should skip on-network stops', () => {
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 2,
+        reasoning: 'test',
+        // no startingCity — Berlin is skipped because it's on-network
+      };
+      const context = makeContext();
+      context.citiesOnNetwork = ['Berlin'];
+
+      const result = getTargetCoord(route, context, testGrid);
+      // Berlin is on-network, so should target Paris
+      expect(result).toEqual({ row: 2, col: 2 });
+    });
+
+    it('should fall back to current stop when all stops are reachable', () => {
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Steel', city: 'Paris', payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 2,
+        reasoning: 'test',
+      };
+      const context = makeContext();
+      // Both cities are on-network or starting city — all skipped
+      context.citiesOnNetwork = ['Berlin', 'Paris'];
+
+      const result = getTargetCoord(route, context, testGrid);
+      // Falls back to currentStopIndex (0) → Berlin at (0,0)
+      expect(result).toEqual({ row: 0, col: 0 });
+    });
+
+    it('should fall back to unconnected major city when no active route', () => {
+      const context = makeContext();
+      context.unconnectedMajorCities = [{ cityName: 'Paris', estimatedCost: 10 }];
+
+      const result = getTargetCoord(null, context, testGrid);
+      expect(result).toEqual({ row: 2, col: 2 });
+    });
+  });
 });

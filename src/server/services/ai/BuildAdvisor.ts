@@ -72,6 +72,7 @@ export class BuildAdvisor {
       BuildAdvisor.lastDiagnostics.userPrompt = user;
 
       // 4. Call LLM with structured output
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuild' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 2048,
@@ -159,6 +160,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
       BuildAdvisor.lastDiagnostics.systemPrompt = system;
       BuildAdvisor.lastDiagnostics.userPrompt = fullUserPrompt;
 
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildInitial' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 2048,
@@ -216,6 +218,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
       // Omit `thinking` to disable thinkingConfig — this allows structured output
       // (responseSchema) on thinking-capable models like Gemini 3
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildVictory' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 512,
@@ -323,11 +326,25 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
     context: GameContext,
     gridPoints: GridPoint[],
   ): { row: number; col: number } | null {
-    // Use current route stop's city if available
+    // JIRA-145: Mirror PlanExecutor.findInitialBuildTarget — skip the starting
+    // city and on-network stops to find the first unreached destination.
     let targetCityName: string | null = null;
-    if (activeRoute && activeRoute.currentStopIndex < activeRoute.stops.length) {
-      targetCityName = activeRoute.stops[activeRoute.currentStopIndex].city;
-    } else if (context.unconnectedMajorCities.length > 0) {
+    if (activeRoute) {
+      for (const stop of activeRoute.stops) {
+        const isStartingCity = activeRoute.startingCity &&
+          stop.city.toLowerCase() === activeRoute.startingCity.toLowerCase();
+        if (!isStartingCity && !context.citiesOnNetwork.includes(stop.city)) {
+          targetCityName = stop.city;
+          break;
+        }
+      }
+      // Fall back to current stop if all stops are starting city or on-network
+      if (!targetCityName && activeRoute.currentStopIndex < activeRoute.stops.length) {
+        targetCityName = activeRoute.stops[activeRoute.currentStopIndex].city;
+      }
+    }
+
+    if (!targetCityName && context.unconnectedMajorCities.length > 0) {
       // Fall back to cheapest unconnected major city
       targetCityName = context.unconnectedMajorCities[0].cityName;
     }
