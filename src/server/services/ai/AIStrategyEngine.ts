@@ -141,6 +141,7 @@ export interface BotTurnResult {
     hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
+    firstViolation?: string;
   };
   // JIRA-129: Build Advisor fields
   advisorAction?: string;
@@ -597,10 +598,11 @@ export class AIStrategyEngine {
       // ── Stage 3.5: TurnValidator — validate composed plan against hard gates ──
       let recomposeCount = 0;
       let validationResult = TurnValidator.validate(decision.plan, context, snapshot);
+      const firstValidationViolation = validationResult.valid ? undefined : validationResult.violation;
 
       while (!validationResult.valid && recomposeCount < MAX_RECOMPOSE_ATTEMPTS) {
         recomposeCount++;
-        console.warn(`${tag} [TurnValidator] Hard gate violation: ${validationResult.violation} — re-composing (attempt ${recomposeCount}/${MAX_RECOMPOSE_ATTEMPTS})`);
+        console.warn(`${tag} [TurnValidator] Hard gate violation: ${validationResult.violation} — re-composing (attempt ${recomposeCount}/${MAX_RECOMPOSE_ATTEMPTS}). Pre-recompose plan: ${JSON.stringify(decision.plan.type === 'MultiAction' ? decision.plan.steps.map((s: any) => ({ type: s.type, segs: s.segments?.length ?? 0 })) : { type: decision.plan.type, segs: (decision.plan as any).segments?.length ?? 0 })}`);
 
         // Strip the violating Phase B actions (BUILD/UPGRADE) from the primary plan and re-compose
         const strippedSteps = (decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan])
@@ -626,6 +628,7 @@ export class AIStrategyEngine {
           hardGates: validationResult.hardGates,
           outcome: validationResult.valid ? 'passed' : 'hard_reject',
           recomposeCount,
+          firstViolation: recomposeCount > 0 ? firstValidationViolation : undefined,
         },
       });
 
@@ -716,7 +719,16 @@ export class AIStrategyEngine {
 
           // JIRA-126: Use TripPlanner for all post-delivery planning (both route-completed and mid-route)
           console.log(`${tag} JIRA-126: Post-delivery trip planning with fresh state`);
-          const tripResult = await postDeliveryTripPlanner.planTrip(freshSnap, freshContext, gridPoints, memory);
+          // Build a city-aware user prompt when loads are available for pickup at current location
+          let reEvalUserPrompt: string | undefined;
+          if (freshContext.canPickup.length > 0) {
+            const cityName = freshContext.position?.city ?? 'current city';
+            const loadList = freshContext.canPickup.map(p => `${p.loadType} (best: ${p.bestPayout}M → ${p.bestDeliveryCity})`).join(', ');
+            reEvalUserPrompt = `You are at ${cityName} and can pick up: ${loadList}. ` +
+              `Plan the best multi-stop trip. Can you find a profitable route that delivers multiple loads from here, ` +
+              `or picks up multiples of one load type? Consider all 3 demand cards simultaneously.`;
+          }
+          const tripResult = await postDeliveryTripPlanner.planTrip(freshSnap, freshContext, gridPoints, memory, reEvalUserPrompt);
           const llmMs = Date.now() - llmStart;
 
           // Always capture llmLog from tripResult (even on failure)
@@ -1116,7 +1128,10 @@ export class AIStrategyEngine {
       let milepostsMoved: number | undefined;
       let trackUsageFee: number | undefined;
       const movementPath: { row: number; col: number }[] = [];
-      // Extract MOVE paths from early-executed steps (stripped by JIRA-91) before processing finalPlan
+      // JIRA-144: Declare before earlyExecutedSteps loop so both loops contribute
+      const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
+      const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
+      // Extract MOVE paths, deliveries, and pickups from early-executed steps (stripped by JIRA-91) before processing finalPlan
       for (const earlyStep of earlyExecutedSteps) {
         if (earlyStep.type === AIActionType.MoveTrain && 'path' in earlyStep && (earlyStep as any).path?.length > 0) {
           const path = (earlyStep as any).path as Array<{ row: number; col: number }>;
@@ -1127,9 +1142,21 @@ export class AIStrategyEngine {
           const startIndex = (last && last.row === first.row && last.col === first.col) ? 1 : 0;
           movementPath.push(...path.slice(startIndex));
         }
+        if (earlyStep.type === AIActionType.DeliverLoad && 'load' in earlyStep && 'city' in earlyStep) {
+          loadsDelivered.push({
+            loadType: (earlyStep as any).load as string,
+            city: (earlyStep as any).city as string,
+            payment: (earlyStep as any).payout ?? 0,
+            cardId: (earlyStep as any).cardId ?? 0,
+          });
+        }
+        if (earlyStep.type === AIActionType.PickupLoad && 'load' in earlyStep && 'city' in earlyStep) {
+          loadsPickedUp.push({
+            loadType: (earlyStep as any).load as string,
+            city: (earlyStep as any).city as string,
+          });
+        }
       }
-      const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
-      const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       for (const step of allSteps) {
         if (step.type === AIActionType.MoveTrain) {
