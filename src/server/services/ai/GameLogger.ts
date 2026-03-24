@@ -7,6 +7,7 @@
 
 import { mkdirSync, appendFile } from 'fs';
 import { join } from 'path';
+import { AIActionType, TimelineStep } from '../../../shared/types/GameTypes';
 
 const LOGS_DIR = join(process.cwd(), 'logs');
 
@@ -122,6 +123,7 @@ export interface GameTurnLogEntry {
     hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
+    firstViolation?: string;
   };
 
   // Build Advisor (JIRA-129)
@@ -136,6 +138,17 @@ export interface GameTurnLogEntry {
   // Prompt text for NDJSON observability
   systemPrompt?: string;
   userPrompt?: string;
+
+  // Actor & LLM Metadata (populated by Project 2)
+  actor?: 'llm' | 'system' | 'heuristic' | 'guardrail' | 'error';
+  actorDetail?: string;
+  llmModel?: string;
+  actionBreakdown?: Array<{ action: AIActionType; actor: 'llm' | 'system' | 'heuristic'; detail?: string }>;
+  llmCallIds?: string[];
+  llmSummary?: { callCount: number; totalLatencyMs: number; totalTokens: { input: number; output: number }; callers: string[] };
+  actionTimeline?: TimelineStep[];
+  originalPlan?: { action: string; reasoning: string };
+  advisorUsedFallback?: boolean;
 
   // Execution Results
   success: boolean;
