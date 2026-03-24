@@ -909,12 +909,16 @@ export class AIStrategyEngine {
       }
 
       // ── Stage 4: Apply guardrails ──
+      // JIRA-143: Snapshot plan before guardrail check for originalPlan capture
+      const preGuardrailPlan = { action: decision.plan.type, reasoning: decision.reasoning ?? '' };
       let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns, activeRoute != null);
       let finalPlan: TurnPlan = guardrailResult.plan;
+      let originalPlan: { action: string; reasoning: string } | undefined;
 
       if (guardrailResult.overridden) {
         console.log(`${tag} Guardrail override: ${guardrailResult.reason}`);
         decision.guardrailOverride = true;
+        originalPlan = preGuardrailPlan;
       }
 
       // Log LLM decision phase
@@ -1197,6 +1201,13 @@ export class AIStrategyEngine {
       // Build structured action timeline for animated partial turn movements
       const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
 
+      // JIRA-143: Map model → actor metadata
+      const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
+      // For LLM actors, populate llmModel from brain if not already set by the mapping
+      if (actorMeta.actor === 'llm' && !actorMeta.llmModel && brain) {
+        actorMeta.llmModel = brain.modelName;
+      }
+
       return {
         action: result.action,
         segmentsBuilt: result.segmentsBuilt,
@@ -1209,6 +1220,10 @@ export class AIStrategyEngine {
         planHorizon: decision.planHorizon,
         guardrailOverride: guardrailResult.overridden || undefined,
         guardrailReason: guardrailResult.reason,
+        // JIRA-143: Actor metadata
+        actor: actorMeta.actor,
+        actorDetail: actorMeta.actorDetail,
+        llmModel: actorMeta.llmModel,
         demandRanking,
         // JIRA-19: LLM decision metadata
         model: decision.model,
@@ -1236,6 +1251,9 @@ export class AIStrategyEngine {
         advisorSystemPrompt: compositionTrace?.advisor?.systemPrompt ?? undefined,
         advisorUserPrompt: compositionTrace?.advisor?.userPrompt ?? undefined,
         solvencyRetries: compositionTrace?.advisor?.solvencyRetries ?? undefined,
+        // JIRA-143: Original plan capture and advisor fallback
+        originalPlan,
+        advisorUsedFallback: compositionTrace?.advisor?.fallback ?? undefined,
         movementPath: movementPath.length > 0 ? movementPath : undefined,
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
@@ -1298,9 +1316,38 @@ export class AIStrategyEngine {
         success: false,
         error: error instanceof Error ? error.message : String(error),
         model: 'pipeline-error',
+        actor: 'error' as const,
+        actorDetail: 'pipeline-error',
         llmLatencyMs: 0,
         retried: false,
       };
+    }
+  }
+
+  /** JIRA-143: Map the model field to actor/actorDetail/llmModel metadata. */
+  static mapActorMetadata(model: string | undefined, guardrailOverridden: boolean): { actor: BotTurnResult['actor']; actorDetail: string; llmModel?: string } {
+    if (guardrailOverridden) {
+      return { actor: 'guardrail', actorDetail: 'guardrail-enforcer' };
+    }
+    switch (model) {
+      case 'initial-build-planner':
+      case 'route-executor':
+        return { actor: 'system', actorDetail: model };
+      case 'broke-bot-heuristic':
+      case 'heuristic-fallback':
+        return { actor: 'heuristic', actorDetail: model };
+      case 'trip-planner':
+        return { actor: 'llm', actorDetail: 'trip-planner' };
+      case 'llm-failed':
+      case 'no-api-key':
+      case 'pipeline-error':
+        return { actor: 'error', actorDetail: model };
+      default:
+        // If model is an actual LLM model ID (not a known pseudo-label), it came from strategy-brain
+        if (model) {
+          return { actor: 'llm', actorDetail: 'strategy-brain', llmModel: model };
+        }
+        return { actor: 'system', actorDetail: 'unknown' };
     }
   }
 
