@@ -2150,7 +2150,7 @@ export class PlayerService {
       const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
         ? (playerResult.rows[0].loads as LoadType[])
         : [];
-      const trainType = playerResult.rows[0].trainType as TrainType;
+      const trainType = PlayerService.normalizeTrainType(playerResult.rows[0].trainType);
       const capacity = getTrainCapacity(trainType);
 
       if (currentLoads.length >= capacity) {
