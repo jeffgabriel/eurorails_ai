@@ -11,6 +11,7 @@ import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 import { loadGridPoints } from "./ai/MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
+import { TrackSegment } from "../../shared/types/TrackTypes";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -2255,6 +2256,67 @@ export class PlayerService {
         "[PlayerService] dropLoadForPlayer city placement failed:",
         dropErr instanceof Error ? dropErr.message : dropErr,
       );
+    }
+  }
+
+  /**
+   * Build track for a player. Atomically UPSERTs player_tracks and deducts cost
+   * from the player's money. Validates sufficient funds before deducting.
+   * Used by both human players and bots.
+   */
+  static async buildTrackForPlayer(
+    gameId: string,
+    playerId: string,
+    newSegments: TrackSegment[],
+    existingSegments: TrackSegment[],
+    cost: number,
+  ): Promise<{ remainingMoney: number }> {
+    const allSegments = [...existingSegments, ...newSegments];
+    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Validate player has sufficient funds
+      const playerResult = await client.query(
+        `SELECT money FROM players WHERE id = $1 AND game_id = $2 FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+      const currentMoney = playerResult.rows[0].money as number;
+      if (currentMoney < cost) {
+        throw new Error(
+          `Insufficient funds: need ${cost}, have ${currentMoney}`,
+        );
+      }
+
+      // 1. UPSERT player_tracks
+      await client.query(
+        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (game_id, player_id)
+         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
+        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost],
+      );
+
+      // 2. Deduct money
+      const moneyResult = await client.query(
+        `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,
+        [cost, playerId],
+      );
+
+      await client.query("COMMIT");
+
+      const remainingMoney = moneyResult.rows[0]?.money as number;
+      return { remainingMoney };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
   }
 }
