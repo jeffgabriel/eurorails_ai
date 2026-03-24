@@ -1,5 +1,7 @@
 import { db } from "../db/index";
 import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
+import { getTrainCapacity } from "../../shared/services/trainProperties";
+import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -2109,6 +2111,77 @@ export class PlayerService {
         throw new Error("Failed to load updated player");
       }
       return updatedPlayer;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Pick up a load for a player. Validates train capacity, atomically appends
+   * the load to the player's loads array, and clears any dropped-load state.
+   * Used by both human players and bots.
+   */
+  static async pickupLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<{ updatedLoads: LoadType[] }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current state
+      const playerResult = await client.query(
+        `SELECT loads, train_type as "trainType"
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+      const trainType = playerResult.rows[0].trainType as TrainType;
+      const capacity = getTrainCapacity(trainType);
+
+      if (currentLoads.length >= capacity) {
+        throw new Error(`Train at full capacity (${currentLoads.length}/${capacity})`);
+      }
+
+      // Atomically append load
+      const updateResult = await client.query(
+        `UPDATE players SET loads = array_append(loads, $1)
+         WHERE id = $2 AND game_id = $3
+         RETURNING loads`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+
+      const updatedLoads: LoadType[] = updateResult.rows[0].loads as LoadType[];
+
+      // Best-effort: clear dropped-load state if this load was dropped at the city
+      if (cityName) {
+        try {
+          const loadSvc = LoadService.getInstance();
+          await loadSvc.pickupDroppedLoad(cityName, loadType, gameId);
+        } catch (droppedErr) {
+          console.error(
+            "[PlayerService] pickupLoadForPlayer dropped-load clear failed:",
+            droppedErr instanceof Error ? droppedErr.message : droppedErr,
+          );
+        }
+      }
+
+      return { updatedLoads };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
