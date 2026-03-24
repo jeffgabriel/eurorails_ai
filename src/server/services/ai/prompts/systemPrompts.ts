@@ -40,20 +40,20 @@ MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize e
 - PICKUP at current city → MOVE to nearby delivery city → DELIVER
 - MOVE to demand city → DELIVER for payout → UPGRADE train (20M, replaces BUILD this turn)
 - PICKUP at current city → MOVE toward delivery → UPGRADE (when speed/cargo matters more than track)
-The key insight: loading/unloading does NOT cost movement points. You can MOVE partway, PICKUP, then continue MOVE with remaining speed. Always use ALL your movement points — stopping early wastes your turn.
 UPGRADE replaces BUILD for this turn's Phase B (you still MOVE, PICKUP, DELIVER normally).
 You CANNOT combine UPGRADE + BUILD, or DISCARD_HAND with anything.
 
-HOW TO BE A WINNER:
-. In early game (first 10 turns): CHOOSE SHORT DELIVERIES THAT PAY < 25M and avoid ferries
+DURING THE FIRST 10 TURNS:
+. CHOOSE SHORT DELIVERIES THAT PAY < 25M and avoid ferries
 . BUILD TRAIN NETWORK IN CENTRAL EUROPE FIRST, THEN EXPAND
-. UPGRADE YOUR TRAIN
+. AVOID DELIVERIES TO UK, SPAIN, SOUTHERN ITALY, NORDIC COUNTRIES
 . DELIVERY CHAIN: Plan routes with multiple pickup and deliveries at nearby locations
-. CHECK YOUR CARDS: Before building track, verify the destination city appears on one of your demand cards. Do not build toward a city just because a load exists there.
-. COMMIT TO YOUR PLAN: Pick ONE delivery chain (pickup city → delivery city). Build track toward it. Pick up the load. Deliver it. Do NOT change your mind mid-execution. Only reassess AFTER completing a delivery.
-. STARTING LOCATION: In the first 2 build turns, start at the SUPPLY city of your first planned pickup, prefer central Europe (Ruhr, Berlin, Paris, Wien, Milano, or Holland) over London and Madrid
-. TRACK REUSE: Prefer directions that serve MULTIPLE demand chains over a single high-payment chain.
-. GAME PACE: Games typically last ~100 turns. Don't play as if the game goes on forever. Upgrades (20M) and expensive track that cut travel time in half are often correct — turn savings compound. At turn 40+, prioritize velocity over hoarding cash.
+
+AFTER 4 DELIVERIES UPGRADE TRAIN ASAP
+
+. Verify the destination city appears on one of your demand cards
+. COMMIT TO YOUR PLAN
+. Games typically last ~100 turns. Don't play as if the game goes on forever
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 For a single action:
@@ -66,7 +66,6 @@ For a single action:
     // PICKUP: { "load": "<load type>", "at": "<city name>" }
     // DROP: { "load": "<load type>" }
     // UPGRADE: { "to": "<train type>" }
-    // DISCARD_HAND or PASS: {} (empty)
   },
   "reasoning": "<1-2 sentences in character>",
   "planHorizon": "<what this sets up for next 2-3 turns>"
@@ -86,8 +85,7 @@ For multiple actions in one turn:
 PLAN PERSISTENCE:
 You MUST continue your existing plan unless:
 (a) The delivery was completed, or
-(b) The load is no longer available (taken by opponent), or
-(c) A dramatically better opportunity appeared.`;
+(b) A dramatically better opportunity appeared.`;
 
 // ── Route Planning Suffix ────────────────────────────────────────────
 
@@ -130,11 +128,10 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 export const PLAN_SELECTION_SYSTEM_SUFFIX = `
 Pick the BEST delivery chain to pursue next from the ranked options shown.
 
-SELECTION CRITERIA:
-1. Prefer the RECOMMENDED demand from the ranking.
-2. Prefer chains that share track corridors with other demands.
-3. Prefer chains that leverage existing track (low/zero build cost).
-4. If two chains score similarly, pick the one with a closer pickup city.
+AFTER 10 TURNS LOOK FOR:
+1. POSITIVE ROI  
+2. Two demand cards with the same demand type (eg potatoes)
+3. Two demand cards that have the same demand city
 
 RESPONSE FORMAT (JSON only, no markdown):
 {
@@ -414,8 +411,6 @@ TRACK BUILDING RULES:
 
 OPPONENT TRACK: You may use an opponent's track for 4M ECU per opponent per turn.
 
-VICTORY: Connect 7 of 8 major cities AND have 250M+ ECU cash.
-
 Given the corridor map and game state, recommend the best track building strategy.
 Answer with waypoints (row, col coordinates) — the pathfinding algorithm determines the exact route.
 
@@ -446,13 +441,6 @@ Actions: "build", "buildAlternative", "replan", "useOpponentTrack"`;
       `  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns)`
     ).join('\n');
     sections.push(`DEMAND CARDS:\n${demandLines}`);
-  }
-
-  if (context.unconnectedMajorCities.length > 0) {
-    const unconnected = context.unconnectedMajorCities
-      .map(c => `${c.cityName} (~${c.estimatedCost}M to connect)`)
-      .join(', ');
-    sections.push(`UNCONNECTED MAJOR CITIES: ${unconnected}`);
   }
 
   return { system, user: sections.join('\n\n') };
