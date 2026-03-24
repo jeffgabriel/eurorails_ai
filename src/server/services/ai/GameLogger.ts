@@ -42,16 +42,8 @@ export interface GameTurnLogEntry {
   action: string;
   reasoning?: string;
   planHorizon?: string;
-  model?: string;
   llmLatencyMs?: number;
   tokenUsage?: { input: number; output: number };
-  llmLog?: Array<{
-    attemptNumber: number;
-    status: string;
-    responseText: string;
-    error?: string;
-    latencyMs: number;
-  }>;
 
   // Turn Composition Trace (JIRA-32 pass 2)
   composition?: {
@@ -131,13 +123,7 @@ export interface GameTurnLogEntry {
   advisorWaypoints?: [number, number][];
   advisorReasoning?: string;
   advisorLatencyMs?: number;
-  advisorSystemPrompt?: string;
-  advisorUserPrompt?: string;
   solvencyRetries?: number;
-
-  // Prompt text for NDJSON observability
-  systemPrompt?: string;
-  userPrompt?: string;
 
   // Actor & LLM Metadata (populated by Project 2)
   actor?: 'llm' | 'system' | 'heuristic' | 'guardrail' | 'error';
