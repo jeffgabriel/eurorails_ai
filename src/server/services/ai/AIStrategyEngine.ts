@@ -245,18 +245,36 @@ export class AIStrategyEngine {
       const deadLoadDropActions: TurnPlanDropLoad[] = [];
       let pendingUpgradeAction: TurnPlanUpgradeTrain | null = null; // JIRA-105
 
+      if (!activeRoute && context.isInitialBuild) {
+        // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
+        // Create the route BEFORE the activeRoute check so PlanExecutor handles execution.
+        const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints);
+        console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
+
+        activeRoute = {
+          stops: buildPlan.route,
+          currentStopIndex: 0,
+          phase: 'build',
+          startingCity: buildPlan.startingCity,
+          createdAtTurn: snapshot.turnNumber,
+          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
+        };
+      }
+
       if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
         console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
         const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
 
+        const routeSummary = `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
         decision = {
           plan: execResult.plan,
           reasoning: `[route-executor] ${execResult.description}`,
-          planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
+          planHorizon: routeSummary,
           model: 'route-executor',
           latencyMs: 0,
           retried: false,
+          userPrompt: `[Route] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}. ${routeSummary}`,
         };
 
         if (execResult.routeComplete) {
@@ -269,30 +287,6 @@ export class AIStrategyEngine {
           // Save updated route state (advanced stop/phase)
           activeRoute = execResult.updatedRoute;
         }
-      } else if (context.isInitialBuild) {
-        // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
-        const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints);
-        console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
-
-        // Convert to StrategicRoute for PlanExecutor on turn 2+
-        activeRoute = {
-          stops: buildPlan.route,
-          currentStopIndex: 0,
-          phase: 'build',
-          startingCity: buildPlan.startingCity,
-          createdAtTurn: snapshot.turnNumber,
-          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
-        };
-
-        // Produce a BuildTrack decision for turn 1
-        decision = {
-          plan: { type: AIActionType.BuildTrack, segments: [], targetCity: buildPlan.route[0]?.city ?? buildPlan.startingCity },
-          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
-          planHorizon: `Route: ${buildPlan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-          model: 'initial-build-planner',
-          latencyMs: 0,
-          retried: false,
-        };
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── Pre-LLM discard gate: broke bot with no deliverable hand ──
         // If cash < 5M, no affordable demands, and no immediate delivery,
@@ -313,6 +307,7 @@ export class AIStrategyEngine {
             model: 'broke-bot-heuristic',
             latencyMs: 0,
             retried: false,
+            userPrompt: `[Heuristic] Broke bot gate — cash=${snapshot.bot.money}M, discarding hand`,
           };
         } else {
         // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
@@ -558,6 +553,7 @@ export class AIStrategyEngine {
           model: 'no-api-key',
           latencyMs: 0,
           retried: false,
+          userPrompt: '[No API key] Passing turn — no LLM provider configured',
         };
       }
 
