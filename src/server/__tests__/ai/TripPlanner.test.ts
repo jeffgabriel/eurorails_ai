@@ -880,4 +880,55 @@ describe('TripPlanner', () => {
       );
     });
   });
+
+  describe('userPromptOverride', () => {
+    it('forwards custom user prompt to brain.chat() when provided', async () => {
+      const llmResponse = buildLlmResponse([
+        { stops: [
+          { action: 'PICKUP', load: 'Coal', city: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ], reasoning: 'Quick delivery' },
+      ]);
+
+      const { brain, chatFn } = makeMockBrain({
+        chatFn: jest.fn<Promise<ProviderResponse>, [any]>().mockResolvedValue({
+          text: llmResponse,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        }),
+      });
+
+      const customPrompt = 'You are at Nantes and can pick up: Cattle (best: 27M → Dublin), Machinery (best: 18M → Manchester). Plan the best multi-stop trip.';
+      const planner = new TripPlanner(brain);
+      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory(), customPrompt);
+
+      // Verify the custom prompt was forwarded via the userPrompt field
+      expect(chatFn).toHaveBeenCalledTimes(1);
+      const chatArgs = chatFn.mock.calls[0][0];
+      expect(chatArgs.userPrompt).toContain('You are at Nantes');
+      expect(chatArgs.userPrompt).toContain('Cattle');
+    });
+
+    it('uses default prompt when no override is provided', async () => {
+      const llmResponse = buildLlmResponse([
+        { stops: [
+          { action: 'PICKUP', load: 'Coal', city: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ], reasoning: 'Quick delivery' },
+      ]);
+
+      const { brain, chatFn } = makeMockBrain({
+        chatFn: jest.fn<Promise<ProviderResponse>, [any]>().mockResolvedValue({
+          text: llmResponse,
+          usage: { inputTokens: 100, outputTokens: 50 },
+        }),
+      });
+
+      const planner = new TripPlanner(brain);
+      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      expect(chatFn).toHaveBeenCalledTimes(1);
+      const chatArgs = chatFn.mock.calls[0][0];
+      expect(chatArgs.userPrompt).toContain('Plan the best multi-stop trip');
+    });
+  });
 });

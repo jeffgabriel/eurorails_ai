@@ -1248,6 +1248,7 @@ export class AIStrategyEngine {
           hardGates: validationResult.hardGates,
           outcome: validationResult.valid ? 'passed' : 'hard_reject',
           recomposeCount,
+          firstViolation: recomposeCount > 0 ? firstValidationViolation : undefined,
         },
       };
     } catch (error) {

@@ -101,6 +101,7 @@ export class TripPlanner {
     context: GameContext,
     gridPoints: GridPoint[],
     memory: BotMemoryState,
+    userPromptOverride?: string,
   ): Promise<TripPlanResult | { route: null; llmLog: LlmAttempt[] }> {
     const config = this.brain.strategyConfig;
     const adapter = this.brain.providerAdapter;
@@ -108,7 +109,7 @@ export class TripPlanner {
     const skillLevel = config.skillLevel;
 
     const systemPrompt = getTripPlanningPrompt(skillLevel, context, memory);
-    const userPrompt = `Plan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.`;
+    const userPrompt = userPromptOverride ?? `Plan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.`;
 
     const llmLog: LlmAttempt[] = [];
     let lastError: string | undefined;
