@@ -247,7 +247,10 @@ export class AIStrategyEngine {
 
       if (!activeRoute && context.isInitialBuild) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
-        // Create the route BEFORE the activeRoute check so PlanExecutor handles execution.
+        // Plan the route and produce a BuildTrack decision with targetCity.
+        // Don't go through PlanExecutor.executeInitialBuild — its cold-start
+        // segment computation fails. Instead, let TurnComposer Phase B
+        // (BuildAdvisor) compute the actual segments.
         const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints);
         console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
 
@@ -259,9 +262,19 @@ export class AIStrategyEngine {
           createdAtTurn: snapshot.turnNumber,
           reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
         };
-      }
 
-      if (activeRoute) {
+        const targetCity = buildPlan.route[0]?.city ?? buildPlan.startingCity;
+        const routeSummary = `Route: ${buildPlan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
+        decision = {
+          plan: { type: AIActionType.BuildTrack, segments: [], targetCity },
+          reasoning: `[initial-build-planner] ${buildPlan.buildPriority}`,
+          planHorizon: routeSummary,
+          model: 'initial-build-planner',
+          latencyMs: 0,
+          retried: false,
+          userPrompt: `[Computed] Initial build: ${routeSummary}, startingCity=${buildPlan.startingCity}`,
+        };
+      } else if (activeRoute) {
         // ── Auto-execute from active route (no LLM call) ──
         console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
         const execResult = await PlanExecutor.execute(activeRoute, snapshot, context);
