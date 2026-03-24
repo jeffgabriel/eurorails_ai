@@ -2189,4 +2189,72 @@ export class PlayerService {
       client.release();
     }
   }
+
+  /**
+   * Drop a load for a player at a city. Validates the player is carrying the load,
+   * removes it from their loads array, and handles city placement via LoadService.
+   * Used by both human players and bots.
+   */
+  static async dropLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<void> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current loads
+      const playerResult = await client.query(
+        `SELECT loads
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+
+      if (!currentLoads.includes(loadType)) {
+        throw new Error(`Player is not carrying load: ${loadType}`);
+      }
+
+      // Remove the first occurrence of this load type
+      await client.query(
+        `UPDATE players SET loads = array_remove(loads, $1)
+         WHERE id = $2 AND game_id = $3`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort: handle city placement via LoadService
+    try {
+      const loadSvc = LoadService.getInstance();
+      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
+        // Load is native to this city — return to tray
+        await loadSvc.returnLoad(cityName, loadType, gameId);
+      } else {
+        // Drop as a non-native load at this city
+        await loadSvc.setLoadInCity(cityName, loadType, gameId);
+      }
+    } catch (dropErr) {
+      console.error(
+        "[PlayerService] dropLoadForPlayer city placement failed:",
+        dropErr instanceof Error ? dropErr.message : dropErr,
+      );
+    }
+  }
 }
