@@ -1209,9 +1209,17 @@ export class AIStrategyEngine {
       // Build structured action timeline for animated partial turn movements
       const actionTimeline = AIStrategyEngine.buildActionTimeline(allSteps);
 
+      // JIRA-143: Map model → actor metadata
+      const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
+      // For LLM actors, populate llmModel from brain if not already set by the mapping
+      if (actorMeta.actor === 'llm' && !actorMeta.llmModel && brain) {
+        actorMeta.llmModel = brain.modelName;
+      }
+
       // JIRA-143: Build actionBreakdown from composed steps
       const actionBreakdown: Array<{ action: AIActionType; actor: 'llm' | 'system' | 'heuristic'; detail?: string }> = [];
       const a1PickupCities = new Set((compositionTrace?.pickups ?? []).map(p => p.city));
+      const primaryActor = actorMeta.actor === 'llm' || actorMeta.actor === 'heuristic' ? actorMeta.actor : 'system' as const;
       for (const step of allSteps) {
         if (step.type === AIActionType.BuildTrack) {
           const buildActor = compositionTrace?.advisor?.fallback ? 'heuristic' as const : 'llm' as const;
@@ -1219,17 +1227,8 @@ export class AIStrategyEngine {
         } else if (step.type === AIActionType.PickupLoad && 'city' in step && a1PickupCities.has((step as any).city)) {
           actionBreakdown.push({ action: step.type, actor: 'system', detail: 'a1-opportunistic' });
         } else {
-          // Primary plan steps get the decision pathway's actor
-          const primaryActor = actorMeta?.actor === 'llm' || actorMeta?.actor === 'heuristic' ? actorMeta.actor : 'system' as const;
-          actionBreakdown.push({ action: step.type, actor: primaryActor, detail: actorMeta?.actorDetail });
+          actionBreakdown.push({ action: step.type, actor: primaryActor, detail: actorMeta.actorDetail });
         }
-      }
-
-      // JIRA-143: Map model → actor metadata
-      const actorMeta = AIStrategyEngine.mapActorMetadata(decision.model, guardrailResult.overridden);
-      // For LLM actors, populate llmModel from brain if not already set by the mapping
-      if (actorMeta.actor === 'llm' && !actorMeta.llmModel && brain) {
-        actorMeta.llmModel = brain.modelName;
       }
 
       return {
@@ -1249,6 +1248,7 @@ export class AIStrategyEngine {
         actorDetail: actorMeta.actorDetail,
         llmModel: actorMeta.llmModel,
         llmCallIds: brain ? brain.providerAdapter.getCallIds() : undefined,
+        actionBreakdown: actionBreakdown.length > 0 ? actionBreakdown : undefined,
         demandRanking,
         // JIRA-19: LLM decision metadata
         model: decision.model,
