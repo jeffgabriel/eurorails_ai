@@ -151,6 +151,15 @@ export interface BotTurnResult {
   advisorSystemPrompt?: string;
   advisorUserPrompt?: string;
   solvencyRetries?: number;
+  // JIRA-143: Actor/action metadata
+  actor?: 'llm' | 'system' | 'heuristic' | 'guardrail' | 'error';
+  actorDetail?: string;
+  llmModel?: string;
+  actionBreakdown?: Array<{ action: AIActionType; actor: 'llm' | 'system' | 'heuristic'; detail?: string }>;
+  llmCallIds?: string[];
+  llmSummary?: { callCount: number; totalLatencyMs: number; totalTokens: { input: number; output: number }; callers: string[] };
+  originalPlan?: { action: string; reasoning: string };
+  advisorUsedFallback?: boolean;
 }
 
 export class AIStrategyEngine {
