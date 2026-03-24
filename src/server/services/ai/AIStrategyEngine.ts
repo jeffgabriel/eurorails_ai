@@ -1227,7 +1227,7 @@ export class AIStrategyEngine {
         } else if (step.type === AIActionType.PickupLoad && 'city' in step && a1PickupCities.has((step as any).city)) {
           actionBreakdown.push({ action: step.type, actor: 'system', detail: 'a1-opportunistic' });
         } else {
-          actionBreakdown.push({ action: step.type, actor: primaryActor, detail: actorMeta.actorDetail });
+          actionBreakdown.push({ action: step.type as AIActionType, actor: primaryActor, detail: actorMeta.actorDetail });
         }
       }
 

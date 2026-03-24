@@ -218,7 +218,6 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
       // Omit `thinking` to disable thinkingConfig — this allows structured output
       // (responseSchema) on thinking-capable models like Gemini 3
-      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildVictory' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 512,
