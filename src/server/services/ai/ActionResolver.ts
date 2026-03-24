@@ -25,7 +25,6 @@ import {
   TerrainType,
   TrackSegment,
   TrainType,
-  TRAIN_PROPERTIES,
   TRACK_USAGE_FEE,
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
@@ -33,6 +32,8 @@ import { loadGridPoints, GridCoord, GridPointData, hexDistance } from './MapTopo
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
+import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
+import { isPositionAtCity } from '../../../shared/services/cityPositionResolver';
 
 export class ActionResolver {
   /**
@@ -256,8 +257,7 @@ export class ActionResolver {
     if (ferryCrossing) {
       skipFerryPortKey = `${fromPosition.row},${fromPosition.col}`;
       fromPosition = ferryCrossing.pairedPort;
-      const trainType = snapshot.bot.trainType as TrainType;
-      const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
+      const rawSpeed = getTrainSpeed(snapshot.bot.trainType as TrainType);
       speed = Math.ceil(rawSpeed / 2);
       console.log(`[Ferry] Crossing ${ferryCrossing.ferryName}: (${skipFerryPortKey}) → (${fromPosition.row},${fromPosition.col}) — half speed (${speed})`);
 
@@ -858,11 +858,8 @@ export class ActionResolver {
         context.money -= upgradePlan.cost;
         snapshot.bot.trainType = upgradePlan.targetTrain as TrainType;
         context.trainType = upgradePlan.targetTrain as TrainType;
-        const props = TRAIN_PROPERTIES[upgradePlan.targetTrain as TrainType];
-        if (props) {
-          context.speed = props.speed;
-          context.capacity = props.capacity;
-        }
+        context.speed = getTrainSpeed(upgradePlan.targetTrain as TrainType);
+        context.capacity = getTrainCapacity(upgradePlan.targetTrain as TrainType);
         break;
       }
       // PassTurn and DiscardHand don't change state
@@ -1106,14 +1103,12 @@ export class ActionResolver {
    */
   private static isBotAtCity(snapshot: WorldSnapshot, cityName: string): boolean {
     if (!snapshot.bot.position) return false;
-    const grid = loadGridPoints();
-    const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
-    const point = grid.get(posKey);
-    if (point?.name === cityName) return true;
-    // Check major city groups (center + outposts all count)
-    const majorCityLookup = getMajorCityLookup();
-    const botCity = majorCityLookup.get(posKey);
-    return botCity === cityName;
+    return isPositionAtCity(
+      snapshot.bot.position.row,
+      snapshot.bot.position.col,
+      cityName,
+      loadGridPoints(),
+    );
   }
 
   /**
@@ -1252,14 +1247,12 @@ export class ActionResolver {
 
   /** Get the bot's train speed, accounting for ferry half-speed. */
   private static getBotSpeed(snapshot: WorldSnapshot): number {
-    const trainType = snapshot.bot.trainType as TrainType;
-    const rawSpeed = TRAIN_PROPERTIES[trainType]?.speed ?? 9;
+    const rawSpeed = getTrainSpeed(snapshot.bot.trainType as TrainType);
     return snapshot.bot.ferryHalfSpeed ? Math.ceil(rawSpeed / 2) : rawSpeed;
   }
 
   /** Get the bot's train capacity. */
   private static getBotCapacity(snapshot: WorldSnapshot): number {
-    const trainType = snapshot.bot.trainType as TrainType;
-    return TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+    return getTrainCapacity(snapshot.bot.trainType as TrainType);
   }
 }
