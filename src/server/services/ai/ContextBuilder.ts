@@ -16,7 +16,6 @@ import {
   OpponentContext,
   BotSkillLevel,
   TrackSegment,
-  TRAIN_PROPERTIES,
   TrainType,
   GridPoint,
   TerrainType,
@@ -27,6 +26,7 @@ import {
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
+import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -56,11 +56,10 @@ export class ContextBuilder {
     gridPoints: GridPoint[],
   ): Promise<GameContext> {
     const botPosition = snapshot.bot.position;
-    const trainType = snapshot.bot.trainType as TrainType;
-    const trainProps = TRAIN_PROPERTIES[trainType];
+    const rawSpeed = getTrainSpeed(snapshot.bot.trainType as TrainType);
     const speed = snapshot.bot.ferryHalfSpeed
-      ? Math.ceil(trainProps.speed / 2)
-      : trainProps.speed;
+      ? Math.ceil(rawSpeed / 2)
+      : rawSpeed;
 
     // Build the track network from bot's segments
     const network = snapshot.bot.existingSegments.length > 0
@@ -136,7 +135,7 @@ export class ContextBuilder {
       money: snapshot.bot.money,
       trainType: snapshot.bot.trainType,
       speed,
-      capacity: trainProps.capacity,
+      capacity: getTrainCapacity(snapshot.bot.trainType as TrainType),
       loads: snapshot.bot.loads,
       connectedMajorCities,
       unconnectedMajorCities,
@@ -169,11 +168,10 @@ export class ContextBuilder {
     const network = snapshot.bot.existingSegments.length > 0
       ? buildTrackNetwork(snapshot.bot.existingSegments)
       : null;
-    const trainType = snapshot.bot.trainType as keyof typeof TRAIN_PROPERTIES;
-    const trainProps = TRAIN_PROPERTIES[trainType];
+    const rawSpeed = getTrainSpeed(snapshot.bot.trainType as TrainType);
     const speed = snapshot.bot.ferryHalfSpeed
-      ? Math.ceil(trainProps.speed / 2)
-      : trainProps.speed;
+      ? Math.ceil(rawSpeed / 2)
+      : rawSpeed;
     const botPosition = snapshot.bot.position as { row: number; col: number } | null;
     const reachableCities = botPosition && network
       ? ContextBuilder.computeReachableCities(botPosition, speed, network, gridPoints)
@@ -553,7 +551,7 @@ export class ContextBuilder {
 
     // 9. Turn estimate: build turns + travel turns + 1 (for pickup/deliver)
     const totalTrackCost = estimatedTrackCostToSupply + estimatedTrackCostToDelivery;
-    const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType].speed;
+    const speed = getTrainSpeed(snapshot.bot.trainType as TrainType);
     const buildTurns = totalTrackCost > 0 ? Math.ceil(totalTrackCost / 20) : 0;
 
     // Travel distance: BFS hop count through actual hex grid (JIRA-66)
@@ -1414,8 +1412,7 @@ export class ContextBuilder {
     if (!snapshot.bot.position) return [];
     if (snapshot.gameStatus === 'initialBuild') return [];
 
-    const trainType = snapshot.bot.trainType as TrainType;
-    const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
     if (snapshot.bot.loads.length >= capacity) return [];
 
     const cityName = ContextBuilder.getCityNameAtPosition(snapshot.bot.position, gridPoints);
@@ -1560,7 +1557,7 @@ export class ContextBuilder {
     lines.push(`TURN ${snapshot.turnNumber}`);
     lines.push(`Cash: ${snapshot.bot.money}M | Train: ${snapshot.bot.trainType} | Loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
 
-    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
     lines.push(`Cargo capacity: ${snapshot.bot.loads.length}/${capacity} (${capacity - snapshot.bot.loads.length} free slots)`);
     lines.push('');
 
@@ -1611,11 +1608,11 @@ export class ContextBuilder {
     demands: DemandContext[],
   ): string {
     const lines: string[] = [];
-    const capacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
     const freeSlots = capacity - snapshot.bot.loads.length;
 
     lines.push(`TURN ${snapshot.turnNumber}`);
-    lines.push(`Train: ${snapshot.bot.trainType} (capacity ${capacity}, speed ${TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9})`);
+    lines.push(`Train: ${snapshot.bot.trainType} (capacity ${capacity}, speed ${getTrainSpeed(snapshot.bot.trainType as TrainType)})`);
     lines.push(`Cash: ${snapshot.bot.money}M`);
     lines.push(`Carried loads: ${snapshot.bot.loads.join(', ') || 'none'}`);
     lines.push(`Free slots: ${freeSlots} of ${capacity}`);

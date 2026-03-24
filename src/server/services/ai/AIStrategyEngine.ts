@@ -36,11 +36,11 @@ import {
   TimelineStep,
   TurnPlanMoveTrain,
   TurnPlanDropLoad,
-  TRAIN_PROPERTIES,
   TrainType,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { getTrainCapacity } from '../../../shared/services/trainProperties';
 import { gridToPixel, loadGridPoints as loadGridPointsMap } from './MapTopology';
 import { RouteValidator } from './RouteValidator';
 import { getMemory, updateMemory } from './BotMemory';
@@ -214,7 +214,7 @@ export class AIStrategyEngine {
           console.log(`${tag} New route planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
 
           // ── JIRA-89: Dead load check + secondary delivery planning ──
-          const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+          const trainCapacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
           const deadLoads = PlanExecutor.findDeadLoads(snapshot.bot.loads, snapshot.bot.resolvedDemands);
           const deadLoadDropPlans: TurnPlanDropLoad[] = [];
           if (deadLoads.length > 0 && snapshot.bot.position) {

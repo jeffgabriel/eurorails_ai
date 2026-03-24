@@ -11,7 +11,6 @@ import {
   WorldSnapshot,
   AIActionType,
   TrainType,
-  TRAIN_PROPERTIES,
   TurnPlan,
 } from '../../../shared/types/GameTypes';
 import { LoadType } from '../../../shared/types/LoadTypes';
@@ -20,6 +19,7 @@ import { PlayerService } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from './MapTopology';
+import { getTrainCapacity } from '../../../shared/services/trainProperties';
 
 export interface ExecutionResult {
   success: boolean;
@@ -481,8 +481,7 @@ export class TurnExecutor {
     const cityName = currentPoint?.name ?? '';
 
     // Server-side capacity check: reject pickup if train is full
-    const trainType = snapshot.bot.trainType as TrainType;
-    const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
+    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
     if (snapshot.bot.loads.length >= capacity) {
       return {
         success: false,

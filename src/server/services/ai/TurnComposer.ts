@@ -22,10 +22,12 @@ import {
   GameContext,
   AIActionType,
   StrategicRoute,
+  TrainType,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
 import { loadGridPoints } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { getTrainCapacity } from '../../../shared/services/trainProperties';
 
 /** JIRA-32: Structured trace of what TurnComposer did during composition. */
 export interface CompositionTrace {
@@ -876,14 +878,6 @@ export class TurnComposer {
    * Get the bot's train capacity.
    */
   private static getBotCapacity(snapshot: WorldSnapshot): number {
-    const trainType = snapshot.bot.trainType;
-    // Match TRAIN_PROPERTIES logic
-    switch (trainType) {
-      case 'HeavyFreight':
-      case 'Superfreight':
-        return 3;
-      default:
-        return 2;
-    }
+    return getTrainCapacity(snapshot.bot.trainType as TrainType);
   }
 }
