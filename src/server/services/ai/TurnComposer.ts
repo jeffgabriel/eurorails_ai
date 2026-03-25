@@ -31,7 +31,7 @@ import {
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { loadGridPoints, makeKey, getHexNeighbors } from './MapTopology';
+import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 import { BuildAdvisor } from './BuildAdvisor';
@@ -390,7 +390,7 @@ export class TurnComposer {
 
         // Try multiple targets in priority order — the primary route target
         // may be unreachable if track hasn't been built there yet.
-        const moveTargets = TurnComposer.findMoveTargets(simContext, activeRoute);
+        const moveTargets = TurnComposer.findMoveTargets(simContext, activeRoute, simSnapshot);
         let chainedSuccessfully = false;
 
         for (const moveTarget of moveTargets) {
@@ -468,7 +468,7 @@ export class TurnComposer {
             // Try multiple targets — the route's build target city is likely
             // unreachable (that's why PlanExecutor chose BUILD), so fall back
             // to demand-based cities on the existing track network.
-            let moveTargets = TurnComposer.findMoveTargets(context, activeRoute);
+            let moveTargets = TurnComposer.findMoveTargets(context, activeRoute, snapshot);
 
             // Directional filter: only accept targets closer to the build target
             if (buildTargetCity) {
@@ -1457,6 +1457,7 @@ export class TurnComposer {
   private static findMoveTargets(
     context: GameContext,
     activeRoute?: StrategicRoute | null,
+    snapshot?: WorldSnapshot,
   ): string[] {
     const targets: string[] = [];
     const seen = new Set<string>();
@@ -1466,6 +1467,9 @@ export class TurnComposer {
         targets.push(city);
       }
     };
+
+    // JIRA-148: Track whether next route stop is off-network for Priority 1.5
+    let offNetworkTarget: string | null = null;
 
     // Priority 1: Route stops (in order, skipping completed ones)
     if (activeRoute) {
@@ -1479,56 +1483,78 @@ export class TurnComposer {
         if (stop.action === 'deliver' && !context.loads.includes(stop.loadType)) {
           continue;
         }
+        // JIRA-148: Track first off-network stop for P1.5 frontier approach
+        if (!offNetworkTarget && !context.citiesOnNetwork.includes(stop.city)) {
+          offNetworkTarget = stop.city;
+        }
         add(stop.city);
       }
     }
 
     // Priority 1.5: Frontier approach — when next route stop is off-network,
-    // move toward the on-network city closest to that off-network target (JIRA-115).
-    // Prevents backtracking to already-visited cities when the bot is at a branch endpoint.
-    if (activeRoute) {
-      for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
-        const stop = activeRoute.stops[i];
-        // Skip completed stops (same logic as P1)
-        if (stop.action === 'pickup' && context.loads.includes(stop.loadType)) continue;
-        if (stop.action === 'deliver' && !context.loads.includes(stop.loadType)) continue;
+    // find the track frontier node (degree-1 dead-end) closest to that target.
+    // JIRA-148 fixes: (a) exclude current city, (b) use frontier nodes not all network cities,
+    // (c) use hexDistance, (d) P1.5 is primary for off-network targets
+    if (offNetworkTarget) {
+      const gridPoints = loadGridPoints();
+      // Look up off-network target coordinates
+      let targetRow = -1, targetCol = -1;
+      for (const [, gp] of gridPoints) {
+        if (gp.name && gp.name === offNetworkTarget) {
+          targetRow = gp.row;
+          targetCol = gp.col;
+          break;
+        }
+      }
+      if (targetRow >= 0) {
+        // (b) Compute track frontier: degree-1 nodes from bot's segments
+        const segments = snapshot?.bot.existingSegments ?? [];
+        const nodeCount = new Map<string, { row: number; col: number; count: number }>();
+        for (const seg of segments) {
+          for (const endpoint of [seg.from, seg.to]) {
+            const key = `${endpoint.row},${endpoint.col}`;
+            const existing = nodeCount.get(key);
+            if (existing) {
+              existing.count++;
+            } else {
+              nodeCount.set(key, { row: endpoint.row, col: endpoint.col, count: 1 });
+            }
+          }
+        }
+        // Frontier = nodes with degree 1 (dead-end endpoints)
+        const frontierNodes = [...nodeCount.values()].filter(n => n.count === 1);
 
-        if (!context.citiesOnNetwork.includes(stop.city)) {
-          // This stop is off-network — find the closest on-network city
-          const gridPoints = loadGridPoints();
-          // Look up the off-network target's coordinates
-          let targetRow = -1, targetCol = -1;
-          for (const [, gp] of gridPoints) {
-            if (gp.name && gp.name === stop.city) {
-              targetRow = gp.row;
-              targetCol = gp.col;
-              break;
-            }
+        // (a) Get bot's current city name for exclusion
+        const botPos = context.position;
+        let currentCityName: string | null = null;
+        if (botPos) {
+          const posKey = `${botPos.row},${botPos.col}`;
+          const gp = gridPoints.get(posKey);
+          if (gp?.name) currentCityName = gp.name;
+        }
+
+        // Find the frontier node closest to the off-network target
+        let bestCity = '';
+        let bestDist = Infinity;
+        for (const node of frontierNodes) {
+          const nodeKey = `${node.row},${node.col}`;
+          const gp = gridPoints.get(nodeKey);
+          const nodeCityName = gp?.name;
+          // (a) Exclude bot's current city
+          if (nodeCityName && nodeCityName === currentCityName) continue;
+          // (c) Use hexDistance instead of Manhattan distance
+          const dist = hexDistance(node.row, node.col, targetRow, targetCol);
+          if (dist < bestDist && nodeCityName) {
+            bestDist = dist;
+            bestCity = nodeCityName;
           }
-          if (targetRow >= 0) {
-            let bestCity = '';
-            let bestDist = Infinity;
-            for (const networkCity of context.citiesOnNetwork) {
-              for (const [, gp] of gridPoints) {
-                if (gp.name && gp.name === networkCity) {
-                  const dist = Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
-                  if (dist < bestDist) {
-                    bestDist = dist;
-                    bestCity = networkCity;
-                  }
-                  break;
-                }
-              }
-            }
-            if (bestCity) {
-              add(bestCity);
-              console.log(
-                `[TurnComposer] JIRA-115: Frontier approach — off-network target "${stop.city}", ` +
-                `moving toward closest on-network city "${bestCity}" (dist=${bestDist})`,
-              );
-            }
-          }
-          break; // Only target the first off-network stop
+        }
+        if (bestCity) {
+          add(bestCity);
+          console.log(
+            `[TurnComposer] JIRA-148: Frontier approach — off-network target "${offNetworkTarget}", ` +
+            `moving toward frontier node "${bestCity}" (hexDist=${bestDist})`,
+          );
         }
       }
     }

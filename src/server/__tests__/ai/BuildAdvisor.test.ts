@@ -560,8 +560,8 @@ describe('BuildAdvisor', () => {
       context.citiesOnNetwork = ['Berlin'];
 
       const result = getTargetCoord(route, context, testGrid);
-      // Should target Paris (2,2), not Berlin (0,0)
-      expect(result).toEqual({ row: 2, col: 2 });
+      // Should target Paris (2,2), not Berlin (0,0) — JIRA-148: now includes cityName
+      expect(result).toEqual({ row: 2, col: 2, cityName: 'Paris' });
     });
 
     it('should skip on-network stops', () => {
@@ -581,7 +581,7 @@ describe('BuildAdvisor', () => {
 
       const result = getTargetCoord(route, context, testGrid);
       // Berlin is on-network, so should target Paris
-      expect(result).toEqual({ row: 2, col: 2 });
+      expect(result).toEqual({ row: 2, col: 2, cityName: 'Paris' });
     });
 
     it('should fall back to current stop when all stops are reachable', () => {
@@ -602,7 +602,7 @@ describe('BuildAdvisor', () => {
 
       const result = getTargetCoord(route, context, testGrid);
       // Falls back to currentStopIndex (0) → Berlin at (0,0)
-      expect(result).toEqual({ row: 0, col: 0 });
+      expect(result).toEqual({ row: 0, col: 0, cityName: 'Berlin' });
     });
 
     it('should fall back to unconnected major city when no active route', () => {
@@ -610,7 +610,7 @@ describe('BuildAdvisor', () => {
       context.unconnectedMajorCities = [{ cityName: 'Paris', estimatedCost: 10 }];
 
       const result = getTargetCoord(null, context, testGrid);
-      expect(result).toEqual({ row: 2, col: 2 });
+      expect(result).toEqual({ row: 2, col: 2, cityName: 'Paris' });
     });
   });
 

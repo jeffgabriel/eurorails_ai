@@ -20,6 +20,16 @@ jest.mock('../../services/ai/MapTopology', () => ({
   getTerrainCost: jest.fn(() => 1),
   gridToPixel: jest.fn(() => ({ x: 0, y: 0 })),
   makeKey: (row: number, col: number) => `${row},${col}`,
+  hexDistance: (r1: number, c1: number, r2: number, c2: number) => {
+    // Cube distance for offset hex coordinates
+    const x1 = c1 - Math.floor(r1 / 2);
+    const z1 = r1;
+    const y1 = -x1 - z1;
+    const x2 = c2 - Math.floor(r2 / 2);
+    const z2 = r2;
+    const y2 = -x2 - z2;
+    return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+  },
   _resetCache: jest.fn(),
 }));
 jest.mock('../../../shared/services/trackUsageFees', () => ({
@@ -5456,11 +5466,17 @@ describe('TurnComposer', () => {
       // Bot at Frankfurt (row=20, col=30), picked up Beer. Next stop Leipzig is off-network.
       // On-network cities: Ruhr (row=18, col=26) and Berlin (row=16, col=38).
       // Berlin (dist=16) is closer to Leipzig (row=14, col=40) than Ruhr (dist=18).
+      // JIRA-148: Track includes segments toward Berlin (frontier dead-end)
       const snapshot = makeSnapshot({
         bot: {
           ...makeSnapshot().bot,
           position: { row: 20, col: 30 },
           loads: ['Beer'],
+          existingSegments: [
+            // Track: Frankfurt(20,30) → Ruhr(18,26) → Berlin(16,38)
+            makeSegment(20, 30, 18, 26),
+            makeSegment(18, 26, 16, 38),
+          ],
         },
       });
       const context = makeContext({
@@ -5533,9 +5549,9 @@ describe('TurnComposer', () => {
       expect(moveCalls[0][0].details.to).toBe('Leipzig');
       expect(moveCalls[1][0].details.to).toBe('Berlin');
 
-      // Verify frontier approach log message
+      // Verify frontier approach log message (JIRA-148 updated from JIRA-115)
       const frontierLog = logSpy.mock.calls.find(
-        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-148'),
       );
       expect(frontierLog).toBeDefined();
 
@@ -5736,11 +5752,16 @@ describe('TurnComposer', () => {
     });
 
     it('targets first off-network stop when multiple stops are off-network', async () => {
+      // JIRA-148: Include segments so frontier computation can find Munich as dead-end
       const snapshot = makeSnapshot({
         bot: {
           ...makeSnapshot().bot,
           position: { row: 20, col: 30 },
           loads: ['Beer'],
+          existingSegments: [
+            // Track from bot position toward Munich
+            makeSegment(20, 30, 22, 36),
+          ],
         },
       });
       const context = makeContext({
@@ -5767,6 +5788,7 @@ describe('TurnComposer', () => {
       gridPoints.set('14,40', { row: 14, col: 40, name: 'Leipzig', terrain: 0 });
       gridPoints.set('10,44', { row: 10, col: 44, name: 'Szczecin', terrain: 0 });
       gridPoints.set('22,36', { row: 22, col: 36, name: 'Munich', terrain: 0 });
+      gridPoints.set('20,30', { row: 20, col: 30, name: 'Frankfurt', terrain: 0 });
       mockLoadGridPoints.mockReturnValue(gridPoints);
 
       const pickupPlan: TurnPlan = {
@@ -5809,7 +5831,7 @@ describe('TurnComposer', () => {
 
       // Verify frontier approach targets Leipzig (first off-network), not Szczecin
       const frontierLog = logSpy.mock.calls.find(
-        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-115'),
+        (c: any[]) => typeof c[0] === 'string' && c[0].includes('JIRA-148'),
       );
       expect(frontierLog).toBeDefined();
       expect(frontierLog![0]).toContain('Leipzig');
@@ -6676,6 +6698,148 @@ describe('TurnComposer', () => {
       expect(trace.jitGate).toBeDefined();
       expect(trace.jitGate!.deferred).toBe(true);
       expect(trace.jitGate!.reason).toBe('no_active_route');
+    });
+  });
+
+  describe('JIRA-148: findMoveTargets frontier approach (movement reversal fix)', () => {
+    it('A2 continuation should move toward frontier closest to off-network target', async () => {
+      // Setup: bot at Stuttgart (row 18, col 14), delivery target Marseille (row 28, col 8) is off-network
+      // Track runs Stuttgart(18,14) → Frankfurt(17,14) (north) and Stuttgart(18,14) → Zürich(19,15) (south)
+      // Zürich is closer to Marseille via hex distance — should pick Zürich, not Frankfurt
+      const gridMap = new Map<string, any>();
+      gridMap.set('18,14', { row: 18, col: 14, terrain: 7, name: 'Stuttgart' });
+      gridMap.set('17,14', { row: 17, col: 14, terrain: 7, name: 'Frankfurt' });
+      gridMap.set('19,15', { row: 19, col: 15, terrain: 5, name: 'Zürich' });
+      gridMap.set('28,8', { row: 28, col: 8, terrain: 7, name: 'Marseille' });
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 18, col: 14 },
+          loads: ['Cars'],
+          existingSegments: [
+            // Stuttgart → Frankfurt (north)
+            makeSegment(18, 14, 17, 14),
+            // Stuttgart → Zürich (south)
+            makeSegment(18, 14, 19, 15),
+          ],
+        },
+      });
+      const context = makeContext({
+        position: { row: 18, col: 14 },
+        loads: ['Cars'],
+        citiesOnNetwork: ['Stuttgart', 'Frankfurt', 'Zürich'],
+        reachableCities: ['Frankfurt', 'Zürich'],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Cars', city: 'Marseille', demandCardId: 1, payment: 10 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      // Mock A1: primary plan is PICKUP (bot picked up Cars at Stuttgart)
+      // A2 chain should then try to MOVE toward delivery target
+      const pickupPlan: TurnPlan = {
+        type: AIActionType.PickupLoad,
+        load: 'Cars',
+        city: 'Stuttgart',
+      };
+
+      // A2 continuation: resolve succeeds for Zürich (frontier node closest to Marseille)
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+      mockResolve.mockImplementation(async (intent: any) => {
+        if (intent.action === 'MOVE' && intent.details?.to === 'Zürich') {
+          return {
+            success: true,
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [{ row: 18, col: 14 }, { row: 19, col: 15 }],
+              fees: new Set<string>(),
+              totalFee: 0,
+            },
+          };
+        }
+        return { success: false };
+      });
+
+      await TurnComposer.compose(pickupPlan, snapshot, context, route);
+
+      // Verify that the resolve was called with Zürich (closest frontier to Marseille),
+      // NOT with Marseille directly (off-network) or Frankfurt (farther frontier)
+      const allMoveCalls = mockResolve.mock.calls
+        .filter((call: any[]) => call[0]?.action === 'MOVE')
+        .map((call: any[]) => call[0]?.details?.to);
+
+      // Should have tried Zürich (frontier closest to Marseille)
+      expect(allMoveCalls).toContain('Zürich');
+    });
+
+    it('should exclude bot current city from frontier candidates', async () => {
+      // Bot is at Stuttgart. Track: Stuttgart → Frankfurt. Frankfurt is a dead-end (frontier).
+      // Stuttgart should NOT be returned as a frontier candidate even though it's on-network.
+      const gridMap = new Map<string, any>();
+      gridMap.set('18,14', { row: 18, col: 14, terrain: 7, name: 'Stuttgart' });
+      gridMap.set('17,14', { row: 17, col: 14, terrain: 7, name: 'Frankfurt' });
+      gridMap.set('28,8', { row: 28, col: 8, terrain: 7, name: 'Marseille' });
+      mockLoadGridPoints.mockReturnValue(gridMap);
+
+      const snapshot = makeSnapshot({
+        bot: {
+          ...makeSnapshot().bot,
+          position: { row: 18, col: 14 },
+          loads: ['Cars'],
+          existingSegments: [makeSegment(18, 14, 17, 14)],
+        },
+      });
+      const context = makeContext({
+        position: { row: 18, col: 14 },
+        loads: ['Cars'],
+        citiesOnNetwork: ['Stuttgart', 'Frankfurt'],
+        reachableCities: ['Frankfurt'],
+        demands: [],
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Cars', city: 'Marseille', demandCardId: 1, payment: 10 },
+        ],
+        currentStopIndex: 0,
+        phase: 'travel',
+      });
+
+      const movePlan: TurnPlan = {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 18, col: 14 }],
+        fees: new Set<string>(),
+        totalFee: 0,
+      };
+
+      mockCloneSnapshot.mockImplementation(defaultCloneSnapshot);
+      mockResolve.mockImplementation(async (intent: any) => {
+        if (intent.action === 'MOVE' && intent.details?.to === 'Frankfurt') {
+          return {
+            success: true,
+            plan: {
+              type: AIActionType.MoveTrain,
+              path: [{ row: 18, col: 14 }, { row: 17, col: 14 }],
+              fees: new Set<string>(),
+              totalFee: 0,
+            },
+          };
+        }
+        return { success: false };
+      });
+
+      await TurnComposer.compose(movePlan, snapshot, context, route);
+
+      // Stuttgart (current city) should NOT appear as a MOVE target
+      const allMoveCities = mockResolve.mock.calls
+        .filter((call: any[]) => call[0]?.action === 'MOVE')
+        .map((call: any[]) => call[0]?.details?.to);
+      expect(allMoveCities).not.toContain('Stuttgart');
     });
   });
 });
