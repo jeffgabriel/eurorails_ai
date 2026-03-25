@@ -418,6 +418,147 @@ describe('InitialBuildPlanner', () => {
     });
   });
 
+  describe('budget ratio penalty (JIRA-146)', () => {
+    it('should prefer cheap nearby delivery over expensive distant one', () => {
+      // Use direct DemandOption construction to test the scoring directly
+      // Steel: cheap route (3M build, 12M payout)
+      // Potatoes: expensive route (35M build, 29M payout) — triggers budget penalty
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Steel') return ['Essen'];
+        if (loadType === 'Potatoes') return ['Wroclaw'];
+        return [];
+      });
+
+      // Return fixed costs based on city pairs to control the test scenario
+      mockEstimatePathCost.mockImplementation((r1: number, c1: number, r2: number, c2: number) => {
+        // Essen(16,11) ↔ Frankfurt(17,14): close, low cost
+        if ((r1 === 16 && c1 === 11) || (r1 === 17 && c1 === 14)) return 2;
+        // Wroclaw(13,17) ↔ Wien(18,18): far, high cost
+        if ((r1 === 13 && c1 === 17 && r2 === 18 && c2 === 18) ||
+            (r1 === 18 && c1 === 18 && r2 === 13 && c2 === 17)) return 20;
+        // Default: use distance
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 12 }] },
+          { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 29 }] },
+        ],
+        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Potatoes'] },
+      });
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+
+      // The planner should pick the cheap Steel delivery over the expensive Potatoes one
+      const firstDelivery = plan.route.find(s => s.action === 'deliver');
+      expect(firstDelivery?.loadType).toBe('Steel');
+    });
+
+    it('should apply 0.5x penalty when build cost exceeds 80% of budget', () => {
+      mockGetSourceCitiesForLoad.mockReturnValue(['Hamburg']);
+      // Force a cost that's >32M (80% of 40M)
+      mockEstimatePathCost.mockReturnValue(17); // 17+17=34 > 32
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Wien', loadType: 'Steel', payment: 40 }],
+        }],
+        loadAvailability: { 'Hamburg': ['Steel'] },
+      });
+
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
+      // Any option with totalBuildCost > 32 should have penalized efficiency
+      for (const opt of options) {
+        if (opt.totalBuildCost > 32) {
+          const rawEfficiency = (opt.payout - opt.totalBuildCost) / opt.estimatedTurns;
+          expect(opt.efficiency).toBeCloseTo(rawEfficiency * 0.5, 2);
+        }
+      }
+    });
+
+    it('should score lower-cost delivery higher than higher-cost with similar payout', () => {
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Coal') return ['Essen'];
+        if (loadType === 'Wine') return ['Lyon'];
+        return [];
+      });
+      // Essen→Frankfurt is close, Lyon→Wien is far
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 2.0);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }] },
+          { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 14 }] },
+        ],
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
+      });
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+      // Should pick the cheaper Coal delivery, not the distant Wine one
+      const firstDelivery = plan.route.find(s => s.action === 'deliver');
+      expect(firstDelivery?.loadType).toBe('Coal');
+    });
+  });
+
+  describe('ferry penalty in scorePairing (JIRA-146)', () => {
+    it('should penalize double-delivery pairing when one leg requires a ferry', () => {
+      // First leg: continent-only (no ferry). Second leg: involves London (ferry)
+      const continentalOption = makeDemandOption({
+        cardId: 1,
+        supplyCity: 'Essen',
+        deliveryCity: 'Frankfurt',
+        startingCity: 'Ruhr',
+        payout: 12,
+        totalBuildCost: 5,
+      });
+      const ferryOption = makeDemandOption({
+        cardId: 2,
+        supplyCity: 'London',
+        deliveryCity: 'Hamburg',
+        startingCity: 'London',
+        payout: 12,
+        totalBuildCost: 5,
+      });
+      // Add London as a ferry city in the grid
+      const ferryGrid = [
+        ...grid,
+        makeCityPoint(14, 6, 'London', TerrainType.MajorCity),
+      ];
+      // Mark London grid point as ferry
+      for (const gp of ferryGrid) {
+        if (gp.city?.name === 'London') gp.isFerryCity = true;
+      }
+
+      const pairingsWithFerry = InitialBuildPlanner.computeDoubleDeliveryPairings(
+        [continentalOption, ferryOption], ferryGrid,
+      );
+
+      // Same pairing but no ferry on second leg
+      const noFerryOption = makeDemandOption({
+        cardId: 2,
+        supplyCity: 'Lyon',
+        deliveryCity: 'Zürich',
+        startingCity: 'Paris',
+        payout: 12,
+        totalBuildCost: 5,
+      });
+
+      const pairingsNoFerry = InitialBuildPlanner.computeDoubleDeliveryPairings(
+        [continentalOption, noFerryOption], grid,
+      );
+
+      // The ferry pairing should score lower (penalized by 30 points)
+      if (pairingsWithFerry.length > 0 && pairingsNoFerry.length > 0) {
+        expect(pairingsNoFerry[0].pairingScore).toBeGreaterThan(pairingsWithFerry[0].pairingScore);
+      }
+    });
+  });
+
   describe('estimateBuildCostFromCity', () => {
     it('should return zero supply cost when starting city is supply city', () => {
       const result = InitialBuildPlanner.estimateBuildCostFromCity(

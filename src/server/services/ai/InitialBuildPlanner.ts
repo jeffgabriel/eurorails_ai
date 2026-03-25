@@ -36,6 +36,15 @@ const CHAIN_DISTANCE_THRESHOLD = 3;
 /** Efficiency threshold: double must be >= 70% of single efficiency to be chosen */
 const DOUBLE_VS_SINGLE_THRESHOLD = 0.7;
 
+/** Budget ratio above which single-delivery efficiency is penalized (80% of MAX_BUILD_BUDGET) */
+const HIGH_BUDGET_RATIO = 0.8;
+
+/** Multiplier applied to efficiency when build cost exceeds HIGH_BUDGET_RATIO */
+const HIGH_BUDGET_PENALTY = 0.5;
+
+/** Point penalty for ferry routes in double-delivery pairings */
+const FERRY_PAIRING_PENALTY = 30;
+
 export class InitialBuildPlanner {
 
   /**
@@ -142,7 +151,11 @@ export class InitialBuildPlanner {
             const buildTurns = Math.ceil(costs.totalBuildCost / 20);
             const travelTurns = Math.ceil(costs.totalBuildCost / speed) + 1;
             const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
-            const efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+            let efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+            // Penalize routes that consume most of the initial budget
+            if (costs.totalBuildCost > HIGH_BUDGET_RATIO * MAX_BUILD_BUDGET) {
+              efficiency *= HIGH_BUDGET_PENALTY;
+            }
 
             const option: DemandOption = {
               cardId: rd.cardId,
@@ -311,7 +324,14 @@ export class InitialBuildPlanner {
     const hubBonus = sharedStartingCity ? 15 : 0;
     const peripheralPenalty = PERIPHERAL_CITIES.has(first.startingCity) ? 30 : 0;
 
-    const pairingScore = efficiency * 100 + chainBonus + hubBonus - peripheralPenalty;
+    // Penalize pairings where either leg requires a ferry
+    const ferryOnFirstLeg = InitialBuildPlanner.isFerryBetween(first.supplyCity, first.deliveryCity, gridPoints)
+      || InitialBuildPlanner.isFerryBetween(first.startingCity, first.supplyCity, gridPoints);
+    const ferryOnSecondLeg = InitialBuildPlanner.isFerryBetween(second.supplyCity, second.deliveryCity, gridPoints)
+      || InitialBuildPlanner.isFerryBetween(second.startingCity, second.supplyCity, gridPoints);
+    const ferryPenalty = (ferryOnFirstLeg || ferryOnSecondLeg) ? FERRY_PAIRING_PENALTY : 0;
+
+    const pairingScore = efficiency * 100 + chainBonus + hubBonus - peripheralPenalty - ferryPenalty;
 
     return {
       first,
