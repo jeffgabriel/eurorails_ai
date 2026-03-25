@@ -1,6 +1,7 @@
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
 import { TrackSegment } from '../../shared/types/TrackTypes';
+import { TerrainType } from '../../shared/types/GameTypes';
 
 // Mock the database module
 jest.mock('../db/index', () => {
@@ -26,11 +27,11 @@ describe('PlayerService.buildTrackForPlayer', () => {
   const playerId = 'player-456';
 
   const existingSegments: TrackSegment[] = [
-    { from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 },
+    { from: { x: 0, y: 0, row: 1, col: 1, terrain: TerrainType.Clear }, to: { x: 1, y: 0, row: 1, col: 2, terrain: TerrainType.Clear }, cost: 1 },
   ];
   const newSegments: TrackSegment[] = [
-    { from: { row: 1, col: 2 }, to: { row: 2, col: 2 }, cost: 2 },
-    { from: { row: 2, col: 2 }, to: { row: 3, col: 2 }, cost: 5 },
+    { from: { x: 1, y: 0, row: 1, col: 2, terrain: TerrainType.Clear }, to: { x: 1, y: 1, row: 2, col: 2, terrain: TerrainType.Mountain }, cost: 2 },
+    { from: { x: 1, y: 1, row: 2, col: 2, terrain: TerrainType.Mountain }, to: { x: 1, y: 2, row: 3, col: 2, terrain: TerrainType.Alpine }, cost: 5 },
   ];
   const cost = 7; // sum of new segments
 

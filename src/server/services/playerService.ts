@@ -1598,6 +1598,49 @@ export class PlayerService {
   }
 
   /**
+   * Core card-discard logic: discard old hand, draw 3 new Demand cards, persist to DB.
+   * Does NOT validate turns or advance the game turn — callers handle that.
+   *
+   * @returns newHandIds (persisted), plus discardedIds/drawnIds for rollback compensation.
+   */
+  private static async discardHandCore(
+    gameId: string,
+    playerId: string,
+    handIds: number[],
+    client: import("pg").PoolClient
+  ): Promise<{ newHandIds: number[]; discardedIds: number[]; drawnIds: number[] }> {
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
+
+    // Discard old hand (must be currently dealt).
+    for (const id of handIds) {
+      demandDeckService.discardCard(id);
+      discardedIds.push(id);
+    }
+
+    // Draw replacement hand (future-proof loop structure).
+    const newCards: DemandCard[] = [];
+    while (newCards.length < 3) {
+      const card = demandDeckService.drawCard();
+      if (!card) {
+        throw new Error("Failed to draw new demand card");
+      }
+      newCards.push(card);
+      drawnIds.push(card.id);
+    }
+    const newHandIds = newCards.map((c) => c.id);
+
+    await client.query(
+      `UPDATE players
+       SET hand = $1
+       WHERE game_id = $2 AND id = $3`,
+      [newHandIds, gameId, playerId]
+    );
+
+    return { newHandIds, discardedIds, drawnIds };
+  }
+
+  /**
    * Discard the authenticated user's entire hand and draw 3 new Demand cards,
    * consuming (ending) the user's turn by advancing the game's currentPlayerIndex.
    *
@@ -1622,8 +1665,8 @@ export class PlayerService {
     userId: string
   ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
     const client = await db.connect();
-    const discardedIds: number[] = [];
-    const drawnIds: number[] = [];
+    let discardedIds: number[] = [];
+    let drawnIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1708,30 +1751,10 @@ export class PlayerService {
       // - turn_build_cost === 0
       // - no server-tracked turn_actions this turn
 
-      // Discard old hand (must be currently dealt).
-      for (const id of handIds) {
-        demandDeckService.discardCard(id);
-        discardedIds.push(id);
-      }
-
-      // Draw replacement hand (future-proof loop structure).
-      const newCards: DemandCard[] = [];
-      while (newCards.length < 3) {
-        const card = demandDeckService.drawCard();
-        if (!card) {
-          throw new Error("Failed to draw new demand card");
-        }
-        newCards.push(card);
-        drawnIds.push(card.id);
-      }
-      const newHandIds = newCards.map((c) => c.id);
-
-      await client.query(
-        `UPDATE players
-         SET hand = $1
-         WHERE game_id = $2 AND id = $3`,
-        [newHandIds, gameId, playerId]
-      );
+      // Core card logic: discard old hand, draw 3 new cards, persist.
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
+      discardedIds = coreResult.discardedIds;
+      drawnIds = coreResult.drawnIds;
 
       // Increment per-player turn count at END of the active player's turn.
       await client.query(
