@@ -18,6 +18,7 @@ import {
   loc,
 } from '../services/logParser';
 import { GameTurnLogEntry } from '../services/ai/GameLogger';
+import { LLMTranscriptEntry } from '../services/ai/LLMTranscriptLogger';
 
 const router = express.Router();
 
@@ -262,6 +263,205 @@ router.get('/:gameId', (req, res) => {
   }
 });
 
+// ─── GET /api/llm/:gameId — Raw JSON LLM transcript ────────────────────────
+
+router.get('/api/llm/:gameId', (req, res) => {
+  const { gameId } = req.params;
+  if (!isValidGameId(gameId)) {
+    return res.status(400).json({ error: 'INVALID_GAME_ID', details: 'Game ID must contain only hex characters and hyphens' });
+  }
+  const entries = loadLLMTranscript(gameId);
+  if (entries === null) {
+    return res.status(404).json({ error: 'LOG_NOT_FOUND', details: `No LLM transcript found for game ${gameId}` });
+  }
+  return res.json(entries);
+});
+
+// ─── GET /llm/:gameId — HTML LLM transcript viewer ──────────────────────────
+
+router.get('/llm/:gameId', (req, res) => {
+  const { gameId } = req.params;
+  if (!isValidGameId(gameId)) {
+    return res.status(400).json({ error: 'INVALID_GAME_ID', details: 'Game ID must contain only hex characters and hyphens' });
+  }
+  const entries = loadLLMTranscript(gameId);
+  if (entries === null) {
+    return res.status(404).type('html').send(`<!DOCTYPE html>
+<html><head><title>LLM Transcript Not Found</title>
+<style>body{font-family:monospace;background:#1a1a2e;color:#eee;padding:40px;text-align:center;}a{color:#0f9ef7;}</style>
+</head><body><h1>No LLM transcript for game ${escapeHtml(gameId)}</h1><p><a href="/logs">← Back to log index</a></p></body></html>`);
+  }
+
+  try {
+    const players = Array.from(new Set(entries.map(e => e.playerId)));
+    const turns = Array.from(new Set(entries.map(e => e.turn))).sort((a, b) => a - b);
+    const callers = Array.from(new Set(entries.map(e => e.caller)));
+    const statuses = Array.from(new Set(entries.map(e => e.status)));
+    const models = Array.from(new Set(entries.map(e => e.model)));
+
+    // Group entries by turn+player+caller+attemptNumber for retry chains
+    const callCards = renderLLMCallCards(entries, gameId);
+
+    res.type('html').send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Transcript — Game ${gameId.slice(0, 8)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #1a1a2e; color: #eee; display: flex; min-height: 100vh; }
+  .sidebar { width: 280px; background: #16213e; padding: 16px; flex-shrink: 0; overflow-y: auto; position: sticky; top: 0; height: 100vh; }
+  .sidebar h2 { color: #e94560; margin-bottom: 12px; font-size: 14px; }
+  .sidebar label { display: block; font-size: 12px; color: #aaa; margin: 8px 0 4px; }
+  .sidebar select, .sidebar input { width: 100%; padding: 6px 8px; background: #0f3460; border: 1px solid #555; color: #eee; border-radius: 4px; font-size: 13px; }
+  .sidebar a { color: #0f9ef7; text-decoration: none; font-size: 13px; }
+  .sidebar a:hover { text-decoration: underline; }
+  .sidebar .stats { margin-top: 20px; padding-top: 12px; border-top: 1px solid #333; }
+  .sidebar .stats div { font-size: 12px; color: #aaa; margin: 4px 0; }
+  .sidebar .stats span { color: #0f9ef7; font-weight: 600; }
+  .main { flex: 1; padding: 16px 24px; overflow-y: auto; }
+  .main h1 { color: #e94560; margin-bottom: 16px; font-size: 20px; }
+  .call-card { border: 2px solid #333; border-radius: 8px; margin-bottom: 12px; padding: 12px 16px; background: #16213e; }
+  .call-card.success { border-color: #2ecc71; }
+  .call-card.error { border-color: #e74c3c; }
+  .call-card.timeout { border-color: #f39c12; }
+  .call-card.validation_error { border-color: #e67e22; }
+  .call-card.retry { border-left: 4px solid #9b59b6; margin-left: 20px; }
+  .call-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+  .call-header h3 { font-size: 14px; }
+  .call-header .meta { font-size: 12px; color: #888; }
+  .call-body { margin-top: 8px; }
+  details { margin: 6px 0; }
+  summary { cursor: pointer; font-size: 13px; color: #aaa; padding: 4px 0; }
+  summary:hover { color: #eee; }
+  .section { padding: 8px 12px; background: #0f3460; border-radius: 4px; margin-top: 4px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 400px; overflow-y: auto; }
+  .section.json { font-family: 'Fira Code', 'Consolas', monospace; }
+  .diff-added { background: #2ecc7122; color: #2ecc71; }
+  .diff-removed { background: #e74c3c22; color: #e74c3c; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; margin-left: 4px; }
+  .badge-success { background: #2ecc7133; color: #2ecc71; }
+  .badge-error { background: #e74c3c33; color: #e74c3c; }
+  .badge-timeout { background: #f39c1233; color: #f39c12; }
+  .badge-validation { background: #e67e2233; color: #e67e22; }
+  .hidden { display: none !important; }
+  .pretty-toggle { cursor: pointer; font-size: 11px; color: #0f9ef7; margin-left: 8px; }
+</style>
+</head>
+<body>
+<div class="sidebar">
+  <h2>Filters</h2>
+  <a href="/logs">← All Games</a>
+  <br><a href="/logs/${gameId}">View Game Turns →</a>
+
+  <label for="f-player">Player</label>
+  <select id="f-player"><option value="">All</option>${players.map(p => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('')}</select>
+
+  <label for="f-turn">Turn</label>
+  <input id="f-turn" type="text" placeholder="e.g. 9 or 5-15">
+
+  <label for="f-caller">Caller</label>
+  <select id="f-caller"><option value="">All</option>${callers.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select>
+
+  <label for="f-status">Status</label>
+  <select id="f-status"><option value="">All</option>${statuses.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select>
+
+  <label for="f-model">Model</label>
+  <select id="f-model"><option value="">All</option>${models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('')}</select>
+
+  <div class="stats">
+    <h2>Stats</h2>
+    <div>Total Calls: <span>${entries.length}</span></div>
+    <div>Successes: <span>${entries.filter(e => e.status === 'success').length}</span></div>
+    <div>Errors: <span>${entries.filter(e => e.status !== 'success').length}</span></div>
+    <div>Unique Turns: <span>${turns.length}</span></div>
+    <div>Avg Latency: <span>${entries.length > 0 ? secs(entries.reduce((s, e) => s + e.latencyMs, 0) / entries.length) : 'N/A'}</span></div>
+  </div>
+</div>
+<div class="main">
+  <h1>LLM Transcript — Game ${escapeHtml(gameId.slice(0, 8))}… — ${entries.length} Calls</h1>
+  <div id="calls">${callCards}</div>
+</div>
+<script>
+(function() {
+  var cards = document.querySelectorAll('.call-card');
+  var filters = {
+    player: document.getElementById('f-player'),
+    turn: document.getElementById('f-turn'),
+    caller: document.getElementById('f-caller'),
+    status: document.getElementById('f-status'),
+    model: document.getElementById('f-model'),
+  };
+
+  var params = new URLSearchParams(window.location.search);
+  if (params.get('player')) filters.player.value = params.get('player');
+  if (params.get('turn')) filters.turn.value = params.get('turn');
+  if (params.get('caller')) filters.caller.value = params.get('caller');
+  if (params.get('status')) filters.status.value = params.get('status');
+  if (params.get('model')) filters.model.value = params.get('model');
+
+  function applyFilters() {
+    var p = filters.player.value.toLowerCase();
+    var turnVal = filters.turn.value.trim();
+    var tMin = -Infinity, tMax = Infinity;
+    if (turnVal) {
+      if (turnVal.includes('-')) { var parts = turnVal.split('-').map(Number); tMin = parts[0]; tMax = parts[1]; }
+      else { tMin = tMax = Number(turnVal); }
+    }
+    var cal = filters.caller.value.toLowerCase();
+    var st = filters.status.value.toLowerCase();
+    var mdl = filters.model.value.toLowerCase();
+
+    cards.forEach(function(card) {
+      var d = card.dataset;
+      var show = true;
+      if (p && d.player.toLowerCase() !== p) show = false;
+      if (show && (Number(d.turn) < tMin || Number(d.turn) > tMax)) show = false;
+      if (show && cal && (d.caller || '').toLowerCase() !== cal) show = false;
+      if (show && st && (d.status || '').toLowerCase() !== st) show = false;
+      if (show && mdl && (d.model || '').toLowerCase() !== mdl) show = false;
+      card.classList.toggle('hidden', !show);
+    });
+
+    var url = new URL(window.location);
+    ['player','turn','caller','status','model'].forEach(function(k) {
+      var v = filters[k].value;
+      if (v) url.searchParams.set(k, v); else url.searchParams.delete(k);
+    });
+    history.replaceState(null, '', url);
+  }
+
+  Object.values(filters).forEach(function(el) { el.addEventListener('input', applyFilters); el.addEventListener('change', applyFilters); });
+  applyFilters();
+
+  // Pretty-print toggle for JSON sections
+  document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('pretty-toggle')) {
+      var sec = e.target.closest('details').querySelector('.section');
+      if (!sec) return;
+      try {
+        var raw = sec.getAttribute('data-raw');
+        if (!raw) { sec.setAttribute('data-raw', sec.textContent); raw = sec.textContent; }
+        if (e.target.textContent === 'pretty') {
+          sec.textContent = JSON.stringify(JSON.parse(raw), null, 2);
+          e.target.textContent = 'compact';
+        } else {
+          sec.textContent = raw;
+          e.target.textContent = 'pretty';
+        }
+      } catch(err) {}
+    }
+  });
+})();
+</script>
+</body>
+</html>`);
+  } catch (error) {
+    console.error('[logRoutes] Error rendering LLM transcript:', error);
+    res.status(500).json({ error: 'SERVER_ERROR', details: 'Failed to render LLM transcript' });
+  }
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function escapeHtml(str: string): string {
@@ -405,6 +605,119 @@ function computeStats(entries: GameTurnLogEntry[]): { llmCalls: number; tokensIn
     deliveries,
     errors,
   };
+}
+
+function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): string {
+  const cards: string[] = [];
+  let prevByKey = new Map<string, LLMTranscriptEntry>();
+
+  for (const entry of entries) {
+    const key = `${entry.playerId}-${entry.turn}-${entry.caller}`;
+    const isRetry = entry.attemptNumber > 1;
+    const prev = prevByKey.get(key);
+
+    const statusBadgeClass = entry.status === 'success' ? 'badge-success'
+      : entry.status === 'timeout' ? 'badge-timeout'
+      : entry.status === 'validation_error' ? 'badge-validation'
+      : 'badge-error';
+
+    const cardClass = `${entry.status}${isRetry ? ' retry' : ''}`;
+
+    let sections = '';
+
+    // System prompt
+    sections += `<details><summary>System Prompt (${fmt(entry.systemPrompt.length)} chars)</summary><div class="section">${escapeHtml(entry.systemPrompt)}</div></details>`;
+
+    // User prompt — with diff if retry
+    if (isRetry && prev) {
+      const diff = computeLineDiff(prev.userPrompt, entry.userPrompt);
+      if (diff.hasChanges) {
+        sections += `<details><summary>User Prompt — diff from attempt #${entry.attemptNumber - 1} (${fmt(entry.userPrompt.length)} chars)</summary><div class="section">${diff.html}</div></details>`;
+      } else {
+        sections += `<details><summary>User Prompt (${fmt(entry.userPrompt.length)} chars, unchanged)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
+      }
+    } else {
+      sections += `<details><summary>User Prompt (${fmt(entry.userPrompt.length)} chars)</summary><div class="section">${escapeHtml(entry.userPrompt)}</div></details>`;
+    }
+
+    // Response — with pretty-print toggle for JSON
+    const isJson = entry.responseText.trimStart().startsWith('{') || entry.responseText.trimStart().startsWith('[');
+    const toggleBtn = isJson ? ' <span class="pretty-toggle">pretty</span>' : '';
+    sections += `<details><summary>Response (${fmt(entry.responseText.length)} chars)${toggleBtn}</summary><div class="section${isJson ? ' json' : ''}">${escapeHtml(entry.responseText)}</div></details>`;
+
+    // Error detail
+    if (entry.error) {
+      sections += `<div style="color:#e74c3c;font-size:13px;margin-top:6px;">Error: ${escapeHtml(entry.error)}</div>`;
+    }
+
+    // System prompt diff for retries
+    if (isRetry && prev) {
+      const sysDiff = computeLineDiff(prev.systemPrompt, entry.systemPrompt);
+      if (sysDiff.hasChanges) {
+        sections += `<details><summary>System Prompt Diff (from attempt #${entry.attemptNumber - 1})</summary><div class="section">${sysDiff.html}</div></details>`;
+      }
+    }
+
+    const tokens = entry.tokenUsage ? `${fmt(entry.tokenUsage.input)} in / ${fmt(entry.tokenUsage.output)} out` : '';
+
+    cards.push(`<div class="call-card ${cardClass}" data-turn="${entry.turn}" data-player="${escapeHtml(entry.playerId)}" data-caller="${escapeHtml(entry.caller)}" data-status="${escapeHtml(entry.status)}" data-model="${escapeHtml(entry.model)}">
+  <div class="call-header" onclick="this.parentElement.querySelector('.call-body').classList.toggle('hidden')">
+    <h3>Turn ${entry.turn} | ${escapeHtml(entry.caller)} | #${entry.attemptNumber}/${entry.totalAttempts}
+      <a href="/logs/${gameId}?turns=${entry.turn}" style="font-size:12px;color:#0f9ef7;margin-left:8px;">→ game turn</a>
+    </h3>
+    <div class="meta">
+      ${escapeHtml(entry.model)} | ${secs(entry.latencyMs)}${tokens ? ` | ${tokens}` : ''}
+      <span class="badge ${statusBadgeClass}">${entry.status}</span>
+    </div>
+  </div>
+  <div class="call-body hidden">
+    <div style="font-size:12px;color:#888;margin-bottom:4px;">${escapeHtml(entry.playerId)} | ${entry.timestamp} | ${escapeHtml(entry.method)}</div>
+    ${sections}
+  </div>
+</div>`);
+
+    prevByKey.set(key, entry);
+  }
+
+  return cards.join('\n');
+}
+
+/** Basic line-by-line diff between two strings. Returns HTML with green/red highlighting. */
+function computeLineDiff(a: string, b: string): { html: string; hasChanges: boolean } {
+  const aLines = a.split('\n');
+  const bLines = b.split('\n');
+
+  if (a === b) return { html: escapeHtml(a), hasChanges: false };
+
+  const result: string[] = [];
+  const maxLen = Math.max(aLines.length, bLines.length);
+  let ai = 0, bi = 0;
+
+  while (ai < aLines.length || bi < bLines.length) {
+    if (ai < aLines.length && bi < bLines.length && aLines[ai] === bLines[bi]) {
+      result.push(escapeHtml(bLines[bi]));
+      ai++;
+      bi++;
+    } else if (ai < aLines.length && (bi >= bLines.length || !bLines.includes(aLines[ai]))) {
+      result.push(`<span class="diff-removed">- ${escapeHtml(aLines[ai])}</span>`);
+      ai++;
+    } else if (bi < bLines.length && (ai >= aLines.length || !aLines.includes(bLines[bi]))) {
+      result.push(`<span class="diff-added">+ ${escapeHtml(bLines[bi])}</span>`);
+      bi++;
+    } else {
+      // Both lines differ — show as remove old, add new
+      if (ai < aLines.length) {
+        result.push(`<span class="diff-removed">- ${escapeHtml(aLines[ai])}</span>`);
+        ai++;
+      }
+      if (bi < bLines.length) {
+        result.push(`<span class="diff-added">+ ${escapeHtml(bLines[bi])}</span>`);
+        bi++;
+      }
+    }
+  }
+
+  return { html: result.join('\n'), hasChanges: true };
 }
 
 export default router;
