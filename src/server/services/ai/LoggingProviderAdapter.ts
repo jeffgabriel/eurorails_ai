@@ -18,10 +18,18 @@ interface LoggingContext {
   method: string;
 }
 
+export interface LLMCallSummary {
+  callId: string;
+  caller: string;
+  latencyMs: number;
+  tokenUsage?: { input: number; output: number };
+}
+
 export class LoggingProviderAdapter implements ProviderAdapter {
   private inner: ProviderAdapter;
   private context: LoggingContext | null = null;
   private callIds: string[] = [];
+  private callSummaries: LLMCallSummary[] = [];
 
   constructor(inner: ProviderAdapter) {
     this.inner = inner;
@@ -35,8 +43,13 @@ export class LoggingProviderAdapter implements ProviderAdapter {
     return [...this.callIds];
   }
 
+  getCallSummaries(): LLMCallSummary[] {
+    return [...this.callSummaries];
+  }
+
   resetCallIds(): void {
     this.callIds = [];
+    this.callSummaries = [];
   }
 
   async chat(request: {
@@ -69,6 +82,12 @@ export class LoggingProviderAdapter implements ProviderAdapter {
       throw err;
     } finally {
       const latencyMs = Date.now() - startMs;
+      this.callSummaries.push({
+        callId,
+        caller: this.context?.caller ?? 'unknown',
+        latencyMs,
+        tokenUsage,
+      });
       if (this.context) {
         const entry: LLMTranscriptEntry = {
           callId,

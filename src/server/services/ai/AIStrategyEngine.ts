@@ -1231,6 +1231,23 @@ export class AIStrategyEngine {
         }
       }
 
+      // JIRA-143: Build llmSummary from call summaries
+      let llmSummary: BotTurnResult['llmSummary'];
+      if (brain) {
+        const summaries = brain.providerAdapter.getCallSummaries();
+        if (summaries.length > 0) {
+          llmSummary = {
+            callCount: summaries.length,
+            totalLatencyMs: summaries.reduce((sum, s) => sum + s.latencyMs, 0),
+            totalTokens: {
+              input: summaries.reduce((sum, s) => sum + (s.tokenUsage?.input ?? 0), 0),
+              output: summaries.reduce((sum, s) => sum + (s.tokenUsage?.output ?? 0), 0),
+            },
+            callers: [...new Set(summaries.map(s => s.caller))],
+          };
+        }
+      }
+
       return {
         action: result.action,
         segmentsBuilt: result.segmentsBuilt,
@@ -1248,6 +1265,7 @@ export class AIStrategyEngine {
         actorDetail: actorMeta.actorDetail,
         llmModel: actorMeta.llmModel,
         llmCallIds: brain ? brain.providerAdapter.getCallIds() : undefined,
+        llmSummary,
         actionBreakdown: actionBreakdown.length > 0 ? actionBreakdown : undefined,
         demandRanking,
         // JIRA-19: LLM decision metadata
