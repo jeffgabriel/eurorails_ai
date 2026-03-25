@@ -1641,6 +1641,64 @@ export class PlayerService {
   }
 
   /**
+   * Discard a player's entire hand and draw 3 new Demand cards.
+   * Accepts playerId directly — works for both human and bot players.
+   * Does NOT advance the game turn; callers manage turn lifecycle.
+   */
+  static async discardHandForPlayer(
+    gameId: string,
+    playerId: string
+  ): Promise<{ newHandIds: number[] }> {
+    const client = await db.connect();
+    let discardedIds: number[] = [];
+    let drawnIds: number[] = [];
+    try {
+      await client.query("BEGIN");
+
+      // Fetch current hand with row lock.
+      const playerResult = await client.query(
+        `SELECT hand
+         FROM players
+         WHERE game_id = $1 AND id = $2
+         LIMIT 1
+         FOR UPDATE`,
+        [gameId, playerId]
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentHand: unknown = playerResult.rows[0].hand;
+      const handIds: number[] = Array.isArray(currentHand)
+        ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
+        : [];
+
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
+      discardedIds = coreResult.discardedIds;
+      drawnIds = coreResult.drawnIds;
+
+      await client.query("COMMIT");
+      return { newHandIds: coreResult.newHandIds };
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        /* rollback best-effort */
+      }
+      // Best-effort deck compensation: return drawn cards, restore discarded originals.
+      for (const id of drawnIds) {
+        try { demandDeckService.returnDealtCardToTop(id); } catch { /* best-effort */ }
+      }
+      for (const id of discardedIds) {
+        try { demandDeckService.returnDiscardedCardToDealt(id); } catch { /* best-effort */ }
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
    * Discard the authenticated user's entire hand and draw 3 new Demand cards,
    * consuming (ending) the user's turn by advancing the game's currentPlayerIndex.
    *
