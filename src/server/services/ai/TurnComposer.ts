@@ -844,6 +844,30 @@ export class TurnComposer {
     // JIRA-146: Skip advisor during initial build — deterministic Dijkstra is sufficient
     const useAdvisor = brain && gridPoints && !victoryConditionsMet && remainingBudget > 0 && !context.isInitialBuild;
 
+    // ── JIRA-148: shouldDeferBuild gate — skip advisor when build is unnecessary ──
+    // Only applies when the advisor would be used (not victory builds, not initial builds)
+    if (useAdvisor) {
+      let buildTarget: string | undefined;
+      if (activeRoute) {
+        for (const stop of activeRoute.stops) {
+          const isStartingCity = activeRoute.startingCity &&
+            stop.city.toLowerCase() === activeRoute.startingCity.toLowerCase();
+          if (!isStartingCity && !context.citiesOnNetwork.includes(stop.city)) {
+            buildTarget = stop.city;
+            break;
+          }
+        }
+      }
+      const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+      const deferResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, buildTarget ?? '', trainSpeed);
+      if (trace) {
+        trace.jitGate = { deferred: deferResult.deferred, reason: deferResult.reason, trackRunway: deferResult.trackRunway, trainSpeed, destinationCity: buildTarget ?? '' };
+      }
+      if (deferResult.deferred) {
+        return emptyResult;
+      }
+    }
+
     const allBuildSegments: TrackSegment[] = [];
     let buildBudgetSpent = context.turnBuildCost;
     let buildSnapshot = snapshot;

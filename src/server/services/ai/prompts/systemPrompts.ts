@@ -436,12 +436,9 @@ Actions: "build", "buildAlternative", "replan", "useOpponentTrack"`;
   sections.push(`CARRIED LOADS: ${context.loads.length > 0 ? context.loads.join(', ') : 'None'}`);
   sections.push(`GAME PHASE: ${context.phase} | Turn ${context.turnNumber}`);
 
-  if (context.demands.length > 0) {
-    const demandLines = context.demands.map(d =>
-      `  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M, ~${d.estimatedTurns} turns)`
-    ).join('\n');
-    sections.push(`DEMAND CARDS:\n${demandLines}`);
-  }
+  // JIRA-148: Demand cards intentionally omitted — BuildAdvisor is a tactical
+  // pathfinding tool, not a strategic planner. Including demand cards caused
+  // the LLM to override the computed build target with its own route selection.
 
   return { system, user: sections.join('\n\n') };
 }

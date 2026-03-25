@@ -100,6 +100,12 @@ export class BuildAdvisor {
         BuildAdvisor.lastDiagnostics.error = msg;
         return null;
       }
+      // JIRA-148: Validate LLM target matches computed target — override on mismatch
+      if (parsed.target && targetCity.cityName &&
+          parsed.target.toLowerCase() !== targetCity.cityName.toLowerCase()) {
+        console.warn(`[BuildAdvisor] Target mismatch: LLM returned "${parsed.target}" but computed target is "${targetCity.cityName}" — overriding`);
+        parsed.target = targetCity.cityName;
+      }
       BuildAdvisor.lastDiagnostics.rawWaypoints = parsed.waypoints ? [...parsed.waypoints] : [];
       const validated = BuildAdvisor.validateWaypoints(parsed, gridPoints);
       if (!validated) {
@@ -326,7 +332,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
     activeRoute: StrategicRoute | null,
     context: GameContext,
     gridPoints: GridPoint[],
-  ): { row: number; col: number } | null {
+  ): { row: number; col: number; cityName: string } | null {
     // JIRA-145: Mirror PlanExecutor.findInitialBuildTarget — skip the starting
     // city and on-network stops to find the first unreached destination.
     let targetCityName: string | null = null;
@@ -354,7 +360,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
     // Find grid coordinate for the city
     const cityPoint = gridPoints.find(gp => gp.city?.name === targetCityName);
-    return cityPoint ? { row: cityPoint.row, col: cityPoint.col } : null;
+    return cityPoint ? { row: cityPoint.row, col: cityPoint.col, cityName: targetCityName } : null;
   }
 
   /**

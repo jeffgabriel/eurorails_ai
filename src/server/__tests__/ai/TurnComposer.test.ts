@@ -6420,11 +6420,26 @@ describe('TurnComposer', () => {
       expect(mockAdvise).not.toHaveBeenCalled();
     });
 
-    it('calls advisor when not initial build (regression guard, JIRA-146)', async () => {
+    it('calls advisor when not initial build and build needed (regression guard, JIRA-146)', async () => {
       const snapshot = makeSnapshot();
-      const context = makeContext({ turnBuildCost: 0, isInitialBuild: false });
+      const context = makeContext({
+        turnBuildCost: 0,
+        isInitialBuild: false,
+        citiesOnNetwork: ['Berlin'],
+        loads: ['Coal'],
+        turnNumber: 5,
+      });
+      // Active route with off-network stop so shouldDeferBuild allows it
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
 
-      await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
+      await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain, mockGridPoints);
 
       expect(mockAdvise).toHaveBeenCalled();
     });
@@ -6561,6 +6576,106 @@ describe('TurnComposer', () => {
       await TurnComposer.tryAppendBuild(snapshot, context, route);
 
       expect(mockAdvise).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('JIRA-148: shouldDeferBuild gates BuildAdvisor in tryAppendBuild', () => {
+    it('should skip advisor when destination is on-network (sufficient runway)', async () => {
+      const mockBrain = { modelName: 'test', providerAdapter: { chat: jest.fn(), setContext: jest.fn(), resetCallIds: jest.fn() } };
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin', 'Paris'],
+        turnNumber: 5,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, route, undefined, mockBrain as any, []);
+
+      // All route stops are on-network → shouldDeferBuild returns deferred=true
+      expect(result.plan).toBeNull();
+      expect(mockAdvise).not.toHaveBeenCalled();
+    });
+
+    it('should skip advisor when no active route', async () => {
+      const mockBrain = { modelName: 'test', providerAdapter: { chat: jest.fn(), setContext: jest.fn(), resetCallIds: jest.fn() } };
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, turnNumber: 5 });
+
+      const result = await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain as any, []);
+
+      // No route → shouldDeferBuild returns deferred=true (no_active_route)
+      expect(result.plan).toBeNull();
+      expect(mockAdvise).not.toHaveBeenCalled();
+    });
+
+    it('should call advisor when shouldDeferBuild returns deferred=false', async () => {
+      const mockBrain = { modelName: 'test', providerAdapter: { chat: jest.fn(), setContext: jest.fn(), resetCallIds: jest.fn() } };
+      const snapshot = makeSnapshot();
+      const context = makeContext({
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'],
+        turnNumber: 5,
+      });
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+        ],
+        currentStopIndex: 1,
+        phase: 'travel',
+      });
+
+      // Paris is NOT on network → shouldDeferBuild should return deferred=false
+      // But we need the bot to have the load to be "committed"
+      const contextWithLoad = makeContext({
+        ...context,
+        loads: ['Coal'],
+        turnBuildCost: 0,
+        citiesOnNetwork: ['Berlin'],
+        turnNumber: 5,
+      });
+
+      mockAdvise.mockResolvedValueOnce({
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[20, 20]],
+        reasoning: 'Build toward Paris',
+      });
+      mockSolvencyCheck.mockReturnValueOnce({ canAfford: true, actualCost: 5, availableForBuild: 50, incomeBefore: 0 });
+
+      await TurnComposer.tryAppendBuild(snapshot, contextWithLoad, route, undefined, mockBrain as any, []);
+
+      // Advisor should have been called since build is needed
+      expect(mockAdvise).toHaveBeenCalled();
+    });
+
+    it('should record jitGate in trace when deferred', async () => {
+      const mockBrain = { modelName: 'test', providerAdapter: { chat: jest.fn(), setContext: jest.fn(), resetCallIds: jest.fn() } };
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, turnNumber: 5 });
+      const trace = {
+        inputPlan: [], outputPlan: [],
+        moveBudget: { total: 9, used: 0, wasted: 0 },
+        a1: { citiesScanned: 0, opportunitiesFound: 0 },
+        a2: { iterations: 0, terminationReason: '' },
+        a3: { movePreprended: false },
+        build: { target: null, cost: 0, skipped: false, upgradeConsidered: false },
+        pickups: [], deliveries: [],
+      };
+
+      await TurnComposer.tryAppendBuild(snapshot, context, null, trace, mockBrain as any, []);
+
+      expect(trace.jitGate).toBeDefined();
+      expect(trace.jitGate!.deferred).toBe(true);
+      expect(trace.jitGate!.reason).toBe('no_active_route');
     });
   });
 });
