@@ -94,7 +94,7 @@ export class BuildAdvisor {
         console.warn(`[BuildAdvisor] ${msg}, raw: ${response.text.substring(0, 200)}`);
         // Two-pass extraction fallback: ask the same model to extract structured data from prose
         const extracted = await BuildAdvisor.extractFromProse(
-          response.text, targetCity, frontier, brain, gridPoints,
+          response.text, targetCity, frontier, brain, gridPoints, snapshot,
         );
         if (extracted) return extracted;
         BuildAdvisor.lastDiagnostics.error = msg;
@@ -180,7 +180,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
         const msg = `JSON parse failed: ${(parseErr as Error).message}`;
         console.warn(`[BuildAdvisor] retryWithSolvencyFeedback ${msg}, raw: ${response.text.substring(0, 200)}`);
         const extracted = await BuildAdvisor.extractFromProse(
-          response.text, targetCity, frontier, brain, gridPoints,
+          response.text, targetCity, frontier, brain, gridPoints, snapshot,
         );
         if (extracted) return extracted;
         BuildAdvisor.lastDiagnostics.error = msg;
@@ -206,6 +206,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
     frontier: { row: number; col: number }[],
     brain: LLMStrategyBrain,
     gridPoints: GridPoint[],
+    snapshot: WorldSnapshot,
   ): Promise<BuildAdvisorResult | null> {
     const extractionStart = Date.now();
     BuildAdvisor.lastDiagnostics.extractionUsed = true;
@@ -218,6 +219,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
       // Omit `thinking` to disable thinkingConfig — this allows structured output
       // (responseSchema) on thinking-capable models like Gemini 3
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildVictory' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 512,
