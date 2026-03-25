@@ -249,6 +249,8 @@ export async function onTurnChange(
         advisorReasoning: result.advisorReasoning,
         advisorLatencyMs: result.advisorLatencyMs,
         solvencyRetries: result.solvencyRetries,
+        // JIRA-147: Decision source for web log viewer
+        decisionSource: result.actorDetail,
         // JIRA-143: Actor/action metadata
         actor: result.actor,
         actorDetail: result.actorDetail,

@@ -125,6 +125,9 @@ export interface GameTurnLogEntry {
   advisorLatencyMs?: number;
   solvencyRetries?: number;
 
+  // Decision source — the pipeline component that produced this turn's action
+  decisionSource?: string;
+
   // Actor & LLM Metadata (populated by Project 2)
   actor?: 'llm' | 'system' | 'heuristic' | 'guardrail' | 'error';
   actorDetail?: string;
