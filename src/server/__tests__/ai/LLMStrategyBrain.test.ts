@@ -8,6 +8,11 @@ import {
   LLM_DEFAULT_MODELS,
 } from '../../../shared/types/GameTypes';
 
+// Mock LLM transcript logger to prevent file I/O
+jest.mock('../../services/ai/LLMTranscriptLogger', () => ({
+  appendLLMCall: jest.fn(),
+}));
+
 // Mock all provider adapters
 jest.mock('../../services/ai/providers/AnthropicAdapter');
 jest.mock('../../services/ai/providers/GoogleAdapter');
@@ -70,6 +75,7 @@ import { ActionResolver } from '../../services/ai/ActionResolver';
 import { ResponseParser } from '../../services/ai/ResponseParser';
 import { RouteValidator } from '../../services/ai/RouteValidator';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
+import { LoggingProviderAdapter } from '../../services/ai/LoggingProviderAdapter';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.Mock;
@@ -149,6 +155,7 @@ function setupSuccessfulDecision(
 
 describe('LLMStrategyBrain', () => {
   let mockChat: jest.Mock;
+  let setContextSpy: jest.SpyInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -157,6 +164,12 @@ describe('LLMStrategyBrain', () => {
     (AnthropicAdapter as jest.MockedClass<typeof AnthropicAdapter>).mockImplementation(
       () => ({ chat: mockChat }) as unknown as AnthropicAdapter,
     );
+    // Spy on LoggingProviderAdapter.setContext for JIRA-143 assertions
+    setContextSpy = jest.spyOn(LoggingProviderAdapter.prototype, 'setContext');
+  });
+
+  afterEach(() => {
+    setContextSpy.mockRestore();
   });
 
   function createBrain(skillLevel: BotSkillLevel = BotSkillLevel.Medium): LLMStrategyBrain {
@@ -1188,7 +1201,7 @@ describe('LLMStrategyBrain', () => {
       expect(result.llmLog![0].error).toContain('Parsing error');
     });
 
-    it('should truncate responseText to 500 chars', async () => {
+    it('should preserve full responseText without truncation', async () => {
       const longText = 'x'.repeat(1000);
       mockChat.mockResolvedValue({ text: longText, usage: { input: 10, output: 5 } });
       mockParseActionIntent.mockReturnValue({
@@ -1201,7 +1214,7 @@ describe('LLMStrategyBrain', () => {
       const brain = createBrain();
       const result = await brain.decideAction(makeSnapshot(), makeContext());
 
-      expect(result.llmLog![0].responseText.length).toBe(500);
+      expect(result.llmLog![0].responseText.length).toBe(1000);
     });
   });
 
@@ -1280,7 +1293,7 @@ describe('LLMStrategyBrain', () => {
       }
     });
 
-    it('should include llmLog in successful return value with truncated responseText', async () => {
+    it('should include llmLog in successful return value with full responseText', async () => {
       const longResponse = 'r'.repeat(1000);
       mockChat.mockResolvedValue({ text: longResponse, usage: { input: 100, output: 50 } });
       mockParseStrategicRoute.mockReturnValue(validRoute);
@@ -1291,7 +1304,7 @@ describe('LLMStrategyBrain', () => {
 
       expect(result).not.toBeNull();
       const r = result!;
-      expect(r.llmLog[0].responseText.length).toBe(500);
+      expect(r.llmLog[0].responseText.length).toBe(1000);
     });
   });
 
@@ -1428,6 +1441,120 @@ describe('LLMStrategyBrain', () => {
       expect(result).toBeNull();
     });
   });
+  // ── JIRA-143: setContext() called before each chat() ──
+
+  describe('setContext — caller context before chat() (JIRA-143)', () => {
+    it('should call setContext with strategy-brain/planRoute before chat in decideAction', async () => {
+      setupSuccessfulDecision(mockChat);
+      const brain = createBrain();
+      const snapshot = makeSnapshot();
+      await brain.decideAction(snapshot, makeContext());
+
+      expect(setContextSpy).toHaveBeenCalledWith({
+        gameId: 'g1',
+        playerId: 'bot-1',
+        turn: 5,
+        caller: 'strategy-brain',
+        method: 'planRoute',
+      });
+      // setContext must be called before chat
+      const setContextOrder = setContextSpy.mock.invocationCallOrder[0];
+      const chatOrder = mockChat.mock.invocationCallOrder[0];
+      expect(setContextOrder).toBeLessThan(chatOrder);
+    });
+
+    it('should call setContext with strategy-brain/planRoute before chat in planRoute', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"route":"..."}',
+        usage: { input: 100, output: 50 },
+      });
+      mockParseStrategicRoute.mockReturnValue({
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        startingCity: 'Berlin',
+        createdAtTurn: 5,
+        reasoning: 'test',
+      });
+      mockRouteValidate.mockReturnValue({ valid: true, errors: [] });
+
+      const brain = createBrain();
+      await brain.planRoute(makeSnapshot(), makeContext(), []);
+
+      expect(setContextSpy).toHaveBeenCalledWith({
+        gameId: 'g1',
+        playerId: 'bot-1',
+        turn: 5,
+        caller: 'strategy-brain',
+        method: 'planRoute',
+      });
+    });
+
+    it('should call setContext with strategy-brain/evaluateCargoConflict before chat', async () => {
+      const snap = makeSnapshot();
+      snap.bot.loads = ['Hops', 'Coal'];
+      snap.bot.resolvedDemands = [
+        { cardId: 1, demands: [{ city: 'Stockholm', loadType: 'Hops', payment: 48 }] },
+        { cardId: 2, demands: [{ city: 'Paris', loadType: 'Coal', payment: 20 }] },
+      ];
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({ action: 'keep', reasoning: 'keep it' }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      await brain.evaluateCargoConflict('test prompt', snap, makeContext());
+
+      expect(setContextSpy).toHaveBeenCalledWith({
+        gameId: 'g1',
+        playerId: 'bot-1',
+        turn: 5,
+        caller: 'strategy-brain',
+        method: 'evaluateCargoConflict',
+      });
+    });
+
+    it('should call setContext with strategy-brain/evaluateUpgradeBeforeDrop before chat', async () => {
+      mockChat.mockResolvedValue({
+        text: JSON.stringify({ action: 'skip', reasoning: 'not worth it' }),
+        usage: { input: 50, output: 20 },
+      });
+
+      const brain = createBrain();
+      await brain.evaluateUpgradeBeforeDrop('test prompt', makeSnapshot(50), makeContext());
+
+      expect(setContextSpy).toHaveBeenCalledWith({
+        gameId: 'g1',
+        playerId: 'bot-1',
+        turn: 5,
+        caller: 'strategy-brain',
+        method: 'evaluateUpgradeBeforeDrop',
+      });
+    });
+
+    it('should call setContext on each retry in decideAction', async () => {
+      mockChat.mockResolvedValue({
+        text: '{"action":"BuildTrack"}',
+        usage: { input: 50, output: 20 },
+      });
+      mockParseActionIntent.mockReturnValue({
+        action: 'BuildTrack',
+        reasoning: 'Build',
+        planHorizon: '',
+      });
+      // First resolve fails, second succeeds
+      mockResolve
+        .mockResolvedValueOnce({ success: false, error: 'Not enough money' })
+        .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.PassTurn } });
+
+      const brain = createBrain();
+      await brain.decideAction(makeSnapshot(), makeContext());
+
+      // setContext should be called before each chat attempt
+      expect(setContextSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
   // ── JIRA-105b: evaluateUpgradeBeforeDrop ──
 
   describe('evaluateUpgradeBeforeDrop', () => {
