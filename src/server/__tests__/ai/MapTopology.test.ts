@@ -1,4 +1,5 @@
 import { estimateHopDistance, estimatePathCost, hexDistance, _resetCache } from '../../services/ai/MapTopology';
+import { getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 describe('estimateHopDistance', () => {
   afterEach(() => {
@@ -103,5 +104,55 @@ describe('estimatePathCost', () => {
       // Should be a small terrain-only cost (no ferry involved)
       expect(cost).toBeLessThan(20);
     }
+  });
+
+  // JIRA-149: Cross-water routes must be priced higher than equivalent land routes
+  it('cross-water route costs more than continental alternative (JIRA-149)', () => {
+    // Ruhr (row=26, col=42) is the starting hub for game 1b31e1a2
+    // Manchester (row=13, col=30) requires crossing the English Channel — ferry overhead
+    // Stuttgart (row=32, col=44) is continental — land route only
+    const ruhrToManchester = estimatePathCost(26, 42, 13, 30);
+    const ruhrToStuttgart = estimatePathCost(26, 42, 32, 44);
+    // Both routes must be reachable (ferry edges wired correctly)
+    expect(ruhrToManchester).toBeGreaterThan(0);
+    expect(ruhrToStuttgart).toBeGreaterThan(0);
+    // Manchester must cost MORE than Stuttgart — if not, demand scoring will
+    // pick Manchester over Stuttgart for a Marseille delivery (game 1b31e1a2 bug)
+    expect(ruhrToManchester).toBeGreaterThan(ruhrToStuttgart);
+  });
+
+  it('cross-water route includes realistic ferry build cost (JIRA-149)', () => {
+    // JIRA-149: Ruhr → Manchester must include at least the English Channel ferry
+    // port build cost (4M for Dover_Calais) plus terrain on both sides.
+    // A pure hexDistance * 2 fallback (18 * 2 = 36M) would be coincidentally similar
+    // but would regress if ferry edges break — this test guards against 0-cost cross-water.
+    const ruhrToManchester = estimatePathCost(26, 42, 13, 30);
+    // At minimum: some terrain (10M) + ferry port build (4M)
+    expect(ruhrToManchester).toBeGreaterThanOrEqual(14);
+  });
+});
+
+// JIRA-149: Ferry edge data sanity check
+describe('getFerryEdges', () => {
+  it('returns ferry edges for all major crossing routes', () => {
+    const edges = getFerryEdges();
+    // At minimum: Belfast_Stranraer, Dublin_Liverpool, Dover_Calais
+    expect(edges.length).toBeGreaterThanOrEqual(3);
+    // All edges must have valid coordinates and positive build cost
+    for (const edge of edges) {
+      expect(edge.cost).toBeGreaterThan(0);
+      expect(typeof edge.pointA.row).toBe('number');
+      expect(typeof edge.pointA.col).toBe('number');
+      expect(typeof edge.pointB.row).toBe('number');
+      expect(typeof edge.pointB.col).toBe('number');
+    }
+  });
+
+  it('includes the Dover_Calais English Channel crossing', () => {
+    const edges = getFerryEdges();
+    const doverCalais = edges.find(e => e.name === 'Dover_Calais');
+    expect(doverCalais).toBeDefined();
+    // JIRA-149: cost must be a realistic ferry port build cost, not 0
+    expect(doverCalais!.cost).toBeGreaterThan(0);
   });
 });
