@@ -1,5 +1,7 @@
 import { db } from "../db/index";
 import { Player, Game, GameStatus, TrainType, TRAIN_PROPERTIES, TRACK_USAGE_FEE, TerrainType } from "../../shared/types/GameTypes";
+import { getTrainCapacity } from "../../shared/services/trainProperties";
+import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
@@ -9,6 +11,7 @@ import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
 import { loadGridPoints } from "./ai/MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
+import { TrackSegment } from "../../shared/types/TrackTypes";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -2109,6 +2112,206 @@ export class PlayerService {
         throw new Error("Failed to load updated player");
       }
       return updatedPlayer;
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Pick up a load for a player. Validates train capacity, atomically appends
+   * the load to the player's loads array, and clears any dropped-load state.
+   * Used by both human players and bots.
+   */
+  static async pickupLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<{ updatedLoads: LoadType[] }> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current state
+      const playerResult = await client.query(
+        `SELECT loads, train_type as "trainType"
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+      const trainType = PlayerService.normalizeTrainType(playerResult.rows[0].trainType);
+      const capacity = getTrainCapacity(trainType);
+
+      if (currentLoads.length >= capacity) {
+        throw new Error(`Train at full capacity (${currentLoads.length}/${capacity})`);
+      }
+
+      // Atomically append load
+      const updateResult = await client.query(
+        `UPDATE players SET loads = array_append(loads, $1)
+         WHERE id = $2 AND game_id = $3
+         RETURNING loads`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+
+      const updatedLoads: LoadType[] = updateResult.rows[0].loads as LoadType[];
+
+      // Best-effort: clear dropped-load state if this load was dropped at the city
+      if (cityName) {
+        try {
+          const loadSvc = LoadService.getInstance();
+          await loadSvc.pickupDroppedLoad(cityName, loadType, gameId);
+        } catch (droppedErr) {
+          console.error(
+            "[PlayerService] pickupLoadForPlayer dropped-load clear failed:",
+            droppedErr instanceof Error ? droppedErr.message : droppedErr,
+          );
+        }
+      }
+
+      return { updatedLoads };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Drop a load for a player at a city. Validates the player is carrying the load,
+   * removes it from their loads array, and handles city placement via LoadService.
+   * Used by both human players and bots.
+   */
+  static async dropLoadForPlayer(
+    gameId: string,
+    playerId: string,
+    loadType: LoadType,
+    cityName: string,
+  ): Promise<void> {
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Lock the player row and read current loads
+      const playerResult = await client.query(
+        `SELECT loads
+         FROM players
+         WHERE id = $1 AND game_id = $2
+         FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+
+      const currentLoads: LoadType[] = Array.isArray(playerResult.rows[0].loads)
+        ? (playerResult.rows[0].loads as LoadType[])
+        : [];
+
+      if (!currentLoads.includes(loadType)) {
+        throw new Error(`Player is not carrying load: ${loadType}`);
+      }
+
+      // Remove the first occurrence of this load type
+      await client.query(
+        `UPDATE players SET loads = array_remove(loads, $1)
+         WHERE id = $2 AND game_id = $3`,
+        [loadType, playerId, gameId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Best-effort: handle city placement via LoadService
+    try {
+      const loadSvc = LoadService.getInstance();
+      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
+        // Load is native to this city — return to tray
+        await loadSvc.returnLoad(cityName, loadType, gameId);
+      } else {
+        // Drop as a non-native load at this city
+        await loadSvc.setLoadInCity(cityName, loadType, gameId);
+      }
+    } catch (dropErr) {
+      console.error(
+        "[PlayerService] dropLoadForPlayer city placement failed:",
+        dropErr instanceof Error ? dropErr.message : dropErr,
+      );
+    }
+  }
+
+  /**
+   * Build track for a player. Atomically UPSERTs player_tracks and deducts cost
+   * from the player's money. Validates sufficient funds before deducting.
+   * Used by both human players and bots.
+   */
+  static async buildTrackForPlayer(
+    gameId: string,
+    playerId: string,
+    newSegments: TrackSegment[],
+    existingSegments: TrackSegment[],
+    cost: number,
+  ): Promise<{ remainingMoney: number }> {
+    const allSegments = [...existingSegments, ...newSegments];
+    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+
+      // Validate player has sufficient funds
+      const playerResult = await client.query(
+        `SELECT money FROM players WHERE id = $1 AND game_id = $2 FOR UPDATE`,
+        [playerId, gameId],
+      );
+      if (playerResult.rows.length === 0) {
+        throw new Error("Player not found in game");
+      }
+      const currentMoney = playerResult.rows[0].money as number;
+      if (currentMoney < cost) {
+        throw new Error(
+          `Insufficient funds: need ${cost}, have ${currentMoney}`,
+        );
+      }
+
+      // 1. UPSERT player_tracks
+      await client.query(
+        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
+         VALUES ($1, $2, $3, $4, $5, NOW())
+         ON CONFLICT (game_id, player_id)
+         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
+        [gameId, playerId, JSON.stringify(allSegments), totalCost, cost],
+      );
+
+      // 2. Deduct money
+      const moneyResult = await client.query(
+        `UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money`,
+        [cost, playerId],
+      );
+
+      await client.query("COMMIT");
+
+      const remainingMoney = moneyResult.rows[0]?.money as number;
+      return { remainingMoney };
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;
