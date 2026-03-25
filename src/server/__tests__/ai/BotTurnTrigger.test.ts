@@ -78,10 +78,12 @@ import { AIActionType } from '../../../shared/types/GameTypes';
 import { VictoryService } from '../../services/victoryService';
 import { TrackService } from '../../services/trackService';
 import { getConnectedMajorCities } from '../../services/ai/connectedMajorCities';
+import { appendTurn } from '../../services/ai/GameLogger';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
+const mockAppendTurn = appendTurn as jest.MockedFunction<typeof appendTurn>;
 
 function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
@@ -135,6 +137,23 @@ describe('BotTurnTrigger — JIRA-19: LLM metadata persistence', () => {
       guardrailOverride: undefined,
       guardrailReason: undefined,
       demandRanking: [],
+      // JIRA-143 P2 fields
+      actor: 'llm',
+      actorDetail: 'strategy-brain',
+      llmModel: 'claude-sonnet-4-20250514',
+      actionBreakdown: [
+        { action: 'BuildTrack', actor: 'llm', detail: 'build-advisor' },
+      ],
+      llmCallIds: ['call-001', 'call-002'],
+      llmSummary: {
+        callCount: 2,
+        totalLatencyMs: 1200,
+        totalTokens: { input: 300, output: 100 },
+        callers: ['strategy-brain', 'build-advisor'],
+      },
+      actionTimeline: [{ step: 1, action: 'BuildTrack', detail: 'build 3 segments' }],
+      originalPlan: undefined,
+      advisorUsedFallback: false,
       ...overrides,
     };
   }
@@ -256,6 +275,79 @@ describe('BotTurnTrigger — JIRA-19: LLM metadata persistence', () => {
     expect(payload.llmLatencyMs).toBe(750);
     expect(payload.tokenUsage).toEqual({ input: 200, output: 80 });
     expect(payload.retried).toBe(false);
+  });
+
+  // ── JIRA-143 P2: New fields passed to appendTurn ────────────────────────
+
+  it('should pass actor metadata fields to appendTurn (JIRA-143)', async () => {
+    mockTakeTurn.mockResolvedValue(makeBotTurnResult() as any);
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(mockAppendTurn).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        actor: 'llm',
+        actorDetail: 'strategy-brain',
+        llmModel: 'claude-sonnet-4-20250514',
+        actionBreakdown: [{ action: 'BuildTrack', actor: 'llm', detail: 'build-advisor' }],
+        llmCallIds: ['call-001', 'call-002'],
+        llmSummary: expect.objectContaining({
+          callCount: 2,
+          callers: ['strategy-brain', 'build-advisor'],
+        }),
+        actionTimeline: [{ step: 1, action: 'BuildTrack', detail: 'build 3 segments' }],
+        advisorUsedFallback: false,
+      }),
+    );
+  });
+
+  it('should pass originalPlan to appendTurn when guardrail overrides (JIRA-143)', async () => {
+    mockTakeTurn.mockResolvedValue(makeBotTurnResult({
+      guardrailOverride: true,
+      guardrailReason: 'Safety override',
+      originalPlan: { action: 'MoveTrain', reasoning: 'Original LLM plan' },
+      actor: 'guardrail',
+      actorDetail: 'guardrail-enforcer',
+    }) as any);
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(mockAppendTurn).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        actor: 'guardrail',
+        actorDetail: 'guardrail-enforcer',
+        originalPlan: { action: 'MoveTrain', reasoning: 'Original LLM plan' },
+      }),
+    );
+  });
+
+  it('should handle absent optional JIRA-143 fields gracefully in appendTurn', async () => {
+    mockTakeTurn.mockResolvedValue(makeBotTurnResult({
+      actor: 'system',
+      actorDetail: 'route-executor',
+      llmModel: undefined,
+      actionBreakdown: undefined,
+      llmCallIds: undefined,
+      llmSummary: undefined,
+      actionTimeline: undefined,
+      originalPlan: undefined,
+      advisorUsedFallback: undefined,
+    }) as any);
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(mockAppendTurn).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        actor: 'system',
+        actorDetail: 'route-executor',
+      }),
+    );
+    // Verify undefined fields are passed through (not causing errors)
+    const appendCall = mockAppendTurn.mock.calls[0];
+    expect(appendCall).toBeDefined();
   });
 });
 
