@@ -559,6 +559,251 @@ describe('InitialBuildPlanner', () => {
     });
   });
 
+  describe('JIRA-148: route selection reproducer (game-1b31e1a2)', () => {
+    /**
+     * Reproduces the bug where InitialBuildPlanner chose Cars@Stuttgart→Marseille
+     * (worst demand by global ranking) over China@Leipzig→Ruhr (best demand).
+     *
+     * The bot's 9 demands were:
+     *   Card 79: China Leipzig→Ruhr (7M), Wheat Toulouse→Lisboa (26M), Cork Lisboa→Wroclaw (59M)
+     *   Card 59: Wine Frankfurt→London (16M), Chocolate Bruxelles→Lisboa (40M), Hops Cardiff→Frankfurt (21M)
+     *   Card 63: Cork Lisboa→Ruhr (44M), Cars Manchester→Marseille (10M), Cattle Bern→Kobenhavn (28M)
+     *
+     * We add Stuttgart and Marseille to the grid since those are the supply/delivery
+     * cities the planner actually picked.
+     */
+    it('should log all options and their efficiency scores', () => {
+      // Extend grid with cities from the game
+      const extendedGrid = [
+        ...grid,
+        makeCityPoint(30, 14, 'Stuttgart', TerrainType.MediumCity),
+        makeCityPoint(28, 8, 'Marseille', TerrainType.MediumCity),
+        makeCityPoint(13, 14, 'Leipzig', TerrainType.SmallCity),
+        makeCityPoint(24, 6, 'Toulouse', TerrainType.SmallCity),
+        makeCityPoint(30, 2, 'Lisboa', TerrainType.MajorCity),  // off-continent but keep for test
+        makeCityPoint(25, 8, 'Bern', TerrainType.SmallCity),
+        makeCityPoint(8, 14, 'Kobenhavn', TerrainType.MediumCity),
+        makeCityPoint(15, 8, 'Bruxelles', TerrainType.SmallCity),
+        makeCityPoint(24, 8, 'Sevilla', TerrainType.SmallCity),
+      ];
+
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        const sources: Record<string, string[]> = {
+          'China': ['Leipzig'],
+          'Wheat': ['Toulouse'],
+          'Cork': ['Lisboa', 'Sevilla'],
+          'Wine': ['Frankfurt'],
+          'Chocolate': ['Bruxelles'],
+          'Hops': ['Frankfurt'],  // Simplified — Cardiff is in Britain, filtered by ferry
+          'Cars': ['Stuttgart'],  // Game log shows pickup at Stuttgart
+          'Cattle': ['Bern'],
+        };
+        return sources[loadType] ?? [];
+      });
+
+      // Use realistic path costs (distance * 1.5)
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          {
+            cardId: 79,
+            demands: [
+              { city: 'Ruhr', loadType: 'China', payment: 7 },
+              { city: 'Lisboa', loadType: 'Wheat', payment: 26 },
+              { city: 'Wroclaw', loadType: 'Cork', payment: 59 },
+            ],
+          },
+          {
+            cardId: 59,
+            demands: [
+              { city: 'London', loadType: 'Wine', payment: 16 },
+              { city: 'Lisboa', loadType: 'Chocolate', payment: 40 },
+              { city: 'Frankfurt', loadType: 'Hops', payment: 21 },
+            ],
+          },
+          {
+            cardId: 63,
+            demands: [
+              { city: 'Ruhr', loadType: 'Cork', payment: 44 },
+              { city: 'Marseille', loadType: 'Cars', payment: 10 },
+              { city: 'Kobenhavn', loadType: 'Cattle', payment: 28 },
+            ],
+          },
+        ],
+        loadAvailability: {
+          'Leipzig': ['China'],
+          'Toulouse': ['Wheat'],
+          'Lisboa': ['Cork'],
+          'Sevilla': ['Cork'],
+          'Frankfurt': ['Wine', 'Hops'],
+          'Bruxelles': ['Chocolate'],
+          'Stuttgart': ['Cars'],
+          'Bern': ['Cattle'],
+        },
+      });
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, extendedGrid);
+
+      // Diagnostic output — this test exists to make the scoring visible
+      console.log('\n[JIRA-148 DIAGNOSTIC]');
+      console.log(`  Chosen: ${plan.route.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`);
+      console.log(`  Starting city: ${plan.startingCity}`);
+      console.log(`  Build cost: ${plan.totalBuildCost}M, Payout: ${plan.totalPayout}M, Est turns: ${plan.estimatedTurns}`);
+
+      // The planner should NOT pick Cars→Marseille as best single —
+      // China Leipzig→Ruhr should score higher (short route, Ruhr is a major city starting point)
+      const firstPickup = plan.route.find(s => s.action === 'pickup');
+      const firstDeliver = plan.route.find(s => s.action === 'deliver');
+      console.log(`  First pickup: ${firstPickup?.loadType}@${firstPickup?.city}`);
+      console.log(`  First deliver: ${firstDeliver?.loadType}@${firstDeliver?.city}`);
+
+      // Assert that Cars→Marseille is NOT the chosen single delivery
+      // (This assertion documents the expected fix — currently it may fail, proving the bug)
+      if (plan.route.length === 2) {
+        // Single delivery — should not be Cars→Marseille
+        expect(firstDeliver?.loadType).not.toBe('Cars');
+      }
+    });
+  });
+
+  describe('JIRA-148: corridor/victory-aware demand scoring', () => {
+    it('should NOT select Cars→Marseille when demand scores are provided', () => {
+      const extendedGrid = [
+        ...grid,
+        makeCityPoint(30, 14, 'Stuttgart', TerrainType.MediumCity),
+        makeCityPoint(28, 8, 'Marseille', TerrainType.MediumCity),
+        makeCityPoint(13, 14, 'Leipzig', TerrainType.SmallCity),
+      ];
+
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'China') return ['Leipzig'];
+        if (loadType === 'Cars') return ['Stuttgart'];
+        if (loadType === 'Hops') return ['Frankfurt'];
+        return [];
+      });
+
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 79, demands: [{ city: 'Ruhr', loadType: 'China', payment: 7 }] },
+          { cardId: 63, demands: [{ city: 'Marseille', loadType: 'Cars', payment: 10 }] },
+          { cardId: 59, demands: [{ city: 'Frankfurt', loadType: 'Hops', payment: 21 }] },
+        ],
+        loadAvailability: {
+          'Leipzig': ['China'],
+          'Stuttgart': ['Cars'],
+          'Frankfurt': ['Hops'],
+        },
+      });
+
+      // China→Ruhr has high corridor score (Ruhr is a major hub)
+      // Cars→Marseille has low corridor score (peripheral city)
+      const demandScores = new Map([
+        ['China:Ruhr', 4.5],       // High: corridor bonus from Ruhr hub
+        ['Cars:Marseille', 0.8],   // Low: peripheral, low payout
+        ['Hops:Frankfurt', 3.2],   // Medium: decent corridor value
+      ]);
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, extendedGrid, demandScores);
+      const firstDeliver = plan.route.find(s => s.action === 'deliver');
+      expect(firstDeliver?.loadType).not.toBe('Cars');
+    });
+
+    it('should rank corridor-rich demand higher than higher-payout demand without corridor bonus', () => {
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Coal') return ['Essen'];
+        if (loadType === 'Wine') return ['Lyon'];
+        return [];
+      });
+
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }] },
+          { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 18 }] },
+        ],
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
+      });
+
+      // Coal→Frankfurt: delivery city is on-network (high corridor score)
+      // Wine→Wien: higher payout but no corridor bonus
+      const demandScores = new Map([
+        ['Coal:Frankfurt', 5.0],  // High corridor value
+        ['Wine:Wien', 1.5],       // Low corridor despite higher payout
+      ]);
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid, demandScores);
+      const firstDeliver = plan.route.find(s => s.action === 'deliver');
+      expect(firstDeliver?.loadType).toBe('Coal');
+    });
+
+    it('should reflect victory bonus in scoring when demand scores include it', () => {
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Coal') return ['Essen'];
+        if (loadType === 'Wine') return ['Lyon'];
+        return [];
+      });
+
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 10 }] },
+          { cardId: 2, demands: [{ city: 'Wien', loadType: 'Wine', payment: 14 }] },
+        ],
+        loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
+      });
+
+      // Wine→Wien has victory bonus (connects toward 7th major city)
+      const demandScores = new Map([
+        ['Coal:Frankfurt', 2.0],
+        ['Wine:Wien', 6.0],  // Victory bonus makes this much higher
+      ]);
+
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid, demandScores);
+      const firstDeliver = plan.route.find(s => s.action === 'deliver');
+      expect(firstDeliver?.loadType).toBe('Wine');
+    });
+
+    it('should fall back to local formula when no demand scores provided', () => {
+      mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 12 }],
+        }],
+        loadAvailability: { 'Essen': ['Coal'] },
+      });
+
+      // No demandScores param — should still produce options using local formula
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
+      expect(options.length).toBeGreaterThan(0);
+      for (const opt of options) {
+        expect(opt.efficiency).toBeGreaterThan(0);
+      }
+    });
+  });
+
   describe('estimateBuildCostFromCity', () => {
     it('should return zero supply cost when starting city is supply city', () => {
       const result = InitialBuildPlanner.estimateBuildCostFromCity(

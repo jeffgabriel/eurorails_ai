@@ -39,6 +39,7 @@ import {
   TurnPlanUpgradeTrain,
   TRAIN_PROPERTIES,
   TrainType,
+  InitialBuildPlan,
 } from '../../../shared/types/GameTypes';
 import { db } from '../../db/index';
 import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
@@ -160,6 +161,8 @@ export interface BotTurnResult {
   llmSummary?: { callCount: number; totalLatencyMs: number; totalTokens: { input: number; output: number }; callers: string[] };
   originalPlan?: { action: string; reasoning: string };
   advisorUsedFallback?: boolean;
+  // JIRA-148: Initial build planner evaluated options (only on initial build turns)
+  initialBuildOptions?: InitialBuildPlan['evaluatedOptions'];
 }
 
 export class AIStrategyEngine {
@@ -258,6 +261,7 @@ export class AIStrategyEngine {
       let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
       const deadLoadDropActions: TurnPlanDropLoad[] = [];
       let pendingUpgradeAction: TurnPlanUpgradeTrain | null = null; // JIRA-105
+      let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
 
       if (!activeRoute && context.isInitialBuild) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
@@ -265,7 +269,13 @@ export class AIStrategyEngine {
         // Don't go through PlanExecutor.executeInitialBuild — its cold-start
         // segment computation fails. Instead, let TurnComposer Phase B
         // (BuildAdvisor) compute the actual segments.
-        const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints);
+        // JIRA-148: Pass pre-computed demand scores for corridor/victory-aware route selection
+        const demandScores = new Map<string, number>();
+        for (const d of context.demands) {
+          demandScores.set(`${d.loadType}:${d.deliveryCity}`, d.demandScore);
+        }
+        const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints, demandScores);
+        initialBuildEvaluatedOptions = buildPlan.evaluatedOptions;
         console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
 
         activeRoute = {
@@ -1308,6 +1318,8 @@ export class AIStrategyEngine {
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
+        // JIRA-148: Initial build planner evaluated options for diagnostics
+        initialBuildOptions: initialBuildEvaluatedOptions,
         // Prompt text for NDJSON + debug overlay observability
         systemPrompt: decision.systemPrompt,
         userPrompt: decision.userPrompt ?? debugUserPrompt,

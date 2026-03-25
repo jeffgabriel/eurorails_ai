@@ -54,12 +54,31 @@ export class InitialBuildPlanner {
   static planInitialBuild(
     snapshot: WorldSnapshot,
     gridPoints: GridPoint[],
+    demandScores?: Map<string, number>,
   ): InitialBuildPlan {
-    const options = InitialBuildPlanner.expandDemandOptions(snapshot, gridPoints);
+    const options = InitialBuildPlanner.expandDemandOptions(snapshot, gridPoints, demandScores);
 
     if (options.length === 0) {
       return InitialBuildPlanner.emergencyFallback(snapshot, gridPoints);
     }
+
+    // JIRA-148: Sort options by efficiency for logging and diagnostics
+    const sorted = [...options].sort((a, b) => b.efficiency - a.efficiency);
+    const evaluatedOptions = sorted.map((o, i) => ({
+      rank: i + 1,
+      loadType: o.loadType,
+      supplyCity: o.supplyCity,
+      deliveryCity: o.deliveryCity,
+      startingCity: o.startingCity,
+      payout: o.payout,
+      totalBuildCost: o.totalBuildCost,
+      buildCostToSupply: o.buildCostToSupply,
+      buildCostSupplyToDelivery: o.buildCostSupplyToDelivery,
+      estimatedTurns: o.estimatedTurns,
+      efficiency: Math.round(o.efficiency * 100) / 100,
+      penalized: o.totalBuildCost > HIGH_BUDGET_RATIO * MAX_BUILD_BUDGET,
+    }));
+    console.log(`[InitialBuildPlanner] ${options.length} options evaluated — top: ${sorted[0]?.loadType} ${sorted[0]?.supplyCity}→${sorted[0]?.deliveryCity} eff=${sorted[0]?.efficiency.toFixed(2)}`);
 
     const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, gridPoints);
 
@@ -83,6 +102,7 @@ export class InitialBuildPlanner {
         totalBuildCost: bestDouble.totalBuildCost,
         totalPayout: bestDouble.totalPayout,
         estimatedTurns: bestDouble.estimatedTurns,
+        evaluatedOptions,
       };
     }
 
@@ -98,6 +118,7 @@ export class InitialBuildPlanner {
       totalBuildCost: bestSingle.totalBuildCost,
       totalPayout: bestSingle.payout,
       estimatedTurns: bestSingle.estimatedTurns,
+      evaluatedOptions,
     };
   }
 
@@ -108,6 +129,7 @@ export class InitialBuildPlanner {
   static expandDemandOptions(
     snapshot: WorldSnapshot,
     gridPoints: GridPoint[],
+    demandScores?: Map<string, number>,
   ): DemandOption[] {
     const loadSvc = LoadService.getInstance();
     const majorCityGroups = getMajorCityGroups();
@@ -151,7 +173,18 @@ export class InitialBuildPlanner {
             const buildTurns = Math.ceil(costs.totalBuildCost / 20);
             const travelTurns = Math.ceil(costs.totalBuildCost / speed) + 1;
             const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
-            let efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+            // JIRA-148: Use pre-computed demand score (corridor + victory bonuses)
+            // when available, falling back to simple ROI formula
+            const scoreKey = `${demand.loadType}:${demand.city}`;
+            const contextScore = demandScores?.get(scoreKey);
+            let efficiency: number;
+            if (contextScore !== undefined) {
+              // Scale context score by local build cost efficiency
+              const localCostFactor = Math.max(0, 1 - costs.totalBuildCost / MAX_BUILD_BUDGET);
+              efficiency = contextScore * (1 + localCostFactor);
+            } else {
+              efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
+            }
             // Penalize routes that consume most of the initial budget
             if (costs.totalBuildCost > HIGH_BUDGET_RATIO * MAX_BUILD_BUDGET) {
               efficiency *= HIGH_BUDGET_PENALTY;
