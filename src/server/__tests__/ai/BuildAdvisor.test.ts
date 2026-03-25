@@ -113,14 +113,15 @@ function makeRoute(): StrategicRoute {
 }
 
 /** Mock brain that returns canned responses */
-function makeMockBrain(responseText: string): LLMStrategyBrain {
+function makeMockBrain(responseText: string, opts: { setContextFn?: jest.Mock } = {}): LLMStrategyBrain {
   const mockChat = jest.fn().mockResolvedValue({
     text: responseText,
     usage: { input: 100, output: 50 },
   });
+  const setContextFn = opts.setContextFn ?? jest.fn();
 
   return {
-    providerAdapter: { chat: mockChat },
+    providerAdapter: { chat: mockChat, setContext: setContextFn },
     modelName: 'test-model',
   } as unknown as LLMStrategyBrain;
 }
@@ -130,7 +131,7 @@ function makeFailingBrain(): LLMStrategyBrain {
   const mockChat = jest.fn().mockRejectedValue(new Error('LLM timeout'));
 
   return {
-    providerAdapter: { chat: mockChat },
+    providerAdapter: { chat: mockChat, setContext: jest.fn() },
     modelName: 'test-model',
   } as unknown as LLMStrategyBrain;
 }
@@ -232,7 +233,7 @@ describe('BuildAdvisor', () => {
         .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
 
       const brain = {
-        providerAdapter: { chat: mockChat },
+        providerAdapter: { chat: mockChat, setContext: jest.fn() },
         modelName: 'test-model',
       } as unknown as LLMStrategyBrain;
 
@@ -260,7 +261,7 @@ describe('BuildAdvisor', () => {
         .mockResolvedValueOnce({ text: 'I suggest building south-east', usage: { input: 50, output: 30 } });
 
       const brain = {
-        providerAdapter: { chat: mockChat },
+        providerAdapter: { chat: mockChat, setContext: jest.fn() },
         modelName: 'test-model',
       } as unknown as LLMStrategyBrain;
 
@@ -312,7 +313,7 @@ describe('BuildAdvisor', () => {
         .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
 
       const brain = {
-        providerAdapter: { chat: mockChat },
+        providerAdapter: { chat: mockChat, setContext: jest.fn() },
         modelName: 'test-model',
       } as unknown as LLMStrategyBrain;
 
@@ -466,7 +467,7 @@ describe('BuildAdvisor', () => {
         .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
 
       const brain = {
-        providerAdapter: { chat: mockChat },
+        providerAdapter: { chat: mockChat, setContext: jest.fn() },
         modelName: 'test-model',
       } as unknown as LLMStrategyBrain;
 
@@ -610,6 +611,108 @@ describe('BuildAdvisor', () => {
 
       const result = getTargetCoord(null, context, testGrid);
       expect(result).toEqual({ row: 2, col: 2 });
+    });
+  });
+
+  // ── JIRA-143: setContext() called before chat() ──────────────────────
+
+  describe('setContext — caller context before chat() (JIRA-143)', () => {
+    it('should call setContext with build-advisor/adviseBuild before chat in advise', async () => {
+      const validResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1], [2, 2]],
+        reasoning: 'Build toward Paris',
+      };
+      const setContextFn = jest.fn();
+      const brain = makeMockBrain(JSON.stringify(validResponse), { setContextFn });
+
+      await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(setContextFn).toHaveBeenCalledWith({
+        gameId: 'test-game',
+        playerId: 'bot-1',
+        turn: 10,
+        caller: 'build-advisor',
+        method: 'adviseBuild',
+      });
+      // setContext must be called before chat
+      const setContextOrder = setContextFn.mock.invocationCallOrder[0];
+      const chatOrder = (brain.providerAdapter.chat as jest.Mock).mock.invocationCallOrder[0];
+      expect(setContextOrder).toBeLessThan(chatOrder);
+    });
+
+    it('should call setContext with build-advisor/adviseBuildInitial in retryWithSolvencyFeedback', async () => {
+      const validResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Cheaper route',
+      };
+      const setContextFn = jest.fn();
+      const brain = makeMockBrain(JSON.stringify(validResponse), { setContextFn });
+
+      await BuildAdvisor.retryWithSolvencyFeedback(
+        { action: 'build', target: 'Paris', waypoints: [[1, 1], [2, 2]], reasoning: 'Original' },
+        25,
+        15,
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      expect(setContextFn).toHaveBeenCalledWith({
+        gameId: 'test-game',
+        playerId: 'bot-1',
+        turn: 10,
+        caller: 'build-advisor',
+        method: 'adviseBuildInitial',
+      });
+    });
+
+    it('should call setContext with build-advisor/adviseBuildVictory during extraction fallback', async () => {
+      const validExtracted: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Extracted',
+      };
+      const setContextFn = jest.fn();
+      const mockChat = jest.fn()
+        .mockResolvedValueOnce({ text: 'Build south-east toward Paris...', usage: { input: 100, output: 50 } })
+        .mockResolvedValueOnce({ text: JSON.stringify(validExtracted), usage: { input: 50, output: 30 } });
+
+      const brain = {
+        providerAdapter: { chat: mockChat, setContext: setContextFn },
+        modelName: 'test-model',
+      } as unknown as LLMStrategyBrain;
+
+      await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      // First call: adviseBuild, second call (extraction): adviseBuildVictory
+      expect(setContextFn).toHaveBeenCalledTimes(2);
+      expect(setContextFn).toHaveBeenNthCalledWith(1, expect.objectContaining({
+        caller: 'build-advisor',
+        method: 'adviseBuild',
+      }));
+      expect(setContextFn).toHaveBeenNthCalledWith(2, expect.objectContaining({
+        caller: 'build-advisor',
+        method: 'adviseBuildVictory',
+      }));
     });
   });
 });

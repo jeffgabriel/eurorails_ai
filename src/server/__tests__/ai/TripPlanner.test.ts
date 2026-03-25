@@ -146,15 +146,16 @@ function makeMockBrain(overrides: {
 } = {}) {
   const chatFn = overrides.chatFn ?? jest.fn<Promise<ProviderResponse>, [any]>();
   const planRouteFn = overrides.planRouteFn ?? jest.fn();
+  const setContextFn = jest.fn();
 
   const brain = {
-    providerAdapter: { chat: chatFn },
+    providerAdapter: { chat: chatFn, setContext: setContextFn },
     modelName: 'claude-sonnet-4-6',
     strategyConfig: makeConfig(),
     planRoute: planRouteFn,
   };
 
-  return { brain: brain as any, chatFn, planRouteFn };
+  return { brain: brain as any, chatFn, planRouteFn, setContextFn };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -929,6 +930,74 @@ describe('TripPlanner', () => {
       expect(chatFn).toHaveBeenCalledTimes(1);
       const chatArgs = chatFn.mock.calls[0][0];
       expect(chatArgs.userPrompt).toContain('Plan the best multi-stop trip');
+    });
+  });
+
+  // ── JIRA-143: setContext() called before chat() ──────────────────────
+
+  describe('setContext — caller context before chat() (JIRA-143)', () => {
+    it('should call setContext with trip-planner/planTrip before chat', async () => {
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          ],
+          reasoning: 'Direct delivery',
+        },
+      ]);
+
+      const { brain, chatFn, setContextFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      expect(setContextFn).toHaveBeenCalledWith({
+        gameId: 'g1',
+        playerId: 'bot-1',
+        turn: 5,
+        caller: 'trip-planner',
+        method: 'planTrip',
+      });
+      // setContext must be called before chat
+      const setContextOrder = setContextFn.mock.invocationCallOrder[0];
+      const chatOrder = chatFn.mock.invocationCallOrder[0];
+      expect(setContextOrder).toBeLessThan(chatOrder);
+    });
+
+    it('should call setContext on each retry attempt', async () => {
+      const { brain, chatFn, setContextFn } = makeMockBrain();
+      // First call fails, second succeeds
+      chatFn
+        .mockRejectedValueOnce(new Error('API timeout'))
+        .mockResolvedValueOnce({
+          text: buildLlmResponse([
+            {
+              stops: [
+                { action: 'pickup', load: 'Coal', city: 'Essen' },
+                { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+              ],
+              reasoning: 'Retry success',
+            },
+          ]),
+          usage: { input: 100, output: 50 },
+        });
+
+      const planner = new TripPlanner(brain);
+      await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      // setContext should be called before each chat attempt
+      expect(setContextFn).toHaveBeenCalledTimes(2);
+      for (const call of setContextFn.mock.calls) {
+        expect(call[0]).toEqual({
+          gameId: 'g1',
+          playerId: 'bot-1',
+          turn: 5,
+          caller: 'trip-planner',
+          method: 'planTrip',
+        });
+      }
     });
   });
 });
