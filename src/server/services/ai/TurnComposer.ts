@@ -840,8 +840,9 @@ export class TurnComposer {
     }
 
     // ── JIRA-129: Build Advisor integration ─────────────────────────────
-    // Exemptions: bypass advisor for victory builds, zero budget, or no brain
-    const useAdvisor = brain && gridPoints && !victoryConditionsMet && remainingBudget > 0;
+    // Exemptions: bypass advisor for victory builds, zero budget, no brain, or initial build
+    // JIRA-146: Skip advisor during initial build — deterministic Dijkstra is sufficient
+    const useAdvisor = brain && gridPoints && !victoryConditionsMet && remainingBudget > 0 && !context.isInitialBuild;
 
     const allBuildSegments: TrackSegment[] = [];
     let buildBudgetSpent = context.turnBuildCost;

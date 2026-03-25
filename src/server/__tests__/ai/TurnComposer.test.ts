@@ -6411,9 +6411,18 @@ describe('TurnComposer', () => {
       expect(mockAdvise).not.toHaveBeenCalled();
     });
 
-    it('calls advisor during initial build phase (JIRA-140)', async () => {
+    it('skips advisor during initial build phase (JIRA-146)', async () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ turnBuildCost: 0, isInitialBuild: true });
+
+      await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
+
+      expect(mockAdvise).not.toHaveBeenCalled();
+    });
+
+    it('calls advisor when not initial build (regression guard, JIRA-146)', async () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnBuildCost: 0, isInitialBuild: false });
 
       await TurnComposer.tryAppendBuild(snapshot, context, null, undefined, mockBrain, mockGridPoints);
 
