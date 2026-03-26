@@ -30,12 +30,6 @@ const BLOCKED_STARTING_CITIES = new Set(['Madrid']);
 /** Max affordable build cost within 2 initial build turns (2 × 20M) */
 const MAX_BUILD_BUDGET = 40;
 
-/** Chain distance threshold for bonus */
-const CHAIN_DISTANCE_THRESHOLD = 3;
-
-/** Efficiency threshold: double must be >= 70% of single efficiency to be chosen */
-const DOUBLE_VS_SINGLE_THRESHOLD = 0.7;
-
 /** Budget ratio above which single-delivery efficiency is penalized (80% of MAX_BUILD_BUDGET) */
 const HIGH_BUDGET_RATIO = 0.8;
 
@@ -87,8 +81,8 @@ export class InitialBuildPlanner {
       ? pairings.reduce((a, b) => a.pairingScore > b.pairingScore ? a : b)
       : null;
 
-    // Choose double if it meets the 70% efficiency threshold
-    if (bestDouble && bestDouble.efficiency >= bestSingle.efficiency * DOUBLE_VS_SINGLE_THRESHOLD) {
+    // Choose double if any within-budget pairing exists (budget cap enforced in computeDoubleDeliveryPairings)
+    if (bestDouble) {
       const route: RouteStop[] = [
         { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
         { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
@@ -171,7 +165,26 @@ export class InitialBuildPlanner {
 
             const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
             const buildTurns = Math.ceil(costs.totalBuildCost / 20);
-            const travelTurns = Math.ceil(costs.totalBuildCost / speed) + 1;
+            // Compute travel distance using hex distance (milepost proxy), not build cost
+            const startPoints = gridPoints.filter(gp => gp.city?.name === group.cityName);
+            const supplyGridPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+            const deliveryGridPoints = gridPoints.filter(gp => gp.city?.name === demand.city);
+            let hexToSupply = Infinity;
+            for (const sp of startPoints) {
+              for (const sup of supplyGridPoints) {
+                const d = hexDistance(sp.row, sp.col, sup.row, sup.col);
+                if (d < hexToSupply) hexToSupply = d;
+              }
+            }
+            let hexSupplyToDelivery = Infinity;
+            for (const sup of supplyGridPoints) {
+              for (const dp of deliveryGridPoints) {
+                const d = hexDistance(sup.row, sup.col, dp.row, dp.col);
+                if (d < hexSupplyToDelivery) hexSupplyToDelivery = d;
+              }
+            }
+            const travelDistance = (hexToSupply === Infinity ? 0 : hexToSupply) + (hexSupplyToDelivery === Infinity ? 0 : hexSupplyToDelivery);
+            const travelTurns = Math.ceil(travelDistance / speed) + 1;
             const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
             // JIRA-148: Use pre-computed demand score (corridor + victory bonuses)
             // when available, falling back to simple ROI formula
@@ -332,28 +345,66 @@ export class InitialBuildPlanner {
     }
     if (chainDistance === Infinity) chainDistance = 99;
 
-    // Estimate combined build cost (approximate shared track deduction)
+    // Fix 3: Extract terrain-aware chain leg cost, shared by both branches.
+    // Fallback to chainDistance * 1.5 if costBetween returns Infinity (no grid points found).
+    let chainLegCost = Infinity;
+    for (const dp of firstDeliveryPoints) {
+      for (const sp of secondSupplyPoints) {
+        const c = InitialBuildPlanner.costBetween(dp.row, dp.col, sp.row, sp.col);
+        if (c < chainLegCost) chainLegCost = c;
+      }
+    }
+    if (chainLegCost === Infinity) chainLegCost = chainDistance * 1.5;
+
+    // Fix 1 & 3: Estimate combined build cost using terrain-aware costs for both branches
     let totalBuildCost: number;
     if (sharedStartingCity) {
-      // Shared hub: start→supplyA + supplyA→deliveryA + deliveryA→supplyB + supplyB→deliveryB
-      // But first two legs are already in first.totalBuildCost
-      // Additional cost is delivery A → supply B → delivery B, minus any overlap
-      const chainCost = chainDistance * 1.5; // rough cost per hex for chain leg
-      totalBuildCost = first.totalBuildCost + second.buildCostSupplyToDelivery + chainCost;
+      // Shared hub: first legs already in first.totalBuildCost; add chain leg + second supply→delivery
+      totalBuildCost = first.totalBuildCost + chainLegCost + second.buildCostSupplyToDelivery;
     } else {
-      // Different hubs: sum both, no sharing
-      totalBuildCost = first.totalBuildCost + second.totalBuildCost;
+      // Different hubs: first's full cost + min(second's full cost, chain leg + second's supply→delivery)
+      const chainedSecondCost = chainLegCost + second.buildCostSupplyToDelivery;
+      totalBuildCost = first.totalBuildCost + Math.min(second.totalBuildCost, chainedSecondCost);
     }
 
-    const totalPayout = first.payout + second.payout;
+    // Fix 4: Use hex distance for travel time estimation, not build cost
     const speed = 9; // Freight default
+    const firstSupplyPoints = gridPoints.filter(gp => gp.city?.name === first.supplyCity);
+    const startPoints = gridPoints.filter(gp => gp.city?.name === first.startingCity);
+    let firstLegHex = Infinity;
+    for (const sp of startPoints) {
+      for (const sup of firstSupplyPoints) {
+        const d = hexDistance(sp.row, sp.col, sup.row, sup.col);
+        if (d < firstLegHex) firstLegHex = d;
+      }
+    }
+    let firstDeliveryHex = Infinity;
+    for (const sup of firstSupplyPoints) {
+      for (const dp of firstDeliveryPoints) {
+        const d = hexDistance(sup.row, sup.col, dp.row, dp.col);
+        if (d < firstDeliveryHex) firstDeliveryHex = d;
+      }
+    }
+    const secondDeliveryPoints = gridPoints.filter(gp => gp.city?.name === second.deliveryCity);
+    let secondDeliveryHex = Infinity;
+    for (const sp of secondSupplyPoints) {
+      for (const dp of secondDeliveryPoints) {
+        const d = hexDistance(sp.row, sp.col, dp.row, dp.col);
+        if (d < secondDeliveryHex) secondDeliveryHex = d;
+      }
+    }
+    const totalHexDistance = (firstLegHex === Infinity ? 0 : firstLegHex)
+      + (firstDeliveryHex === Infinity ? 0 : firstDeliveryHex)
+      + chainDistance
+      + (secondDeliveryHex === Infinity ? 0 : secondDeliveryHex);
+
+    const totalPayout = first.payout + second.payout;
     const buildTurns = Math.ceil(totalBuildCost / 20);
-    const travelTurns = Math.ceil(totalBuildCost / speed) + 2; // +2 for two deliveries
+    const travelTurns = Math.ceil(totalHexDistance / speed) + 2; // +2 for two deliveries
     const estimatedTurns = Math.max(buildTurns + travelTurns, 2);
     const efficiency = (totalPayout - totalBuildCost) / estimatedTurns;
 
-    // Scoring formula from spec
-    const chainBonus = chainDistance <= CHAIN_DISTANCE_THRESHOLD ? 20 : 0;
+    // Fix 2: Remove chainBonus cliff — hub bonus and penalties only
     const hubBonus = sharedStartingCity ? 15 : 0;
     const peripheralPenalty = PERIPHERAL_CITIES.has(first.startingCity) ? 30 : 0;
 
@@ -364,7 +415,7 @@ export class InitialBuildPlanner {
       || InitialBuildPlanner.isFerryBetween(second.startingCity, second.supplyCity, gridPoints);
     const ferryPenalty = (ferryOnFirstLeg || ferryOnSecondLeg) ? FERRY_PAIRING_PENALTY : 0;
 
-    const pairingScore = efficiency * 100 + chainBonus + hubBonus - peripheralPenalty - ferryPenalty;
+    const pairingScore = efficiency * 100 + hubBonus - peripheralPenalty - ferryPenalty;
 
     return {
       first,
