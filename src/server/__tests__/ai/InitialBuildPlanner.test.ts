@@ -456,10 +456,9 @@ describe('InitialBuildPlanner', () => {
       expect(firstDelivery?.loadType).toBe('Steel');
     });
 
-    it('should apply 0.5x penalty when build cost exceeds 80% of budget', () => {
+    it('should not penalize high-cost options — budget cap is the only gate', () => {
       mockGetSourceCitiesForLoad.mockReturnValue(['Hamburg']);
-      // Force a cost that's >32M (80% of 40M)
-      mockEstimatePathCost.mockReturnValue(17); // 17+17=34 > 32
+      mockEstimatePathCost.mockReturnValue(17); // 17+17=34 > 32 (old penalty threshold)
       const snapshot = makeWorldSnapshot({
         resolvedDemands: [{
           cardId: 1,
@@ -469,12 +468,10 @@ describe('InitialBuildPlanner', () => {
       });
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
-      // Any option with totalBuildCost > 32 should have penalized efficiency
+      // Efficiency should be raw formula with no penalty multiplier
       for (const opt of options) {
-        if (opt.totalBuildCost > 32) {
-          const rawEfficiency = (opt.payout - opt.totalBuildCost) / opt.estimatedTurns;
-          expect(opt.efficiency).toBeCloseTo(rawEfficiency * 0.5, 2);
-        }
+        const rawEfficiency = (opt.payout - opt.totalBuildCost) / opt.estimatedTurns;
+        expect(opt.efficiency).toBeCloseTo(rawEfficiency, 2);
       }
     });
 
@@ -839,6 +836,48 @@ describe('InitialBuildPlanner', () => {
       expect(result!.totalBuildCost).toBe(
         result!.buildCostToSupply + result!.buildCostSupplyToDelivery,
       );
+    });
+
+    it('JIRA-152: hub routing uses start→delivery when cheaper than supply→delivery', () => {
+      // Hub pattern: supply city (Wien) and delivery city (Hamburg) are far from each other,
+      // but BOTH are close to the starting city (Berlin).
+      // Direct route: supply(Wien)→delivery(Hamburg) is expensive (different ends of the map).
+      // Hub route:    start(Berlin)→delivery(Hamburg) is cheap (Berlin is close to Hamburg).
+      // The planner should use the hub route for buildCostSupplyToDelivery.
+      //
+      // Grid positions used:
+      //   Berlin  (12,16) — start city
+      //   Wien    (18,18) — supply city (far from Hamburg, close to Berlin)
+      //   Hamburg (10,14) — delivery city (close to Berlin, far from Wien)
+
+      const SUPPLY_TO_DELIVERY_DIRECT = 20; // Wien(18,18) → Hamburg(10,14): expensive
+      const START_TO_DELIVERY_HUB = 4;      // Berlin(12,16) → Hamburg(10,14): cheap
+
+      mockEstimatePathCost.mockImplementation(
+        (r1: number, c1: number, r2: number, c2: number): number => {
+          // Wien(18,18) → Hamburg(10,14): direct supply→delivery, expensive
+          if (r1 === 18 && c1 === 18 && r2 === 10 && c2 === 14) return SUPPLY_TO_DELIVERY_DIRECT;
+          if (r1 === 10 && c1 === 14 && r2 === 18 && c2 === 18) return SUPPLY_TO_DELIVERY_DIRECT;
+          // Berlin(12,16) → Hamburg(10,14): hub route, cheap
+          if (r1 === 12 && c1 === 16 && r2 === 10 && c2 === 14) return START_TO_DELIVERY_HUB;
+          if (r1 === 10 && c1 === 14 && r2 === 12 && c2 === 16) return START_TO_DELIVERY_HUB;
+          // All other pairs: use hex-distance default
+          const dist = mockHexDistance(r1, c1, r2, c2);
+          return Math.round(dist * 1.5);
+        },
+      );
+
+      const result = InitialBuildPlanner.estimateBuildCostFromCity(
+        'Berlin', 'Wien', 'Hamburg', grid,
+      );
+
+      expect(result).not.toBeNull();
+      // Hub routing should win: buildCostSupplyToDelivery should be the hub cost (4),
+      // not the expensive direct cost (20).
+      expect(result!.buildCostSupplyToDelivery).toBe(START_TO_DELIVERY_HUB);
+      expect(result!.buildCostSupplyToDelivery).toBeLessThan(SUPPLY_TO_DELIVERY_DIRECT);
+      // totalBuildCost should reflect the cheaper hub-routed leg
+      expect(result!.totalBuildCost).toBe(result!.buildCostToSupply + START_TO_DELIVERY_HUB);
     });
   });
 

@@ -63,6 +63,13 @@ export interface BotTurnEntry {
   advisorReasoning?: string;
   advisorLatencyMs?: number;
   solvencyRetries?: number;
+  // JIRA-148: Initial build planner evaluated options
+  initialBuildOptions?: Array<{
+    rank: number; loadType: string; supplyCity: string; deliveryCity: string;
+    startingCity: string; payout: number; totalBuildCost: number;
+    buildCostToSupply: number; buildCostSupplyToDelivery: number;
+    estimatedTurns: number; efficiency: number;
+  }>;
 }
 
 /**
@@ -312,6 +319,8 @@ export class DebugOverlay {
       if (payload?.advisorReasoning) entry.advisorReasoning = payload.advisorReasoning;
       if (payload?.advisorLatencyMs) entry.advisorLatencyMs = payload.advisorLatencyMs;
       if (payload?.solvencyRetries) entry.solvencyRetries = payload.solvencyRetries;
+      // JIRA-148: Initial build planner options
+      if (payload?.initialBuildOptions) entry.initialBuildOptions = payload.initialBuildOptions;
 
       this.botTurnHistory.set(botId, history);
     } else if (eventName === 'bot:demandRankingUpdate') {
@@ -580,6 +589,35 @@ export class DebugOverlay {
           latestDetail += `<div style="color:#e5e7eb;font-size:13px;">${latest.advisorReasoning}</div>`;
         }
         latestDetail += `</div>`;
+      }
+      // JIRA-148: Initial Build Planner evaluated options
+      if (latest.initialBuildOptions && latest.initialBuildOptions.length > 0) {
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(168,85,247,0.08);border-radius:4px;border-left:3px solid #a855f7;">`;
+        latestDetail += `<div style="color:#a855f7;font-size:14px;font-weight:bold;margin-bottom:4px;">Initial Build Options (${latest.initialBuildOptions.length} evaluated)</div>`;
+        latestDetail += `<table style="width:100%;font-size:12px;color:#d1d5db;border-collapse:collapse;">`;
+        latestDetail += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
+          `<th style="text-align:left;padding:2px 4px;">#</th>` +
+          `<th style="text-align:left;padding:2px 4px;">Load</th>` +
+          `<th style="text-align:left;padding:2px 4px;">Route</th>` +
+          `<th style="text-align:left;padding:2px 4px;">From</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Pay</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Build</th>` +
+          `<th style="text-align:right;padding:2px 4px;">~Turns</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Eff</th></tr>`;
+        for (const o of latest.initialBuildOptions) {
+          const isTop = o.rank === 1;
+          const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
+          latestDetail += `<tr style="${rowStyle}">` +
+            `<td style="padding:2px 4px;">${o.rank}</td>` +
+            `<td style="padding:2px 4px;">${o.loadType}</td>` +
+            `<td style="padding:2px 4px;">${o.supplyCity}→${o.deliveryCity}</td>` +
+            `<td style="padding:2px 4px;">${o.startingCity}</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${o.payout}M</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${o.totalBuildCost}M</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${o.estimatedTurns}</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${o.efficiency}</td></tr>`;
+        }
+        latestDetail += `</table></div>`;
       }
       if (latest.loadsPickedUp || latest.loadsDelivered) {
         latestDetail += this.renderLoadDetails(latest.loadsPickedUp, latest.loadsDelivered);

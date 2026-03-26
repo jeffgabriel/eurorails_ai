@@ -138,6 +138,13 @@ export interface GameTurnLogEntry {
   actionTimeline?: TimelineStep[];
   originalPlan?: { action: string; reasoning: string };
   advisorUsedFallback?: boolean;
+  // JIRA-148: Initial build planner evaluated options (only on initial build turns)
+  initialBuildOptions?: Array<{
+    rank: number; loadType: string; supplyCity: string; deliveryCity: string;
+    startingCity: string; payout: number; totalBuildCost: number;
+    buildCostToSupply: number; buildCostSupplyToDelivery: number;
+    estimatedTurns: number; efficiency: number;
+  }>;
 
   // Execution Results
   success: boolean;

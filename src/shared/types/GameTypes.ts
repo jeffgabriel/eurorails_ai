@@ -921,4 +921,18 @@ export interface InitialBuildPlan {
     totalBuildCost: number;
     totalPayout: number;
     estimatedTurns: number;
+    /** JIRA-148: All evaluated demand options sorted by efficiency (best first) */
+    evaluatedOptions?: Array<{
+        rank: number;
+        loadType: string;
+        supplyCity: string;
+        deliveryCity: string;
+        startingCity: string;
+        payout: number;
+        totalBuildCost: number;
+        buildCostToSupply: number;
+        buildCostSupplyToDelivery: number;
+        estimatedTurns: number;
+        efficiency: number;
+    }>;
 }

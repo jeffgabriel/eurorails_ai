@@ -30,11 +30,6 @@ const BLOCKED_STARTING_CITIES = new Set(['Madrid']);
 /** Max affordable build cost within 2 initial build turns (2 × 20M) */
 const MAX_BUILD_BUDGET = 40;
 
-/** Budget ratio above which single-delivery efficiency is penalized (80% of MAX_BUILD_BUDGET) */
-const HIGH_BUDGET_RATIO = 0.8;
-
-/** Multiplier applied to efficiency when build cost exceeds HIGH_BUDGET_RATIO */
-const HIGH_BUDGET_PENALTY = 0.5;
 
 /** Point penalty for ferry routes in double-delivery pairings */
 const FERRY_PAIRING_PENALTY = 30;
@@ -70,7 +65,6 @@ export class InitialBuildPlanner {
       buildCostSupplyToDelivery: o.buildCostSupplyToDelivery,
       estimatedTurns: o.estimatedTurns,
       efficiency: Math.round(o.efficiency * 100) / 100,
-      penalized: o.totalBuildCost > HIGH_BUDGET_RATIO * MAX_BUILD_BUDGET,
     }));
     console.log(`[InitialBuildPlanner] ${options.length} options evaluated — top: ${sorted[0]?.loadType} ${sorted[0]?.supplyCity}→${sorted[0]?.deliveryCity} eff=${sorted[0]?.efficiency.toFixed(2)}`);
 
@@ -198,10 +192,6 @@ export class InitialBuildPlanner {
             } else {
               efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
             }
-            // Penalize routes that consume most of the initial budget
-            if (costs.totalBuildCost > HIGH_BUDGET_RATIO * MAX_BUILD_BUDGET) {
-              efficiency *= HIGH_BUDGET_PENALTY;
-            }
 
             const option: DemandOption = {
               cardId: rd.cardId,
@@ -301,13 +291,24 @@ export class InitialBuildPlanner {
     if (buildCostToSupply === Infinity) return null;
 
     // Cost: supply city → delivery city (0 if same city)
+    // JIRA-152: Compare linear (supply→delivery) vs hub (start→delivery) routing.
+    // The bot can deliver by going back through the starting city hub,
+    // reusing the start→supply track. (Same fix as JIRA-72 in ContextBuilder.)
     let buildCostSupplyToDelivery = Infinity;
     if (supplyCity === deliveryCity) {
       buildCostSupplyToDelivery = 0;
     } else {
+      // Linear: supply → delivery direct
       for (const sup of supplyPoints) {
         for (const dp of deliveryPoints) {
           const cost = InitialBuildPlanner.costBetween(sup.row, sup.col, dp.row, dp.col);
+          if (cost < buildCostSupplyToDelivery) buildCostSupplyToDelivery = cost;
+        }
+      }
+      // Hub: start → delivery (supply→start track already counted in buildCostToSupply)
+      for (const sp of startPoints) {
+        for (const dp of deliveryPoints) {
+          const cost = InitialBuildPlanner.costBetween(sp.row, sp.col, dp.row, dp.col);
           if (cost < buildCostSupplyToDelivery) buildCostSupplyToDelivery = cost;
         }
       }
