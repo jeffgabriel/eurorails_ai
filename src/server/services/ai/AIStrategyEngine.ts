@@ -163,6 +163,8 @@ export interface BotTurnResult {
   advisorUsedFallback?: boolean;
   // JIRA-148: Initial build planner evaluated options (only on initial build turns)
   initialBuildOptions?: InitialBuildPlan['evaluatedOptions'];
+  // Double delivery pairings evaluated during initial build
+  initialBuildPairings?: InitialBuildPlan['evaluatedPairings'];
 }
 
 export class AIStrategyEngine {
@@ -262,6 +264,7 @@ export class AIStrategyEngine {
       const deadLoadDropActions: TurnPlanDropLoad[] = [];
       let pendingUpgradeAction: TurnPlanUpgradeTrain | null = null; // JIRA-105
       let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
+      let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
 
       if (!activeRoute && context.isInitialBuild) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
@@ -276,6 +279,7 @@ export class AIStrategyEngine {
         }
         const buildPlan = InitialBuildPlanner.planInitialBuild(snapshot, gridPoints, demandScores);
         initialBuildEvaluatedOptions = buildPlan.evaluatedOptions;
+        initialBuildEvaluatedPairings = buildPlan.evaluatedPairings;
         console.log(`${tag} Initial build: chose ${buildPlan.route.length > 2 ? 'double' : 'single'} delivery, startingCity=${buildPlan.startingCity}, payout=${buildPlan.totalPayout}M, buildCost=${buildPlan.totalBuildCost}M`);
 
         activeRoute = {
@@ -1320,6 +1324,7 @@ export class AIStrategyEngine {
         activeRoute: activeRoute ?? null,
         // JIRA-148: Initial build planner evaluated options for diagnostics
         initialBuildOptions: initialBuildEvaluatedOptions,
+        initialBuildPairings: initialBuildEvaluatedPairings,
         // Prompt text for NDJSON + debug overlay observability
         systemPrompt: decision.systemPrompt,
         userPrompt: decision.userPrompt ?? debugUserPrompt,

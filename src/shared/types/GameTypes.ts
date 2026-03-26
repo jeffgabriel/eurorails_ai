@@ -935,4 +935,19 @@ export interface InitialBuildPlan {
         estimatedTurns: number;
         efficiency: number;
     }>;
+    /** Top double-delivery pairings evaluated during initial build (ranked by pairingScore) */
+    evaluatedPairings?: Array<{
+        rank: number;
+        firstLoad: string;
+        firstRoute: string;
+        secondLoad: string;
+        secondRoute: string;
+        sharedHub: string | null;
+        chainDistance: number;
+        totalBuildCost: number;
+        totalPayout: number;
+        estimatedTurns: number;
+        efficiency: number;
+        pairingScore: number;
+    }>;
 }

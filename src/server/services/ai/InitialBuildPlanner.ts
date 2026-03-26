@@ -80,6 +80,24 @@ export class InitialBuildPlanner {
 
     const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, gridPoints);
 
+    // Map top 10 pairings to diagnostics shape
+    const evaluatedPairings = pairings.slice(0, 10).map((p, i) => ({
+      rank: i + 1,
+      firstLoad: p.first.loadType,
+      firstRoute: `${p.first.supplyCity}→${p.first.deliveryCity}`,
+      secondLoad: p.second.loadType,
+      secondRoute: `${p.second.supplyCity}→${p.second.deliveryCity}`,
+      sharedHub: p.sharedStartingCity,
+      chainDistance: p.chainDistance,
+      totalBuildCost: p.totalBuildCost,
+      totalPayout: p.totalPayout,
+      estimatedTurns: p.estimatedTurns,
+      efficiency: Math.round(p.efficiency * 100) / 100,
+      pairingScore: Math.round(p.pairingScore * 100) / 100,
+    }));
+    const topPairing = pairings[0];
+    console.log(`[InitialBuildPlanner] ${pairings.length} pairings evaluated${topPairing ? ` — top: ${topPairing.first.loadType} ${topPairing.first.supplyCity}→${topPairing.first.deliveryCity} + ${topPairing.second.loadType} ${topPairing.second.supplyCity}→${topPairing.second.deliveryCity} score=${topPairing.pairingScore.toFixed(2)}` : ''}`);
+
     const bestSingle = options.reduce((a, b) => a.efficiency > b.efficiency ? a : b);
     const bestDouble = pairings.length > 0
       ? pairings.reduce((a, b) => a.pairingScore > b.pairingScore ? a : b)
@@ -101,6 +119,7 @@ export class InitialBuildPlanner {
         totalPayout: bestDouble.totalPayout,
         estimatedTurns: bestDouble.estimatedTurns,
         evaluatedOptions,
+        evaluatedPairings,
       };
     }
 
@@ -117,6 +136,7 @@ export class InitialBuildPlanner {
       totalPayout: bestSingle.payout,
       estimatedTurns: bestSingle.estimatedTurns,
       evaluatedOptions,
+      evaluatedPairings,
     };
   }
 

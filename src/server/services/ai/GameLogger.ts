@@ -145,6 +145,13 @@ export interface GameTurnLogEntry {
     buildCostToSupply: number; buildCostSupplyToDelivery: number;
     estimatedTurns: number; efficiency: number;
   }>;
+  // Double delivery pairings evaluated during initial build
+  initialBuildPairings?: Array<{
+    rank: number; firstLoad: string; firstRoute: string;
+    secondLoad: string; secondRoute: string; sharedHub: string | null;
+    chainDistance: number; totalBuildCost: number; totalPayout: number;
+    estimatedTurns: number; efficiency: number; pairingScore: number;
+  }>;
 
   // Execution Results
   success: boolean;

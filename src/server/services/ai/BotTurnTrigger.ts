@@ -199,6 +199,9 @@ export async function onTurnChange(
       tripPlanning: result.tripPlanning,
       // Debug overlay: active route snapshot (or null if cleared)
       activeRoute: result.activeRoute ?? null,
+      // JIRA-148: Initial build planner evaluated options
+      initialBuildOptions: result.initialBuildOptions,
+      initialBuildPairings: result.initialBuildPairings,
     });
 
     // JIRA-32: Append structured turn log to NDJSON game file
@@ -261,6 +264,8 @@ export async function onTurnChange(
         actionTimeline: result.actionTimeline,
         originalPlan: result.originalPlan,
         advisorUsedFallback: result.advisorUsedFallback,
+        initialBuildOptions: result.initialBuildOptions,
+        initialBuildPairings: result.initialBuildPairings,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
