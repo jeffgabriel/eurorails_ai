@@ -1601,17 +1601,20 @@ export class PlayerService {
    * Core card-discard logic: discard old hand, draw 3 new Demand cards, persist to DB.
    * Does NOT validate turns or advance the game turn — callers handle that.
    *
-   * @returns newHandIds (persisted), plus discardedIds/drawnIds for rollback compensation.
+   * Callers pass in mutable `discardedIds` and `drawnIds` arrays so that
+   * partial progress is visible for rollback compensation even if this
+   * method throws mid-way (e.g. deck exhausted after 2 draws, or DB UPDATE fails).
+   *
+   * @returns newHandIds (persisted to DB).
    */
   private static async discardHandCore(
     gameId: string,
     playerId: string,
     handIds: number[],
-    client: import("pg").PoolClient
-  ): Promise<{ newHandIds: number[]; discardedIds: number[]; drawnIds: number[] }> {
-    const discardedIds: number[] = [];
-    const drawnIds: number[] = [];
-
+    client: import("pg").PoolClient,
+    discardedIds: number[],
+    drawnIds: number[]
+  ): Promise<{ newHandIds: number[] }> {
     // Discard old hand (must be currently dealt).
     for (const id of handIds) {
       demandDeckService.discardCard(id);
@@ -1637,7 +1640,7 @@ export class PlayerService {
       [newHandIds, gameId, playerId]
     );
 
-    return { newHandIds, discardedIds, drawnIds };
+    return { newHandIds };
   }
 
   /**
@@ -1650,8 +1653,8 @@ export class PlayerService {
     playerId: string
   ): Promise<{ newHandIds: number[] }> {
     const client = await db.connect();
-    let discardedIds: number[] = [];
-    let drawnIds: number[] = [];
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1673,9 +1676,7 @@ export class PlayerService {
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
 
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
-      discardedIds = coreResult.discardedIds;
-      drawnIds = coreResult.drawnIds;
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds);
 
       await client.query("COMMIT");
       return { newHandIds: coreResult.newHandIds };
@@ -1723,8 +1724,8 @@ export class PlayerService {
     userId: string
   ): Promise<{ currentPlayerIndex: number; nextPlayerId: string; nextPlayerName: string }> {
     const client = await db.connect();
-    let discardedIds: number[] = [];
-    let drawnIds: number[] = [];
+    const discardedIds: number[] = [];
+    const drawnIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1810,9 +1811,7 @@ export class PlayerService {
       // - no server-tracked turn_actions this turn
 
       // Core card logic: discard old hand, draw 3 new cards, persist.
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client);
-      discardedIds = coreResult.discardedIds;
-      drawnIds = coreResult.drawnIds;
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds);
 
       // Increment per-player turn count at END of the active player's turn.
       await client.query(

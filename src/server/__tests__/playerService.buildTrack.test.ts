@@ -126,9 +126,13 @@ describe('PlayerService.buildTrackForPlayer', () => {
       expect(upsertCall).toBeDefined();
       expect(upsertCall![0]).toContain('ON CONFLICT');
       // Verify combined segments are passed
-      const segmentsParam = upsertCall![1]![2]; // $3 is JSON segments
-      const parsed = JSON.parse(segmentsParam);
-      expect(parsed).toHaveLength(3); // 1 existing + 2 new
+      const params = upsertCall![1]!;
+      expect(params[0]).toBe(gameId);       // $1 game_id
+      expect(params[1]).toBe(playerId);     // $2 player_id
+      const parsed = JSON.parse(params[2]); // $3 segments JSON
+      expect(parsed).toHaveLength(3);       // 1 existing + 2 new
+      expect(params[3]).toBe(8);            // $4 totalCost (1+2+5)
+      expect(params[4]).toBe(7);            // $5 turn_build_cost (cost param)
     });
 
     it('should build with empty existing segments', async () => {
