@@ -186,9 +186,19 @@ export class InitialBuildPlanner {
             const contextScore = demandScores?.get(scoreKey);
             let efficiency: number;
             if (contextScore !== undefined) {
-              // Scale context score by local build cost efficiency
+              // Scale context score by local build cost efficiency.
+              // localCostFactor is higher for cheaper routes (0=max cost, 1=zero cost).
+              // For positive scores: multiply by (1 + factor) to boost cheap routes.
+              // For negative scores: divide by (1 + factor) — cheap routes (high factor)
+              //   produce a result closer to 0 (less negative = better rank). Multiplying
+              //   by (1 + factor) would instead amplify the negative magnitude, making cheap
+              //   routes rank WORSE than expensive ones (the original bug).
               const localCostFactor = Math.max(0, 1 - costs.totalBuildCost / MAX_BUILD_BUDGET);
-              efficiency = contextScore * (1 + localCostFactor);
+              if (contextScore >= 0) {
+                efficiency = contextScore * (1 + localCostFactor);
+              } else {
+                efficiency = contextScore / (1 + localCostFactor);
+              }
             } else {
               efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
             }

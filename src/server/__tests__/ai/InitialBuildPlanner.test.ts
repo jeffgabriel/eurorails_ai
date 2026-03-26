@@ -809,6 +809,87 @@ describe('InitialBuildPlanner', () => {
         expect(opt.efficiency).toBeGreaterThan(0);
       }
     });
+
+    it('JIRA-153 regression: negative contextScore — cheaper supply scores higher (less negative) efficiency', () => {
+      // Bug: efficiency = contextScore * (1 + localCostFactor) inverts cost preference when
+      // contextScore is negative. A larger localCostFactor (cheaper route) makes the result
+      // MORE negative (worse), so expensive routes incorrectly rank above cheap ones.
+      //
+      // Fix: scale the absolute value, then restore the sign.
+      //
+      // We use two non-major-city supply sources (Essen and Wroclaw) for the same demand.
+      // Both will pick the cheapest starting city. By controlling path costs we ensure:
+      //   - Essen option: totalBuildCost = 6M  (cheap)
+      //   - Wroclaw option: totalBuildCost = 22M (expensive)
+      // With a negative contextScore, the cheap option must still produce a HIGHER (less negative)
+      // efficiency than the expensive option.
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Steel') return ['Essen', 'Wroclaw'];
+        return [];
+      });
+
+      // Control costs by fixing estimatePathCost for key city pairs.
+      // Ruhr(15,12)→Essen(16,11): 2M (cheap supply leg)
+      // Essen(16,11)→Frankfurt(17,14): 4M (supply→delivery) → Ruhr-Essen total = 6M
+      // Ruhr(15,12)→Wroclaw(13,17): 12M (expensive supply leg)
+      // Wroclaw(13,17)→Frankfurt(17,14): 10M (supply→delivery) → Ruhr-Wroclaw total = 22M
+      // (Also need Berlin→Wroclaw etc to be ≥ Ruhr costs so Ruhr stays best for both)
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        // Ruhr(15,12) → Essen(16,11): cheap supply
+        if (r1 === 15 && c1 === 12 && r2 === 16 && c2 === 11) return 2;
+        if (r1 === 16 && c1 === 11 && r2 === 15 && c2 === 12) return 2;
+        // Essen(16,11) → Frankfurt(17,14): supply→delivery
+        if (r1 === 16 && c1 === 11 && r2 === 17 && c2 === 14) return 4;
+        if (r1 === 17 && c1 === 14 && r2 === 16 && c2 === 11) return 4;
+        // Ruhr(15,12) → Wroclaw(13,17): expensive supply
+        if (r1 === 15 && c1 === 12 && r2 === 13 && c2 === 17) return 12;
+        if (r1 === 13 && c1 === 17 && r2 === 15 && c2 === 12) return 12;
+        // Wroclaw(13,17) → Frankfurt(17,14): supply→delivery
+        if (r1 === 13 && c1 === 17 && r2 === 17 && c2 === 14) return 10;
+        if (r1 === 17 && c1 === 14 && r2 === 13 && c2 === 17) return 10;
+        // Berlin(12,16) → Wroclaw(13,17): must be ≥ 12 so Ruhr beats Berlin for Wroclaw too
+        if (r1 === 12 && c1 === 16 && r2 === 13 && c2 === 17) return 13;
+        if (r1 === 13 && c1 === 17 && r2 === 12 && c2 === 16) return 13;
+        // All other: use hex distance * 2 (generous fallback)
+        const dist = mockHexDistance(r1, c1, r2, c2);
+        return Math.round(dist * 2);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 12 }],
+        }],
+        loadAvailability: { 'Essen': ['Steel'], 'Wroclaw': ['Steel'] },
+      });
+
+      // Negative contextScore simulates a below-average demand ranking
+      const demandScores = new Map([
+        ['Steel:Frankfurt', -1.5],  // Negative: demand is below average relative rank
+      ]);
+
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid, demandScores);
+
+      const essenOption = options.find(o => o.supplyCity === 'Essen');
+      const wrocOption = options.find(o => o.supplyCity === 'Wroclaw');
+
+      // Both options must be generated
+      expect(essenOption).toBeDefined();
+      expect(wrocOption).toBeDefined();
+
+      if (essenOption && wrocOption) {
+        // Essen option should have lower totalBuildCost
+        expect(essenOption.totalBuildCost).toBeLessThan(wrocOption.totalBuildCost);
+
+        // With fixed formula: cheaper route produces higher (less negative) efficiency
+        // i.e. essenOption.efficiency > wrocOption.efficiency even though both are negative
+        expect(essenOption.efficiency).toBeGreaterThan(wrocOption.efficiency);
+
+        // Both efficiencies should be negative (contextScore is negative)
+        expect(essenOption.efficiency).toBeLessThan(0);
+        expect(wrocOption.efficiency).toBeLessThan(0);
+      }
+    });
   });
 
   describe('estimateBuildCostFromCity', () => {
