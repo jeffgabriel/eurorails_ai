@@ -2804,18 +2804,16 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     expect(output).not.toContain('DEMAND RANKING');
   });
 
-  it('demand scoring formula: baseROI + corridorMultiplier * baseROI + victoryBonus', () => {
-    // New payout-relative formula (BE-003):
+  it('demand scoring formula: baseROI * (1 + corridorMultiplier)', () => {
+    // Formula:
     // baseROI = (payout - trackCost) / estimatedTurns
     // corridorMultiplier = min(networkCities * 0.05, 0.5)
-    // victoryBonus = victoryMajorCities * max(payout * 0.15, 5)
-    // score = baseROI + corridorMultiplier * baseROI + victoryBonus
+    // score = baseROI * (1 + corridorMultiplier)
     //
-    // Example: payout=30, cost=10, turns=2, network=4, victory=1
+    // Example: payout=30, cost=10, turns=2, network=4
     // baseROI = (30-10)/2 = 10
     // corridorMultiplier = min(4*0.05, 0.5) = 0.2
-    // victoryBonus = 1 * max(30*0.15, 5) = 1 * max(4.5, 5) = 5
-    // score = 10 + 0.2*10 + 5 = 17
+    // score = 10 * 1.2 = 12
     const d = makeScoringDemand({
       loadType: 'Coal',
       supplyCity: 'Lyon',
@@ -2824,7 +2822,7 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
       estimatedTrackCostToSupply: 5,
       estimatedTrackCostToDelivery: 5,
       estimatedTurns: 2,
-      demandScore: 17,
+      demandScore: 12,
       networkCitiesUnlocked: 4,
       victoryMajorCitiesEnRoute: 1,
     });
@@ -2833,17 +2831,14 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     const totalCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
     const baseROI = (d.payout - totalCost) / d.estimatedTurns;
     const corridorMult = Math.min(d.networkCitiesUnlocked * 0.05, 0.5);
-    const victoryBonus = d.victoryMajorCitiesEnRoute * Math.max(d.payout * 0.15, 5);
-    expect(d.demandScore).toBe(baseROI + corridorMult * baseROI + victoryBonus);
+    expect(d.demandScore).toBe(baseROI * (1 + corridorMult));
   });
 
   it('payout dominance: higher payout beats lower payout with better corridor', () => {
     // 51M payout with modest corridor should beat 21M payout with great corridor
     // High payout: baseROI = (51-10)/3 ≈ 13.67, corridor = min(4*0.05, 0.5) = 0.2
-    //   victory = 1 * max(51*0.15, 5) = 7.65
-    //   score = 13.67 + 0.2*13.67 + 7.65 ≈ 24.05
-    // score = 13.667 + 0.2*13.667 + 7.65 = 24.05
-    const highPayoutScore = ((51 - 10) / 3) + (0.2 * ((51 - 10) / 3)) + (1 * Math.max(51 * 0.15, 5));
+    //   score = 13.67 * 1.2 ≈ 16.40
+    const highPayoutScore = ((51 - 10) / 3) * (1 + 0.2);
     const highPayout = makeScoringDemand({
       loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Paris',
       payout: 51, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 5,
@@ -2851,9 +2846,8 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
       demandScore: highPayoutScore,
     });
     // Low payout: baseROI = (21-10)/3 ≈ 3.67, corridor = min(7*0.05, 0.5) = 0.35
-    //   victory = 2 * max(21*0.15, 5) = 10
-    //   score = 3.67 + 0.35*3.67 + 10 ≈ 14.95
-    const lowPayoutScore = ((21 - 10) / 3) + (0.35 * ((21 - 10) / 3)) + (2 * Math.max(21 * 0.15, 5));
+    //   score = 3.67 * 1.35 ≈ 4.95
+    const lowPayoutScore = ((21 - 10) / 3) * (1 + 0.35);
     const lowPayout = makeScoringDemand({
       loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin',
       payout: 21, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 5,
@@ -2894,19 +2888,6 @@ describe('ContextBuilder demand scoring (JIRA-13)', () => {
     // baseROI = 40/2 = 20, corridorMult = 0.5, score = 20 + 0.5*20 = 30
     const baseROI = 40 / 2;
     expect(capped.demandScore).toBe(baseROI + 0.5 * baseROI);
-  });
-
-  it('victoryBonus uses minimum of 5 for very low payouts', () => {
-    // payout=10, payout*0.15 = 1.5 < 5, so victoryBonus uses 5
-    const lowPayout = makeScoringDemand({
-      loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin',
-      payout: 10, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
-      estimatedTurns: 2, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 2,
-      demandScore: 15,
-    });
-    // baseROI = 10/2 = 5, corridorMult = 0, victoryBonus = 2*5 = 10
-    // score = 5 + 0 + 10 = 15
-    expect(lowPayout.demandScore).toBe(15);
   });
 
   it('efficiencyPerTurn should equal ROI / estimatedTurns', () => {

@@ -743,16 +743,9 @@ export class ContextBuilder {
       snapshot.bot.existingSegments, gridPoints, connectedMajorCities,
       optimalStartingCity,
     );
-    // JIRA-125: Amplify victory bonus in endgame — demands routing through
-    // unconnected major cities become significantly more attractive when
-    // the bot already has enough cash but needs city connections.
-    let victoryMajorCitiesForScoring = corridorValue.victoryMajorCities;
-    if (snapshot.bot.money >= 250 && connectedMajorCities.length < 7) {
-      victoryMajorCitiesForScoring = corridorValue.victoryMajorCities * 3;
-    }
     const demandScore = ContextBuilder.scoreDemand(
       demand.payment, totalTrackCost,
-      corridorValue.networkCities, victoryMajorCitiesForScoring,
+      corridorValue.networkCities,
       estimatedTurns,
       affordability.affordable, affordability.projectedFunds,
     );
@@ -2309,13 +2302,12 @@ export class ContextBuilder {
   }
 
   /**
-   * Compute a demand score using payout-relative corridor and victory bonuses.
+   * Compute a demand score using payout-relative corridor bonus.
    * Higher scores mean better demand options for the bot to pursue.
    *
    * baseROI = (payout - totalTrackCost) / estimatedTurns
    * corridorMultiplier = min(networkCities * 0.05, 0.5)
-   * victoryBonus = victoryMajorCities * max(payout * 0.15, 5)
-   * score = baseROI + corridorMultiplier * baseROI + victoryBonus
+   * score = baseROI * (1 + corridorMultiplier)
    *
    * The corridor multiplier scales with baseROI so geographical advantages
    * amplify good deliveries rather than overshadowing economic value.
@@ -2328,15 +2320,13 @@ export class ContextBuilder {
     payout: number,
     totalTrackCost: number,
     networkCities: number,
-    victoryMajorCities: number,
     estimatedTurns: number,
     isAffordable: boolean = true,
     projectedFunds: number = Infinity,
   ): number {
     const baseROI = (payout - totalTrackCost) / estimatedTurns;
     const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-    const victoryBonus = (victoryMajorCities * Math.max(payout * 0.15, 5)) / estimatedTurns;
-    const rawScore = baseROI + (corridorMultiplier * baseROI) + victoryBonus;
+    const rawScore = baseROI * (1 + corridorMultiplier);
 
     if (!isAffordable && totalTrackCost > 0) {
       const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
