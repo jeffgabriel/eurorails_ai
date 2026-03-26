@@ -24,8 +24,18 @@ import { LoadService } from '../loadService';
 /** Peripheral cities that get a scoring penalty */
 const PERIPHERAL_CITIES = new Set(['London', 'Milano']);
 
-/** Madrid is blocked as a starting city */
-const BLOCKED_STARTING_CITIES = new Set(['Madrid']);
+/** Starting cities that are too remote to be viable starting points */
+const BLOCKED_STARTING_CITIES = new Set<string>();
+
+/**
+ * Remote/peripheral delivery cities excluded from expandDemandOptions().
+ * These cities require extensive track into outlying areas, causing early bankruptcy.
+ * emergencyFallback() does NOT apply this filter — they remain available as last resort.
+ */
+const REMOTE_DELIVERY_CITIES = new Set([
+  'Nantes', 'Bordeaux', 'Bilbao', 'Porto', 'Lisboa', 'Madrid',
+  'Roma', 'Napoli', 'Kobenhavn', 'Arhus', 'Goteborg', 'Oslo', 'Stockholm',
+]);
 
 /** Max affordable build cost within 2 initial build turns (2 × 20M) */
 const MAX_BUILD_BUDGET = 40;
@@ -132,6 +142,9 @@ export class InitialBuildPlanner {
           // Check load availability at supply city
           const available = snapshot.loadAvailability[supplyCity];
           if (!available || !available.includes(demand.loadType)) continue;
+
+          // Skip remote delivery cities — they require overextended track during initial build
+          if (REMOTE_DELIVERY_CITIES.has(demand.city)) continue;
 
           // Check ferry requirement
           const ferryRequired = InitialBuildPlanner.isFerryBetween(

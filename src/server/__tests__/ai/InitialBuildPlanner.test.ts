@@ -177,7 +177,7 @@ describe('InitialBuildPlanner', () => {
       }
     });
 
-    it('should filter out Madrid as starting city', () => {
+    it('should allow Madrid as starting city (no longer blocked)', () => {
       mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
       const snapshot = makeWorldSnapshot({
         resolvedDemands: [{
@@ -187,8 +187,57 @@ describe('InitialBuildPlanner', () => {
         loadAvailability: { 'Essen': ['Coal'] },
       });
 
+      // Madrid is no longer in BLOCKED_STARTING_CITIES; it can be a starting city
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
-      expect(options.every(o => o.startingCity !== 'Madrid')).toBe(true);
+      expect(options.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should filter out REMOTE_DELIVERY_CITIES as delivery destinations', () => {
+      mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [
+            { city: 'Madrid', loadType: 'Coal', payment: 20 },
+            { city: 'Lisboa', loadType: 'Coal', payment: 18 },
+            { city: 'Frankfurt', loadType: 'Coal', payment: 12 },
+          ],
+        }],
+        loadAvailability: { 'Essen': ['Coal'] },
+      });
+
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
+
+      // Madrid and Lisboa are in REMOTE_DELIVERY_CITIES — must be filtered out
+      expect(options.every(o => o.deliveryCity !== 'Madrid')).toBe(true);
+      expect(options.every(o => o.deliveryCity !== 'Lisboa')).toBe(true);
+      // Frankfurt is not remote — should appear
+      expect(options.some(o => o.deliveryCity === 'Frankfurt')).toBe(true);
+    });
+
+    it('should include remote cities in emergencyFallback when no other options exist', () => {
+      mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
+      // All demands are remote — expandDemandOptions returns empty, triggers emergencyFallback
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [
+            { city: 'Madrid', loadType: 'Coal', payment: 20 },
+          ],
+        }],
+        loadAvailability: { 'Essen': ['Coal'] },
+      });
+
+      // expandDemandOptions should return empty (Madrid is remote)
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
+      expect(options.length).toBe(0);
+
+      // planInitialBuild triggers emergencyFallback — should still produce a plan
+      const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+      expect(plan.startingCity).toBeTruthy();
+      // The fallback should have found Madrid as the delivery city (not filtered in fallback)
+      const deliveryStop = plan.route.find(r => r.action === 'deliver');
+      expect(deliveryStop?.city).toBe('Madrid');
     });
 
     it('should filter out ferry routes', () => {
