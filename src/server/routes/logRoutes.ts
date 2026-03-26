@@ -279,7 +279,7 @@ router.get('/api/llm/:gameId', (req, res) => {
 
 // ─── GET /llm/:gameId — HTML LLM transcript viewer ──────────────────────────
 
-router.get('/llm/:gameId', (req, res) => {
+const handleLLMViewer: express.RequestHandler = (req, res) => {
   const { gameId } = req.params;
   if (!isValidGameId(gameId)) {
     return res.status(400).json({ error: 'INVALID_GAME_ID', details: 'Game ID must contain only hex characters and hyphens' });
@@ -460,7 +460,9 @@ router.get('/llm/:gameId', (req, res) => {
     console.error('[logRoutes] Error rendering LLM transcript:', error);
     res.status(500).json({ error: 'SERVER_ERROR', details: 'Failed to render LLM transcript' });
   }
-});
+};
+
+router.get('/llm/:gameId', handleLLMViewer);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -550,6 +552,68 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
     sections += `<details><summary>Demand Ranking (${entry.demandRanking.length} demands)</summary><div class="section">`;
     for (const d of entry.demandRanking) {
       sections += `#${d.rank} ${d.loadType}: ${d.supplyCity}→${d.deliveryCity} ${d.payout}M (score: ${d.score.toFixed(1)}${d.estimatedTurns ? `, ~${d.estimatedTurns}T` : ''})\n`;
+    }
+    sections += `</div></details>`;
+  }
+
+  // Initial Build Options (single options + double delivery pairings)
+  if (entry.initialBuildOptions?.length || entry.initialBuildPairings?.length) {
+    sections += `<details><summary>Initial Build Options</summary><div class="section">`;
+    if (entry.initialBuildOptions?.length) {
+      sections += `<strong>Single Delivery Options (${entry.initialBuildOptions.length})</strong><br>`;
+      sections += `<table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:8px;">`;
+      sections += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
+        `<th style="text-align:left;padding:2px 4px;">#</th>` +
+        `<th style="text-align:left;padding:2px 4px;">Load</th>` +
+        `<th style="text-align:left;padding:2px 4px;">Route</th>` +
+        `<th style="text-align:left;padding:2px 4px;">From</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Pay</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Build</th>` +
+        `<th style="text-align:right;padding:2px 4px;">~Turns</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Eff</th></tr>`;
+      for (const o of entry.initialBuildOptions) {
+        const isTop = o.rank === 1;
+        const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
+        sections += `<tr style="${rowStyle}">` +
+          `<td style="padding:2px 4px;">${o.rank}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(o.loadType)}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(o.supplyCity)}→${escapeHtml(o.deliveryCity)}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(o.startingCity)}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${o.payout}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${o.totalBuildCost}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${o.estimatedTurns}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${o.efficiency}</td></tr>`;
+      }
+      sections += `</table>`;
+    }
+    if (entry.initialBuildPairings?.length) {
+      sections += `<strong>Double Delivery Pairings (${entry.initialBuildPairings.length})</strong><br>`;
+      sections += `<table style="width:100%;font-size:12px;border-collapse:collapse;">`;
+      sections += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
+        `<th style="text-align:left;padding:2px 4px;">#</th>` +
+        `<th style="text-align:left;padding:2px 4px;">1st Leg</th>` +
+        `<th style="text-align:left;padding:2px 4px;">2nd Leg</th>` +
+        `<th style="text-align:left;padding:2px 4px;">Hub</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Chain</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Cost</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Payout</th>` +
+        `<th style="text-align:right;padding:2px 4px;">~Turns</th>` +
+        `<th style="text-align:right;padding:2px 4px;">Score</th></tr>`;
+      for (const p of entry.initialBuildPairings) {
+        const isTop = p.rank === 1;
+        const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
+        sections += `<tr style="${rowStyle}">` +
+          `<td style="padding:2px 4px;">${p.rank}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(p.firstLoad)} ${escapeHtml(p.firstRoute)}</td>` +
+          `<td style="padding:2px 4px;">${escapeHtml(p.secondLoad)} ${escapeHtml(p.secondRoute)}</td>` +
+          `<td style="padding:2px 4px;">${p.sharedHub ? escapeHtml(p.sharedHub) : '—'}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${p.chainDistance}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${p.totalBuildCost}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${p.totalPayout}M</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${p.estimatedTurns}</td>` +
+          `<td style="text-align:right;padding:2px 4px;">${p.pairingScore}</td></tr>`;
+      }
+      sections += `</table>`;
     }
     sections += `</div></details>`;
   }
@@ -719,5 +783,25 @@ function computeLineDiff(a: string, b: string): { html: string; hasChanges: bool
 
   return { html: result.join('\n'), hasChanges: true };
 }
+
+/**
+ * Standalone LLM router for mounting at /llm so that /llm/:gameId works
+ * at the top level (separate from the /logs or /log mount).
+ */
+export const llmRouter = express.Router();
+
+llmRouter.get('/api/:gameId', (req, res) => {
+  const { gameId } = req.params;
+  if (!isValidGameId(gameId)) {
+    return res.status(400).json({ error: 'INVALID_GAME_ID', details: 'Game ID must contain only hex characters and hyphens' });
+  }
+  const entries = loadLLMTranscript(gameId);
+  if (entries === null) {
+    return res.status(404).json({ error: 'LOG_NOT_FOUND', details: `No LLM transcript found for game ${gameId}` });
+  }
+  return res.json(entries);
+});
+
+llmRouter.get('/:gameId', handleLLMViewer);
 
 export default router;

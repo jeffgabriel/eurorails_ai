@@ -70,6 +70,13 @@ export interface BotTurnEntry {
     buildCostToSupply: number; buildCostSupplyToDelivery: number;
     estimatedTurns: number; efficiency: number;
   }>;
+  // Double delivery pairings evaluated during initial build
+  initialBuildPairings?: Array<{
+    rank: number; firstLoad: string; firstRoute: string;
+    secondLoad: string; secondRoute: string; sharedHub: string | null;
+    chainDistance: number; totalBuildCost: number; totalPayout: number;
+    estimatedTurns: number; efficiency: number; pairingScore: number;
+  }>;
 }
 
 /**
@@ -321,6 +328,7 @@ export class DebugOverlay {
       if (payload?.solvencyRetries) entry.solvencyRetries = payload.solvencyRetries;
       // JIRA-148: Initial build planner options
       if (payload?.initialBuildOptions) entry.initialBuildOptions = payload.initialBuildOptions;
+      if (payload?.initialBuildPairings) entry.initialBuildPairings = payload.initialBuildPairings;
 
       this.botTurnHistory.set(botId, history);
     } else if (eventName === 'bot:demandRankingUpdate') {
@@ -616,6 +624,37 @@ export class DebugOverlay {
             `<td style="text-align:right;padding:2px 4px;">${o.totalBuildCost}M</td>` +
             `<td style="text-align:right;padding:2px 4px;">${o.estimatedTurns}</td>` +
             `<td style="text-align:right;padding:2px 4px;">${o.efficiency}</td></tr>`;
+        }
+        latestDetail += `</table></div>`;
+      }
+      // Double delivery pairings table
+      if (latest.initialBuildPairings && latest.initialBuildPairings.length > 0) {
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(168,85,247,0.08);border-radius:4px;border-left:3px solid #a855f7;">`;
+        latestDetail += `<div style="color:#a855f7;font-size:14px;font-weight:bold;margin-bottom:4px;">Double Delivery Pairings (${latest.initialBuildPairings.length} evaluated)</div>`;
+        latestDetail += `<table style="width:100%;font-size:12px;color:#d1d5db;border-collapse:collapse;">`;
+        latestDetail += `<tr style="color:#9ca3af;border-bottom:1px solid rgba(255,255,255,0.1);">` +
+          `<th style="text-align:left;padding:2px 4px;">#</th>` +
+          `<th style="text-align:left;padding:2px 4px;">1st Leg</th>` +
+          `<th style="text-align:left;padding:2px 4px;">2nd Leg</th>` +
+          `<th style="text-align:left;padding:2px 4px;">Hub</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Chain</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Cost</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Payout</th>` +
+          `<th style="text-align:right;padding:2px 4px;">~Turns</th>` +
+          `<th style="text-align:right;padding:2px 4px;">Score</th></tr>`;
+        for (const p of latest.initialBuildPairings) {
+          const isTop = p.rank === 1;
+          const rowStyle = isTop ? 'color:#34d399;font-weight:bold;' : '';
+          latestDetail += `<tr style="${rowStyle}">` +
+            `<td style="padding:2px 4px;">${p.rank}</td>` +
+            `<td style="padding:2px 4px;">${p.firstLoad} ${p.firstRoute}</td>` +
+            `<td style="padding:2px 4px;">${p.secondLoad} ${p.secondRoute}</td>` +
+            `<td style="padding:2px 4px;">${p.sharedHub ?? '—'}</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${p.chainDistance}</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${p.totalBuildCost}M</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${p.totalPayout}M</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${p.estimatedTurns}</td>` +
+            `<td style="text-align:right;padding:2px 4px;">${p.pairingScore}</td></tr>`;
         }
         latestDetail += `</table></div>`;
       }
