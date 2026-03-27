@@ -1,15 +1,13 @@
 /**
- * routeHelpers unit tests — isStopComplete
+ * routeHelpers unit tests — isStopComplete, resolveBuildTarget
  *
  * Tests cover:
- * - Pickup completion (count-aware JIRA-104 logic)
- * - Delivery completion (load gone + demand card gone)
- * - Edge cases: multiple same-type pickups, missing demandCardId
+ * - isStopComplete: pickup completion (count-aware JIRA-104 logic), delivery completion
+ * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete } from '../../services/ai/routeHelpers';
-import { GameContext, RouteStop } from '../../../shared/types/GameTypes';
-import { TrainType } from '../../../shared/types/GameTypes';
+import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
+import { GameContext, RouteStop, StrategicRoute, TrainType } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -279,5 +277,177 @@ describe('isStopComplete — unknown action types', () => {
     const context = makeContext();
 
     expect(isStopComplete(stop, 0, allStops, context)).toBe(false);
+  });
+});
+
+// ── resolveBuildTarget helpers ─────────────────────────────────────────────
+
+function makeRoute(overrides: Partial<StrategicRoute> = {}): StrategicRoute {
+  return {
+    stops: [
+      { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+      { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+    ],
+    currentStopIndex: 0,
+    phase: 'build',
+    createdAtTurn: 3,
+    reasoning: 'Test route',
+    ...overrides,
+  };
+}
+
+// ── resolveBuildTarget tests ───────────────────────────────────────────────
+
+describe('resolveBuildTarget — route-based targets', () => {
+  it('returns the first off-network stop city from currentStopIndex', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Berlin');
+    expect(result!.stopIndex).toBe(0);
+    expect(result!.isVictoryBuild).toBe(false);
+  });
+
+  it('skips stops whose city is already on the network', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    // Berlin is on network, Paris is not
+    const context = makeContext({ citiesOnNetwork: ['Berlin'] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Paris');
+    expect(result!.stopIndex).toBe(1);
+  });
+
+  it('returns null when all stops are already on the network', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({ citiesOnNetwork: ['Berlin', 'Paris'] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).toBeNull();
+  });
+
+  it('returns null when route has no stops remaining (currentStopIndex at end)', () => {
+    const route = makeRoute({ currentStopIndex: 2 }); // past both stops
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).toBeNull();
+  });
+
+  it('skips the startingCity stop', () => {
+    const route = makeRoute({
+      currentStopIndex: 0,
+      startingCity: 'Berlin',
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Berlin is startingCity so should be skipped; Paris is the target
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Paris');
+    expect(result!.stopIndex).toBe(1);
+  });
+
+  it('startingCity comparison is case-insensitive', () => {
+    const route = makeRoute({
+      currentStopIndex: 0,
+      startingCity: 'berlin',
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result!.targetCity).toBe('Paris');
+  });
+
+  it('respects currentStopIndex and skips completed stops', () => {
+    const route = makeRoute({ currentStopIndex: 1 }); // Berlin pickup already done
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result!.targetCity).toBe('Paris');
+    expect(result!.stopIndex).toBe(1);
+  });
+});
+
+describe('resolveBuildTarget — victory build override', () => {
+  it('returns the cheapest unconnected major city as a victory build when bot has ≥250M and <7 connected cities', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 250,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      // Only 6 connected, need 7
+      unconnectedMajorCities: [
+        { cityName: 'Moskva', estimatedCost: 5 },
+        { cityName: 'London', estimatedCost: 10 },
+      ],
+      citiesOnNetwork: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Moskva'); // cheapest
+    expect(result!.stopIndex).toBe(-1);
+  });
+
+  it('does NOT use victory override when bot has <250M', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 249,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      unconnectedMajorCities: [{ cityName: 'Moskva', estimatedCost: 5 }],
+      citiesOnNetwork: [],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Falls through to route-based logic, not victory
+    expect(result!.isVictoryBuild).toBe(false);
+  });
+
+  it('does NOT use victory override when bot already has 7 connected major cities', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 300,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg', 'Moskva'],
+      // 7 connected — victory city requirement met; no unconnected majors
+      unconnectedMajorCities: [],
+      // Route stops (Berlin, Paris) are off-network to ensure route target is returned
+      citiesOnNetwork: [],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Falls through to route-based logic
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(false);
+    expect(result!.targetCity).toBe('Berlin'); // first off-network stop
+  });
+
+  it('returns null when all major cities are connected and all route stops are on-network', () => {
+    const route = makeRoute({ currentStopIndex: 0 });
+    const context = makeContext({
+      money: 300,
+      connectedMajorCities: ['Paris', 'Berlin', 'Madrid', 'Rome', 'Wien', 'Hamburg'],
+      unconnectedMajorCities: [],
+      // Both route stops are on-network, so route-based also returns null
+      citiesOnNetwork: ['Berlin', 'Paris'],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // No unconnected major cities and all route stops on-network → null
+    expect(result).toBeNull();
   });
 });

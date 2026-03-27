@@ -3,12 +3,113 @@
  *
  * These functions are the single source of truth for route-related decisions:
  * - isStopComplete: determines if a route stop has been fulfilled
+ * - resolveBuildTarget: determines the optimal city to build toward
  *
  * They replace duplicated logic that previously existed across PlanExecutor,
  * TurnComposer, and AIStrategyEngine.
  */
 
-import { RouteStop, GameContext } from '../../../shared/types/GameTypes';
+import { RouteStop, StrategicRoute, GameContext, VICTORY_INITIAL_THRESHOLD } from '../../../shared/types/GameTypes';
+
+/** Number of connected major cities required to win */
+const VICTORY_CITY_COUNT = 7;
+
+// ── resolveBuildTarget ─────────────────────────────────────────────────────
+
+/**
+ * Result from resolveBuildTarget — describes the target city to build toward.
+ */
+export interface BuildTargetResult {
+  /** Name of the city to build toward */
+  targetCity: string;
+  /** Index of the route stop that motivated this target (or -1 for victory build) */
+  stopIndex: number;
+  /** True when the bot meets the victory cash threshold but lacks 7 major cities */
+  isVictoryBuild: boolean;
+}
+
+/**
+ * Unified build-target resolver — the single source of truth for determining
+ * what city the bot should extend its track toward this turn.
+ *
+ * Resolution order:
+ * 1. Victory build override: if bot has ≥250M and fewer than 7 connected major
+ *    cities, target the cheapest unconnected major city (bypasses JIT gate).
+ * 2. Route-based target: iterate stops from currentStopIndex; return the first
+ *    stop whose city is off-network (skipping the route's startingCity).
+ * 3. Null: all remaining stops are on-network — no build needed.
+ *
+ * @param route - The active strategic route.
+ * @param context - Current game context.
+ * @returns BuildTargetResult or null if no build is needed.
+ */
+export function resolveBuildTarget(
+  route: StrategicRoute,
+  context: GameContext,
+): BuildTargetResult | null {
+  // Victory build override — bot is close to winning but needs more major cities
+  const isVictoryEligible =
+    context.money >= VICTORY_INITIAL_THRESHOLD &&
+    context.connectedMajorCities.length < VICTORY_CITY_COUNT;
+
+  if (isVictoryEligible) {
+    const victoryTarget = findCheapestUnconnectedMajorCity(context);
+    if (victoryTarget) {
+      return { targetCity: victoryTarget, stopIndex: -1, isVictoryBuild: true };
+    }
+  }
+
+  // Route-based target — find first off-network stop city
+  return findRouteBasedTarget(route, context);
+}
+
+/**
+ * Returns the cheapest unconnected major city by estimated track cost,
+ * or null if all major cities are connected.
+ */
+function findCheapestUnconnectedMajorCity(context: GameContext): string | null {
+  if (context.unconnectedMajorCities.length === 0) return null;
+  // unconnectedMajorCities is already sorted by estimatedCost ascending
+  // (computed by ContextBuilder.computeUnconnectedMajorCities)
+  return context.unconnectedMajorCities[0].cityName;
+}
+
+/**
+ * Iterates route stops from currentStopIndex and returns the first stop whose
+ * city is not yet on the network, skipping the route's starting city.
+ *
+ * Collects demand card IDs that will be consumed by this route's deliver stops
+ * (JIRA-114) so we do not chase a supply city for a card we're about to discard.
+ */
+function findRouteBasedTarget(
+  route: StrategicRoute,
+  context: GameContext,
+): BuildTargetResult | null {
+  // JIRA-114: Collect cards that will be consumed by deliver stops in this route
+  const activeDeliveryCardIds = new Set<number>();
+  for (const stop of route.stops) {
+    if (stop.action === 'deliver' && stop.demandCardId != null) {
+      activeDeliveryCardIds.add(stop.demandCardId);
+    }
+  }
+
+  for (let i = route.currentStopIndex; i < route.stops.length; i++) {
+    const stop = route.stops[i];
+
+    // Skip the starting city — the bot is already there
+    const isStartingCity =
+      route.startingCity != null &&
+      stop.city.toLowerCase() === route.startingCity.toLowerCase();
+    if (isStartingCity) continue;
+
+    // Skip cities already on the network
+    if (context.citiesOnNetwork.includes(stop.city)) continue;
+
+    return { targetCity: stop.city, stopIndex: i, isVictoryBuild: false };
+  }
+
+  return null;
+}
 
 /**
  * Determines whether a single route stop has been completed given the current
