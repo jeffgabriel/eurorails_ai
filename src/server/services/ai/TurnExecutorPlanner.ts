@@ -136,6 +136,8 @@ export class TurnExecutorPlanner {
     const plans: TurnPlan[] = [];
     let hasDelivery = false;
     let remainingBudget = context.speed;
+    // Track the last move target city for AC13(b) build direction check
+    let lastMoveTargetCity: string | null = null;
 
     // ── Phase A: Movement loop ─────────────────────────────────────────────
     //
@@ -196,11 +198,22 @@ export class TurnExecutorPlanner {
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });
           console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
 
+          // Capture stops before advancing (for AC13(c) mutation check)
+          const stopsBeforePickup = activeRoute.stops;
+
           // Advance stop index — no reorder after pickup (ADR-4)
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
 
           // Skip any newly-completed stops
           activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+
+          // AC13(c): Verify stops array was NOT mutated by the pickup or skipCompletedStops
+          TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(
+            stopsBeforePickup,
+            activeRoute.stops,
+            `pickup(${currentStop.loadType}@${targetCity})`,
+            tag,
+          );
         } else {
           // Delivery
           hasDelivery = true;
@@ -250,6 +263,7 @@ export class TurnExecutorPlanner {
 
       // ── Stop city on network but bot is not there? → MOVE ────────────────
       if (context.citiesOnNetwork.includes(targetCity)) {
+        lastMoveTargetCity = targetCity; // Track for AC13(b) build direction check
         console.log(`${tag} ${targetCity} is on network, moving (budget=${remainingBudget})`);
 
         const moveResult = await ActionResolver.resolveMove(
@@ -339,6 +353,14 @@ export class TurnExecutorPlanner {
       trace.build.skipped = false;
       console.log(
         `${tag} Phase B: build target "${buildTarget.targetCity}" (isVictoryBuild=${buildTarget.isVictoryBuild})`,
+      );
+
+      // AC13(b): Build direction must agree with move direction
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove(
+        buildTarget.targetCity,
+        lastMoveTargetCity,
+        activeRoute,
+        tag,
       );
 
       const buildPlan = await TurnExecutorPlanner.executeBuildPhase(
@@ -691,6 +713,103 @@ export class TurnExecutorPlanner {
         `${tag} INVARIANT VIOLATION: route stop index decreased from ` +
           `${originalRoute.currentStopIndex} to ${updatedRoute.currentStopIndex}`,
       );
+    }
+  }
+
+  /**
+   * AC13(b): Build direction must agree with move direction.
+   *
+   * If the executor has emitted both a MoveTrain plan AND resolved a build target,
+   * the build target must be the same as (or directly reachable from) the move
+   * destination — not a city in a contradictory direction.
+   *
+   * Concretely: the build target city must be an unconnected stop in the active route.
+   * If the bot is also moving toward a route stop city, the build target must be a
+   * LATER stop than the move target (i.e., not "build south, move north").
+   *
+   * This assertion prevents the case where the bot plans to move toward city A
+   * while simultaneously building track toward city B in the opposite direction.
+   *
+   * @param buildTargetCity - The city that Phase B will build toward.
+   * @param moveTargetCity - The city that Phase A moved toward (or null if no move).
+   * @param route - Active route at the time of assertion.
+   * @param tag - Log prefix.
+   */
+  static assertBuildDirectionAgreesWithMove(
+    buildTargetCity: string | null,
+    moveTargetCity: string | null,
+    route: StrategicRoute,
+    tag: string,
+  ): void {
+    if (!buildTargetCity || !moveTargetCity) return; // Nothing to compare
+
+    // Find positions of each city in the route stops
+    const buildStopIndex = route.stops.findIndex(
+      s => s.city.toLowerCase() === buildTargetCity.toLowerCase(),
+    );
+    const moveStopIndex = route.stops.findIndex(
+      s => s.city.toLowerCase() === moveTargetCity.toLowerCase(),
+    );
+
+    // If either city is not in the route, we cannot determine direction — skip
+    if (buildStopIndex < 0 || moveStopIndex < 0) return;
+
+    // INVARIANT: build target must be at the same or LATER position in the route
+    // than the move target. Moving toward stop N while building toward stop N-1 is
+    // contradictory (bot is going the wrong direction).
+    if (buildStopIndex < moveStopIndex) {
+      throw new Error(
+        `${tag} INVARIANT VIOLATION: build direction disagrees with move direction. ` +
+          `Build target "${buildTargetCity}" is at route stop ${buildStopIndex} but ` +
+          `move target "${moveTargetCity}" is at route stop ${moveStopIndex}. ` +
+          `Bot cannot build backwards along the route.`,
+      );
+    }
+  }
+
+  /**
+   * AC13(c): Route stops array must not be mutated outside of designated mutation points.
+   *
+   * Designated mutation points:
+   *   1. After a delivery: TripPlanner replan replaces the entire route object
+   *   2. At route creation: RouteEnrichmentAdvisor.enrich() may reorder stops
+   *
+   * After a pickup (ADR-4), the stops array must remain identical to the pre-pickup
+   * array — only `currentStopIndex` may change.
+   *
+   * @param beforeStops - The stops array before the sanctioned operation.
+   * @param afterStops - The stops array after the sanctioned operation.
+   * @param operationTag - Human-readable name of the operation that ran.
+   * @param tag - Log prefix.
+   */
+  static assertStopsNotMutatedAfterPickup(
+    beforeStops: RouteStop[],
+    afterStops: RouteStop[],
+    operationTag: string,
+    tag: string,
+  ): void {
+    if (beforeStops === afterStops) return; // Same reference — no mutation possible
+
+    // Must have same length
+    if (beforeStops.length !== afterStops.length) {
+      throw new Error(
+        `${tag} INVARIANT VIOLATION: route stops were mutated after ${operationTag}. ` +
+          `Length changed from ${beforeStops.length} to ${afterStops.length}. ` +
+          `Route stops may only be replaced after a delivery (via TripPlanner replan).`,
+      );
+    }
+
+    // Must have same stop city+action at each index
+    for (let i = 0; i < beforeStops.length; i++) {
+      const before = beforeStops[i];
+      const after = afterStops[i];
+      if (before.city !== after.city || before.action !== after.action) {
+        throw new Error(
+          `${tag} INVARIANT VIOLATION: route stops were mutated after ${operationTag}. ` +
+            `Stop ${i} changed from ${before.action}@${before.city} to ${after.action}@${after.city}. ` +
+            `Route stops may only be replaced after a delivery (via TripPlanner replan).`,
+        );
+      }
     }
   }
 

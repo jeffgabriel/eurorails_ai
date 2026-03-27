@@ -1007,6 +1007,110 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
   });
 });
 
+// ── Route mutation invariants (AC13) ──────────────────────────────────────
+
+describe('TurnExecutorPlanner — AC13(b): assertBuildDirectionAgreesWithMove', () => {
+  it('does not throw when build target is after move target in route', () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine'), makeStop('deliver', 'München', 'Wine')],
+      currentStopIndex: 0,
+    });
+    // Move toward Paris (index 0), build toward München (index 1) — valid
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove('München', 'Paris', route, '[test]');
+    }).not.toThrow();
+  });
+
+  it('does not throw when build and move targets are the same city', () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine'), makeStop('deliver', 'München', 'Wine')],
+      currentStopIndex: 0,
+    });
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove('Paris', 'Paris', route, '[test]');
+    }).not.toThrow();
+  });
+
+  it('throws when build target is BEFORE move target in route', () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine'), makeStop('deliver', 'München', 'Wine')],
+      currentStopIndex: 0,
+    });
+    // Move toward München (index 1), build toward Paris (index 0) — contradictory
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove('Paris', 'München', route, '[test]');
+    }).toThrow('INVARIANT VIOLATION');
+  });
+
+  it('does not throw when buildTargetCity is null', () => {
+    const route = makeRoute();
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove(null, 'Paris', route, '[test]');
+    }).not.toThrow();
+  });
+
+  it('does not throw when moveTargetCity is null', () => {
+    const route = makeRoute();
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove('München', null, route, '[test]');
+    }).not.toThrow();
+  });
+
+  it('does not throw when either city is not in the route', () => {
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    // Madrid not in route — cannot determine direction
+    expect(() => {
+      TurnExecutorPlanner.assertBuildDirectionAgreesWithMove('Madrid', 'Paris', route, '[test]');
+    }).not.toThrow();
+  });
+});
+
+describe('TurnExecutorPlanner — AC13(c): assertStopsNotMutatedAfterPickup', () => {
+  const tag = '[test]';
+
+  it('does not throw when stops array is the same reference', () => {
+    const stops = [makeStop('pickup', 'Paris')];
+    expect(() => {
+      TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(stops, stops, 'pickup', tag);
+    }).not.toThrow();
+  });
+
+  it('does not throw when stops array is a copy with identical stops', () => {
+    const stopsA = [makeStop('pickup', 'Paris', 'Coal')];
+    const stopsB = [makeStop('pickup', 'Paris', 'Coal')]; // same content, different ref
+    expect(() => {
+      TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(stopsA, stopsB, 'pickup', tag);
+    }).not.toThrow();
+  });
+
+  it('throws when stops array length changes (insertion)', () => {
+    const before = [makeStop('pickup', 'Paris')];
+    const after = [makeStop('pickup', 'Paris'), makeStop('deliver', 'Berlin')];
+    expect(() => {
+      TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(before, after, 'pickup', tag);
+    }).toThrow('INVARIANT VIOLATION');
+  });
+
+  it('throws when a stop city is changed', () => {
+    const before = [makeStop('pickup', 'Paris', 'Coal')];
+    const after = [makeStop('pickup', 'München', 'Coal')]; // city changed
+    expect(() => {
+      TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(before, after, 'pickup', tag);
+    }).toThrow('INVARIANT VIOLATION');
+  });
+
+  it('throws when a stop action is changed', () => {
+    const before = [makeStop('pickup', 'Paris', 'Coal')];
+    const after = [makeStop('deliver', 'Paris', 'Coal')]; // action changed
+    expect(() => {
+      TurnExecutorPlanner.assertStopsNotMutatedAfterPickup(before, after, 'pickup', tag);
+    }).toThrow('INVARIANT VIOLATION');
+  });
+});
+
 // ── execute() — Phase B: build phase ──────────────────────────────────────
 
 describe('TurnExecutorPlanner.execute — Phase B: build phase', () => {
