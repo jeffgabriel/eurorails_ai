@@ -4,7 +4,7 @@
  */
 
 import { NetworkBuildAnalyzer, FerryAwareNetworkResult } from '../../services/ai/NetworkBuildAnalyzer';
-import { TurnComposer } from '../../services/ai/TurnComposer';
+import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import {
   TerrainType,
   TrackSegment,
@@ -164,13 +164,13 @@ function makeRoute(overrides: Partial<StrategicRoute> = {}): StrategicRoute {
 // Part 1: JIT Build Gate Tests
 // ═══════════════════════════════════════════════════════════════════════
 
-describe('TurnComposer.shouldDeferBuild', () => {
+describe('TurnExecutorPlanner.shouldDeferBuild', () => {
   describe('initial build exemption', () => {
     it('allows build during initial build phase', () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ isInitialBuild: true, turnNumber: 1 });
       const route = makeRoute();
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(false);
       expect(result.reason).toBe('initial_build_exempt');
     });
@@ -179,7 +179,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ turnNumber: 2 });
       const route = makeRoute();
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(false);
       expect(result.reason).toBe('initial_build_exempt');
     });
@@ -194,7 +194,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
         unconnectedMajorCities: [{ cityName: 'Berlin', estimatedCost: 10 }],
       });
       const route = makeRoute();
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(false);
       expect(result.reason).toBe('victory_build_exempt');
     });
@@ -204,7 +204,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
     it('defers when no active route exists', () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ turnNumber: 20 });
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, null, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, null, 'Berlin', 9);
       expect(result.deferred).toBe(true);
       expect(result.reason).toBe('no_active_route');
     });
@@ -217,7 +217,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
       const route = makeRoute({
         stops: [{ action: 'pickup', loadType: 'Coal', city: 'Paris' }],
       });
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(true);
       expect(result.reason).toBe('target_not_in_route');
     });
@@ -229,7 +229,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
         phase: 'travel',
         stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin' }],
       });
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       // Travel phase means bot is actively moving toward route — committed
       expect(result.deferred).toBe(false);
     });
@@ -242,7 +242,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
         stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
       });
       // Route phase is 'build' and target is in route — should allow
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(false);
     });
   });
@@ -258,7 +258,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
         phase: 'build',
         stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
       });
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result.deferred).toBe(true);
       expect(result.reason).toBe('sufficient_runway');
       expect(result.trackRunway).toBeGreaterThanOrEqual(2);
@@ -309,7 +309,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
       });
 
       // buildTargetStopIndex = 3 (Holland is off-network)
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Holland', 9, 3);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Holland', 9, 3);
       expect(result.deferred).toBe(true);
       expect(result.reason).toBe('sufficient_runway');
       expect(result.intermediateStopTurns).toBeGreaterThan(0);
@@ -326,7 +326,7 @@ describe('TurnComposer.shouldDeferBuild', () => {
         stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
       });
       // buildTargetStopIndex === currentStopIndex → no intermediate stops → no extra deferral
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9, 0);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9, 0);
       // No intermediate turns, track runway from BFS = 0 (Berlin not on network, city not in grid)
       expect(result.intermediateStopTurns).toBe(0);
       expect(result.deferred).toBe(false);
@@ -337,14 +337,14 @@ describe('TurnComposer.shouldDeferBuild', () => {
       const snapshot = makeSnapshot();
       const context = makeContext({ isInitialBuild: true, turnNumber: 1 });
       const route = makeRoute();
-      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
       expect(result).toHaveProperty('intermediateStopTurns');
       expect(result).toHaveProperty('effectiveRunway');
     });
   });
 });
 
-describe('TurnComposer.estimateIntermediateStopTurns', () => {
+describe('TurnExecutorPlanner.estimateIntermediateStopTurns', () => {
   const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
 
   beforeEach(() => {
@@ -356,7 +356,7 @@ describe('TurnComposer.estimateIntermediateStopTurns', () => {
     const snapshot = makeSnapshot();
     const context = makeContext({ citiesOnNetwork: [] });
     const route = makeRoute({ currentStopIndex: 0 });
-    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 0, 9);
+    const result = TurnExecutorPlanner.estimateIntermediateStopTurns(snapshot, context, route, 0, 9);
     expect(result).toBe(0);
   });
 
@@ -371,7 +371,7 @@ describe('TurnComposer.estimateIntermediateStopTurns', () => {
         { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
       ],
     });
-    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 0);
+    const result = TurnExecutorPlanner.estimateIntermediateStopTurns(snapshot, context, route, 1, 0);
     expect(result).toBe(0);
   });
 
@@ -391,7 +391,7 @@ describe('TurnComposer.estimateIntermediateStopTurns', () => {
         { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
       ],
     });
-    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
+    const result = TurnExecutorPlanner.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
     expect(result).toBe(0); // Berlin skipped — not on network
   });
 
@@ -411,31 +411,31 @@ describe('TurnComposer.estimateIntermediateStopTurns', () => {
         { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
       ],
     });
-    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
+    const result = TurnExecutorPlanner.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
     // 18 mileposts / 9 speed = 2 turns
     expect(result).toBe(2);
   });
 });
 
-describe('TurnComposer.calculateTrackRunway', () => {
+describe('TurnExecutorPlanner.calculateTrackRunway', () => {
   it('returns 0 when bot has no position', () => {
     const snapshot = makeSnapshot({ bot: { ...makeSnapshot().bot, position: null } });
     const context = makeContext();
-    const result = TurnComposer.calculateTrackRunway(snapshot, 'Berlin', 9, context);
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Berlin', 9, context);
     expect(result).toBe(0);
   });
 
   it('returns 0 when train speed is 0', () => {
     const snapshot = makeSnapshot();
     const context = makeContext();
-    const result = TurnComposer.calculateTrackRunway(snapshot, 'Berlin', 0, context);
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Berlin', 0, context);
     expect(result).toBe(0);
   });
 
   it('returns high runway when destination is on network', () => {
     const snapshot = makeSnapshot();
     const context = makeContext({ citiesOnNetwork: ['Berlin'] });
-    const result = TurnComposer.calculateTrackRunway(snapshot, 'Berlin', 9, context);
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Berlin', 9, context);
     expect(result).toBe(10);
   });
 
@@ -443,7 +443,7 @@ describe('TurnComposer.calculateTrackRunway', () => {
     const snapshot = makeSnapshot();
     const context = makeContext();
     loadGridPoints.mockReturnValue(new Map());
-    const result = TurnComposer.calculateTrackRunway(snapshot, 'UnknownCity', 9, context);
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'UnknownCity', 9, context);
     expect(result).toBe(0);
   });
 });

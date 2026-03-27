@@ -119,15 +119,6 @@ jest.mock('../../services/ai/RouteValidator', () => ({
   },
 }));
 
-// Mock PlanExecutor (still used for findDeadLoads)
-jest.mock('../../services/ai/PlanExecutor', () => ({
-  PlanExecutor: {
-    execute: jest.fn(),
-    findDeadLoads: jest.fn(() => []),
-    revalidateRemainingDeliveries: jest.fn((route: any) => route),
-  },
-}));
-
 // Mock TurnExecutorPlanner — the new unified turn planner replacing PlanExecutor+TurnComposer
 const defaultCompositionTrace = {
   inputPlan: [], outputPlan: [],
@@ -142,6 +133,8 @@ jest.mock('../../services/ai/TurnExecutorPlanner', () => ({
   TurnExecutorPlanner: {
     execute: jest.fn(),
     filterByDirection: jest.fn((targets: any) => targets),
+    findDeadLoads: jest.fn(() => []),
+    revalidateRemainingDeliveries: jest.fn((route: any) => route),
   },
 }));
 
@@ -183,13 +176,7 @@ jest.mock('../../services/ai/TripPlanner', () => ({
   })),
 }));
 
-// Mock TurnComposer — passthrough (TurnComposer has its own test suite)
-jest.mock('../../services/ai/TurnComposer', () => ({
-  TurnComposer: {
-    compose: jest.fn((plan: any) => Promise.resolve({ plan, trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] } })),
-    tryAppendBuild: jest.fn(() => Promise.resolve({ plan: null })),
-  },
-}));
+// TurnComposer has been deleted — its methods are now on TurnExecutorPlanner (already mocked above)
 
 // Mock DecisionLogger
 jest.mock('../../services/ai/DecisionLogger', () => ({
@@ -234,7 +221,6 @@ import { capture } from '../../services/ai/WorldSnapshotService';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import { ActionResolver } from '../../services/ai/ActionResolver';
-import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
@@ -3133,7 +3119,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
   // ── JIRA-89 fix: Dead load drop execution ──────────────────────────────
   describe('JIRA-89: dead load drop execution', () => {
-    const mockFindDeadLoads = PlanExecutor.findDeadLoads as jest.MockedFunction<typeof PlanExecutor.findDeadLoads>;
+    const mockFindDeadLoads = TurnExecutorPlanner.findDeadLoads as jest.MockedFunction<typeof TurnExecutorPlanner.findDeadLoads>;
 
     function setupWithRoute(snapshotOverrides: any = {}, deadLoads: string[] = []) {
       process.env.ANTHROPIC_API_KEY = 'test-key';

@@ -5,7 +5,7 @@
  * BotTurnResult.advisorUsedFallback.
  */
 
-import type { CompositionTrace } from '../../services/ai/TurnComposer';
+import type { CompositionTrace } from '../../services/ai/TurnExecutorPlanner';
 
 /**
  * Replicated advisorUsedFallback extraction from AIStrategyEngine.takeTurn() (line 1302).

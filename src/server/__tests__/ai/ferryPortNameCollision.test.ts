@@ -21,9 +21,7 @@ jest.mock('../../../shared/services/trackUsageFees', () => ({
 jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(() => []),
 }));
-jest.mock('../../services/ai/PlanExecutor', () => ({
-  PlanExecutor: { findDemandBuildTarget: jest.fn() },
-}));
+// PlanExecutor deleted — no longer needed
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   getMajorCityGroups: jest.fn(() => []),
   getMajorCityLookup: jest.fn(() => new Map()),

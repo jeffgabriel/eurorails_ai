@@ -9,7 +9,7 @@
  */
 
 import { AIActionType } from '../../../shared/types/GameTypes';
-import type { CompositionTrace } from '../../services/ai/TurnComposer';
+import type { CompositionTrace } from '../../services/ai/TurnExecutorPlanner';
 import type { BotTurnResult } from '../../services/ai/AIStrategyEngine';
 
 /**

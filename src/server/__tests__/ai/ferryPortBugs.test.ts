@@ -16,9 +16,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
     applyPlanToState: jest.fn(),
   },
 }));
-jest.mock('../../services/ai/PlanExecutor', () => ({
-  PlanExecutor: { findDemandBuildTarget: jest.fn() },
-}));
+// PlanExecutor deleted — no longer needed
 jest.mock('../../services/ai/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
@@ -38,7 +36,6 @@ jest.mock('../../services/ai/computeBuildSegments', () => ({
 // ─── Imports ───────────────────────────────────────────────────────────────
 
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
-import { TurnComposer } from '../../services/ai/TurnComposer';
 import { loadGridPoints, getFerryPairPort } from '../../services/ai/MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import {
@@ -231,95 +228,8 @@ describe('Bug 3: computeEffectivePathLength — intra-city hops are free', () =>
   });
 });
 
-// ─── Bug 4: truncatePathToEffectiveBudget enforces ferry port boundaries ───
-
-describe('Bug 4: truncatePathToEffectiveBudget — ferry port boundary', () => {
-  // Access private static method via bracket notation
-  const truncate = (path: Array<{ row: number; col: number }>, budget: number) =>
-    (TurnComposer as any).truncatePathToEffectiveBudget(path, budget);
-
-  it('should truncate at first ferry port node (after index 0)', () => {
-    mockLoadGridPoints.mockReturnValue(new Map([
-      ['3,3', { terrain: TerrainType.Clear }],
-      ['4,4', { terrain: TerrainType.Clear }],
-      ['5,5', { terrain: TerrainType.FerryPort, name: 'Dover' }],
-      ['6,6', { terrain: TerrainType.Clear }],
-      ['7,7', { terrain: TerrainType.Clear }],
-    ]));
-
-    const path = [
-      { row: 3, col: 3 },
-      { row: 4, col: 4 },
-      { row: 5, col: 5 }, // FerryPort — should stop here
-      { row: 6, col: 6 },
-      { row: 7, col: 7 },
-    ];
-
-    const result = truncate(path, 10);
-
-    expect(result).toHaveLength(3);
-    expect(result[result.length - 1]).toEqual({ row: 5, col: 5 });
-  });
-
-  it('should NOT truncate at index 0 when starting at a ferry port', () => {
-    mockLoadGridPoints.mockReturnValue(new Map([
-      ['5,5', { terrain: TerrainType.FerryPort, name: 'Dover' }],
-      ['6,6', { terrain: TerrainType.Clear }],
-      ['7,7', { terrain: TerrainType.Clear }],
-    ]));
-
-    const path = [
-      { row: 5, col: 5 }, // Starting at FerryPort — skip
-      { row: 6, col: 6 },
-      { row: 7, col: 7 },
-    ];
-
-    const result = truncate(path, 10);
-
-    expect(result).toHaveLength(3);
-  });
-
-  it('should behave identically to pre-fix when no ferry ports in path (regression)', () => {
-    mockLoadGridPoints.mockReturnValue(new Map([
-      ['1,1', { terrain: TerrainType.Clear }],
-      ['2,2', { terrain: TerrainType.Clear }],
-      ['3,3', { terrain: TerrainType.Clear }],
-      ['4,4', { terrain: TerrainType.Clear }],
-    ]));
-
-    const path = [
-      { row: 1, col: 1 },
-      { row: 2, col: 2 },
-      { row: 3, col: 3 },
-      { row: 4, col: 4 },
-    ];
-
-    // Budget of 2 effective mileposts — truncates to 3 nodes
-    const result = truncate(path, 2);
-    expect(result).toHaveLength(3);
-    expect(result[result.length - 1]).toEqual({ row: 3, col: 3 });
-  });
-
-  it('should truncate at ferry port even when budget would allow further', () => {
-    mockLoadGridPoints.mockReturnValue(new Map([
-      ['1,1', { terrain: TerrainType.Clear }],
-      ['2,2', { terrain: TerrainType.Clear }],
-      ['3,3', { terrain: TerrainType.FerryPort, name: 'Calais' }],
-      ['4,4', { terrain: TerrainType.Clear }],
-    ]));
-
-    const path = [
-      { row: 1, col: 1 },
-      { row: 2, col: 2 },
-      { row: 3, col: 3 }, // Ferry port
-      { row: 4, col: 4 },
-    ];
-
-    const result = truncate(path, 5);
-    expect(result).toHaveLength(3);
-    expect(result[result.length - 1]).toEqual({ row: 3, col: 3 });
-  });
-});
+// Bug 4: truncatePathToEffectiveBudget was a private method of TurnComposer (now deleted).
+// This functionality is no longer needed in the new TurnExecutorPlanner architecture.
 
 // ─── JIRA-121 Bug 2: BFS ferry teleportation when bot starts at ferry port ──
 

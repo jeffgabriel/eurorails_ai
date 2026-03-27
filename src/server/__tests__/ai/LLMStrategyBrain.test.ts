@@ -1709,12 +1709,12 @@ describe('CARGO_CONFLICT_SCHEMA', () => {
 
 // ── JIRA-89: findDeadLoads ──
 
-describe('PlanExecutor.findDeadLoads', () => {
-  // Import PlanExecutor — it doesn't need the full mock setup
-  const { PlanExecutor } = require('../../services/ai/PlanExecutor');
+describe('TurnExecutorPlanner.findDeadLoads', () => {
+  // Import TurnExecutorPlanner — findDeadLoads was migrated from PlanExecutor (JIRA-156 BE-012)
+  const { TurnExecutorPlanner } = require('../../services/ai/TurnExecutorPlanner');
 
   it('should return empty array when no loads carried', () => {
-    const result = PlanExecutor.findDeadLoads([], [{ demands: [{ loadType: 'Coal' }] }]);
+    const result = TurnExecutorPlanner.findDeadLoads([], [{ demands: [{ loadType: 'Coal' }] }]);
     expect(result).toEqual([]);
   });
 
@@ -1724,7 +1724,7 @@ describe('PlanExecutor.findDeadLoads', () => {
       { demands: [{ loadType: 'Coal' }] },
       { demands: [{ loadType: 'Iron' }] },
     ];
-    const result = PlanExecutor.findDeadLoads(loads, demands);
+    const result = TurnExecutorPlanner.findDeadLoads(loads, demands);
     expect(result).toEqual([]);
   });
 
@@ -1734,14 +1734,14 @@ describe('PlanExecutor.findDeadLoads', () => {
       { demands: [{ loadType: 'Coal' }] },
       // No demand for Iron
     ];
-    const result = PlanExecutor.findDeadLoads(loads, demands);
+    const result = TurnExecutorPlanner.findDeadLoads(loads, demands);
     expect(result).toEqual(['Iron']);
   });
 
   it('should return all loads when no demands exist', () => {
     const loads = ['Coal', 'Iron'];
     const demands: any[] = [];
-    const result = PlanExecutor.findDeadLoads(loads, demands);
+    const result = TurnExecutorPlanner.findDeadLoads(loads, demands);
     expect(result).toEqual(['Coal', 'Iron']);
   });
 
@@ -1750,7 +1750,7 @@ describe('PlanExecutor.findDeadLoads', () => {
     const demands = [
       { demands: [{ loadType: 'Iron' }, { loadType: 'Coal' }, { loadType: 'Steel' }] },
     ];
-    const result = PlanExecutor.findDeadLoads(loads, demands);
+    const result = TurnExecutorPlanner.findDeadLoads(loads, demands);
     expect(result).toEqual([]);
   });
 });

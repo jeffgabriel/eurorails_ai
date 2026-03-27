@@ -34,17 +34,50 @@ import {
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
-import { loadGridPoints } from './MapTopology';
-import { CompositionTrace, TurnComposer } from './TurnComposer';
+import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
 import { BuildAdvisor } from './BuildAdvisor';
-import { PlanExecutor } from './PlanExecutor';
 import { TripPlanner } from './TripPlanner';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+
+// ── CompositionTrace ────────────────────────────────────────────────────────
+
+/**
+ * Structured trace of what happened during turn planning.
+ * Moved here from TurnComposer.ts as part of the JIRA-156 cleanup.
+ */
+export interface CompositionTrace {
+  /** Action types in the primary plan before composition */
+  inputPlan: string[];
+  /** Action types in the final composed plan */
+  outputPlan: string[];
+  /** Movement budget: total available, used, wasted */
+  moveBudget: { total: number; used: number; wasted: number };
+  /** A1: How many intermediate cities had opportunities, how many were accepted */
+  a1: { citiesScanned: number; opportunitiesFound: number };
+  /** A2: Continuation chaining iterations and termination reason */
+  a2: { iterations: number; terminationReason: string };
+  /** A3: Whether a MOVE was prepended before BUILD, or skipped with reason */
+  a3: { movePreprended: boolean; skipped?: boolean; reason?: string };
+  /** Phase B: Build/upgrade target and cost, or why skipped */
+  build: { target: string | null; cost: number; skipped: boolean; upgradeConsidered: boolean };
+  /** Pickups added during composition */
+  pickups: Array<{ load: string; city: string }>;
+  /** Deliveries added during composition */
+  deliveries: Array<{ load: string; city: string }>;
+  /** JIRA-122: JIT build gate decision */
+  jitGate?: { deferred: boolean; reason: string; trackRunway: number; intermediateStopTurns: number; effectiveRunway: number; trainSpeed: number; destinationCity: string; currentStopIndex?: number; buildTargetStopIndex?: number; currentStopCity?: string };
+  /** JIRA-122: Ferry-aware BFS search result */
+  ferryAwareBFS?: { searched: boolean; ferryHopsUsed: number; nearestPointViaFerry: { row: number; col: number; distance: number; ferryCrossings: number } | null };
+  /** JIRA-125: Victory build decision */
+  victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
+  /** JIRA-129: Build Advisor decision */
+  advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean; rawResponse?: string; rawWaypoints?: [number, number][]; systemPrompt?: string; userPrompt?: string; error?: string };
+}
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
 
@@ -243,17 +276,17 @@ export class TurnExecutorPlanner {
               } else {
                 // TripPlanner returned null route — fall back to revalidating existing route
                 console.warn(`${tag} Post-delivery TripPlanner returned null route. Continuing on existing route.`);
-                activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+                activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
                 activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
               }
             } catch (err) {
               console.warn(`${tag} Post-delivery replan failed (${(err as Error).message}). Continuing on existing route.`);
-              activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+              activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
               activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
             }
           } else {
             // No brain available — revalidate existing route and continue
-            activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+            activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
             activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
           }
         }
@@ -489,7 +522,7 @@ export class TurnExecutorPlanner {
     // ── JIT gate (shouldDeferBuild) ──────────────────────────────────────
     if (useAdvisor) {
       const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
-      const deferResult = TurnComposer.shouldDeferBuild(
+      const deferResult = TurnExecutorPlanner.shouldDeferBuild(
         snapshot,
         context,
         activeRoute,
@@ -930,6 +963,266 @@ export class TurnExecutorPlanner {
       }
       return false; // City not found in grid — exclude
     });
+  }
+
+  // ── Route State Helpers (migrated from PlanExecutor) ──────────────────
+
+  /**
+   * JIRA-123: Revalidate remaining DELIVER stops after a delivery may have
+   * consumed a shared demand card. Migrated from PlanExecutor.revalidateRemainingDeliveries().
+   */
+  static revalidateRemainingDeliveries(
+    route: StrategicRoute,
+    context: GameContext,
+  ): StrategicRoute {
+    const tag = '[TurnExecutorPlanner]';
+    const demandCardIds = new Set(context.demands.map(d => d.cardIndex));
+
+    const completedDeliveryCards = new Set<number>();
+    for (let i = 0; i < route.currentStopIndex; i++) {
+      const stop = route.stops[i];
+      if (stop.action === 'deliver' && stop.demandCardId != null) {
+        completedDeliveryCards.add(stop.demandCardId);
+      }
+    }
+
+    const remainingStops = route.stops.slice(route.currentStopIndex);
+    const invalidatedIndices: number[] = [];
+    for (let i = 0; i < remainingStops.length; i++) {
+      const stop = remainingStops[i];
+      if (stop.action !== 'deliver' || stop.demandCardId == null) continue;
+
+      const cardPresent = demandCardIds.has(stop.demandCardId);
+      const loadOnTrain = context.loads.includes(stop.loadType);
+      const cardConsumedByPriorDelivery = completedDeliveryCards.has(stop.demandCardId);
+
+      if (!cardPresent && loadOnTrain && cardConsumedByPriorDelivery) {
+        console.warn(
+          `${tag} JIRA-123: deliver(${stop.loadType}@${stop.city}) invalid — ` +
+          `demand card #${stop.demandCardId} consumed by prior delivery, ` +
+          `but ${stop.loadType} still on train. Removing stop.`,
+        );
+        invalidatedIndices.push(route.currentStopIndex + i);
+      }
+    }
+
+    if (invalidatedIndices.length === 0) return route;
+
+    const invalidatedLoadTypes = new Set(
+      invalidatedIndices.map(i => route.stops[i].loadType),
+    );
+    const keepSet = new Set<number>(route.stops.map((_, i) => i));
+    for (const idx of invalidatedIndices) {
+      keepSet.delete(idx);
+    }
+    for (let i = route.currentStopIndex; i < route.stops.length; i++) {
+      const stop = route.stops[i];
+      if (stop.action === 'pickup' && invalidatedLoadTypes.has(stop.loadType)) {
+        keepSet.delete(i);
+      }
+    }
+
+    const prunedStops = route.stops.filter((_, i) => keepSet.has(i));
+    const hasDeliveryRemaining = prunedStops
+      .slice(route.currentStopIndex)
+      .some(s => s.action === 'deliver');
+
+    if (!hasDeliveryRemaining) {
+      console.warn(
+        `${tag} JIRA-123: No valid DELIVER stops remain after revalidation — clearing route for re-plan.`,
+      );
+      return { ...route, stops: prunedStops, currentStopIndex: prunedStops.length };
+    }
+
+    return { ...route, stops: prunedStops };
+  }
+
+  /**
+   * Find carried loads with no matching demand card (dead loads).
+   * Migrated from PlanExecutor.findDeadLoads().
+   */
+  static findDeadLoads(
+    carriedLoads: string[],
+    resolvedDemands: Array<{ demands: Array<{ loadType: string }> }>,
+  ): string[] {
+    if (carriedLoads.length === 0) return [];
+    return carriedLoads.filter(loadType => {
+      const hasMatchingDemand = resolvedDemands.some(card =>
+        card.demands.some(d => d.loadType === loadType),
+      );
+      return !hasMatchingDemand;
+    });
+  }
+
+  // ── JIT Build Gate (migrated from TurnComposer) ────────────────────────
+
+  /**
+   * JIRA-122: Determine whether to defer building this turn.
+   * Migrated from TurnComposer.shouldDeferBuild().
+   */
+  static shouldDeferBuild(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    activeRoute: StrategicRoute | null | undefined,
+    buildTarget: string,
+    trainSpeed: number,
+    buildTargetStopIndex?: number,
+  ): { deferred: boolean; reason: string; trackRunway: number; intermediateStopTurns: number; effectiveRunway: number } {
+    if (context.isInitialBuild || context.turnNumber <= 2) {
+      return { deferred: false, reason: 'initial_build_exempt', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
+    }
+
+    if (snapshot.bot.money > 230) {
+      const unconnected = context.unconnectedMajorCities ?? [];
+      if (unconnected.some(c => c.cityName === buildTarget)) {
+        return { deferred: false, reason: 'victory_build_exempt', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
+      }
+    }
+
+    if (!activeRoute) {
+      return { deferred: true, reason: 'no_active_route', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
+    }
+
+    const routeStops = activeRoute.stops.map(s => s.city.toLowerCase());
+    if (!routeStops.includes(buildTarget.toLowerCase())) {
+      return { deferred: true, reason: 'target_not_in_route', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
+    }
+
+    if (activeRoute.phase !== 'build') {
+      const currentStop = activeRoute.stops[activeRoute.currentStopIndex];
+      if (currentStop) {
+        const isDeliveryCommitted = context.loads.includes(currentStop.loadType) ||
+          activeRoute.phase === 'travel' || activeRoute.phase === 'act';
+        if (!isDeliveryCommitted) {
+          return { deferred: true, reason: 'not_committed_to_delivery', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
+        }
+      }
+    }
+
+    const stopIndex = buildTargetStopIndex ?? activeRoute.currentStopIndex;
+    const intermediateStopTurns = TurnExecutorPlanner.estimateIntermediateStopTurns(
+      snapshot, context, activeRoute, stopIndex, trainSpeed,
+    );
+    const trackRunway = TurnExecutorPlanner.calculateTrackRunway(snapshot, buildTarget, trainSpeed, context);
+    const effectiveRunway = intermediateStopTurns + trackRunway;
+    if (effectiveRunway >= 2) {
+      return { deferred: true, reason: 'sufficient_runway', trackRunway, intermediateStopTurns, effectiveRunway };
+    }
+
+    return { deferred: false, reason: 'build_needed', trackRunway, intermediateStopTurns, effectiveRunway };
+  }
+
+  /**
+   * JIRA-154: Estimate intermediate stop travel time between current stop and build target.
+   * Migrated from TurnComposer.estimateIntermediateStopTurns().
+   */
+  static estimateIntermediateStopTurns(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    activeRoute: StrategicRoute,
+    buildTargetStopIndex: number,
+    trainSpeed: number,
+  ): number {
+    const currentStopIndex = activeRoute.currentStopIndex;
+    if (buildTargetStopIndex <= currentStopIndex || trainSpeed <= 0) return 0;
+
+    const gridPoints = loadGridPoints();
+    const cityPositions = new Map<string, { row: number; col: number }>();
+    for (const [, gp] of gridPoints) {
+      if (gp.name) {
+        cityPositions.set(gp.name.toLowerCase(), { row: gp.row, col: gp.col });
+      }
+    }
+
+    let prevPos: { row: number; col: number } | null = snapshot.bot.position
+      ? { row: snapshot.bot.position.row, col: snapshot.bot.position.col }
+      : null;
+
+    let totalTurns = 0;
+    for (let i = currentStopIndex; i < buildTargetStopIndex; i++) {
+      const stop = activeRoute.stops[i];
+      if (!stop) continue;
+      if (!context.citiesOnNetwork.includes(stop.city)) continue;
+
+      const stopPos = cityPositions.get(stop.city.toLowerCase());
+      if (!stopPos || !prevPos) {
+        prevPos = stopPos ?? null;
+        continue;
+      }
+
+      const distance = hexDistance(prevPos.row, prevPos.col, stopPos.row, stopPos.col);
+      totalTurns += distance / trainSpeed;
+      prevPos = stopPos;
+    }
+
+    return totalTurns;
+  }
+
+  /**
+   * JIRA-122: Calculate track runway (turns of existing track toward destination).
+   * Migrated from TurnComposer.calculateTrackRunway().
+   */
+  static calculateTrackRunway(
+    snapshot: WorldSnapshot,
+    destinationCity: string,
+    trainSpeed: number,
+    context: GameContext,
+  ): number {
+    if (!snapshot.bot.position || trainSpeed <= 0) return 0;
+
+    if (context.citiesOnNetwork.includes(destinationCity)) {
+      return 10;
+    }
+
+    const networkNodeKeys = new Set<string>();
+    for (const seg of snapshot.bot.existingSegments) {
+      networkNodeKeys.add(makeKey(seg.from.row, seg.from.col));
+      networkNodeKeys.add(makeKey(seg.to.row, seg.to.col));
+    }
+
+    const gridPoints = loadGridPoints();
+    let destPosition: { row: number; col: number } | null = null;
+    for (const [, gp] of gridPoints) {
+      if (gp.name && gp.name.toLowerCase() === destinationCity.toLowerCase()) {
+        destPosition = { row: gp.row, col: gp.col };
+        break;
+      }
+    }
+    if (!destPosition) return 0;
+
+    const botKey = makeKey(snapshot.bot.position.row, snapshot.bot.position.col);
+    const visited = new Set<string>();
+    visited.add(botKey);
+
+    let frontier = [{ row: snapshot.bot.position.row, col: snapshot.bot.position.col, depth: 0 }];
+    let maxDepthOnNetwork = 0;
+
+    while (frontier.length > 0) {
+      const nextFrontier: typeof frontier = [];
+      for (const node of frontier) {
+        const neighbors = getHexNeighbors(node.row, node.col);
+        for (const neighbor of neighbors) {
+          const key = makeKey(neighbor.row, neighbor.col);
+          if (visited.has(key)) continue;
+          visited.add(key);
+
+          if (!networkNodeKeys.has(key)) continue;
+
+          const hasSegment = snapshot.bot.existingSegments.some(seg =>
+            (makeKey(seg.from.row, seg.from.col) === makeKey(node.row, node.col) && makeKey(seg.to.row, seg.to.col) === key) ||
+            (makeKey(seg.to.row, seg.to.col) === makeKey(node.row, node.col) && makeKey(seg.from.row, seg.from.col) === key),
+          );
+          if (!hasSegment) continue;
+
+          const newDepth = node.depth + 1;
+          if (newDepth > maxDepthOnNetwork) maxDepthOnNetwork = newDepth;
+          nextFrontier.push({ row: neighbor.row, col: neighbor.col, depth: newDepth });
+        }
+      }
+      frontier = nextFrontier;
+    }
+
+    return maxDepthOnNetwork / trainSpeed;
   }
 
   // ── Return helpers ────────────────────────────────────────────────────

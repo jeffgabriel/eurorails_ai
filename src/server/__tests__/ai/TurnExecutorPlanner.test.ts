@@ -36,11 +36,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   },
 }));
 
-jest.mock('../../services/ai/PlanExecutor', () => ({
-  PlanExecutor: {
-    revalidateRemainingDeliveries: jest.fn((route: StrategicRoute) => route),
-  },
-}));
+// revalidateRemainingDeliveries is now on TurnExecutorPlanner — spied on in beforeEach
 
 jest.mock('../../../shared/services/majorCityGroups', () => ({
   getMajorCityLookup: jest.fn(() => new Map()),
@@ -59,17 +55,7 @@ jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
   },
 }));
 
-jest.mock('../../services/ai/TurnComposer', () => ({
-  TurnComposer: {
-    shouldDeferBuild: jest.fn(() => ({
-      deferred: false,
-      reason: 'build_needed',
-      trackRunway: 0,
-      intermediateStopTurns: 0,
-      effectiveRunway: 0,
-    })),
-  },
-}));
+// shouldDeferBuild is now on TurnExecutorPlanner — spied on in beforeEach
 
 jest.mock('../../services/ai/BuildAdvisor', () => ({
   BuildAdvisor: {
@@ -106,10 +92,8 @@ jest.mock('../../services/ai/BotMemory', () => ({
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
-import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
-import { TurnComposer } from '../../services/ai/TurnComposer';
 import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
 import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 
@@ -119,11 +103,11 @@ const mockGetNetworkFrontier = getNetworkFrontier as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
-const mockRevalidate = PlanExecutor.revalidateRemainingDeliveries as jest.Mock;
+let mockRevalidate: jest.SpyInstance;
 const mockComputeEffectivePathLength = computeEffectivePathLength as jest.Mock;
 const MockTripPlanner = TripPlanner as jest.MockedClass<typeof TripPlanner>;
 const mockEnrich = RouteEnrichmentAdvisor.enrich as jest.Mock;
-const mockShouldDeferBuild = TurnComposer.shouldDeferBuild as jest.Mock;
+let mockShouldDeferBuild: jest.SpyInstance;
 const mockBuildAdvisorAdvise = BuildAdvisor.advise as jest.Mock;
 const mockBuildAdvisorRetry = BuildAdvisor.retryWithSolvencyFeedback as jest.Mock;
 
@@ -190,6 +174,26 @@ function makeSnapshot(): WorldSnapshot {
     loadAvailability: {},
   } as unknown as WorldSnapshot;
 }
+
+// ── Top-level spies for migrated methods ──────────────────────────────────
+
+beforeEach(() => {
+  mockRevalidate = jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+    .mockImplementation((route: StrategicRoute) => route);
+  mockShouldDeferBuild = jest.spyOn(TurnExecutorPlanner, 'shouldDeferBuild')
+    .mockReturnValue({
+      deferred: false,
+      reason: 'build_needed',
+      trackRunway: 0,
+      intermediateStopTurns: 0,
+      effectiveRunway: 0,
+    });
+});
+
+afterEach(() => {
+  mockRevalidate.mockRestore();
+  mockShouldDeferBuild.mockRestore();
+});
 
 // ── skipCompletedStops ─────────────────────────────────────────────────────
 
