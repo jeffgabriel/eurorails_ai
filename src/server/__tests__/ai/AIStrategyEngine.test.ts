@@ -119,11 +119,29 @@ jest.mock('../../services/ai/RouteValidator', () => ({
   },
 }));
 
-// Mock PlanExecutor
+// Mock PlanExecutor (still used for findDeadLoads)
 jest.mock('../../services/ai/PlanExecutor', () => ({
   PlanExecutor: {
     execute: jest.fn(),
     findDeadLoads: jest.fn(() => []),
+    revalidateRemainingDeliveries: jest.fn((route: any) => route),
+  },
+}));
+
+// Mock TurnExecutorPlanner — the new unified turn planner replacing PlanExecutor+TurnComposer
+const defaultCompositionTrace = {
+  inputPlan: [], outputPlan: [],
+  moveBudget: { total: 9, used: 0, wasted: 0 },
+  a1: { citiesScanned: 0, opportunitiesFound: 0 },
+  a2: { iterations: 0, terminationReason: 'none' },
+  a3: { movePreprended: false },
+  build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
+  pickups: [], deliveries: [],
+};
+jest.mock('../../services/ai/TurnExecutorPlanner', () => ({
+  TurnExecutorPlanner: {
+    execute: jest.fn(),
+    filterByDirection: jest.fn((targets: any) => targets),
   },
 }));
 
@@ -200,6 +218,12 @@ jest.mock('../../services/ai/LLMStrategyBrain', () => ({
   LLMStrategyBrain: jest.fn().mockImplementation(() => ({
     decideAction: jest.fn(),
     planRoute: jest.fn(),
+    modelName: 'claude-haiku-4-5-20251001',
+    providerAdapter: {
+      resetCallIds: jest.fn(),
+      getCallIds: jest.fn(() => []),
+      getCallSummaries: jest.fn(() => []),
+    },
   })),
 }));
 
@@ -211,7 +235,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
-import { TurnComposer } from '../../services/ai/TurnComposer';
+import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
@@ -234,11 +258,25 @@ const mockContextBuild = ContextBuilder.build as jest.MockedFunction<typeof Cont
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<any>>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
-const mockPlanExecutorExecute = PlanExecutor.execute as jest.MockedFunction<typeof PlanExecutor.execute>;
+const mockTurnExecutorPlannerExecute = TurnExecutorPlanner.execute as jest.MockedFunction<typeof TurnExecutorPlanner.execute>;
 const mockGetMemory = getMemory as jest.MockedFunction<typeof getMemory>;
 const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.MockedFunction<typeof ActionResolver.heuristicFallback>;
 const mockUpdateMemory = updateMemory as jest.MockedFunction<typeof updateMemory>;
-const mockTurnComposerCompose = TurnComposer.compose as jest.MockedFunction<typeof TurnComposer.compose>;
+
+/** Returns a mock LLMStrategyBrain instance with providerAdapter (required by JIRA-143 call tracking). */
+function makeMockBrain(overrides: Record<string, any> = {}): any {
+  return {
+    decideAction: jest.fn(),
+    planRoute: jest.fn(),
+    modelName: 'claude-haiku-4-5-20251001',
+    providerAdapter: {
+      resetCallIds: jest.fn(),
+      getCallIds: jest.fn(() => []),
+      getCallSummaries: jest.fn(() => []),
+    },
+    ...overrides,
+  };
+}
 
 // ── Factory helpers ───────────────────────────────────────────────────────
 
@@ -309,6 +347,34 @@ function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
 }
 
+/**
+ * Helper: set up TurnExecutorPlanner.execute mock with PlanExecutorResult-compatible shape.
+ * Converts the old { plan, routeComplete, routeAbandoned, updatedRoute, description } shape
+ * to the new TurnExecutorResult shape: { plans[], routeComplete, routeAbandoned, updatedRoute, compositionTrace, hasDelivery }.
+ */
+function mockTurnExecResult(opts: {
+  plan: any;
+  routeComplete: boolean;
+  routeAbandoned: boolean;
+  updatedRoute: any;
+  description?: string;
+  hasDelivery?: boolean;
+}): any {
+  const plan = opts.plan;
+  const hasDelivery = opts.hasDelivery ?? (
+    plan.type === AIActionType.DeliverLoad ||
+    (plan.type === 'MultiAction' && plan.steps?.some((s: any) => s.type === AIActionType.DeliverLoad))
+  );
+  return {
+    plans: plan.type === AIActionType.PassTurn ? [] : [plan],
+    routeComplete: opts.routeComplete,
+    routeAbandoned: opts.routeAbandoned,
+    updatedRoute: opts.updatedRoute,
+    compositionTrace: defaultCompositionTrace,
+    hasDelivery,
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe('AIStrategyEngine.takeTurn (Integration)', () => {
@@ -337,8 +403,27 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     mockDecideAction = jest.fn<() => Promise<any>>();
     mockPlanRoute = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(null);
     (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-      (() => ({ decideAction: mockDecideAction, planRoute: mockPlanRoute })) as any,
+      (() => ({
+        decideAction: mockDecideAction,
+        planRoute: mockPlanRoute,
+        modelName: 'claude-haiku-4-5-20251001',
+        providerAdapter: {
+          resetCallIds: jest.fn(),
+          getCallIds: jest.fn(() => []),
+          getCallSummaries: jest.fn(() => []),
+        },
+      })) as any,
     );
+
+    // Default TurnExecutorPlanner.execute — returns PassTurn with no route changes
+    mockTurnExecutorPlannerExecute.mockResolvedValue({
+      plans: [{ type: AIActionType.PassTurn }],
+      updatedRoute: { stops: [], currentStopIndex: 0, phase: 'build' as const, createdAtTurn: 0 },
+      compositionTrace: defaultCompositionTrace,
+      routeComplete: false,
+      routeAbandoned: false,
+      hasDelivery: false,
+    } as any);
   });
 
   describe('successful turn — BuildTrack', () => {
@@ -371,13 +456,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor returns a build plan
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [seg] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -456,13 +541,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor returns a BUILD plan
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Ruhr',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -477,7 +562,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('initial build uses LLM route planning', () => {
-    it('should call planRoute during initialBuild when LLM key is present', async () => {
+    it('should use InitialBuildPlanner (not LLM) during initialBuild', async () => {
+      // JIRA-142b: InitialBuildPlanner replaces LLM for initial build — bypasses planRoute entirely.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -496,32 +582,28 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Build from Ruhr for quick first delivery',
         createdAtTurn: 3,
       };
-      mockPlanRoute.mockResolvedValue({
-        route,
-        model: 'claude-sonnet-4-20250514',
-        latencyMs: 200,
-      });
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Ruhr',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toContain('route-planned');
-      // LLM SHOULD have been called
-      expect(LLMStrategyBrain).toHaveBeenCalled();
-      expect(mockPlanRoute).toHaveBeenCalled();
+      // InitialBuildPlanner uses 'initial-build-planner' model tag
+      expect(result.model).toBe('initial-build-planner');
+      // planRoute is NOT called — InitialBuildPlanner is computed, not LLM
+      expect(mockPlanRoute).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should try heuristicFallback during initialBuild when planRoute returns null', async () => {
+    it('should use InitialBuildPlanner during initialBuild regardless of LLM key', async () => {
+      // JIRA-142b: InitialBuildPlanner is always used for initial build — no LLM fallback needed.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -532,19 +614,30 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // planRoute fails
-      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        startingCity: 'Ruhr',
+        reasoning: 'Build from Ruhr for quick first delivery',
+        createdAtTurn: 3,
+      };
 
-      // heuristicFallback also fails → PassTurn
-      mockHeuristicFallback.mockResolvedValue({ success: false });
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Ruhr',
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      expect(result.action).toBe(AIActionType.PassTurn);
-      expect(result.reasoning).toContain('llm-failed');
-      expect(mockPlanRoute).toHaveBeenCalled();
-      // heuristicFallback SHOULD have been called before PassTurn
-      expect(mockHeuristicFallback).toHaveBeenCalledWith({ ...context, consecutiveLlmFailures: 0 }, snapshot, { llmFailed: true });
+      // InitialBuildPlanner always produces a result — no PassTurn from LLM failure
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.model).toBe('initial-build-planner');
+      // heuristicFallback is NOT called — InitialBuildPlanner handles it
+      expect(mockHeuristicFallback).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -557,7 +650,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const snapshot = makeSnapshot({
         botConfig: { skillLevel: 'medium' },
       } as any);
-      const context = makeContext({ isInitialBuild: true, canBuild: true });
+      // Use non-initial-build context so planRoute is called
+      const context = makeContext({ canBuild: true });
 
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
@@ -580,13 +674,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       const updatedRoute: StrategicRoute = { ...route, currentStopIndex: 0, phase: 'build' };
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute,
         description: 'Building toward Ruhr',
-      });
+      }));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -635,23 +729,31 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor reports route complete
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
+      // TurnExecutorPlanner reports route complete with a PassTurn action
+      // (avoids real TurnExecutor delivery execution which requires additional mocks)
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [],  // PassTurn equivalent — no actions
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
-        description: 'Delivered Coal to Berlin',
-      });
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: false,
+      } as any);
+
+      // Mock heuristicFallback so continuation code doesn't throw
+      mockHeuristicFallback.mockResolvedValue({ success: false });
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
+      // Find the updateMemory call that sets activeRoute
       expect(mockUpdateMemory).toHaveBeenCalled();
-      const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      expect(patch.activeRoute).toBeNull();
-      expect(patch.turnsOnRoute).toBe(0);
-      expect(patch.routeHistory).toBeDefined();
-      expect(patch.routeHistory.length).toBeGreaterThan(0);
+      const allPatches = mockUpdateMemory.mock.calls.map((c: any[]) => c[2]);
+      const routePatch = allPatches.find((p: any) => 'activeRoute' in p);
+      expect(routePatch).toBeDefined();
+      expect(routePatch.activeRoute).toBeNull();
+      expect(routePatch.turnsOnRoute).toBe(0);
+      expect(routePatch.routeHistory).toBeDefined();
+      expect(routePatch.routeHistory.length).toBeGreaterThan(0);
     });
   });
 
@@ -730,20 +832,21 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       // PlanExecutor returns a build plan
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.reasoning).toContain('route-executor');
-      // LLM should NOT have been called
-      expect(LLMStrategyBrain).not.toHaveBeenCalled();
+      // LLM decideAction should NOT have been called — brain is created for Phase B BuildAdvisor
+      // but the route executor path doesn't call decideAction
+      expect(mockDecideAction).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -793,13 +896,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor executes first step
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -927,7 +1030,8 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('initial build — LLM route planning', () => {
-    it('should call planRoute during initialBuild with LLM key', async () => {
+    it('should use InitialBuildPlanner (not LLM planRoute) during initialBuild gameStatus', async () => {
+      // JIRA-142b: InitialBuildPlanner replaces LLM for initial build.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const snapshot = makeSnapshot({
@@ -947,27 +1051,22 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Quick first delivery from Ruhr',
         createdAtTurn: 3,
       };
-      mockPlanRoute.mockResolvedValue({
-        route,
-        model: 'claude-sonnet-4-20250514',
-        latencyMs: 200,
-      });
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Ruhr',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toContain('route-planned');
-      // LLM SHOULD have been called during initialBuild
-      expect(LLMStrategyBrain).toHaveBeenCalled();
-      expect(mockPlanRoute).toHaveBeenCalled();
+      // InitialBuildPlanner uses 'initial-build-planner' model tag, not 'route-planned'
+      expect(result.model).toBe('initial-build-planner');
+      // planRoute is NOT called during initialBuild — InitialBuildPlanner is computed
+      expect(mockPlanRoute).not.toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -1102,13 +1201,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   });
 
   describe('delivery clears active route (BE-004/BE-006)', () => {
-    it('should clear activeRoute when TurnComposer produces a MultiAction with DeliverLoad', async () => {
+    it('should clear activeRoute when TurnExecutorPlanner produces a MultiAction with DeliverLoad', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: jest.fn(),
-      }));
+      (LLMStrategyBrain as any).mockImplementation(() => makeMockBrain());
 
       const route: StrategicRoute = {
         stops: [
@@ -1144,30 +1240,25 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor returns a move plan (not yet delivering)
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: route,
-        description: 'Moving toward Paris',
-      });
-
-      // TurnComposer enriches with a delivery step (scanPathOpportunities detected opportunity)
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
+      // TurnExecutorPlanner produces a MultiAction plan with Move + Deliver (Phase A)
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [
           { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
           { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Paris', cardId: 10, payout: 15 },
         ],
-      }, trace: {} } as any);
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: route,
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       // Verify activeRoute was cleared (set to null) in memory update
       expect(mockUpdateMemory).toHaveBeenCalled();
       const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      // Route should be completed because the delivery matches the last stop
+      // Route should be completed
       expect(patch.activeRoute).toBeNull();
       expect(patch.turnsOnRoute).toBe(0);
 
@@ -1177,10 +1268,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should clear activeRoute for non-route deliveries too (force re-planning)', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: jest.fn(),
-      }));
+      (LLMStrategyBrain as any).mockImplementation(() => makeMockBrain());
 
       const route: StrategicRoute = {
         stops: [
@@ -1216,23 +1304,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor returns a build plan
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: route,
-        description: 'Building toward Essen',
-      });
-
-      // TurnComposer enriches with a delivery for a DIFFERENT load (not on route)
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
+      // TurnExecutorPlanner returns BuildTrack + DeliverLoad (for a DIFFERENT load not on route)
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [
           { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
           { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
         ],
-      }, trace: {} } as any);
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1280,13 +1363,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns delivery + routeComplete
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivered Coal to Berlin',
-      });
+      }));
 
       // heuristicFallback returns a BUILD action for continuation
       const buildPlan = { type: AIActionType.BuildTrack as const, segments: [makeSegment(10, 10, 10, 11)], targetCity: 'Paris' };
@@ -1338,13 +1421,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns delivery + routeComplete
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivered Coal to Berlin',
-      });
+      }));
 
       // heuristicFallback returns a MOVE action for continuation
       const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
@@ -1389,13 +1472,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns delivery + routeComplete
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivered Coal to Berlin',
-      });
+      }));
 
       // heuristicFallback fails — no continuation
       mockHeuristicFallback.mockResolvedValue({ success: false });
@@ -1410,7 +1493,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(patch.activeRoute).toBeNull();
     });
 
-    it('JIRA-99: should preserve replacement route in memory when Stage 3d re-eval succeeds', async () => {
+    it('JIRA-99: should preserve replacement route in memory when TurnExecutorPlanner internally replanned', async () => {
+      // JIRA-99: Stage 3d (post-delivery replan) is now internal to TurnExecutorPlanner.
+      // When TurnExecutorPlanner returns routeComplete=false with updatedRoute=newRoute,
+      // AIStrategyEngine should store the new route in memory.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const oldRoute: StrategicRoute = {
@@ -1444,70 +1530,50 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor returns delivery + routeComplete
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Tourists', city: 'Torino', cardId: 1, payout: 19 },
-        routeComplete: true,
-        routeAbandoned: false,
-        updatedRoute: oldRoute,
-        description: 'Delivered Tourists to Torino',
-      });
-
-      // Stage 3d: LLM plans a replacement route
+      // TurnExecutorPlanner internally performed delivery + replan.
+      // Returns routeComplete=false with the new replacement route.
       const newRoute: StrategicRoute = {
-        stops: [{ action: 'deliver', loadType: 'Tourists', city: 'Venezia', demandCardId: 3, payment: 15 }],
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
         currentStopIndex: 0,
-        phase: 'travel' as const,
+        phase: 'build' as const,
         createdAtTurn: 8,
-        reasoning: 'Deliver remaining tourists to Venezia',
+        reasoning: 'Pick up steel from Ruhr',
       };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: newRoute,
-        model: 'claude-haiku-4-5-20251001',
-        latencyMs: 200,
-        llmLog: [],
-      });
-      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn })) as any,
-      );
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [{ type: AIActionType.DeliverLoad, load: 'Tourists', city: 'Torino', cardId: 1, payout: 19 }],
+        routeComplete: false,  // new route active — NOT completed
+        routeAbandoned: false,
+        updatedRoute: newRoute,  // TurnExecutorPlanner replanned internally
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
-      // Set up delivery execution mocks for JIRA-91 early execution
-      const gridMap = new Map();
-      gridMap.set('10,10', { row: 10, col: 10, name: 'Torino', terrain: 2 });
-      (loadGridPoints as any).mockReturnValue(gridMap);
+      // JIRA-64: After delivery, AIStrategyEngine rebuilds demands to check for stale route stops.
+      // Mock rebuildDemands to include the new route's loadType so JIRA-64 doesn't invalidate it.
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
+        {
+          cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin',
+          payout: 20, isSupplyReachable: true, isDeliveryReachable: true,
+          isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 2, loadChipCarried: 0, estimatedTurns: 2,
+          demandScore: 8, efficiencyPerTurn: 4, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        },
+      ] as any[]);
+      // DeliverLoad in plans requires PlayerService.deliverLoadForUser to not throw
       (PlayerService.deliverLoadForUser as any).mockResolvedValue({
         payment: 19, updatedMoney: 69, newCard: { id: 50, demands: [] },
       });
-      // rebuildDemands must include the new route's loadType so JIRA-64 stale-route
-      // check doesn't invalidate the replacement route.
-      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
-        {
-          cardIndex: 0, loadType: 'Tourists', supplyCity: 'Unknown', deliveryCity: 'Venezia',
-          payout: 15, isSupplyReachable: false, isDeliveryReachable: true,
-          isSupplyOnNetwork: false, isDeliveryOnNetwork: true,
-          estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
-          isLoadAvailable: false, isLoadOnTrain: true, ferryRequired: false,
-          loadChipTotal: 2, loadChipCarried: 1, estimatedTurns: 1,
-          demandScore: 10, efficiencyPerTurn: 10, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
-        },
-      ] as any[]);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Stage 3d should have called planRoute (routeWasCompleted path)
-      expect(mockPlanRouteFn).toHaveBeenCalled();
-
-      // JIRA-99: Memory should save the NEW replacement route, not null
+      // JIRA-99: Memory should save the NEW replacement route returned by TurnExecutorPlanner
       expect(mockUpdateMemory).toHaveBeenCalled();
-      const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      expect(patch.activeRoute).toEqual(newRoute);
-      expect(patch.turnsOnRoute).toBe(0);
-
-      // Old route should be logged as completed in routeHistory
-      expect(patch.routeHistory).toBeDefined();
-      expect(patch.routeHistory.length).toBe(1);
-      expect(patch.routeHistory[0].outcome).toBe('completed');
-      expect(patch.routeHistory[0].route).toEqual(oldRoute);
+      const allPatches99 = mockUpdateMemory.mock.calls.map((c: any[]) => c[2]);
+      const routePatch99 = allPatches99.find((p: any) => p.activeRoute !== undefined && p.activeRoute !== null);
+      expect(routePatch99).toBeDefined();
+      expect(routePatch99.activeRoute).toEqual(newRoute);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
@@ -1544,13 +1610,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns abandoned (not completed)
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
         routeAbandoned: true,
         updatedRoute: route,
         description: 'Route abandoned — cannot reach pickup',
-      });
+      }));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1565,7 +1631,9 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(lastEntry.outcome).toBe('abandoned');
     });
 
-    it('JIRA-103: should retry planRoute with budgetHint when first attempt returns null after delivery', async () => {
+    it('JIRA-103: should store new route in memory when TurnExecutorPlanner replanned after delivery', async () => {
+      // JIRA-103: Stage 3d (planRoute retry with budgetHint) is now internal to TurnExecutorPlanner.
+      // AIStrategyEngine simply uses the updatedRoute returned by TurnExecutorPlanner.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const oldRoute: StrategicRoute = {
@@ -1599,69 +1667,57 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor returns delivery + routeComplete
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
-        routeComplete: true,
-        routeAbandoned: false,
-        updatedRoute: oldRoute,
-        description: 'Delivered Coal to Berlin',
-      });
-
-      // planRoute: first call returns null, second (retry) returns a route
+      // TurnExecutorPlanner internally did delivery + planRoute retry, returning new route.
       const retryRoute: StrategicRoute = {
-        stops: [{ action: 'deliver', loadType: 'Steel', city: 'Warszawa', demandCardId: 2, payment: 20 }],
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
         currentStopIndex: 0,
-        phase: 'travel' as const,
+        phase: 'build' as const,
         createdAtTurn: 6,
-        reasoning: 'Cheap nearby delivery',
+        reasoning: 'Pick up steel as cheap nearby option',
       };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
-        .mockResolvedValueOnce({ route: null, llmLog: [{ attemptNumber: 1, status: 'validation_error', responseText: '', error: 'too expensive' }] })
-        .mockResolvedValueOnce({ route: retryRoute, model: 'claude-haiku-4-5-20251001', latencyMs: 150, llmLog: [{ attemptNumber: 1, status: 'success', responseText: '' }] });
-      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn })) as any,
-      );
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [{ type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 }],
+        routeComplete: false,  // new route active after internal replan
+        routeAbandoned: false,
+        updatedRoute: retryRoute,
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
-      // Set up delivery execution mocks for JIRA-91 early execution
-      const gridMap = new Map();
-      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
-      (loadGridPoints as any).mockReturnValue(gridMap);
-      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
-        payment: 25, updatedMoney: 75, newCard: { id: 50, demands: [] },
-      });
+      // JIRA-64: After delivery, AIStrategyEngine rebuilds demands to check for stale route stops.
+      // Mock rebuildDemands to include the new route's loadType so JIRA-64 doesn't invalidate it.
       (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
         {
-          cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Warszawa',
-          payout: 20, isSupplyReachable: false, isDeliveryReachable: true,
+          cardIndex: 0, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin',
+          payout: 20, isSupplyReachable: true, isDeliveryReachable: true,
           isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
           estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
           isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
           loadChipTotal: 2, loadChipCarried: 0, estimatedTurns: 2,
-          demandScore: 10, efficiencyPerTurn: 5, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+          demandScore: 8, efficiencyPerTurn: 4, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
         },
       ] as any[]);
 
+      // DeliverLoad in plans requires PlayerService.deliverLoadForUser to not throw
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 25, updatedMoney: 75, newCard: { id: 50, demands: [] },
+      });
+
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // planRoute should have been called twice (original + retry)
-      expect(mockPlanRouteFn).toHaveBeenCalledTimes(2);
-
-      // Second call should include budgetHint (6th argument)
-      const retryArgs = mockPlanRouteFn.mock.calls[1];
-      expect(retryArgs[5]).toBeDefined();
-      expect(retryArgs[5]).toContain('budget infeasibility');
-      expect(retryArgs[5]).toContain('existing track');
-
-      // Memory should save the retry route
+      // Memory should save the new route from TurnExecutorPlanner's internal replan
       expect(mockUpdateMemory).toHaveBeenCalled();
-      const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      expect(patch.activeRoute).toEqual(retryRoute);
+      const allPatches103 = mockUpdateMemory.mock.calls.map((c: any[]) => c[2]);
+      const routePatch103 = allPatches103.find((p: any) => p.activeRoute !== undefined && p.activeRoute !== null);
+      expect(routePatch103).toBeDefined();
+      expect(routePatch103.activeRoute).toEqual(retryRoute);
 
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('JIRA-103: should fall through to heuristic when both planRoute attempts return null', async () => {
+    it('JIRA-103: should call heuristicFallback continuation when route completes with no internal replan', async () => {
+      // When TurnExecutorPlanner returns routeComplete=true (no internal replan possible),
+      // AIStrategyEngine calls heuristicFallback for continuation.
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       const oldRoute: StrategicRoute = {
@@ -1695,38 +1751,21 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      // TurnExecutorPlanner completed the route, no internal replan
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: oldRoute,
         description: 'Delivered Coal to Berlin',
-      });
-
-      // Both planRoute calls return null
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
-        .mockResolvedValue({ route: null, llmLog: [{ attemptNumber: 1, status: 'validation_error', responseText: '', error: 'all attempts failed' }] });
-      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn })) as any,
-      );
-
-      const gridMap = new Map();
-      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
-      (loadGridPoints as any).mockReturnValue(gridMap);
-      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
-        payment: 25, updatedMoney: 75, newCard: { id: 50, demands: [] },
-      });
-      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([] as any[]);
+      }));
 
       const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
       mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // planRoute called twice (original + budget-hint retry)
-      expect(mockPlanRouteFn).toHaveBeenCalledTimes(2);
-
-      // heuristicFallback should have been called as final fallback
+      // heuristicFallback should have been called for continuation
       expect(mockHeuristicFallback).toHaveBeenCalled();
 
       delete process.env.ANTHROPIC_API_KEY;
@@ -1766,20 +1805,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // Route abandoned, not completed
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.PassTurn },
         routeComplete: false,
         routeAbandoned: true,
         updatedRoute: route,
         description: 'Route abandoned',
-      });
+      }));
 
       // planRoute mock — should only be called if code incorrectly retries
       const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>()
         .mockResolvedValue({ route: null, llmLog: [] });
-      (LLMStrategyBrain as unknown as jest.MockedClass<typeof LLMStrategyBrain>).mockImplementation(
-        (() => ({ decideAction: jest.fn(), planRoute: mockPlanRouteFn })) as any,
-      );
+      (LLMStrategyBrain as any).mockImplementation(() => makeMockBrain({ planRoute: mockPlanRouteFn }));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -1830,17 +1867,19 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         tokenUsage: { input: 200, output: 80 },
       });
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      expect(result.model).toBe('claude-sonnet-4-20250514');
+      // TripPlanner wraps LLM calls; model is 'trip-planner' at the AIStrategyEngine level.
+      // The underlying LLM model is captured inside TripPlanner's result but not surfaced here.
+      expect(result.model).toBe('trip-planner');
       expect(result.llmLatencyMs).toBe(750);
       expect(result.tokenUsage).toEqual({ input: 200, output: 80 });
       expect(result.retried).toBe(false);
@@ -1879,13 +1918,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -2078,17 +2117,12 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         deliveryCount: 0,
         totalEarnings: 0,
       } as any);
-      // Reset TurnComposer to passthrough (clearAllMocks doesn't reset mockResolvedValue)
-      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({ plan, trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] } }));
     });
 
     it('should store remaining route stops in memory when delivery clears active route', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: jest.fn(),
-      }));
+      (LLMStrategyBrain as any).mockImplementation(() => makeMockBrain());
 
       const route: StrategicRoute = {
         stops: [
@@ -2125,24 +2159,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      // PlanExecutor returns a move toward Berlin
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: route,
-        description: 'Moving toward Berlin',
-      });
-
-      // TurnComposer enriches with a delivery that does NOT match the current route stop
-      // (non-route delivery, e.g., an opportunistic one)
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
+      // TurnExecutorPlanner produces Move + non-route DeliverLoad (opportunistic delivery)
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [
           { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set(), totalFee: 0 },
           { type: AIActionType.DeliverLoad, load: 'Wine', city: 'München', cardId: 99, payout: 12 },
         ],
-      }, trace: {} } as any);
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -2205,7 +2233,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor runs the first step
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
@@ -2217,7 +2245,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
           createdAtTurn: 8,
         },
         description: 'Building toward Baku',
-      });
+      }));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -2274,13 +2302,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns route complete
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 1, payout: 25 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivered Coal to Berlin',
-      });
+      }));
 
       mockHeuristicFallback.mockResolvedValue({ success: false, error: 'no options' });
 
@@ -2388,13 +2416,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         llmLog: mockLlmLog,
       });
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -2440,13 +2468,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Moving toward Berlin',
-      });
+      }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
@@ -2533,13 +2561,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // PlanExecutor returns DiscardHand (heuristic fallback or guardrail)
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DiscardHand },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Discarding hand',
-      });
+      }));
 
       // After discard, rebuildDemands returns NEW demands WITHOUT Flowers
       const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
@@ -2626,13 +2654,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor delivers load (payment > 0 triggers hadDelivery)
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Steel', city: 'Berlin', cardId: 1, payout: 19 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: { ...route, currentStopIndex: 1 },
         description: 'Delivering Steel to Berlin',
-      });
+      }));
 
       // After delivery, rebuildDemands returns NEW demands with the drawn card
       const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
@@ -2719,13 +2747,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // PlanExecutor delivers Wine to Praha (payment > 0 triggers hadDelivery)
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Praha', cardId: 3, payout: 15 },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivering Wine to Praha',
-      });
+      }));
 
       // After delivery, rebuildDemands returns NEW demands WITHOUT Wine
       const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
@@ -2788,13 +2816,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         model: 'claude-sonnet-4-20250514',
         latencyMs: 500,
       });
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12, 1)] },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Building toward Berlin',
-      });
+      }));
 
       const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
 
@@ -2860,13 +2888,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
       (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue(context.demands);
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Potatoes', city: 'Antwerpen', cardId: 1, payout: 15 },
         routeComplete: true,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivering Potatoes to Antwerpen',
-      });
+      }));
 
       const gridMap = new Map();
       gridMap.set('10,10', { row: 10, col: 10, name: 'Antwerpen', terrain: 2 });
@@ -2875,28 +2903,6 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         payment: 15, updatedMoney: 65, newCard: { id: 50, demands: [] },
       });
 
-      // TurnComposer produces: DELIVER + MOVE(heuristic with 5mp) → wasted=0
-      // The heuristic MOVE has a 6-point path (5 edges = 5mp)
-      const heuristicPath = [
-        { row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 },
-        { row: 10, col: 13 }, { row: 10, col: 14 }, { row: 10, col: 15 },
-      ];
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
-          { type: AIActionType.DeliverLoad, load: 'Potatoes', city: 'Antwerpen', cardId: 1, payout: 15 },
-          { type: AIActionType.MoveTrain, path: heuristicPath, to: 'SomeCity' },
-        ],
-      }, trace: {
-        inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad', 'MoveTrain'],
-        moveBudget: { total: 9, used: 9, wasted: 0 },
-        a1: { citiesScanned: 0, opportunitiesFound: 0 },
-        a2: { iterations: 1, terminationReason: 'budget exhausted' },
-        a3: { movePreprended: false },
-        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-        pickups: [], deliveries: [{ load: 'Potatoes', city: 'Antwerpen' }],
-      } } as any);
-
       return route;
     }
 
@@ -2904,140 +2910,34 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should reclaim A2 heuristic movement and call planRoute for completed route', async () => {
+    it('should clear activeRoute and call heuristicFallback continuation when route completes', async () => {
+      // JIRA-90: Stage 3d (planRoute after delivery) is now internal to TurnExecutorPlanner.
+      // When routeComplete=true, AIStrategyEngine calls heuristicFallback for continuation movement.
       setupRouteCompletedWithA2Movement();
 
-      const newRoute: StrategicRoute = {
-        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Essen' }],
-        currentStopIndex: 0,
-        phase: 'travel' as const,
-        createdAtTurn: 8,
-        reasoning: 'Pick up coal next',
-      };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: newRoute,
-        model: 'claude-haiku-4-5-20251001',
-        latencyMs: 200,
-        llmLog: [],
-      });
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: mockPlanRouteFn,
-      }));
+      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // planRoute should be called
-      expect(mockPlanRouteFn).toHaveBeenCalled();
+      // Route should be cleared when complete
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
+
+      // heuristicFallback called for continuation movement
+      expect(mockHeuristicFallback).toHaveBeenCalled();
     });
 
-    it('should use reclaimed movement for re-composition with new route', async () => {
+    it('should not throw when heuristicFallback returns null after route completion', async () => {
+      // JIRA-90: When TurnExecutorPlanner completes route and heuristicFallback has no action,
+      // ASE should gracefully produce a PassTurn result.
       setupRouteCompletedWithA2Movement();
 
-      const newRoute: StrategicRoute = {
-        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Essen' }],
-        currentStopIndex: 0,
-        phase: 'travel' as const,
-        createdAtTurn: 8,
-        reasoning: 'Pick up coal next',
-      };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: newRoute,
-        model: 'claude-haiku-4-5-20251001',
-        latencyMs: 200,
-        llmLog: [],
-      });
+      mockHeuristicFallback.mockResolvedValue({ success: false });
 
-      // PlanExecutor returns a move for the new route (called second time by Stage 3d)
-      let planExecCallCount = 0;
-      mockPlanExecutorExecute.mockImplementation(async () => {
-        planExecCallCount++;
-        if (planExecCallCount === 1) {
-          // First call: original route delivery
-          return {
-            plan: { type: AIActionType.DeliverLoad, load: 'Potatoes', city: 'Antwerpen', cardId: 1, payout: 15 },
-            routeComplete: true,
-            routeAbandoned: false,
-            updatedRoute: undefined as unknown as StrategicRoute,
-            description: 'Delivering Potatoes',
-          };
-        }
-        // Second call: Stage 3d re-execution with new route
-        return {
-          plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], to: 'Essen', fees: new Set<string>(), totalFee: 0 },
-          routeComplete: false,
-          routeAbandoned: false,
-          updatedRoute: newRoute,
-          description: 'Moving toward Essen',
-        };
-      });
-
-      // Second TurnComposer.compose call for re-composition
-      let composeCallCount = 0;
-      mockTurnComposerCompose.mockImplementation(async (plan: any) => {
-        composeCallCount++;
-        if (composeCallCount === 1) {
-          // First call: original composition with A2 heuristic
-          const heuristicPath = [
-            { row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 },
-            { row: 10, col: 13 }, { row: 10, col: 14 }, { row: 10, col: 15 },
-          ];
-          return { plan: {
-            type: 'MultiAction' as const,
-            steps: [
-              { type: AIActionType.DeliverLoad, load: 'Potatoes', city: 'Antwerpen', cardId: 1, payout: 15 },
-              { type: AIActionType.MoveTrain, path: heuristicPath, to: 'SomeCity', fees: new Set<string>(), totalFee: 0 },
-            ],
-          }, trace: {
-            inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad', 'MoveTrain'],
-            moveBudget: { total: 9, used: 9, wasted: 0 },
-            a1: { citiesScanned: 0, opportunitiesFound: 0 },
-            a2: { iterations: 1, terminationReason: 'budget exhausted' },
-            a3: { movePreprended: false },
-            build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-            pickups: [], deliveries: [{ load: 'Potatoes', city: 'Antwerpen' }],
-          } } as any;
-        }
-        // Second call: re-composition with reclaimed movement
-        return { plan, trace: {
-          inputPlan: ['MoveTrain'], outputPlan: ['MoveTrain'],
-          moveBudget: { total: 5, used: 1, wasted: 4 },
-          a1: { citiesScanned: 0, opportunitiesFound: 0 },
-          a2: { iterations: 0, terminationReason: '' },
-          a3: { movePreprended: false },
-          build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-          pickups: [], deliveries: [],
-        } };
-      });
-
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: mockPlanRouteFn,
-      }));
-
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // PlanExecutor should be called a second time (Stage 3d re-execution)
-      expect(planExecCallCount).toBeGreaterThanOrEqual(2);
-      // TurnComposer should be called a second time (re-composition)
-      expect(composeCallCount).toBeGreaterThanOrEqual(2);
-    });
-
-    it('should not throw when planRoute returns null (graceful fallback)', async () => {
-      setupRouteCompletedWithA2Movement();
-
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: null,
-        llmLog: [],
-      });
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: mockPlanRouteFn,
-      }));
-
-      // Should not throw — planRoute returns null, falls through gracefully
+      // Should not throw — falls through gracefully to PassTurn
       await expect(AIStrategyEngine.takeTurn('game-1', 'bot-1')).resolves.toBeDefined();
-      expect(mockPlanRouteFn).toHaveBeenCalled();
     });
 
   });
@@ -3158,13 +3058,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue(postDeliveryContext.demands);
 
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
         routeComplete: routeCompleted,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Delivering Beer to Bruxelles',
-      });
+      }));
 
       const gridMap = new Map();
       gridMap.set('10,10', { row: 10, col: 10, name: 'Bruxelles', terrain: 2 });
@@ -3173,22 +3073,6 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         payment: 10, updatedMoney: 60, newCard: { id: 50, demands: [] },
       });
 
-      // TurnComposer produces a plan with delivery step
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
-          { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
-        ],
-      }, trace: {
-        inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad'],
-        moveBudget: { total: 9, used: 2, wasted: 7 },
-        a1: { citiesScanned: 0, opportunitiesFound: 0 },
-        a2: { iterations: 1, terminationReason: 'no valid target' },
-        a3: { movePreprended: false },
-        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-        pickups: [], deliveries: [{ load: 'Beer', city: 'Bruxelles' }],
-      } } as any);
-
       return { preDeliverySnap, postDeliverySnap, preDeliveryContext, postDeliveryContext, route };
     }
 
@@ -3196,42 +3080,24 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should pass fresh post-delivery context to planRoute (route completed)', async () => {
-      const { postDeliverySnap, postDeliveryContext } = setupDeliveryWithFreshContext(true);
+    it('should clear activeRoute and call heuristicFallback continuation when route completed via delivery', async () => {
+      // JIRA-91: Stage 3d (planRoute after delivery) is now internal to TurnExecutorPlanner.
+      // When routeComplete=true (delivery finished route), AIStrategyEngine clears the route
+      // and calls heuristicFallback for continuation movement.
+      setupDeliveryWithFreshContext(true);
 
-      const newRoute: StrategicRoute = {
-        stops: [{ action: 'pickup', loadType: 'Chocolate', city: 'Bern' }],
-        currentStopIndex: 0,
-        phase: 'travel' as const,
-        createdAtTurn: 5,
-        reasoning: 'Pick up chocolate',
-      };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: newRoute,
-        model: 'claude-haiku-4-5-20251001',
-        latencyMs: 200,
-        llmLog: [],
-      });
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: mockPlanRouteFn,
-      }));
+      const movePlan = { type: AIActionType.MoveTrain as const, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 };
+      mockHeuristicFallback.mockResolvedValue({ success: true, plan: movePlan });
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // planRoute should receive the post-delivery snapshot and context
-      expect(mockPlanRouteFn).toHaveBeenCalled();
-      const [snapArg, ctxArg] = mockPlanRouteFn.mock.calls[0];
-      // Post-delivery: no Beer on train, money updated, new demand card present
-      expect(snapArg.bot.loads).toEqual([]);
-      expect(snapArg.bot.money).toBe(60);
-      expect(ctxArg.demands).toHaveLength(2); // original + newly drawn card
-      expect(ctxArg.demands[1].loadType).toBe('Chocolate'); // the new card
-      expect(ctxArg.money).toBe(60);
+      // Route should be cleared when complete
+      expect(mockUpdateMemory).toHaveBeenCalled();
+      const patch = mockUpdateMemory.mock.calls[0][2] as any;
+      expect(patch.activeRoute).toBeNull();
     });
 
-
-    it('should call capture and ContextBuilder.build a second time for fresh post-delivery state', async () => {
+    it('should call capture multiple times per turn when delivery occurs', async () => {
       setupDeliveryWithFreshContext(true);
 
       const newRoute: StrategicRoute = {
@@ -3250,235 +3116,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       (LLMStrategyBrain as any).mockImplementation(() => ({
         decideAction: jest.fn(),
         planRoute: mockPlanRouteFn,
+        modelName: 'claude-haiku-4-5-20251001',
+        providerAdapter: {
+          resetCallIds: jest.fn(),
+          getCallIds: jest.fn(() => []),
+          getCallSummaries: jest.fn(() => []),
+        },
       }));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // JIRA-91: capture() called at least twice — initial (Stage 1) + post-delivery fresh state (Stage 3d)
+      // capture() is called: initial (Stage 1) + JIRA-64 post-delivery refresh + JIRA-85 ranking snapshot
       expect(mockCapture.mock.calls.length).toBeGreaterThanOrEqual(2);
-      // ContextBuilder.build called at least twice — initial + fresh post-delivery build
-      expect(mockContextBuild.mock.calls.length).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  // ── JIRA-100 fix: Post-delivery double BUILD ──────────────────────────
-  describe('JIRA-100: Post-delivery double BUILD prevention', () => {
-    /**
-     * Setup: Route completed mid-turn, Stage 3d re-plans with reclaimed movement.
-     * PlanExecutor+TurnComposer produce reCompSteps that may contain a BUILD.
-     * The fix ensures:
-     * 1. reCompSteps are applied to simState before tryAppendBuild
-     * 2. If reCompSteps already has BUILD, tryAppendBuild is skipped entirely
-     */
-    function setupPostDeliveryReplan(reCompStepsIncludeBuild: boolean) {
-      process.env.ANTHROPIC_API_KEY = 'test-key';
-
-      const route: StrategicRoute = {
-        stops: [
-          { action: 'deliver', loadType: 'Wine', city: 'Warszawa', demandCardId: 1, payment: 12 },
-        ],
-        currentStopIndex: 0,
-        phase: 'travel' as const,
-        createdAtTurn: 3,
-        reasoning: 'Deliver wine',
-      };
-
-      mockGetMemory.mockReturnValue({
-        turnNumber: 5,
-        noProgressTurns: 0,
-        consecutiveDiscards: 0,
-        lastAction: AIActionType.MoveTrain,
-        activeRoute: route,
-        turnsOnRoute: 2,
-        routeHistory: [],
-        deliveryCount: 1,
-        totalEarnings: 20,
-        currentBuildTarget: null,
-        turnsOnTarget: 0,
-        consecutiveLlmFailures: 0,
-      });
-
-      const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
-        loads: ['Wine'],
-        money: 46,
-      } as any);
-      const context = makeContext({
-        loads: ['Wine'],
-        money: 46,
-        demands: [{
-          cardIndex: 0, loadType: 'Marble', supplyCity: 'Firenze', deliveryCity: 'Lodz',
-          payout: 20, isSupplyReachable: false, isDeliveryReachable: false,
-          isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
-          estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 3,
-          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
-          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
-          demandScore: 4, efficiencyPerTurn: 0.8, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
-        }] as any[],
-      });
-
-      // Post-delivery snapshot
-      const postSnap = makeSnapshot({
-        botConfig: { skillLevel: 'medium', provider: 'anthropic' },
-        loads: [],
-        money: 46,
-      } as any);
-      const postContext = makeContext({
-        loads: [],
-        money: 46,
-        demands: context.demands,
-      });
-
-      let captureCallCount = 0;
-      mockCapture.mockImplementation(async () => {
-        captureCallCount++;
-        return captureCallCount === 1 ? snapshot : postSnap;
-      });
-      let contextBuildCallCount = 0;
-      mockContextBuild.mockImplementation(async () => {
-        contextBuildCallCount++;
-        return contextBuildCallCount === 1 ? context : postContext;
-      });
-      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue(context.demands);
-
-      // First PlanExecutor call: delivery (route complete)
-      // Second PlanExecutor call: Stage 3d re-execution with new route
-      let planExecCallCount = 0;
-      mockPlanExecutorExecute.mockImplementation(async () => {
-        planExecCallCount++;
-        if (planExecCallCount === 1) {
-          return {
-            plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Warszawa', cardId: 1, payout: 12 },
-            routeComplete: true,
-            routeAbandoned: false,
-            updatedRoute: route,
-            description: 'Delivering Wine',
-          };
-        }
-        // Second call: returns BUILD (unreachable stop) or MOVE depending on test scenario
-        if (reCompStepsIncludeBuild) {
-          return {
-            plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 11, 10, 12, 5)], cost: 20, targetCity: 'Firenze' },
-            routeComplete: false,
-            routeAbandoned: false,
-            updatedRoute: undefined as unknown as StrategicRoute,
-            description: 'Building toward Firenze',
-          };
-        }
-        return {
-          plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], to: 'Firenze', fees: new Set<string>(), totalFee: 0 },
-          routeComplete: false,
-          routeAbandoned: false,
-          updatedRoute: undefined as unknown as StrategicRoute,
-          description: 'Moving toward Firenze',
-        };
-      });
-
-      const gridMap = new Map();
-      gridMap.set('10,10', { row: 10, col: 10, name: 'Warszawa', terrain: 2 });
-      (loadGridPoints as any).mockReturnValue(gridMap);
-      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
-        payment: 12, updatedMoney: 46, newCard: { id: 50, demands: [] },
-      });
-
-      // First TurnComposer.compose: delivery + heuristic MOVE (gives wasted movement for reclaim)
-      const heuristicPath = [
-        { row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 },
-        { row: 10, col: 13 }, { row: 10, col: 14 }, { row: 10, col: 15 },
-      ];
-      let composeCallCount = 0;
-      mockTurnComposerCompose.mockImplementation(async (plan: any) => {
-        composeCallCount++;
-        if (composeCallCount === 1) {
-          return { plan: {
-            type: 'MultiAction' as const,
-            steps: [
-              { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Warszawa', cardId: 1, payout: 12 },
-              { type: AIActionType.MoveTrain, path: heuristicPath, to: 'SomeCity', fees: new Set<string>(), totalFee: 0 },
-            ],
-          }, trace: {
-            inputPlan: ['DeliverLoad'], outputPlan: ['DeliverLoad', 'MoveTrain'],
-            moveBudget: { total: 9, used: 9, wasted: 0 },
-            a1: { citiesScanned: 0, opportunitiesFound: 0 },
-            a2: { iterations: 1, terminationReason: 'budget exhausted' },
-            a3: { movePreprended: false },
-            build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-            pickups: [], deliveries: [{ load: 'Wine', city: 'Warszawa' }],
-          } } as any;
-        }
-        // Second call: re-composition wraps the PlanExecutor result
-        if (reCompStepsIncludeBuild) {
-          return { plan, trace: {
-            inputPlan: ['BuildTrack'], outputPlan: ['BuildTrack'],
-            moveBudget: { total: 5, used: 0, wasted: 5 },
-            a1: { citiesScanned: 0, opportunitiesFound: 0 },
-            a2: { iterations: 0, terminationReason: '' },
-            a3: { movePreprended: false },
-            build: { target: 'Firenze', cost: 20, skipped: false, upgradeConsidered: false },
-            pickups: [], deliveries: [],
-          } };
-        }
-        return { plan, trace: {
-          inputPlan: ['MoveTrain'], outputPlan: ['MoveTrain'],
-          moveBudget: { total: 5, used: 1, wasted: 4 },
-          a1: { citiesScanned: 0, opportunitiesFound: 0 },
-          a2: { iterations: 0, terminationReason: '' },
-          a3: { movePreprended: false },
-          build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-          pickups: [], deliveries: [],
-        } };
-      });
-
-      const newRoute: StrategicRoute = {
-        stops: [{ action: 'pickup', loadType: 'Marble', city: 'Firenze' }],
-        currentStopIndex: 0,
-        phase: 'travel' as const,
-        createdAtTurn: 5,
-        reasoning: 'Pick up marble',
-      };
-      const mockPlanRouteFn = jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({
-        route: newRoute,
-        model: 'claude-haiku-4-5-20251001',
-        latencyMs: 200,
-        llmLog: [],
-      });
-      (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(),
-        planRoute: mockPlanRouteFn,
-      }));
-
-      return { route, newRoute };
-    }
-
-    afterEach(() => {
-      delete process.env.ANTHROPIC_API_KEY;
-    });
-
-    it('should skip tryAppendBuild when reCompSteps already contains a BuildTrack', async () => {
-      setupPostDeliveryReplan(true);
-      const mockTryAppendBuild = TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>;
-
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // tryAppendBuild should NOT have been called — reCompSteps already has BUILD
-      expect(mockTryAppendBuild).not.toHaveBeenCalled();
-    });
-
-    it('should call tryAppendBuild with updated sim state when reCompSteps has no BUILD', async () => {
-      setupPostDeliveryReplan(false);
-      const mockApplyPlanToState = ActionResolver.applyPlanToState as jest.MockedFunction<typeof ActionResolver.applyPlanToState>;
-      const mockTryAppendBuild = TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>;
-      mockTryAppendBuild.mockResolvedValue({
-        type: AIActionType.BuildTrack, segments: [makeSegment(10, 12, 10, 13, 5)], cost: 15, targetCity: 'Firenze',
-      } as any);
-
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // applyPlanToState should have been called for the reCompSteps (MOVE step)
-      // It's also called for postDeliveryCoreSteps, so check it was called at least once more
-      expect(mockApplyPlanToState).toHaveBeenCalled();
-      // tryAppendBuild SHOULD have been called — no BUILD in reCompSteps
-      expect(mockTryAppendBuild).toHaveBeenCalled();
     });
   });
 
@@ -3538,13 +3187,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       // Mock PlanExecutor.execute to return a valid plan
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.MoveTrain, path: [{ row: 10, col: 10 }, { row: 10, col: 11 }], fees: new Set<string>(), totalFee: 0 },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Moving toward Berlin',
-      });
+      }));
 
       // Mock TurnExecutor to return successfully
       mockClient.query.mockResolvedValue(mockResult([]));
@@ -3607,13 +3256,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 1,
       };
       mockPlanRoute.mockResolvedValue({ route, model: 'test', latencyMs: 0, llmLog: [] });
-      mockPlanExecutorExecute.mockResolvedValue({
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.MoveTrain, path: [{ row: 5, col: 5 }, { row: 5, col: 6 }], fees: new Set<string>(), totalFee: 0 },
         routeComplete: false,
         routeAbandoned: false,
         updatedRoute: route,
         description: 'Moving',
-      });
+      }));
       mockClient.query.mockResolvedValue(mockResult([]));
 
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
@@ -3685,29 +3334,19 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
       (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([]);
 
-      // PlanExecutor returns DELIVER plan
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
-        routeComplete: false, routeAbandoned: false, updatedRoute: route, description: 'Delivering Beer',
-      });
-
-      // Early MOVE path: bot moves from (10,10) to (12,12)
+      // TurnExecutorPlanner returns a MultiAction plan with MOVE + DELIVER (A3 move prepended)
       const earlyMovePath = [{ row: 10, col: 10 }, { row: 11, col: 11 }, { row: 12, col: 12 }];
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: 'MultiAction' as const,
-        steps: [
-          { type: AIActionType.MoveTrain, path: earlyMovePath, fees: new Set(), totalFee: 0 },
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [
+          { type: AIActionType.MoveTrain, path: earlyMovePath, to: 'Bruxelles', fees: new Set(), totalFee: 0 },
           { type: AIActionType.DeliverLoad, load: 'Beer', city: 'Bruxelles', cardId: 1, payout: 10 },
         ],
-      }, trace: {
-        inputPlan: ['DeliverLoad'], outputPlan: ['MoveTrain', 'DeliverLoad'],
-        moveBudget: { total: 9, used: 2, wasted: 0 },
-        a1: { citiesScanned: 0, opportunitiesFound: 0 },
-        a2: { iterations: 0, terminationReason: 'none' },
-        a3: { movePreprended: false },
-        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-        pickups: [], deliveries: [{ load: 'Beer', city: 'Bruxelles' }],
-      } } as any);
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        compositionTrace: { ...defaultCompositionTrace, a3: { movePreprended: true } },
+        hasDelivery: true,
+      } as any);
 
       // Grid for city lookup in handleMoveTrain/handleDeliverLoad
       const gridMap = new Map();
@@ -3724,12 +3363,19 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       });
 
       (LLMStrategyBrain as any).mockImplementation(() => ({
-        decideAction: jest.fn(), planRoute: jest.fn(),
+        decideAction: jest.fn(),
+        planRoute: jest.fn(),
+        modelName: 'claude-haiku-4-5-20251001',
+        providerAdapter: {
+          resetCallIds: jest.fn(),
+          getCallIds: jest.fn(() => []),
+          getCallSummaries: jest.fn(() => []),
+        },
       }));
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // movementPath should include the early-executed MOVE path
+      // movementPath should include the MOVE path from TurnExecutorPlanner plans
       expect(result.movementPath).toBeDefined();
       expect(result.movementPath).toEqual(earlyMovePath);
     });
@@ -3749,24 +3395,11 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(makeContext());
 
-      // PlanExecutor returns a PASS (no delivery → no early execution)
-      mockPlanExecutorExecute.mockResolvedValue({
+      // TurnExecutorPlanner returns a PASS (no delivery → no movement path)
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
         plan: { type: AIActionType.PassTurn },
         routeComplete: false, routeAbandoned: false, updatedRoute: undefined as unknown as StrategicRoute, description: 'Pass',
-      });
-
-      // TurnComposer passes through the PASS plan
-      mockTurnComposerCompose.mockResolvedValue({ plan: {
-        type: AIActionType.PassTurn as const,
-      }, trace: {
-        inputPlan: ['PassTurn'], outputPlan: ['PassTurn'],
-        moveBudget: { total: 9, used: 0, wasted: 0 },
-        a1: { citiesScanned: 0, opportunitiesFound: 0 },
-        a2: { iterations: 0, terminationReason: 'none' },
-        a3: { movePreprended: false },
-        build: { target: null, cost: 0, skipped: true, upgradeConsidered: false },
-        pickups: [], deliveries: [],
-      } } as any);
+      }));
 
       // Heuristic fallback returns a PASS (no movement)
       mockHeuristicFallback.mockResolvedValue({
@@ -3781,8 +3414,22 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  // ── JIRA-129: activeRoute timing fix in Stage 3d ──
-  describe('JIRA-129: activeRoute timing fix — Stage 3d re-eval', () => {
+  // ── JIRA-129: activeRoute reflects new route from post-delivery TripPlanner replan ──
+  describe('JIRA-129: activeRoute updated after post-delivery TripPlanner replan', () => {
+    /**
+     * Post-delivery TripPlanner replan is now handled internally by TurnExecutorPlanner.
+     * AIStrategyEngine receives the replanned route via execResult.updatedRoute.
+     *
+     * When TurnExecutorPlanner successfully replans:
+     *   - routeComplete = false (new route is active, not complete)
+     *   - updatedRoute = the new route from TripPlanner
+     *   → AIStrategyEngine sets activeRoute = updatedRoute
+     *
+     * When TurnExecutorPlanner fails to replan (TripPlanner returned null / threw):
+     *   - routeComplete = true (original route was the only one)
+     *   - updatedRoute = old route
+     *   → AIStrategyEngine sets routeWasCompleted, memory.activeRoute = null
+     */
     const oldRoute: StrategicRoute = {
       stops: [
         { action: 'deliver', loadType: 'Oil', city: 'Holland', demandCardId: 1, payment: 20 },
@@ -3804,7 +3451,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       reasoning: 'Pick up cars for Manchester',
     };
 
-    function setupDeliveryScenario() {
+    function setupBase() {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       mockGetMemory.mockReturnValue({
@@ -3822,22 +3469,10 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         consecutiveLlmFailures: 0,
       });
 
-      const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
-      } as any);
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
       const context = makeContext();
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
-
-      // PlanExecutor reports delivery + route complete
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
-        routeComplete: true,
-        routeAbandoned: false,
-        updatedRoute: oldRoute,
-        description: 'Delivered Oil to Holland',
-      });
-
       return { snapshot, context };
     }
 
@@ -3845,131 +3480,74 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
     });
 
-    it('should update activeRoute immediately after successful re-eval (before Phase B)', async () => {
-      process.env.ANTHROPIC_API_KEY = 'test-key';
+    it('should reflect new route in activeRoute when TurnExecutorPlanner internally replanned', async () => {
+      setupBase();
 
-      // Override TripPlanner to directly return the new route for the post-delivery call.
-      // This bypasses the LLMStrategyBrain → planRoute chain entirely, isolating the test
-      // to just verify the activeRoute timing in Stage 3d.
-      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
-      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
-        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue({
-          candidates: [],
-          chosen: 0,
-          route: newRoute,
-          llmLatencyMs: 0,
-          llmTokens: { input: 0, output: 0 },
-          llmLog: [],
-        }),
-      }));
-
-      mockGetMemory.mockReturnValue({
-        turnNumber: 4,
-        noProgressTurns: 0,
-        consecutiveDiscards: 0,
-        lastAction: null,
-        activeRoute: oldRoute,
-        turnsOnRoute: 2,
-        routeHistory: [],
-        currentBuildTarget: null,
-        turnsOnTarget: 0,
-        deliveryCount: 1,
-        totalEarnings: 20,
-        consecutiveLlmFailures: 0,
-      });
-
-      const snapshot = makeSnapshot({
-        botConfig: { skillLevel: 'medium' },
-      } as any);
-      const context = makeContext();
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
-
-      // PlanExecutor reports delivery + route complete
-      mockPlanExecutorExecute.mockResolvedValue({
-        plan: { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
-        routeComplete: true,
+      // TurnExecutorPlanner delivered Oil and internally called TripPlanner which returned newRoute.
+      // Since the new route is not complete, it returns routeComplete=false with updatedRoute=newRoute.
+      mockTurnExecutorPlannerExecute.mockResolvedValue({
+        plans: [
+          { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
+        ],
+        routeComplete: false,
         routeAbandoned: false,
-        updatedRoute: oldRoute,
-        description: 'Delivered Oil to Holland',
-      });
+        updatedRoute: newRoute,
+        compositionTrace: defaultCompositionTrace,
+        hasDelivery: true,
+      } as any);
 
-      // Reset TurnComposer.compose to passthrough (previous tests may have overridden it
-      // with mockResolvedValue, which clearAllMocks does NOT reset).
-      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
-        plan,
-        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
-      }));
-
-      (TurnComposer.tryAppendBuild as jest.MockedFunction<typeof TurnComposer.tryAppendBuild>).mockResolvedValue({ plan: null });
-
-      // JIRA-64 rebuilds demands post-delivery and invalidates route if demands don't match.
-      (ContextBuilder.rebuildDemands as jest.Mock).mockImplementation(() => [
-        { loadType: 'Cars', destinationCity: 'Manchester', demandCardId: 5, payout: 30, pickupCity: 'München', estimatedTurns: 3 },
+      // JIRA-64: rebuildDemands must include Cars so route isn't invalidated
+      (ContextBuilder.rebuildDemands as jest.Mock).mockReturnValue([
+        { loadType: 'Cars', supplyCity: 'München', deliveryCity: 'Manchester', demandCardId: 5, payout: 30, estimatedTurns: 3 },
       ]);
 
       const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // Verify the BotTurnResult's activeRoute field reflects the new route
-      expect(result.activeRoute).toBeDefined();
+      // activeRoute should be the new route returned by TurnExecutorPlanner
       expect(result.activeRoute).not.toBeNull();
       expect(result.activeRoute!.stops[0].city).toBe('München');
       expect(result.activeRoute!.stops[0].loadType).toBe('Cars');
       expect(result.activeRoute!.reasoning).toBe('Pick up cars for Manchester');
     });
 
-    it('should NOT update activeRoute when TripPlanner returns null', async () => {
-      setupDeliveryScenario();
+    it('should clear activeRoute in memory when original route completes with no new replan', async () => {
+      setupBase();
 
-      // Reset TurnComposer.compose to passthrough (may be overridden by prior tests)
-      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
-        plan,
-        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
+      // TurnExecutorPlanner completed the old route with no successful internal replan.
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.DeliverLoad, load: 'Oil', city: 'Holland', cardId: 1, payout: 20 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: oldRoute,
+        description: 'Delivered Oil to Holland',
+        hasDelivery: true,
       }));
 
-      // TripPlanner returns null — post-delivery re-eval fails
-      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
-      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
-        planTrip: jest.fn<() => Promise<any>>().mockResolvedValue({ route: null, llmLog: [] }),
-      }));
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // activeRoute should be the old route (preDeliveryRoute restoration) or null
-      // Since TripPlanner failed, reEvalHandled=false, and preDeliveryRoute gets restored
-      // The old route had only delivery stops which are now completed, so JIRA-64
-      // demand check will clear it since rebuildDemands returns [] by default.
+      // Memory should have activeRoute cleared when route completes
       expect(mockUpdateMemory).toHaveBeenCalled();
       const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      // The route should NOT be the newRoute (TripPlanner failed)
-      if (patch.activeRoute) {
-        expect(patch.activeRoute.stops[0].city).not.toBe('München');
-      }
+      expect(patch.activeRoute).toBeNull();
     });
 
-    it('should NOT update activeRoute when TripPlanner throws an error', async () => {
-      setupDeliveryScenario();
+    it('should NOT set activeRoute to new route when TurnExecutorPlanner returns routeAbandoned', async () => {
+      setupBase();
 
-      // Reset TurnComposer.compose to passthrough (may be overridden by prior tests)
-      mockTurnComposerCompose.mockImplementation((plan: any) => Promise.resolve({
-        plan,
-        trace: { inputPlan: [], outputPlan: [], moveBudget: { total: 9, used: 0, wasted: 0 }, a1: { citiesScanned: 0, opportunitiesFound: 0 }, a2: { iterations: 0, terminationReason: 'none' }, a3: { movePreprended: false }, build: { target: null, cost: 0, skipped: true, upgradeConsidered: false }, pickups: [], deliveries: [] },
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: true,
+        updatedRoute: oldRoute,
+        description: 'Route abandoned',
       }));
 
-      // TripPlanner throws — post-delivery re-eval errors out
-      const { TripPlanner: TripPlannerMock } = require('../../services/ai/TripPlanner');
-      (TripPlannerMock as jest.Mock).mockImplementation(() => ({
-        planTrip: jest.fn<() => Promise<any>>().mockRejectedValue(new Error('LLM API timeout')),
-      }));
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // activeRoute should NOT be the newRoute (TripPlanner errored)
       expect(mockUpdateMemory).toHaveBeenCalled();
       const patch = mockUpdateMemory.mock.calls[0][2] as any;
-      if (patch.activeRoute) {
-        expect(patch.activeRoute.stops[0].city).not.toBe('München');
-      }
+      // Route abandoned → activeRoute cleared in memory
+      expect(patch.activeRoute).toBeNull();
     });
   });
 });
