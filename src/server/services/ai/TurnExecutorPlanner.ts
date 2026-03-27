@@ -312,6 +312,51 @@ export class TurnExecutorPlanner {
     };
   }
 
+  // ── Cargo evaluation ──────────────────────────────────────────────────
+
+  /**
+   * Evaluate which cargo the bot should drop to free capacity for a desired pickup.
+   *
+   * Scoring formula (per audit finding #7):
+   *   - No demand card for this load → Infinity (worst; drop immediately)
+   *   - Delivery on network → 0 (best; keep)
+   *   - Otherwise → estimatedTrackCostToDelivery - payout (higher = worse deal)
+   *
+   * Returns the worst-scored load (highest score) — the one to drop.
+   * Returns null if bot carries no loads.
+   *
+   * Migrated from PlanExecutor.evaluateCargoForDrop() (JIRA-156 BE-008).
+   */
+  static evaluateCargoForDrop(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+  ): { loadType: string; score: number } | null {
+    if (snapshot.bot.loads.length === 0) return null;
+
+    const scored = snapshot.bot.loads.map(loadType => {
+      const matchingDemands = context.demands.filter(d => d.loadType === loadType);
+      if (matchingDemands.length === 0) {
+        // No demand card for this load — worst possible score
+        return { loadType, score: Infinity };
+      }
+
+      // Find the best (most feasible) delivery option for this load
+      const bestScore = Math.min(
+        ...matchingDemands.map(d => {
+          if (d.isDeliveryOnNetwork) return 0;
+          // Score = build cost - payout (higher = worse deal)
+          return d.estimatedTrackCostToDelivery - d.payout;
+        }),
+      );
+
+      return { loadType, score: bestScore };
+    });
+
+    // Sort worst-first (highest score) — return the one to drop
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0] ?? null;
+  }
+
   // ── Movement helpers ──────────────────────────────────────────────────
 
   /**
@@ -325,6 +370,12 @@ export class TurnExecutorPlanner {
 
   /**
    * Execute a single route stop action (pickup or deliver) via ActionResolver.
+   *
+   * For pickups: if the train is full, attempts a drop-and-continue recovery:
+   *   evaluateCargoForDrop() identifies the worst load to drop, then returns
+   *   a DropLoad plan so the movement loop can emit it and retry the pickup
+   *   next loop iteration.
+   *
    * Returns the resolved action result.
    */
   private static async executeStopAction(
@@ -339,6 +390,29 @@ export class TurnExecutorPlanner {
         snapshot,
         context,
       );
+
+      // Full-capacity recovery: if pickup failed due to full train, drop worst load
+      if (!result.success && result.error && result.error.includes('full')) {
+        const dropCandidate = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+        if (dropCandidate && context.position) {
+          const cityName = context.position.city;
+          if (cityName) {
+            console.warn(
+              `${tag} Pickup failed (full capacity). Dropping worst load "${dropCandidate.loadType}" ` +
+              `(score: ${dropCandidate.score}) at ${cityName} to recover.`,
+            );
+            return {
+              success: true,
+              plan: {
+                type: AIActionType.DropLoad,
+                load: dropCandidate.loadType,
+                city: cityName,
+              },
+            };
+          }
+        }
+      }
+
       return result;
     }
 

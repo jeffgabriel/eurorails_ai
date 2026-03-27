@@ -115,6 +115,7 @@ function makeSnapshot(): WorldSnapshot {
       existingSegments: [],
       money: 100,
       trainType: 'Freight',
+      loads: [],
     },
     players: [],
     loadAvailability: {},
@@ -660,5 +661,134 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
     expect(result.compositionTrace.moveBudget.used).toBe(5);
+  });
+});
+
+// ── evaluateCargoForDrop ───────────────────────────────────────────────────
+
+describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
+  function makeDemandContext(overrides: Partial<{
+    loadType: string;
+    payout: number;
+    isDeliveryOnNetwork: boolean;
+    estimatedTrackCostToDelivery: number;
+  }> = {}) {
+    return {
+      loadType: overrides.loadType ?? 'Coal',
+      payout: overrides.payout ?? 8,
+      isDeliveryOnNetwork: overrides.isDeliveryOnNetwork ?? false,
+      estimatedTrackCostToDelivery: overrides.estimatedTrackCostToDelivery ?? 10,
+      // Minimal required fields
+      deliveryCity: 'Berlin',
+      cardIndex: 1,
+      isLoadOnTrain: false,
+      isDeliveryReachable: false,
+    } as any;
+  }
+
+  function makeSnapshotWithLoads(loads: string[]): WorldSnapshot {
+    return {
+      ...makeSnapshot(),
+      bot: { ...makeSnapshot().bot, loads },
+    } as unknown as WorldSnapshot;
+  }
+
+  it('returns null when bot carries no loads', () => {
+    const snapshot = makeSnapshotWithLoads([]);
+    const context = makeContext();
+
+    expect(TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context)).toBeNull();
+  });
+
+  it('scores loads with no demand card as Infinity (worst)', () => {
+    const snapshot = makeSnapshotWithLoads(['Coal']);
+    const context = makeContext({ demands: [] }); // no demands
+
+    const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+
+    expect(result).not.toBeNull();
+    expect(result!.loadType).toBe('Coal');
+    expect(result!.score).toBe(Infinity);
+  });
+
+  it('scores delivery-on-network as 0 (best — keep)', () => {
+    const snapshot = makeSnapshotWithLoads(['Coal']);
+    const context = makeContext({
+      demands: [makeDemandContext({ loadType: 'Coal', isDeliveryOnNetwork: true })],
+    });
+
+    const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+
+    expect(result!.score).toBe(0);
+  });
+
+  it('returns the worst-scored load when multiple loads carried', () => {
+    const snapshot = makeSnapshotWithLoads(['Wine', 'Coal']);
+    const context = makeContext({
+      demands: [
+        // Wine: score = 15 - 10 = 5 (high = bad)
+        makeDemandContext({ loadType: 'Wine', estimatedTrackCostToDelivery: 15, payout: 10 }),
+        // Coal: on network = 0 (good)
+        makeDemandContext({ loadType: 'Coal', isDeliveryOnNetwork: true }),
+      ],
+    });
+
+    const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+
+    // Wine has the worse score (5 > 0) — should be returned
+    expect(result!.loadType).toBe('Wine');
+  });
+
+  it('picks the no-demand load over a feasible one', () => {
+    const snapshot = makeSnapshotWithLoads(['OrphanLoad', 'Coal']);
+    const context = makeContext({
+      demands: [
+        makeDemandContext({ loadType: 'Coal', isDeliveryOnNetwork: true }), // score=0
+        // OrphanLoad has no demand → Infinity
+      ],
+    });
+
+    const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+
+    expect(result!.loadType).toBe('OrphanLoad');
+    expect(result!.score).toBe(Infinity);
+  });
+});
+
+// ── execute() — full-capacity drop recovery ────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — full-capacity drop recovery', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+  });
+
+  it('emits a DropLoad plan when pickup fails due to full capacity', async () => {
+    // Pickup fails with "full" error
+    mockResolve.mockResolvedValue({ success: false, error: 'Train is full (2/2).' });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Paris', row: 1, col: 1 },
+      // Bot is carrying Coal which has no demand → Infinity score → drop it
+      demands: [],
+    });
+    const snapshot = {
+      ...makeSnapshot(),
+      bot: { ...makeSnapshot().bot, loads: ['Coal'] },
+    } as unknown as WorldSnapshot;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    const dropPlan = result.plans.find(p => p.type === AIActionType.DropLoad);
+    expect(dropPlan).toBeDefined();
+    expect((dropPlan as any).load).toBe('Coal');
+    expect((dropPlan as any).city).toBe('Paris');
   });
 });
