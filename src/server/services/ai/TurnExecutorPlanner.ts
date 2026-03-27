@@ -34,6 +34,7 @@ import {
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget } from './routeHelpers';
+import { loadGridPoints } from './MapTopology';
 import { CompositionTrace, TurnComposer } from './TurnComposer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
@@ -811,6 +812,72 @@ export class TurnExecutorPlanner {
         );
       }
     }
+  }
+
+  // ── Directional filtering ─────────────────────────────────────────────
+
+  /**
+   * Filter move-target candidates to only include cities that are closer to
+   * (or equidistant from) the build target than the bot's current position.
+   *
+   * This prevents A3-style prepend moves from sending the bot in the wrong
+   * direction (e.g., north when the build target is south).
+   *
+   * **Fix for R10 / AC12**: When `advisorBuildTargetCity` is null (BuildAdvisor
+   * returned null), derives `buildTargetCity` from the route via
+   * `resolveBuildTarget()` instead of falling back to the current stop city.
+   * This ensures the directional gate still points toward the actual
+   * build target even when the LLM advisor is unavailable.
+   *
+   * @param targets - Candidate move-target city names.
+   * @param context - Current game context (used for bot position and resolveBuildTarget).
+   * @param route - Active strategic route (used to derive build target when advisor is null).
+   * @param advisorBuildTargetCity - The build target from the BuildAdvisor/BuildTrack plan,
+   *   or null if the advisor returned null.
+   * @returns Filtered candidate cities — only those in the correct direction.
+   */
+  static filterByDirection(
+    targets: string[],
+    context: GameContext,
+    route: StrategicRoute,
+    advisorBuildTargetCity: string | null,
+  ): string[] {
+    if (!context.position) return targets;
+
+    // Derive build target city: prefer advisor result; fall back to resolveBuildTarget()
+    // (R10 fix: when advisor is null, use route-based target, not the current stop city)
+    const buildTargetCity: string | null =
+      advisorBuildTargetCity ?? resolveBuildTarget(route, context)?.targetCity ?? null;
+
+    if (!buildTargetCity) return targets;
+
+    const grid = loadGridPoints();
+
+    // Find build target coordinates
+    let targetRow = -1, targetCol = -1;
+    for (const [, gp] of grid) {
+      if (gp.name && gp.name === buildTargetCity) {
+        targetRow = gp.row;
+        targetCol = gp.col;
+        break;
+      }
+    }
+    if (targetRow < 0) return targets; // Build target not on grid — no filtering possible
+
+    const botDist =
+      Math.abs(context.position.row - targetRow) +
+      Math.abs(context.position.col - targetCol);
+
+    return targets.filter(city => {
+      for (const [, gp] of grid) {
+        if (gp.name && gp.name === city) {
+          const candidateDist =
+            Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
+          return candidateDist <= botDist;
+        }
+      }
+      return false; // City not found in grid — exclude
+    });
   }
 
   // ── Return helpers ────────────────────────────────────────────────────

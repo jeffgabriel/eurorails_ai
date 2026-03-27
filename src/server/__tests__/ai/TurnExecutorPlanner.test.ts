@@ -103,6 +103,7 @@ jest.mock('../../services/ai/BotMemory', () => ({
 }));
 
 import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
+import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { TripPlanner } from '../../services/ai/TripPlanner';
@@ -113,6 +114,7 @@ import { computeEffectivePathLength } from '../../../shared/services/majorCityGr
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
+const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const mockRevalidate = PlanExecutor.revalidateRemainingDeliveries as jest.Mock;
@@ -1308,5 +1310,132 @@ describe('TurnExecutorPlanner.execute — Phase B: build phase', () => {
 
     // JIT gate should NOT be called for victory builds
     expect(mockShouldDeferBuild).not.toHaveBeenCalled();
+  });
+});
+
+// ── filterByDirection (AC12 / R10) ─────────────────────────────────────────
+//
+// Verifies that when BuildAdvisor returns null, filterByDirection derives
+// buildTargetCity from the route via resolveBuildTarget() rather than using
+// the current stop city (the old TurnComposer bug).
+
+describe('TurnExecutorPlanner.filterByDirection', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Default grid: bot at row=5,col=5; München at row=3,col=3 (closer to target);
+    // Paris at row=8,col=8 (farther from target: Madrid at row=2,col=2)
+    const grid = new Map<string, { name?: string; row: number; col: number }>([
+      ['3,3', { name: 'München', row: 3, col: 3 }],
+      ['8,8', { name: 'Paris', row: 8, col: 8 }],
+      ['2,2', { name: 'Madrid', row: 2, col: 2 }],
+    ]);
+    mockLoadGridPoints.mockReturnValue(grid);
+  });
+
+  it('returns all targets when context.position is null', () => {
+    const route = makeRoute();
+    const context = makeContext({ position: null });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'Paris'],
+      context,
+      route,
+      'Madrid',
+    );
+    expect(result).toEqual(['München', 'Paris']);
+  });
+
+  it('filters to cities closer to explicit advisorBuildTargetCity', () => {
+    // Bot at (5,5). Madrid at (2,2). botDist = |5-2|+|5-2| = 6.
+    // München at (3,3): candidateDist = |3-2|+|3-2| = 2 ≤ 6 → keep
+    // Paris at (8,8): candidateDist = |8-2|+|8-2| = 12 > 6 → exclude
+    const route = makeRoute();
+    const context = makeContext({ position: { city: 'Berlin', row: 5, col: 5 } });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'Paris'],
+      context,
+      route,
+      'Madrid',
+    );
+    expect(result).toContain('München');
+    expect(result).not.toContain('Paris');
+  });
+
+  it('derives buildTargetCity from route via resolveBuildTarget() when advisor returns null (AC12)', () => {
+    // AC12: advisorBuildTargetCity is null → should use resolveBuildTarget() to find target
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Madrid',
+      stopIndex: 1,
+      isVictoryBuild: false,
+    });
+
+    // Bot at (5,5). resolveBuildTarget returns Madrid (2,2). botDist = 6.
+    // München at (3,3): candidateDist = 2 ≤ 6 → keep
+    // Paris at (8,8): candidateDist = 12 > 6 → exclude
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Berlin', 'Coal'), makeStop('deliver', 'Madrid', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 5, col: 5 } });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'Paris'],
+      context,
+      route,
+      null, // null = advisor returned null
+    );
+
+    expect(mockResolveBuildTarget).toHaveBeenCalledWith(route, context);
+    expect(result).toContain('München');
+    expect(result).not.toContain('Paris');
+  });
+
+  it('returns all targets when both advisorBuildTargetCity is null and resolveBuildTarget returns null', () => {
+    mockResolveBuildTarget.mockReturnValue(null);
+
+    const route = makeRoute();
+    const context = makeContext({ position: { city: 'Berlin', row: 5, col: 5 } });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'Paris'],
+      context,
+      route,
+      null,
+    );
+    expect(result).toEqual(['München', 'Paris']);
+  });
+
+  it('excludes cities not found in the grid', () => {
+    const route = makeRoute();
+    const context = makeContext({ position: { city: 'Berlin', row: 5, col: 5 } });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'UnknownCity'],
+      context,
+      route,
+      'Madrid',
+    );
+    expect(result).toContain('München');
+    expect(result).not.toContain('UnknownCity');
+  });
+
+  it('keeps a city that is equidistant to the build target', () => {
+    // Bot at (5,5). Madrid at (2,2). botDist = 6.
+    // Add an equidistant city at (5,8): dist = |5-2|+|8-2| = 9. No wait — let's use grid adjustment.
+    // Actually add a city at exactly dist=6 from Madrid (2,2):
+    // e.g. (8,2) → dist = |8-2|+|2-2| = 6. Equidistant → should keep.
+    const grid = new Map<string, { name?: string; row: number; col: number }>([
+      ['3,3', { name: 'München', row: 3, col: 3 }],
+      ['8,2', { name: 'Equidistant', row: 8, col: 2 }],
+      ['2,2', { name: 'Madrid', row: 2, col: 2 }],
+    ]);
+    mockLoadGridPoints.mockReturnValue(grid);
+
+    const route = makeRoute();
+    const context = makeContext({ position: { city: 'Berlin', row: 5, col: 5 } });
+    const result = TurnExecutorPlanner.filterByDirection(
+      ['München', 'Equidistant'],
+      context,
+      route,
+      'Madrid',
+    );
+    expect(result).toContain('Equidistant'); // equidistant → keep
+    expect(result).toContain('München');
   });
 });
