@@ -33,7 +33,7 @@ import {
   TrainType,
   TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
-import { isStopComplete, resolveBuildTarget } from './routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
 import { loadGridPoints } from './MapTopology';
 import { CompositionTrace, TurnComposer } from './TurnComposer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
@@ -306,9 +306,61 @@ export class TurnExecutorPlanner {
         break;
       }
 
-      // ── Stop city not on network → break to Phase B (build) ──────────────
-      console.log(`${tag} ${targetCity} not on network. Breaking to Phase B (build).`);
+      // ── Stop city not on network → A3 frontier approach, then Phase B ───
+      //
+      // A3: When the next route stop is off-network (needs building), the bot
+      // should still use its remaining movement budget to advance toward the
+      // construction frontier — the dead-end node on the existing track network
+      // closest to the build target. This prevents wasting the movement budget
+      // while waiting for Phase B to extend the track.
+      //
+      // If no frontier node can be found or the move fails, fall straight to Phase B.
+      console.log(`${tag} ${targetCity} not on network. Attempting A3 frontier move before Phase B.`);
       trace.a2.terminationReason = 'stop_city_not_on_network';
+
+      if (remainingBudget > 0) {
+        // Get frontier nodes sorted by distance to the build target (targetCity)
+        const frontierNodes = getNetworkFrontier(snapshot, undefined, targetCity);
+        // Filter out the bot's current city (no need to "move" to where we already are)
+        const currentCity = context.position?.city;
+        const reachableFrontier = frontierNodes.filter(
+          n => n.cityName && n.cityName !== currentCity,
+        );
+
+        let a3MoveSucceeded = false;
+        for (const frontierNode of reachableFrontier) {
+          if (!frontierNode.cityName) continue;
+
+          const a3MoveResult = await ActionResolver.resolveMove(
+            { to: frontierNode.cityName },
+            snapshot,
+            remainingBudget,
+          );
+
+          if (a3MoveResult.success && a3MoveResult.plan) {
+            const a3MovePlan = a3MoveResult.plan as TurnPlanMoveTrain;
+            const majorCityLookup = getMajorCityLookup();
+            const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookup);
+
+            plans.push(a3MoveResult.plan);
+            lastMoveTargetCity = frontierNode.cityName;
+            remainingBudget = Math.max(0, remainingBudget - a3Miles);
+            trace.moveBudget.used = context.speed - remainingBudget;
+            trace.a3.movePreprended = true;
+            console.log(
+              `${tag} A3 frontier move: toward "${frontierNode.cityName}" ` +
+              `(${a3Miles}mp consumed, remaining=${remainingBudget})`,
+            );
+            a3MoveSucceeded = true;
+            break;
+          }
+        }
+
+        if (!a3MoveSucceeded) {
+          console.log(`${tag} A3 frontier move skipped — no reachable frontier node found`);
+        }
+      }
+
       break;
     }
 

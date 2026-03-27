@@ -26,6 +26,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 jest.mock('../../services/ai/routeHelpers', () => ({
   isStopComplete: jest.fn(),
   resolveBuildTarget: jest.fn(),
+  getNetworkFrontier: jest.fn(() => []),
 }));
 
 jest.mock('../../services/ai/ActionResolver', () => ({
@@ -102,7 +103,7 @@ jest.mock('../../services/ai/BotMemory', () => ({
   })),
 }));
 
-import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
@@ -114,6 +115,7 @@ import { computeEffectivePathLength } from '../../../shared/services/majorCityGr
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
+const mockGetNetworkFrontier = getNetworkFrontier as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
@@ -689,7 +691,10 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     expect(result.compositionTrace.a2.terminationReason).toBe('move_failed_fallthrough_build');
   });
 
-  it('breaks to Phase B when stop city is not on network', async () => {
+  it('breaks to Phase B when stop city is not on network (no frontier nodes)', async () => {
+    // Default: getNetworkFrontier returns [] → A3 skipped, no resolveMove called
+    mockGetNetworkFrontier.mockReturnValue([]);
+
     const route = makeRoute({
       stops: [makeStop('pickup', 'München', 'Coal')],
       currentStopIndex: 0,
@@ -702,6 +707,84 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
 
     expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
     expect(mockResolveMove).not.toHaveBeenCalled();
+  });
+
+  it('A3: emits a MoveTrain plan toward frontier node when stop city not on network', async () => {
+    // Frontier node exists and is reachable
+    mockGetNetworkFrontier.mockReturnValue([
+      { row: 3, col: 3, cityName: 'Ruhr' },
+    ]);
+    const a3MovePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 5, col: 5 }, { row: 3, col: 3 }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+    mockResolveMove.mockResolvedValue({ success: true, plan: a3MovePlan });
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [], // München NOT on network → triggers A3
+      position: { city: 'Paris', row: 5, col: 5 },
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // A3 should have emitted a MoveTrain plan toward the frontier node
+    expect(result.plans).toContainEqual(a3MovePlan);
+    expect(result.compositionTrace.a3.movePreprended).toBe(true);
+    expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
+    // getNetworkFrontier called with snapshot and the off-network city as target
+    expect(mockGetNetworkFrontier).toHaveBeenCalledWith(snapshot, undefined, 'München');
+  });
+
+  it('A3: skips frontier move when frontier city matches current bot city', async () => {
+    // Frontier node is the bot's current city — should be excluded
+    mockGetNetworkFrontier.mockReturnValue([
+      { row: 5, col: 5, cityName: 'Paris' }, // same as bot position
+    ]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { city: 'Paris', row: 5, col: 5 },
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // A3 should NOT emit a move (frontier node is current city)
+    expect(mockResolveMove).not.toHaveBeenCalled();
+    expect(result.compositionTrace.a3.movePreprended).toBe(false);
+  });
+
+  it('A3: skips frontier move when resolveMove fails for all frontier nodes', async () => {
+    mockGetNetworkFrontier.mockReturnValue([
+      { row: 3, col: 3, cityName: 'Ruhr' },
+    ]);
+    mockResolveMove.mockResolvedValue({ success: false, error: 'Pathfinding failed' });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [], position: { city: 'Paris', row: 5, col: 5 } });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // No move plan — A3 attempted but failed
+    expect(result.plans.some(p => p.type === AIActionType.MoveTrain)).toBe(false);
+    expect(result.compositionTrace.a3.movePreprended).toBe(false);
   });
 
   it('records mileposts used in moveBudget trace', async () => {
@@ -1122,6 +1205,8 @@ describe('TurnExecutorPlanner.execute — Phase B: build phase', () => {
     mockIsStopComplete.mockReturnValue(false);
     mockRevalidate.mockImplementation((route: StrategicRoute) => route);
     mockComputeEffectivePathLength.mockReturnValue(3);
+    // A3: no frontier nodes by default so Phase B tests are not disrupted
+    mockGetNetworkFrontier.mockReturnValue([]);
     // JIT gate: build not deferred by default
     mockShouldDeferBuild.mockReturnValue({
       deferred: false,
