@@ -6,8 +6,8 @@
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
-import { GameContext, RouteStop, StrategicRoute, TrainType } from '../../../shared/types/GameTypes';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
+import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -449,5 +449,180 @@ describe('resolveBuildTarget — victory build override', () => {
 
     // No unconnected major cities and all route stops on-network → null
     expect(result).toBeNull();
+  });
+});
+
+// ── getNetworkFrontier helpers ─────────────────────────────────────────────
+
+function makeTrackSegment(
+  fromRow: number,
+  fromCol: number,
+  toRow: number,
+  toCol: number,
+): TrackSegment {
+  return {
+    from: { x: 0, y: 0, row: fromRow, col: fromCol, terrain: TerrainType.Clear },
+    to: { x: 0, y: 0, row: toRow, col: toCol, terrain: TerrainType.Clear },
+    cost: 1,
+  };
+}
+
+function makeWorldSnapshot(overrides: {
+  existingSegments?: TrackSegment[];
+  position?: { row: number; col: number } | null;
+} = {}): WorldSnapshot {
+  return {
+    gameId: 'g1',
+    gameStatus: 'active',
+    turnNumber: 5,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-bot-1',
+      money: 50,
+      position: overrides.position !== undefined ? overrides.position : { row: 10, col: 10 },
+      existingSegments: overrides.existingSegments ?? [],
+      demandCards: [],
+      resolvedDemands: [],
+      trainType: TrainType.Freight,
+      loads: [],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
+
+// ── getNetworkFrontier tests ───────────────────────────────────────────────
+
+describe('getNetworkFrontier — basic frontier detection', () => {
+  it('returns an empty array when no track and no bot position', () => {
+    const snapshot = makeWorldSnapshot({ existingSegments: [], position: null });
+    const result = getNetworkFrontier(snapshot);
+    expect(result).toEqual([]);
+  });
+
+  it('returns bot position as fallback when no track exists', () => {
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [],
+      position: { row: 5, col: 8 },
+    });
+    const result = getNetworkFrontier(snapshot, new Map());
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ row: 5, col: 8 });
+  });
+
+  it('returns both dead-end endpoints for a single segment', () => {
+    // Single segment: (0,0) → (0,1) — both endpoints are degree 1
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [makeTrackSegment(0, 0, 0, 1)],
+    });
+
+    const result = getNetworkFrontier(snapshot, new Map());
+
+    expect(result).toHaveLength(2);
+    const coords = result.map(n => `${n.row},${n.col}`).sort();
+    expect(coords).toContain('0,0');
+    expect(coords).toContain('0,1');
+  });
+
+  it('returns only dead-ends for a 3-segment chain (middle node excluded)', () => {
+    // Chain: A(0,0) → B(0,1) → C(0,2)
+    // B appears twice (degree 2) → not a dead-end
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [
+        makeTrackSegment(0, 0, 0, 1),
+        makeTrackSegment(0, 1, 0, 2),
+      ],
+    });
+
+    const result = getNetworkFrontier(snapshot, new Map());
+
+    expect(result).toHaveLength(2);
+    const coords = result.map(n => `${n.row},${n.col}`).sort();
+    expect(coords).toContain('0,0');
+    expect(coords).toContain('0,2');
+    // Middle node (0,1) must NOT appear
+    expect(coords).not.toContain('0,1');
+  });
+
+  it('includes unnamed milepost dead-ends (JIRA-156 Bug B fix)', () => {
+    // Track ends at unnamed milepost (5,5) — no entry in grid map
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [makeTrackSegment(5, 3, 5, 5)],
+    });
+
+    // Grid only has (5,3) named as "Berlin", (5,5) is unnamed
+    const grid = new Map([
+      ['5,3', { name: 'Berlin', row: 5, col: 3 }],
+    ]);
+
+    const result = getNetworkFrontier(snapshot, grid);
+
+    expect(result).toHaveLength(2);
+    const named = result.find(n => n.cityName === 'Berlin');
+    const unnamed = result.find(n => n.cityName === undefined);
+
+    expect(named).toBeDefined();
+    expect(unnamed).toBeDefined();
+    expect(unnamed!.row).toBe(5);
+    expect(unnamed!.col).toBe(5);
+  });
+});
+
+describe('getNetworkFrontier — targetCity sorting', () => {
+  it('sorts frontier nodes by distance to targetCity when provided', () => {
+    // Two dead-end chains: far node (0,0) and near node (10,0)
+    // Target is at (10,5) — near node should come first
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [
+        makeTrackSegment(0, 0, 0, 1),  // far from target
+        makeTrackSegment(10, 0, 10, 1), // near to target
+      ],
+    });
+
+    // Note: (0,1) and (10,1) are internal junctions if we add more segments;
+    // here all 4 endpoints are degree-1 since segments don't share endpoints
+    const grid = new Map([
+      ['10,5', { name: 'Holland', row: 10, col: 5 }],
+    ]);
+
+    const result = getNetworkFrontier(snapshot, grid, 'Holland');
+
+    // The closest nodes to Holland (10,5) are (10,0) and (10,1): distance 5 and 4
+    // The far nodes (0,0) and (0,1): distance 15 and 14
+    // First result should be from the near chain
+    expect(result[0].row).toBe(10);
+  });
+
+  it('returns unsorted results when no targetCity provided', () => {
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [makeTrackSegment(0, 0, 0, 1)],
+    });
+
+    const result = getNetworkFrontier(snapshot, new Map());
+
+    // Just verify both endpoints are present — order is unspecified
+    expect(result).toHaveLength(2);
+  });
+});
+
+describe('getNetworkFrontier — city name lookup', () => {
+  it('populates cityName from grid map when available', () => {
+    const snapshot = makeWorldSnapshot({
+      existingSegments: [makeTrackSegment(3, 4, 3, 5)],
+    });
+
+    const grid = new Map([
+      ['3,4', { name: 'Paris', row: 3, col: 4 }],
+      ['3,5', { name: 'Berlin', row: 3, col: 5 }],
+    ]);
+
+    const result = getNetworkFrontier(snapshot, grid);
+
+    const cityNames = result.map(n => n.cityName).sort();
+    expect(cityNames).toContain('Paris');
+    expect(cityNames).toContain('Berlin');
   });
 });

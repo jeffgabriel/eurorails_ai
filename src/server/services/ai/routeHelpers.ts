@@ -4,12 +4,20 @@
  * These functions are the single source of truth for route-related decisions:
  * - isStopComplete: determines if a route stop has been fulfilled
  * - resolveBuildTarget: determines the optimal city to build toward
+ * - getNetworkFrontier: returns frontier (dead-end) nodes on the bot's track
  *
  * They replace duplicated logic that previously existed across PlanExecutor,
  * TurnComposer, and AIStrategyEngine.
  */
 
-import { RouteStop, StrategicRoute, GameContext, VICTORY_INITIAL_THRESHOLD } from '../../../shared/types/GameTypes';
+import {
+  RouteStop,
+  StrategicRoute,
+  GameContext,
+  WorldSnapshot,
+  VICTORY_INITIAL_THRESHOLD,
+} from '../../../shared/types/GameTypes';
+import { loadGridPoints } from './MapTopology';
 
 /** Number of connected major cities required to win */
 const VICTORY_CITY_COUNT = 7;
@@ -185,4 +193,127 @@ function isDeliveryComplete(stop: RouteStop, context: GameContext): boolean {
     stop.demandCardId != null && demandCardIds.includes(stop.demandCardId);
 
   return !loadOnTrain && !demandPresent;
+}
+
+// ── getNetworkFrontier ─────────────────────────────────────────────────────
+
+/**
+ * A single frontier node on the bot's track network.
+ */
+export interface FrontierNode {
+  row: number;
+  col: number;
+  /** City name at this milepost, if any (unnamed mileposts will have this undefined) */
+  cityName?: string;
+}
+
+/**
+ * Unified network frontier calculation — the single source of truth for
+ * identifying the dead-end nodes on the bot's existing track.
+ *
+ * **Fixes JIRA-156 Bug B**: The previous TurnComposer implementation only
+ * considered frontier nodes that had a `cityName`, silently ignoring unnamed
+ * milepost endpoints. This caused the bot to miss the Holland direction when
+ * the track ended at an unnamed milepost near Holland.
+ *
+ * A frontier node is a track endpoint with degree 1 (appears in exactly one
+ * segment endpoint — i.e., a dead-end, not an internal junction).
+ *
+ * When `targetCity` is provided, results are sorted by distance to that city
+ * (closest first).
+ *
+ * Fallbacks (when no track exists):
+ * - Bot position (pre-track initial state)
+ * - null (nothing to return)
+ *
+ * @param snapshot - World snapshot containing bot track segments and position.
+ * @param gridPoints - Optional pre-loaded grid point map for city name lookup.
+ *   If omitted, loaded on demand via `loadGridPoints()`.
+ * @param targetCity - Optional city name to sort results toward (closest first).
+ * @returns Ordered list of frontier nodes, with `cityName` populated where known.
+ */
+export function getNetworkFrontier(
+  snapshot: WorldSnapshot,
+  gridPoints?: Map<string, { name?: string; row: number; col: number }>,
+  targetCity?: string,
+): FrontierNode[] {
+  const grid = gridPoints ?? loadGridPoints();
+  const segments = snapshot.bot.existingSegments;
+
+  if (segments.length === 0) {
+    // Fallback: use bot's current position when no track exists
+    if (snapshot.bot.position) {
+      const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
+      const gp = grid.get(posKey);
+      return [{
+        row: snapshot.bot.position.row,
+        col: snapshot.bot.position.col,
+        cityName: gp?.name,
+      }];
+    }
+    return [];
+  }
+
+  // Count how many times each endpoint appears across all segments
+  const nodeCount = new Map<string, { row: number; col: number; count: number }>();
+  for (const seg of segments) {
+    for (const endpoint of [seg.from, seg.to]) {
+      const key = `${endpoint.row},${endpoint.col}`;
+      const existing = nodeCount.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        nodeCount.set(key, { row: endpoint.row, col: endpoint.col, count: 1 });
+      }
+    }
+  }
+
+  // Frontier = nodes with degree 1 (dead-end endpoints only)
+  // NOTE: We do NOT filter by cityName here — unnamed milepost endpoints are
+  // valid frontier nodes and MUST be included (fixes JIRA-156 Bug B).
+  const frontierNodes: FrontierNode[] = [];
+  for (const [key, node] of nodeCount) {
+    if (node.count === 1) {
+      const gp = grid.get(key);
+      frontierNodes.push({
+        row: node.row,
+        col: node.col,
+        cityName: gp?.name,
+      });
+    }
+  }
+
+  // If no degree-1 nodes (e.g., circular track), return all endpoints
+  if (frontierNodes.length === 0) {
+    for (const [key, node] of nodeCount) {
+      const gp = grid.get(key);
+      frontierNodes.push({
+        row: node.row,
+        col: node.col,
+        cityName: gp?.name,
+      });
+    }
+  }
+
+  // Sort by distance to targetCity if provided
+  if (targetCity) {
+    let targetRow = -1;
+    let targetCol = -1;
+    for (const [, gp] of grid) {
+      if (gp.name === targetCity) {
+        targetRow = gp.row;
+        targetCol = gp.col;
+        break;
+      }
+    }
+    if (targetRow >= 0) {
+      frontierNodes.sort((a, b) => {
+        const distA = Math.abs(a.row - targetRow) + Math.abs(a.col - targetCol);
+        const distB = Math.abs(b.row - targetRow) + Math.abs(b.col - targetCol);
+        return distA - distB;
+      });
+    }
+  }
+
+  return frontierNodes;
 }
