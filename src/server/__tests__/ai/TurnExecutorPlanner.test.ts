@@ -46,9 +46,43 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
   computeEffectivePathLength: jest.fn(() => 3),
 }));
 
+jest.mock('../../services/ai/TripPlanner', () => ({
+  TripPlanner: jest.fn().mockImplementation(() => ({
+    planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
+  })),
+}));
+
+jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
+  RouteEnrichmentAdvisor: {
+    enrich: jest.fn((route: StrategicRoute) => route),
+  },
+}));
+
+jest.mock('../../services/ai/BotMemory', () => ({
+  getMemory: jest.fn(() => ({
+    currentBuildTarget: null,
+    turnsOnTarget: 0,
+    lastAction: null,
+    noProgressTurns: 0,
+    consecutiveDiscards: 0,
+    deliveryCount: 0,
+    totalEarnings: 0,
+    turnNumber: 0,
+    activeRoute: null,
+    turnsOnRoute: 0,
+    routeHistory: [],
+    lastReasoning: null,
+    lastPlanHorizon: null,
+    previousRouteStops: null,
+    consecutiveLlmFailures: 0,
+  })),
+}));
+
 import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
+import { TripPlanner } from '../../services/ai/TripPlanner';
+import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
@@ -57,6 +91,8 @@ const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const mockRevalidate = PlanExecutor.revalidateRemainingDeliveries as jest.Mock;
 const mockComputeEffectivePathLength = computeEffectivePathLength as jest.Mock;
+const MockTripPlanner = TripPlanner as jest.MockedClass<typeof TripPlanner>;
+const mockEnrich = RouteEnrichmentAdvisor.enrich as jest.Mock;
 
 // ── Factory helpers ────────────────────────────────────────────────────────
 
@@ -790,5 +826,154 @@ describe('TurnExecutorPlanner.execute — full-capacity drop recovery', () => {
     expect(dropPlan).toBeDefined();
     expect((dropPlan as any).load).toBe('Coal');
     expect((dropPlan as any).city).toBe('Paris');
+  });
+});
+
+// ── execute() — post-delivery replan ──────────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
+  let mockPlanTrip: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    // Reset TripPlanner mock instance behaviour for each test
+    mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('calls TripPlanner.planTrip() and RouteEnrichmentAdvisor.enrich() after delivery when brain is provided', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const newRoute = makeRoute({
+      stops: [makeStop('pickup', 'Lyon', 'Wine'), makeStop('deliver', 'Madrid', 'Wine')],
+      currentStopIndex: 0,
+    });
+    mockPlanTrip.mockResolvedValue({ route: newRoute, llmLog: [] });
+    mockEnrich.mockReturnValue(newRoute);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(mockPlanTrip).toHaveBeenCalledWith(snapshot, context, fakeGridPoints, expect.anything());
+    expect(mockEnrich).toHaveBeenCalledWith(newRoute);
+  });
+
+  it('replaces active route with the enriched route returned by TripPlanner', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const newRoute = makeRoute({
+      stops: [makeStop('pickup', 'Lyon', 'Wine'), makeStop('deliver', 'Madrid', 'Wine')],
+      currentStopIndex: 0,
+      reasoning: 'replanned route',
+    });
+    mockPlanTrip.mockResolvedValue({ route: newRoute, llmLog: [] });
+    mockEnrich.mockReturnValue(newRoute);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // updatedRoute should reflect the new replanned route
+    expect(result.updatedRoute.reasoning).toBe('replanned route');
+  });
+
+  it('falls back to revalidateRemainingDeliveries when TripPlanner returns null route', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // TripPlanner returns null route
+    mockPlanTrip.mockResolvedValue({ route: null, llmLog: [] });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // Should fall back to revalidateRemainingDeliveries instead
+    expect(mockRevalidate).toHaveBeenCalled();
+    // enrich should NOT have been called since TripPlanner returned null
+    expect(mockEnrich).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call TripPlanner when brain is not provided', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+
+    // No brain passed → no TripPlanner
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(mockPlanTrip).not.toHaveBeenCalled();
+    // Falls back to revalidateRemainingDeliveries
+    expect(mockRevalidate).toHaveBeenCalled();
+  });
+
+  it('RouteEnrichmentAdvisor.enrich() stub returns the route unchanged', () => {
+    // Reset enrich to the default pass-through behaviour (previous tests may override it)
+    mockEnrich.mockImplementation((r: StrategicRoute) => r);
+
+    // Direct unit test of the stub behaviour (independent of execute())
+    const route = makeRoute({ reasoning: 'original route' });
+    const result = RouteEnrichmentAdvisor.enrich(route);
+    // In Project 1 the stub returns the same route object
+    expect(result).toBe(route);
   });
 });

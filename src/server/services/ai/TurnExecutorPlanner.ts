@@ -36,8 +36,10 @@ import { CompositionTrace } from './TurnComposer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
 import { PlanExecutor } from './PlanExecutor';
-import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
-import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { TripPlanner } from './TripPlanner';
+import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
+import { getMemory } from './BotMemory';
+import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
 
@@ -189,23 +191,54 @@ export class TurnExecutorPlanner {
         if (currentStop.action === 'pickup') {
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });
           console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
+
+          // Advance stop index — no reorder after pickup (ADR-4)
+          activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+
+          // Skip any newly-completed stops
+          activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
         } else {
+          // Delivery
           hasDelivery = true;
           trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
-          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Revalidating route.`);
+          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Triggering post-delivery replan.`);
+
+          // Advance stop index
+          activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+
+          // Post-delivery replan (ADR-3):
+          // If brain is available, call TripPlanner.planTrip() to get a fresh route.
+          // Then enrich via RouteEnrichmentAdvisor (stub in Project 1 — returns unchanged).
+          // Continue moving on the NEW route with remaining budget.
+          if (brain && gridPoints && gridPoints.length > 0) {
+            try {
+              const memory = getMemory(snapshot.gameId, snapshot.bot.playerId);
+              const tripPlanner = new TripPlanner(brain);
+              const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+
+              if (replanResult.route) {
+                const enrichedRoute = RouteEnrichmentAdvisor.enrich(replanResult.route);
+                activeRoute = TurnExecutorPlanner.skipCompletedStops(enrichedRoute, context);
+                console.log(
+                  `${tag} Post-delivery replan succeeded. New route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
+                );
+              } else {
+                // TripPlanner returned null route — fall back to revalidating existing route
+                console.warn(`${tag} Post-delivery TripPlanner returned null route. Continuing on existing route.`);
+                activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+                activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+              }
+            } catch (err) {
+              console.warn(`${tag} Post-delivery replan failed (${(err as Error).message}). Continuing on existing route.`);
+              activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+              activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+            }
+          } else {
+            // No brain available — revalidate existing route and continue
+            activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+            activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+          }
         }
-
-        // Advance stop index
-        activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
-
-        // Post-delivery: revalidate remaining deliveries (JIRA-123)
-        // ADR-4: Pickup does NOT trigger revalidation or reordering
-        if (currentStop.action === 'deliver') {
-          activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
-        }
-
-        // Skip any newly-completed stops
-        activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
 
         // Continue loop — bot may be able to do more actions this turn
         continue;
