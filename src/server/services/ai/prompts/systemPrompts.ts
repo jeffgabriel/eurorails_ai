@@ -401,7 +401,12 @@ export function getBuildAdvisorPrompt(
   context: GameContext,
   activeRoute: StrategicRoute | null,
   corridorMap: CorridorMap,
+  buildTarget?: string,
 ): { system: string; user: string } {
+  const targetDirective = buildTarget
+    ? `Build track to connect your network to ${buildTarget}. Provide waypoints for the cheapest path.`
+    : 'Build track to extend your network toward your next route stop. Provide waypoints for the cheapest path.';
+
   const system = `You are a railroad track building advisor for the board game Eurorails.
 
 TRACK BUILDING RULES:
@@ -411,10 +416,10 @@ TRACK BUILDING RULES:
 
 OPPONENT TRACK: You may use an opponent's track for 4M ECU per opponent per turn.
 
-Given the corridor map and game state, recommend the best track building strategy.
+${targetDirective}
 Answer with waypoints (row, col coordinates) — the pathfinding algorithm determines the exact route.
 
-Actions: "build", "buildAlternative", "replan", "useOpponentTrack"`;
+Actions: "build", "useOpponentTrack"`;
 
   const sections: string[] = [];
 
@@ -456,7 +461,7 @@ export function getBuildAdvisorExtractionPrompt(
   const system = `Extract structured data from a track building advisor's text response.
 
 OUTPUT FORMAT (JSON):
-- action: one of "build", "buildAlternative", "replan", "useOpponentTrack"
+- action: one of "build", "useOpponentTrack"
 - target: city name string
 - waypoints: array of [row, col] coordinate pairs (integers)
 - reasoning: brief summary

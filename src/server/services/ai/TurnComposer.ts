@@ -61,7 +61,7 @@ export interface CompositionTrace {
   /** Deliveries added during composition */
   deliveries: Array<{ load: string; city: string }>;
   /** JIRA-122: JIT build gate decision */
-  jitGate?: { deferred: boolean; reason: string; trackRunway: number; trainSpeed: number; destinationCity: string; currentStopIndex?: number; buildTargetStopIndex?: number; currentStopCity?: string };
+  jitGate?: { deferred: boolean; reason: string; trackRunway: number; intermediateStopTurns: number; effectiveRunway: number; trainSpeed: number; destinationCity: string; currentStopIndex?: number; buildTargetStopIndex?: number; currentStopCity?: string };
   /** JIRA-122: Ferry-aware BFS search result */
   ferryAwareBFS?: { searched: boolean; ferryHopsUsed: number; nearestPointViaFerry: { row: number; col: number; distance: number; ferryCrossings: number } | null };
   /** JIRA-125: Victory build decision */
@@ -848,20 +848,34 @@ export class TurnComposer {
     // Only applies when the advisor would be used (not victory builds, not initial builds)
     if (useAdvisor) {
       let buildTarget: string | undefined;
+      let buildTargetStopIndex: number = activeRoute?.currentStopIndex ?? 0;
       if (activeRoute) {
-        for (const stop of activeRoute.stops) {
+        for (let i = 0; i < activeRoute.stops.length; i++) {
+          const stop = activeRoute.stops[i];
           const isStartingCity = activeRoute.startingCity &&
             stop.city.toLowerCase() === activeRoute.startingCity.toLowerCase();
           if (!isStartingCity && !context.citiesOnNetwork.includes(stop.city)) {
             buildTarget = stop.city;
+            buildTargetStopIndex = i;
             break;
           }
         }
       }
       const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
-      const deferResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, buildTarget ?? '', trainSpeed);
+      const deferResult = TurnComposer.shouldDeferBuild(snapshot, context, activeRoute, buildTarget ?? '', trainSpeed, buildTargetStopIndex);
       if (trace) {
-        trace.jitGate = { deferred: deferResult.deferred, reason: deferResult.reason, trackRunway: deferResult.trackRunway, trainSpeed, destinationCity: buildTarget ?? '' };
+        trace.jitGate = {
+          deferred: deferResult.deferred,
+          reason: deferResult.reason,
+          trackRunway: deferResult.trackRunway,
+          intermediateStopTurns: deferResult.intermediateStopTurns,
+          effectiveRunway: deferResult.effectiveRunway,
+          trainSpeed,
+          destinationCity: buildTarget ?? '',
+          buildTargetStopIndex,
+          currentStopIndex: activeRoute?.currentStopIndex,
+          currentStopCity: activeRoute?.stops[activeRoute.currentStopIndex ?? 0]?.city,
+        };
       }
       if (deferResult.deferred) {
         return emptyResult;
@@ -1313,7 +1327,7 @@ export class TurnComposer {
    * JIRA-122: Determine if the bot should defer building this turn.
    * Two-part check:
    *   1. Delivery certainty — is the train committed to a delivery that requires this build?
-   *   2. Track runway — does the train have >= 2 turns of existing track toward destination?
+   *   2. Effective runway — does the bot have >= 2 turns of work (intermediate stops + track) before needing new track?
    *
    * Exempt: near-miss builds, initial build phase, victory builds.
    * Returns true to defer (skip build), false to proceed.
@@ -1324,29 +1338,30 @@ export class TurnComposer {
     activeRoute: StrategicRoute | null | undefined,
     buildTarget: string,
     trainSpeed: number,
-  ): { deferred: boolean; reason: string; trackRunway: number } {
+    buildTargetStopIndex?: number,
+  ): { deferred: boolean; reason: string; trackRunway: number; intermediateStopTurns: number; effectiveRunway: number } {
     // Exemption: initial build phase (first 2 turns)
     if (context.isInitialBuild || context.turnNumber <= 2) {
-      return { deferred: false, reason: 'initial_build_exempt', trackRunway: 0 };
+      return { deferred: false, reason: 'initial_build_exempt', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
     }
 
     // Exemption: victory builds (cash > 230M, building toward major city connections)
     if (snapshot.bot.money > 230) {
       const unconnected = context.unconnectedMajorCities ?? [];
       if (unconnected.some(c => c.cityName === buildTarget)) {
-        return { deferred: false, reason: 'victory_build_exempt', trackRunway: 0 };
+        return { deferred: false, reason: 'victory_build_exempt', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
       }
     }
 
     // Check 1: Delivery certainty — build target must be in active route stops
     if (!activeRoute) {
-      return { deferred: true, reason: 'no_active_route', trackRunway: 0 };
+      return { deferred: true, reason: 'no_active_route', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
     }
 
     const routeStops = activeRoute.stops.map(s => s.city.toLowerCase());
     const targetInRoute = routeStops.includes(buildTarget.toLowerCase());
     if (!targetInRoute) {
-      return { deferred: true, reason: 'target_not_in_route', trackRunway: 0 };
+      return { deferred: true, reason: 'target_not_in_route', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
     }
 
     // Check delivery commitment: train should have the load, be near pickup, or actively building toward route
@@ -1357,18 +1372,81 @@ export class TurnComposer {
         const isDeliveryCommitted = context.loads.includes(currentStop.loadType) ||
           activeRoute.phase === 'travel' || activeRoute.phase === 'act';
         if (!isDeliveryCommitted) {
-          return { deferred: true, reason: 'not_committed_to_delivery', trackRunway: 0 };
+          return { deferred: true, reason: 'not_committed_to_delivery', trackRunway: 0, intermediateStopTurns: 0, effectiveRunway: 0 };
         }
       }
     }
 
-    // Check 2: Track runway — defer if >= 2 turns of existing track remain
-    const runway = TurnComposer.calculateTrackRunway(snapshot, buildTarget, trainSpeed, context);
-    if (runway >= 2) {
-      return { deferred: true, reason: 'sufficient_runway', trackRunway: runway };
+    // Check 2: Effective runway — defer if >= 2 turns of work remain before needing new track.
+    // Effective runway = intermediate stop travel time + track runway toward build target.
+    const stopIndex = buildTargetStopIndex ?? activeRoute.currentStopIndex;
+    const intermediateStopTurns = TurnComposer.estimateIntermediateStopTurns(
+      snapshot, context, activeRoute, stopIndex, trainSpeed,
+    );
+    const trackRunway = TurnComposer.calculateTrackRunway(snapshot, buildTarget, trainSpeed, context);
+    const effectiveRunway = intermediateStopTurns + trackRunway;
+    if (effectiveRunway >= 2) {
+      return { deferred: true, reason: 'sufficient_runway', trackRunway, intermediateStopTurns, effectiveRunway };
     }
 
-    return { deferred: false, reason: 'build_needed', trackRunway: runway };
+    return { deferred: false, reason: 'build_needed', trackRunway, intermediateStopTurns, effectiveRunway };
+  }
+
+  /**
+   * JIRA-154: Estimate the number of turns needed to complete on-network stops
+   * between the current stop (inclusive) and the build target stop (exclusive).
+   *
+   * For each on-network intermediate stop, computes the distance from the
+   * previous city to the stop city (via loadGridPoints) and divides by trainSpeed.
+   * Returns 0 when buildTargetStopIndex === currentStopIndex (no intermediate stops).
+   */
+  static estimateIntermediateStopTurns(
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    activeRoute: StrategicRoute,
+    buildTargetStopIndex: number,
+    trainSpeed: number,
+  ): number {
+    const currentStopIndex = activeRoute.currentStopIndex;
+    if (buildTargetStopIndex <= currentStopIndex || trainSpeed <= 0) return 0;
+
+    const gridPoints = loadGridPoints();
+
+    // Build a position lookup by city name
+    const cityPositions = new Map<string, { row: number; col: number }>();
+    for (const [, gp] of gridPoints) {
+      if (gp.name) {
+        cityPositions.set(gp.name.toLowerCase(), { row: gp.row, col: gp.col });
+      }
+    }
+
+    // Get the starting position: either the bot's current grid position or the first stop city
+    let prevPos: { row: number; col: number } | null = snapshot.bot.position
+      ? { row: snapshot.bot.position.row, col: snapshot.bot.position.col }
+      : null;
+
+    let totalTurns = 0;
+
+    // Sum travel distance through on-network stops between currentStopIndex and buildTargetStopIndex
+    for (let i = currentStopIndex; i < buildTargetStopIndex; i++) {
+      const stop = activeRoute.stops[i];
+      if (!stop) continue;
+
+      // Only count stops that are still on the network (have existing track coverage)
+      if (!context.citiesOnNetwork.includes(stop.city)) continue;
+
+      const stopPos = cityPositions.get(stop.city.toLowerCase());
+      if (!stopPos || !prevPos) {
+        prevPos = stopPos ?? null;
+        continue;
+      }
+
+      const distance = hexDistance(prevPos.row, prevPos.col, stopPos.row, stopPos.col);
+      totalTurns += distance / trainSpeed;
+      prevPos = stopPos;
+    }
+
+    return totalTurns;
   }
 
   /**

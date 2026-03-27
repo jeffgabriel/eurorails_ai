@@ -264,6 +264,157 @@ describe('TurnComposer.shouldDeferBuild', () => {
       expect(result.trackRunway).toBeGreaterThanOrEqual(2);
     });
   });
+
+  describe('intermediate stop travel time (JIRA-154)', () => {
+    it('defers when buildTargetStopIndex > currentStopIndex and intermediate stops push effectiveRunway >= 2', () => {
+      // Stops 0-2 on network, stop 3 off network (build target).
+      // loadGridPoints returns positions for intermediate cities far apart,
+      // so intermediateStopTurns > 2.
+      const gridWithCities = new Map<string, GridPointData>();
+      for (let row = 0; row < 20; row++) {
+        for (let col = 0; col < 20; col++) {
+          const key = `${row},${col}`;
+          gridWithCities.set(key, { row, col, terrain: TerrainType.Clear });
+        }
+      }
+      // Place cities at specific positions: Warsaw at (0,0), Budapest at (10,10), destination at (5,5)
+      gridWithCities.set('0,0', { row: 0, col: 0, terrain: TerrainType.Clear, name: 'Warszawa' });
+      gridWithCities.set('10,10', { row: 10, col: 10, terrain: TerrainType.Clear, name: 'Budapest' });
+      gridWithCities.set('5,5', { row: 5, col: 5, terrain: TerrainType.Clear, name: 'Holland' });
+      loadGridPoints.mockReturnValue(gridWithCities);
+
+      // Mock hexDistance to return large values for distant cities
+      const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+      mockHexDistance.mockImplementation((r1: number, c1: number, r2: number, c2: number) => {
+        return Math.abs(r2 - r1) + Math.abs(c2 - c1);
+      });
+
+      const snapshot = makeSnapshot({ bot: { ...makeSnapshot().bot, position: { row: 0, col: 0 } } });
+      const context = makeContext({
+        turnNumber: 20,
+        citiesOnNetwork: ['Warszawa', 'Budapest'],
+      });
+
+      // Route: Warszawa(0) → Budapest(1) → Budapest(2) → Holland(3 - off network)
+      // currentStopIndex = 0, buildTargetStopIndex = 3
+      const route = makeRoute({
+        phase: 'build',
+        currentStopIndex: 0,
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Warszawa' },
+          { action: 'deliver', loadType: 'Coal', city: 'Budapest', demandCardId: 1, payment: 10 },
+          { action: 'pickup', loadType: 'Oil', city: 'Budapest' },
+          { action: 'deliver', loadType: 'Oil', city: 'Holland', demandCardId: 2, payment: 15 },
+        ],
+      });
+
+      // buildTargetStopIndex = 3 (Holland is off-network)
+      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Holland', 9, 3);
+      expect(result.deferred).toBe(true);
+      expect(result.reason).toBe('sufficient_runway');
+      expect(result.intermediateStopTurns).toBeGreaterThan(0);
+      expect(result.effectiveRunway).toBe(result.intermediateStopTurns + result.trackRunway);
+    });
+
+    it('allows build when buildTargetStopIndex === currentStopIndex (no intermediate stops)', () => {
+      loadGridPoints.mockReturnValue(new Map());
+      const snapshot = makeSnapshot();
+      const context = makeContext({ turnNumber: 20 });
+      const route = makeRoute({
+        phase: 'build',
+        currentStopIndex: 0,
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+      });
+      // buildTargetStopIndex === currentStopIndex → no intermediate stops → no extra deferral
+      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9, 0);
+      // No intermediate turns, track runway from BFS = 0 (Berlin not on network, city not in grid)
+      expect(result.intermediateStopTurns).toBe(0);
+      expect(result.deferred).toBe(false);
+      expect(result.reason).toBe('build_needed');
+    });
+
+    it('returns intermediateStopTurns and effectiveRunway in all result shapes', () => {
+      const snapshot = makeSnapshot();
+      const context = makeContext({ isInitialBuild: true, turnNumber: 1 });
+      const route = makeRoute();
+      const result = TurnComposer.shouldDeferBuild(snapshot, context, route, 'Berlin', 9);
+      expect(result).toHaveProperty('intermediateStopTurns');
+      expect(result).toHaveProperty('effectiveRunway');
+    });
+  });
+});
+
+describe('TurnComposer.estimateIntermediateStopTurns', () => {
+  const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+
+  beforeEach(() => {
+    mockHexDistance.mockReset();
+  });
+
+  it('returns 0 when buildTargetStopIndex === currentStopIndex', () => {
+    loadGridPoints.mockReturnValue(new Map());
+    const snapshot = makeSnapshot();
+    const context = makeContext({ citiesOnNetwork: [] });
+    const route = makeRoute({ currentStopIndex: 0 });
+    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 0, 9);
+    expect(result).toBe(0);
+  });
+
+  it('returns 0 when trainSpeed is 0', () => {
+    loadGridPoints.mockReturnValue(new Map());
+    const snapshot = makeSnapshot();
+    const context = makeContext({ citiesOnNetwork: ['Berlin'] });
+    const route = makeRoute({
+      currentStopIndex: 0,
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+      ],
+    });
+    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 0);
+    expect(result).toBe(0);
+  });
+
+  it('returns 0 when intermediate stops are not on network', () => {
+    // Berlin is NOT on network — should be skipped in intermediate calculation
+    const gridWithCities = new Map<string, GridPointData>();
+    gridWithCities.set('3,3', { row: 3, col: 3, terrain: TerrainType.Clear, name: 'Berlin' });
+    loadGridPoints.mockReturnValue(gridWithCities);
+    mockHexDistance.mockReturnValue(10);
+
+    const snapshot = makeSnapshot();
+    const context = makeContext({ citiesOnNetwork: [] }); // Berlin NOT on network
+    const route = makeRoute({
+      currentStopIndex: 0,
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+      ],
+    });
+    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
+    expect(result).toBe(0); // Berlin skipped — not on network
+  });
+
+  it('counts travel time for on-network intermediate stops', () => {
+    // Berlin IS on network: distance from bot (5,5) to Berlin (3,3) = 4 hops
+    const gridWithCities = new Map<string, GridPointData>();
+    gridWithCities.set('3,3', { row: 3, col: 3, terrain: TerrainType.Clear, name: 'Berlin' });
+    loadGridPoints.mockReturnValue(gridWithCities);
+    mockHexDistance.mockReturnValue(18); // 18 mileposts between cities
+
+    const snapshot = makeSnapshot(); // bot at (5,5)
+    const context = makeContext({ citiesOnNetwork: ['Berlin'] });
+    const route = makeRoute({
+      currentStopIndex: 0,
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 25 },
+      ],
+    });
+    const result = TurnComposer.estimateIntermediateStopTurns(snapshot, context, route, 1, 9);
+    // 18 mileposts / 9 speed = 2 turns
+    expect(result).toBe(2);
+  });
 });
 
 describe('TurnComposer.calculateTrackRunway', () => {

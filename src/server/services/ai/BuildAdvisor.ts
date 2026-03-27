@@ -67,7 +67,7 @@ export class BuildAdvisor {
       );
 
       // 3. Build prompt
-      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap);
+      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap, targetCity.cityName);
       BuildAdvisor.lastDiagnostics.systemPrompt = system;
       BuildAdvisor.lastDiagnostics.userPrompt = user;
 
@@ -158,7 +158,7 @@ export class BuildAdvisor {
       );
 
       // 2. Build prompt with solvency feedback
-      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap);
+      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap, targetCity.cityName);
       const solvencyFeedback = `\n\nSOLVENCY FEEDBACK:
 Your previous recommendation (${previousResult.action} toward ${previousResult.target}) costs ${actualCost}M ECU to build, but you only have ${availableCash}M available.
 Please suggest a cheaper route with fewer/different waypoints, use opponent track, or propose an alternative target.`;
