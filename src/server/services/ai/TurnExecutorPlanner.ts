@@ -30,16 +30,20 @@ import {
   AIActionType,
   GridPoint,
   RouteStop,
+  TrainType,
+  TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget } from './routeHelpers';
-import { CompositionTrace } from './TurnComposer';
+import { CompositionTrace, TurnComposer } from './TurnComposer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
+import { BuildAdvisor } from './BuildAdvisor';
 import { PlanExecutor } from './PlanExecutor';
 import { TripPlanner } from './TripPlanner';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
 
@@ -317,18 +321,45 @@ export class TurnExecutorPlanner {
       return TurnExecutorPlanner.routeComplete(activeRoute, trace);
     }
 
-    // ── Phase B: Build target resolution ──────────────────────────────────
+    // ── Phase B: Build ─────────────────────────────────────────────────────
+    //
+    // Resolution order:
+    //   1. resolveBuildTarget() → null = skip build
+    //   2. shouldDeferBuild() JIT gate → deferred = skip build
+    //   3. BuildAdvisor.advise() if brain+gridPoints available (max 1 solvency retry)
+    //   4. Heuristic fallback (merged near-miss + demand-based): build toward targetCity
+
     const buildTarget = resolveBuildTarget(activeRoute, context);
-    if (buildTarget) {
-      trace.build.target = buildTarget.targetCity;
-      console.log(
-        `${tag} Build target: ${buildTarget.targetCity} (isVictoryBuild=${buildTarget.isVictoryBuild})`,
-      );
-    } else {
+    if (!buildTarget) {
       trace.build.skipped = true;
+      trace.build.target = null;
+      console.log(`${tag} Phase B: no build target — skipping build`);
+    } else {
+      trace.build.target = buildTarget.targetCity;
+      trace.build.skipped = false;
+      console.log(
+        `${tag} Phase B: build target "${buildTarget.targetCity}" (isVictoryBuild=${buildTarget.isVictoryBuild})`,
+      );
+
+      const buildPlan = await TurnExecutorPlanner.executeBuildPhase(
+        buildTarget.targetCity,
+        buildTarget.isVictoryBuild,
+        buildTarget.stopIndex,
+        activeRoute,
+        snapshot,
+        context,
+        brain ?? null,
+        gridPoints,
+        trace,
+        tag,
+      );
+
+      if (buildPlan) {
+        plans.push(buildPlan);
+      }
     }
 
-    // If no movement plans were produced, emit PassTurn
+    // If no movement or build plans were produced, emit PassTurn
     if (plans.length === 0) {
       plans.push({ type: AIActionType.PassTurn });
     }
@@ -343,6 +374,159 @@ export class TurnExecutorPlanner {
       routeAbandoned: false,
       hasDelivery,
     };
+  }
+
+  /**
+   * Execute Phase B build logic for a resolved build target.
+   *
+   * AC7: Max 1 solvency retry (down from MAX_SOLVENCY_RETRIES=2 in TurnComposer).
+   * Single heuristic fallback path (merged near-miss + demand-based).
+   *
+   * Flow:
+   *   1. JIT gate (shouldDeferBuild) — skip if sufficient runway, unless victory build
+   *   2. BuildAdvisor.advise() if brain+gridPoints available — call LLM for waypoints
+   *      a. On build action success → return plan
+   *      b. On failure → 1 solvency retry via retryWithSolvencyFeedback → try again
+   *   3. Heuristic fallback (single code path) → ActionResolver BUILD toward targetCity
+   */
+  private static async executeBuildPhase(
+    targetCity: string,
+    isVictoryBuild: boolean,
+    buildTargetStopIndex: number,
+    activeRoute: StrategicRoute,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    brain: LLMStrategyBrain | null,
+    gridPoints: GridPoint[] | undefined,
+    trace: CompositionTrace,
+    tag: string,
+  ): Promise<TurnPlan | null> {
+    // Check build budget
+    const remainingBudget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
+    if (remainingBudget <= 0) {
+      console.log(`${tag} Phase B: no build budget (turnBuildCost=${context.turnBuildCost}, money=${snapshot.bot.money})`);
+      return null;
+    }
+
+    // Victory builds skip the JIT gate (R7)
+    const useAdvisor = !isVictoryBuild && brain != null && gridPoints != null && gridPoints.length > 0 && !context.isInitialBuild;
+
+    // ── JIT gate (shouldDeferBuild) ──────────────────────────────────────
+    if (useAdvisor) {
+      const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+      const deferResult = TurnComposer.shouldDeferBuild(
+        snapshot,
+        context,
+        activeRoute,
+        targetCity,
+        trainSpeed,
+        buildTargetStopIndex >= 0 ? buildTargetStopIndex : undefined,
+      );
+      console.log(
+        `${tag} JIT gate: ${deferResult.deferred ? 'DEFERRED' : 'BUILD'} (reason=${deferResult.reason}, runway=${deferResult.effectiveRunway.toFixed(1)})`,
+      );
+      if (deferResult.deferred) {
+        trace.build.skipped = true;
+        return null;
+      }
+    }
+
+    // ── BuildAdvisor (LLM) with max 1 solvency retry (AC7) ───────────────
+    if (useAdvisor && brain != null && gridPoints != null) {
+      try {
+        const advisorResult = await BuildAdvisor.advise(
+          snapshot,
+          context,
+          activeRoute,
+          gridPoints,
+          brain,
+        );
+
+        if (advisorResult && (advisorResult.action === 'build' || advisorResult.action === 'buildAlternative')) {
+          const advisorTargetCity = advisorResult.target ?? targetCity;
+          const waypoints: [number, number][] = advisorResult.waypoints ?? [];
+
+          // Try building toward advisor target
+          const details: Record<string, any> = { toward: advisorTargetCity };
+          if (waypoints.length > 0) details.waypoints = waypoints;
+
+          const buildResult = await ActionResolver.resolve(
+            { action: 'BUILD', details, reasoning: advisorResult.reasoning ?? '', planHorizon: '' },
+            snapshot,
+            context,
+            activeRoute.startingCity,
+          );
+
+          if (buildResult.success && buildResult.plan) {
+            console.log(`${tag} BuildAdvisor succeeded: building toward "${advisorTargetCity}"`);
+            trace.build.cost = buildResult.plan.type === AIActionType.BuildTrack
+              ? buildResult.plan.segments.reduce((s, seg) => s + seg.cost, 0)
+              : 0;
+            return buildResult.plan;
+          }
+
+          // ── Solvency retry (max 1) — AC7 ─────────────────────────────
+          console.warn(`${tag} BuildAdvisor build failed (${buildResult.error}), attempting 1 solvency retry`);
+          const retryAdvisorResult = await BuildAdvisor.retryWithSolvencyFeedback(
+            advisorResult,
+            remainingBudget + 1, // Indicate overshoot — actual cost exceeded budget
+            remainingBudget,
+            snapshot,
+            context,
+            activeRoute,
+            gridPoints,
+            brain,
+          );
+
+          if (retryAdvisorResult && (retryAdvisorResult.action === 'build' || retryAdvisorResult.action === 'buildAlternative')) {
+            const retryCity = retryAdvisorResult.target ?? targetCity;
+            const retryWaypoints: [number, number][] = retryAdvisorResult.waypoints ?? [];
+            const retryDetails: Record<string, any> = { toward: retryCity };
+            if (retryWaypoints.length > 0) retryDetails.waypoints = retryWaypoints;
+
+            const retryBuildResult = await ActionResolver.resolve(
+              { action: 'BUILD', details: retryDetails, reasoning: retryAdvisorResult.reasoning ?? '', planHorizon: '' },
+              snapshot,
+              context,
+              activeRoute.startingCity,
+            );
+            if (retryBuildResult.success && retryBuildResult.plan) {
+              console.log(`${tag} BuildAdvisor solvency retry succeeded: building toward "${retryCity}"`);
+              return retryBuildResult.plan;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn(`${tag} BuildAdvisor threw error: ${(err as Error).message}. Falling back to heuristic.`);
+      }
+    }
+
+    // ── Heuristic fallback (merged near-miss + demand-based) ─────────────
+    // Single code path: build toward resolveBuildTarget().targetCity (R7)
+    console.log(`${tag} Heuristic fallback: building toward "${targetCity}"`);
+    try {
+      const heuristicResult = await ActionResolver.resolve(
+        {
+          action: 'BUILD',
+          details: { toward: targetCity },
+          reasoning: 'heuristic fallback',
+          planHorizon: '',
+        },
+        snapshot,
+        context,
+        activeRoute.startingCity,
+      );
+
+      if (heuristicResult.success && heuristicResult.plan) {
+        return heuristicResult.plan;
+      }
+
+      console.warn(`${tag} Heuristic build also failed: ${heuristicResult.error}`);
+    } catch (err) {
+      console.warn(`${tag} Heuristic build threw: ${(err as Error).message}`);
+    }
+
+    return null;
   }
 
   // ── Cargo evaluation ──────────────────────────────────────────────────

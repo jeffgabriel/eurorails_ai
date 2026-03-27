@@ -58,6 +58,30 @@ jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
   },
 }));
 
+jest.mock('../../services/ai/TurnComposer', () => ({
+  TurnComposer: {
+    shouldDeferBuild: jest.fn(() => ({
+      deferred: false,
+      reason: 'build_needed',
+      trackRunway: 0,
+      intermediateStopTurns: 0,
+      effectiveRunway: 0,
+    })),
+  },
+}));
+
+jest.mock('../../services/ai/BuildAdvisor', () => ({
+  BuildAdvisor: {
+    advise: jest.fn().mockResolvedValue(null),
+    retryWithSolvencyFeedback: jest.fn().mockResolvedValue(null),
+    lastDiagnostics: {},
+  },
+}));
+
+jest.mock('../../../shared/constants/gameRules', () => ({
+  TURN_BUILD_BUDGET: 20,
+}));
+
 jest.mock('../../services/ai/BotMemory', () => ({
   getMemory: jest.fn(() => ({
     currentBuildTarget: null,
@@ -83,6 +107,8 @@ import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
+import { TurnComposer } from '../../services/ai/TurnComposer';
+import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
 import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
@@ -93,6 +119,9 @@ const mockRevalidate = PlanExecutor.revalidateRemainingDeliveries as jest.Mock;
 const mockComputeEffectivePathLength = computeEffectivePathLength as jest.Mock;
 const MockTripPlanner = TripPlanner as jest.MockedClass<typeof TripPlanner>;
 const mockEnrich = RouteEnrichmentAdvisor.enrich as jest.Mock;
+const mockShouldDeferBuild = TurnComposer.shouldDeferBuild as jest.Mock;
+const mockBuildAdvisorAdvise = BuildAdvisor.advise as jest.Mock;
+const mockBuildAdvisorRetry = BuildAdvisor.retryWithSolvencyFeedback as jest.Mock;
 
 // ── Factory helpers ────────────────────────────────────────────────────────
 
@@ -975,5 +1004,205 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     const result = RouteEnrichmentAdvisor.enrich(route);
     // In Project 1 the stub returns the same route object
     expect(result).toBe(route);
+  });
+});
+
+// ── execute() — Phase B: build phase ──────────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — Phase B: build phase', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Movement loop: bot not at any city, city not on network → terminates immediately
+    mockIsStopComplete.mockReturnValue(false);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+    // JIT gate: build not deferred by default
+    mockShouldDeferBuild.mockReturnValue({
+      deferred: false,
+      reason: 'build_needed',
+      trackRunway: 0,
+      intermediateStopTurns: 0,
+      effectiveRunway: 0,
+    });
+    mockBuildAdvisorAdvise.mockResolvedValue(null);
+    mockBuildAdvisorRetry.mockResolvedValue(null);
+  });
+
+  it('skips build and emits PassTurn when no build target', async () => {
+    mockResolveBuildTarget.mockReturnValue(null);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.compositionTrace.build.skipped).toBe(true);
+    expect(result.compositionTrace.build.target).toBeNull();
+    expect(result.plans).toContainEqual({ type: AIActionType.PassTurn });
+  });
+
+  it('emits a BuildTrack plan when heuristic fallback succeeds', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'München',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 3 }],
+      targetCity: 'München',
+    };
+    // ActionResolver: first call is for resolveMove (fails — city not on network),
+    // then heuristic BUILD
+    mockResolve.mockResolvedValue({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.compositionTrace.build.target).toBe('München');
+    expect(result.plans).toContainEqual(buildPlan);
+  });
+
+  it('defers build when JIT gate returns deferred=true', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'München',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    mockShouldDeferBuild.mockReturnValue({
+      deferred: true,
+      reason: 'sufficient_runway',
+      trackRunway: 3,
+      intermediateStopTurns: 0,
+      effectiveRunway: 3,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(result.compositionTrace.build.skipped).toBe(true);
+    // BuildAdvisor should NOT have been called because JIT gate deferred
+    expect(mockBuildAdvisorAdvise).not.toHaveBeenCalled();
+    expect(result.plans).toContainEqual({ type: AIActionType.PassTurn });
+  });
+
+  it('calls BuildAdvisor.advise() when brain and gridPoints are provided', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 2 }],
+      targetCity: 'Frankfurt',
+    };
+    mockBuildAdvisorAdvise.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'LLM says build here',
+    });
+    mockResolve.mockResolvedValue({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Frankfurt', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(mockBuildAdvisorAdvise).toHaveBeenCalledWith(snapshot, context, route, fakeGridPoints, fakeBrain);
+    expect(result.plans).toContainEqual(buildPlan);
+  });
+
+  it('falls back to heuristic when BuildAdvisor returns null', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Ruhr',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    mockBuildAdvisorAdvise.mockResolvedValue(null); // Advisor fails
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 5, col: 5 }, to: { row: 6, col: 6 }, cost: 1 }],
+      targetCity: 'Ruhr',
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Ruhr', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(result.plans).toContainEqual(buildPlan);
+    // Should still have called build heuristic
+    expect(mockResolve).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'BUILD' }),
+      snapshot,
+      context,
+      expect.anything(),
+    );
+  });
+
+  it('victory builds skip the JIT gate', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Madrid',
+      stopIndex: -1,
+      isVictoryBuild: true,
+    });
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 5 }],
+      targetCity: 'Madrid',
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Madrid', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [], money: 300 });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // JIT gate should NOT be called for victory builds
+    expect(mockShouldDeferBuild).not.toHaveBeenCalled();
   });
 });
