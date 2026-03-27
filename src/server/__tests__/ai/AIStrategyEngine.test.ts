@@ -214,6 +214,12 @@ jest.mock('../../services/ai/LLMStrategyBrain', () => ({
   })),
 }));
 
+jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
+  RouteEnrichmentAdvisor: {
+    enrich: jest.fn(async (route: unknown) => route),
+  },
+}));
+
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
@@ -222,6 +228,7 @@ import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
+import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { db } from '../../db/index';
 import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
@@ -3534,6 +3541,193 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       const patch = mockUpdateMemory.mock.calls[0][2] as any;
       // Route abandoned → activeRoute cleared in memory
       expect(patch.activeRoute).toBeNull();
+    });
+  });
+
+  // ── JIRA-156 P2: RouteEnrichmentAdvisor called after initial TripPlanner route ──
+  describe('JIRA-156 P2: RouteEnrichmentAdvisor enrich() called after new route creation', () => {
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('should call RouteEnrichmentAdvisor.enrich() after TripPlanner creates a new route when hexGrid is populated', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      // Snapshot with hexGrid so gridPoints.length > 0 gate passes
+      const hexGrid = [
+        { id: '0,0', row: 0, col: 0, x: 0, y: 0, terrain: 2, city: { type: 2, name: 'Berlin', availableLoads: [] } },
+        { id: '1,0', row: 1, col: 0, x: 0, y: 50, terrain: 0, city: undefined },
+      ];
+      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any), hexGrid };
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // No active route — TripPlanner path is taken
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const route: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1, payment: 15 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 5,
+        reasoning: 'Coal to Paris',
+      };
+
+      mockPlanRoute.mockResolvedValue({
+        route,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 300,
+        tokenUsage: { input: 100, output: 50 },
+      });
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Building toward Berlin',
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // RouteEnrichmentAdvisor.enrich should have been called with the new route + snapshot + context + brain + gridPoints
+      expect(RouteEnrichmentAdvisor.enrich).toHaveBeenCalledTimes(1);
+      const [enrichRoute, enrichSnapshot, enrichContext, , enrichGrid] =
+        (RouteEnrichmentAdvisor.enrich as jest.Mock).mock.calls[0];
+      expect(enrichRoute.stops[0].city).toBe('Berlin');
+      expect(enrichSnapshot.hexGrid).toBe(hexGrid);
+      expect(enrichContext).toBe(context);
+      expect(enrichGrid).toEqual(hexGrid);
+    });
+
+    it('should NOT call RouteEnrichmentAdvisor.enrich() when hexGrid is empty', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      // Snapshot without hexGrid → gridPoints = []
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 5,
+        reasoning: 'test',
+      };
+
+      mockPlanRoute.mockResolvedValue({ route, model: 'claude-sonnet-4-20250514', latencyMs: 100 });
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Pass',
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // gridPoints.length === 0 → enrich() should NOT be called
+      expect(RouteEnrichmentAdvisor.enrich).not.toHaveBeenCalled();
+    });
+
+    it('should use the enriched route (from enrich() return value) for execution', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const hexGrid = [
+        { id: '0,0', row: 0, col: 0, x: 0, y: 0, terrain: 2, city: { type: 2, name: 'Berlin', availableLoads: [] } },
+      ];
+      const snapshot = { ...makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any), hexGrid };
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockGetMemory.mockReturnValue({
+        turnNumber: 0,
+        noProgressTurns: 0,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null,
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const originalRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 5,
+        reasoning: 'Original',
+      };
+
+      const enrichedRoute: StrategicRoute = {
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+          { action: 'deliver', loadType: 'Coal', city: 'Paris', payment: 12 },
+        ],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        createdAtTurn: 5,
+        reasoning: 'Enriched by advisor',
+      };
+
+      mockPlanRoute.mockResolvedValue({ route: originalRoute, model: 'claude-sonnet-4-20250514', latencyMs: 100 });
+
+      // Override the mock to return enrichedRoute instead of passing through
+      (RouteEnrichmentAdvisor.enrich as jest.Mock).mockResolvedValue(enrichedRoute);
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: enrichedRoute,
+        description: 'Building',
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TurnExecutorPlanner should have been called with the enriched route (not the original)
+      const [execRoute] = mockTurnExecutorPlannerExecute.mock.calls[0];
+      expect(execRoute.stops).toHaveLength(2);
+      expect(execRoute.reasoning).toBe('Enriched by advisor');
     });
   });
 });

@@ -460,7 +460,7 @@ describe('JIRA-156 mid-turn replan: delivery triggers TripPlanner + RouteEnrichm
     expect(mockPlanTrip).toHaveBeenCalledWith(snapshot, context, fakeGridPoints, expect.anything());
 
     // RouteEnrichmentAdvisor.enrich() must be called with the new route (stub returns it unchanged)
-    expect(mockEnrich).toHaveBeenCalledWith(newRoute);
+    expect(mockEnrich).toHaveBeenCalledWith(newRoute, expect.anything(), expect.anything(), expect.anything(), expect.anything());
   });
 
   it('updatedRoute reflects the replanned route after mid-turn replan', async () => {
