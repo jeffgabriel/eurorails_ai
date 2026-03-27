@@ -190,6 +190,88 @@ export const BUILD_ADVISOR_SCHEMA = {
   required: ['action', 'target', 'waypoints', 'reasoning'],
 };
 
+/**
+ * Decision type for the Route Enrichment Advisor LLM response.
+ * 'keep' = no changes to route; 'insert' = add new stops; 'reorder' = change stop ordering.
+ */
+export type RouteEnrichmentDecision = 'keep' | 'insert' | 'reorder';
+
+/**
+ * A single insertion suggested by the Route Enrichment Advisor.
+ * Represents a new stop to be spliced into the existing route after the given stop index.
+ */
+export interface RouteEnrichmentInsertion {
+  afterStopIndex: number;   // Insert the new stop after this index (-1 = before all stops)
+  action: 'pickup' | 'deliver';
+  loadType: string;
+  city: string;
+  reasoning: string;
+}
+
+/**
+ * Full response shape from the Route Enrichment Advisor LLM call.
+ * The LLM returns a decision with optional insertions or reorderedStops and overall reasoning.
+ */
+export interface RouteEnrichmentSchema {
+  decision: RouteEnrichmentDecision;
+  insertions?: RouteEnrichmentInsertion[];
+  reorderedStops?: Array<{
+    action: 'pickup' | 'deliver';
+    loadType: string;
+    city: string;
+    demandCardId?: number;
+    payment?: number;
+  }>;
+  reasoning: string;
+}
+
+/**
+ * JSON Schema for the Route Enrichment Advisor LLM response.
+ * The LLM examines a corridor map and suggests stop insertions or reordering
+ * to capture en-route opportunities that TripPlanner's city-level planning misses.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
+export const ROUTE_ENRICHMENT_SCHEMA = {
+  type: 'object' as const,
+  additionalProperties: false as const,
+  properties: {
+    decision: { type: 'string' as const, enum: ['keep', 'insert', 'reorder'] },
+    insertions: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        additionalProperties: false as const,
+        properties: {
+          afterStopIndex: { type: 'number' as const },
+          action: { type: 'string' as const, enum: ['pickup', 'deliver'] },
+          loadType: { type: 'string' as const },
+          city: { type: 'string' as const },
+          reasoning: { type: 'string' as const },
+        },
+        required: ['afterStopIndex', 'action', 'loadType', 'city', 'reasoning'],
+      },
+    },
+    reorderedStops: {
+      type: 'array' as const,
+      items: {
+        type: 'object' as const,
+        additionalProperties: false as const,
+        properties: {
+          action: { type: 'string' as const, enum: ['pickup', 'deliver'] },
+          loadType: { type: 'string' as const },
+          city: { type: 'string' as const },
+          demandCardId: { type: 'number' as const },
+          payment: { type: 'number' as const },
+        },
+        required: ['action', 'loadType', 'city'],
+      },
+    },
+    reasoning: { type: 'string' as const },
+  },
+  required: ['decision', 'reasoning'],
+};
+
 export const TRIP_PLAN_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,
