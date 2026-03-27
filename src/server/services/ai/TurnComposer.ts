@@ -447,15 +447,19 @@ export class TurnComposer {
         );
       }
 
-      // A3: If primary is BUILD and no MOVE exists, prepend a MOVE before the build.
-      // Movement happens BEFORE building per game rules, so resolve against original
-      // (pre-build) snapshot to avoid pathfinding on not-yet-built segments.
+      // A3: If primary is BUILD (or last step is PICKUP/DELIVER) and no MOVE exists,
+      // prepend a MOVE before the build. Movement happens BEFORE building per game rules,
+      // so resolve against original (pre-build) snapshot to avoid pathfinding on
+      // not-yet-built segments. Also fires after PICKUP/DELIVER when next stop needs
+      // building so the bot uses its movement budget in the same turn (JIRA-155 Bug 1).
       const primaryType = steps[0]?.type;
+      const lastStepType = steps[steps.length - 1]?.type;
       const hasMove = steps.some(s => s.type === AIActionType.MoveTrain);
-      if (!hasMove && primaryType === AIActionType.BuildTrack) {
+      if (!hasMove && (primaryType === AIActionType.BuildTrack || lastStepType === AIActionType.PickupLoad || lastStepType === AIActionType.DeliverLoad)) {
         // Extract build target city for frontier guard and directional filter
         const buildStep = steps.find(s => s.type === AIActionType.BuildTrack) as TurnPlanBuildTrack | undefined;
-        const buildTargetCity = buildStep?.targetCity;
+        const buildTargetCity = buildStep?.targetCity
+          ?? activeRoute?.stops[activeRoute.currentStopIndex]?.city;
 
         // Frontier guard: skip A3 if bot is already at the build frontier
         if (buildTargetCity && TurnComposer.isBotAtBuildFrontier(snapshot, context, buildTargetCity)) {
@@ -630,6 +634,42 @@ export class TurnComposer {
       if (currentRoute && currentRoute.currentStopIndex < currentRoute.stops.length) {
         const plannedStop = currentRoute.stops[currentRoute.currentStopIndex];
         if (plannedStop.city === cityName) {
+          // JIRA-155 Bug 2: Delivery-first ordering — if the planned stop is a PICKUP
+          // and the bot is carrying a load that can be delivered here, deliver first
+          // to free capacity before picking up the new load.
+          if (plannedStop.action === 'pickup') {
+            for (const rd of snapshot.bot.resolvedDemands) {
+              for (const demand of rd.demands) {
+                if (
+                  demand.city === cityName &&
+                  snapshot.bot.loads.includes(demand.loadType)
+                ) {
+                  const deliveryResult = await ActionResolver.resolve(
+                    { action: 'DELIVER', details: { load: demand.loadType, at: cityName }, reasoning: '', planHorizon: '' },
+                    snapshot, context,
+                  );
+                  if (deliveryResult.success && deliveryResult.plan) {
+                    actionPlans.push(deliveryResult.plan);
+                    ActionResolver.applyPlanToState(deliveryResult.plan, snapshot, context);
+                    // JIRA-155: Advance route index if this delivery matches a planned stop
+                    if (currentRoute.currentStopIndex < currentRoute.stops.length) {
+                      const currentStop = currentRoute.stops[currentRoute.currentStopIndex];
+                      if (currentStop.action === 'deliver' && currentStop.loadType === demand.loadType && currentStop.city === cityName) {
+                        currentRoute = { ...currentRoute, currentStopIndex: currentRoute.currentStopIndex + 1 };
+                      }
+                    }
+                    // Remove fulfilled demand from context.demands
+                    const deliverPlan = deliveryResult.plan as TurnPlanDeliverLoad;
+                    context.demands = context.demands.filter(d => d.cardIndex !== deliverPlan.cardId);
+                    console.log(
+                      `[TurnComposer] JIRA-155: Delivery-first at ${cityName}: delivered ${demand.loadType} before planned pickup ${plannedStop.loadType}`,
+                    );
+                  }
+                }
+              }
+            }
+          }
+
           const plannedActionType = plannedStop.action === 'pickup' ? 'PICKUP' : 'DELIVER';
           const plannedResult = await ActionResolver.resolve(
             { action: plannedActionType, details: { load: plannedStop.loadType, at: cityName }, reasoning: '', planHorizon: '' },
