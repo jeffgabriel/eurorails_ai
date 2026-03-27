@@ -8,8 +8,8 @@
  * Architecture:
  *   Phase A — Movement loop: consumes the full movement budget by advancing
  *     through route stops. Pickups advance without reordering (ADR-4).
- *     Deliveries trigger a mid-turn TripPlanner replan and continue on the
- *     NEW route (ADR-3).
+ *     Deliveries trigger post-delivery revalidation and continue on the
+ *     (possibly pruned) route with remaining budget.
  *   Phase B — Build: uses resolveBuildTarget (unified, single source of truth),
  *     shouldDeferBuild JIT gate, and at most 1 BuildAdvisor solvency retry.
  *
@@ -23,15 +23,21 @@
 
 import {
   TurnPlan,
+  TurnPlanMoveTrain,
   WorldSnapshot,
   GameContext,
   StrategicRoute,
   AIActionType,
   GridPoint,
+  RouteStop,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget } from './routeHelpers';
 import { CompositionTrace } from './TurnComposer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
+import { ActionResolver } from './ActionResolver';
+import { PlanExecutor } from './PlanExecutor';
+import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
 
@@ -123,19 +129,160 @@ export class TurnExecutorPlanner {
 
     const plans: TurnPlan[] = [];
     let hasDelivery = false;
+    let remainingBudget = context.speed;
 
     // ── Phase A: Movement loop ─────────────────────────────────────────────
-    // (Stub for this task — full movement implementation in BE-005/BE-006)
-    // The movement loop will:
-    //   while (budget remaining && activeRoute.currentStopIndex < stops.length):
-    //     check if next stop city is reachable
-    //     if reachable: move there, execute action (pickup/deliver), advance index
-    //     if deliver: replan via TripPlanner, continue on new route
-    //     if not reachable: move as far as possible, break
     //
-    // For now, produce a PassTurn placeholder so the shell compiles and tests pass.
-    // The actual movement logic is introduced in subsequent tasks.
-    trace.a2.terminationReason = 'stub_movement_not_yet_implemented';
+    // ADR-3: After delivery, revalidate route and continue on (pruned) route
+    //   with remaining movement budget.
+    // ADR-4: After pickup, continue moving on current route — never reorder.
+    //
+    // Loop terminates when:
+    //   - Movement budget is exhausted (budget == 0)
+    //   - All stops are complete (stop index >= stops.length)
+    //   - Next stop city is not on the network (need to build — break to Phase B)
+    //   - A route was abandoned (action failed)
+
+    let loopIter = 0;
+    const MAX_LOOP_ITERS = 20; // safety cap against infinite loops
+
+    while (
+      remainingBudget > 0 &&
+      activeRoute.currentStopIndex < activeRoute.stops.length &&
+      loopIter < MAX_LOOP_ITERS
+    ) {
+      loopIter++;
+      trace.a2.iterations = loopIter;
+
+      const currentStop = activeRoute.stops[activeRoute.currentStopIndex];
+      const targetCity = currentStop.city;
+
+      // ── Already at the stop city? Execute the action ─────────────────────
+      if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
+        console.log(`${tag} At ${targetCity}, executing ${currentStop.action}`);
+
+        const actionResult = await TurnExecutorPlanner.executeStopAction(
+          currentStop,
+          snapshot,
+          context,
+          tag,
+        );
+
+        if (!actionResult.success) {
+          // Action failed — abandon route
+          console.warn(`${tag} ${currentStop.action} failed at ${targetCity}: ${actionResult.error}. Abandoning route.`);
+          trace.a2.terminationReason = 'action_failed';
+          if (plans.length === 0) plans.push({ type: AIActionType.PassTurn });
+          trace.outputPlan = plans.map(p => p.type);
+          return {
+            plans,
+            updatedRoute: activeRoute,
+            compositionTrace: trace,
+            routeComplete: false,
+            routeAbandoned: true,
+            hasDelivery,
+          };
+        }
+
+        plans.push(actionResult.plan!);
+
+        if (currentStop.action === 'pickup') {
+          trace.pickups.push({ load: currentStop.loadType, city: targetCity });
+          console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
+        } else {
+          hasDelivery = true;
+          trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
+          console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Revalidating route.`);
+        }
+
+        // Advance stop index
+        activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+
+        // Post-delivery: revalidate remaining deliveries (JIRA-123)
+        // ADR-4: Pickup does NOT trigger revalidation or reordering
+        if (currentStop.action === 'deliver') {
+          activeRoute = PlanExecutor.revalidateRemainingDeliveries(activeRoute, context);
+        }
+
+        // Skip any newly-completed stops
+        activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+
+        // Continue loop — bot may be able to do more actions this turn
+        continue;
+      }
+
+      // ── Stop city on network but bot is not there? → MOVE ────────────────
+      if (context.citiesOnNetwork.includes(targetCity)) {
+        console.log(`${tag} ${targetCity} is on network, moving (budget=${remainingBudget})`);
+
+        const moveResult = await ActionResolver.resolveMove(
+          { to: targetCity },
+          snapshot,
+          remainingBudget,
+        );
+
+        if (!moveResult.success || !moveResult.plan) {
+          // Cannot reach via existing track — fall through to Phase B
+          console.warn(`${tag} MOVE to ${targetCity} failed: ${moveResult.error}. Breaking to Phase B.`);
+          trace.a2.terminationReason = 'move_failed_fallthrough_build';
+          break;
+        }
+
+        plans.push(moveResult.plan);
+
+        // Compute how many effective mileposts the move consumed
+        const movePlan = moveResult.plan as TurnPlanMoveTrain;
+        const majorCityLookup = getMajorCityLookup();
+        const milesConsumed = computeEffectivePathLength(movePlan.path, majorCityLookup);
+        remainingBudget = Math.max(0, remainingBudget - milesConsumed);
+        trace.moveBudget.used = context.speed - remainingBudget;
+
+        // Budget exhausted or bot did not reach destination (partial move) — stop loop
+        if (remainingBudget === 0) {
+          trace.a2.terminationReason = 'budget_exhausted';
+          break;
+        }
+
+        // If the path ended at the target city (reached it), the next loop iteration
+        // will detect isBotAtCity and execute the action.
+        // However, context.position is read-only here (it reflects start-of-turn state).
+        // We cannot update context mid-loop, so after a MOVE we break — the next
+        // turn will pick up where we left off.
+        // NOTE: In a future iteration when context is mutable mid-turn, this can be
+        // replaced with a continue to execute the action in the same turn.
+        trace.a2.terminationReason = 'moved_toward_stop';
+        break;
+      }
+
+      // ── Stop city not on network → break to Phase B (build) ──────────────
+      console.log(`${tag} ${targetCity} not on network. Breaking to Phase B (build).`);
+      trace.a2.terminationReason = 'stop_city_not_on_network';
+      break;
+    }
+
+    if (loopIter >= MAX_LOOP_ITERS) {
+      console.warn(`${tag} Movement loop hit MAX_LOOP_ITERS (${MAX_LOOP_ITERS}) — safety break`);
+      trace.a2.terminationReason = 'max_iterations';
+    }
+
+    // ── Route complete check (post-loop) ────────────────────────────────────
+    if (activeRoute.currentStopIndex >= activeRoute.stops.length) {
+      console.log(`${tag} Route complete after movement loop`);
+      trace.a2.terminationReason = 'route_complete';
+      if (plans.length > 0) {
+        // Already have plans — emit them plus routeComplete flag
+        trace.outputPlan = plans.map(p => p.type);
+        return {
+          plans,
+          updatedRoute: activeRoute,
+          compositionTrace: trace,
+          routeComplete: true,
+          routeAbandoned: false,
+          hasDelivery,
+        };
+      }
+      return TurnExecutorPlanner.routeComplete(activeRoute, trace);
+    }
 
     // ── Phase B: Build target resolution ──────────────────────────────────
     const buildTarget = resolveBuildTarget(activeRoute, context);
@@ -148,7 +295,7 @@ export class TurnExecutorPlanner {
       trace.build.skipped = true;
     }
 
-    // PassTurn as placeholder until movement phases are implemented
+    // If no movement plans were produced, emit PassTurn
     if (plans.length === 0) {
       plans.push({ type: AIActionType.PassTurn });
     }
@@ -163,6 +310,48 @@ export class TurnExecutorPlanner {
       routeAbandoned: false,
       hasDelivery,
     };
+  }
+
+  // ── Movement helpers ──────────────────────────────────────────────────
+
+  /**
+   * Check if the bot is currently located at the named city.
+   * Uses `context.position.city` which is set by ContextBuilder from the snapshot.
+   */
+  static isBotAtCity(context: GameContext, cityName: string): boolean {
+    if (!context.position) return false;
+    return context.position.city === cityName;
+  }
+
+  /**
+   * Execute a single route stop action (pickup or deliver) via ActionResolver.
+   * Returns the resolved action result.
+   */
+  private static async executeStopAction(
+    stop: RouteStop,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    tag: string,
+  ): Promise<{ success: boolean; plan?: TurnPlan; error?: string }> {
+    if (stop.action === 'pickup') {
+      const result = await ActionResolver.resolve(
+        { action: 'PICKUP', details: { load: stop.loadType, at: stop.city }, reasoning: '', planHorizon: '' },
+        snapshot,
+        context,
+      );
+      return result;
+    }
+
+    if (stop.action === 'deliver') {
+      const result = await ActionResolver.resolve(
+        { action: 'DELIVER', details: { load: stop.loadType, at: stop.city }, reasoning: '', planHorizon: '' },
+        snapshot,
+        context,
+      );
+      return result;
+    }
+
+    return { success: false, error: `${tag} Unknown stop action: ${stop.action}` };
   }
 
   // ── Route state helpers ────────────────────────────────────────────────
