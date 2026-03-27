@@ -1400,6 +1400,151 @@ describe('TurnExecutorPlanner.execute — Phase B: build phase', () => {
     // JIT gate should NOT be called for victory builds
     expect(mockShouldDeferBuild).not.toHaveBeenCalled();
   });
+
+  // ── AC7: Solvency retry — max 1 retry ──────────────────────────────────
+  // Verifies that when BuildAdvisor's initial build fails (e.g. over budget),
+  // retryWithSolvencyFeedback is called exactly ONCE, then falls back to heuristic
+  // (R7: "1 solvency retry, down from MAX_SOLVENCY_RETRIES=2 in TurnComposer").
+
+  it('AC7: calls retryWithSolvencyFeedback exactly once when advisor build fails', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    // BuildAdvisor.advise returns a plan that then fails at ActionResolver (solvency)
+    mockBuildAdvisorAdvise.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'Build toward Frankfurt',
+    });
+
+    // First ActionResolver call (for advisor result) fails — over budget
+    // Retry advisor returns a cheaper plan
+    mockBuildAdvisorRetry.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'Cheaper route after solvency feedback',
+    });
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 2 }],
+      targetCity: 'Frankfurt',
+    };
+
+    // First resolve (advisor's initial build) fails; second (retry) succeeds
+    mockResolve
+      .mockResolvedValueOnce({ success: false, error: 'insufficient_funds' })
+      .mockResolvedValueOnce({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Frankfurt', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // retryWithSolvencyFeedback called exactly once — NOT twice
+    expect(mockBuildAdvisorRetry).toHaveBeenCalledTimes(1);
+    expect(result.plans).toContainEqual(buildPlan);
+  });
+
+  it('AC7: falls back to heuristic after the single solvency retry also fails', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    // Advisor: initial build
+    mockBuildAdvisorAdvise.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'Build toward Frankfurt',
+    });
+
+    // Retry advisor: returns a plan but it also fails at ActionResolver
+    mockBuildAdvisorRetry.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'Still too expensive',
+    });
+
+    const heuristicPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 3, col: 3 }, to: { row: 4, col: 4 }, cost: 1 }],
+      targetCity: 'Frankfurt',
+    };
+
+    // Both advisor calls fail; heuristic (third resolve call) succeeds
+    mockResolve
+      .mockResolvedValueOnce({ success: false, error: 'insufficient_funds' }) // advisor initial
+      .mockResolvedValueOnce({ success: false, error: 'insufficient_funds' }) // advisor retry
+      .mockResolvedValueOnce({ success: true, plan: heuristicPlan });          // heuristic fallback
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Frankfurt', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // Only 1 solvency retry attempted
+    expect(mockBuildAdvisorRetry).toHaveBeenCalledTimes(1);
+    // Falls back to heuristic (3 total ActionResolver calls)
+    expect(mockResolve).toHaveBeenCalledTimes(3);
+    expect(result.plans).toContainEqual(heuristicPlan);
+  });
+
+  it('AC7: does NOT call retryWithSolvencyFeedback when advisor initial build succeeds', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+
+    mockBuildAdvisorAdvise.mockResolvedValue({
+      action: 'build',
+      target: 'Frankfurt',
+      waypoints: [],
+      reasoning: 'Build toward Frankfurt',
+    });
+
+    const buildPlan = {
+      type: AIActionType.BuildTrack,
+      segments: [{ from: { row: 1, col: 1 }, to: { row: 2, col: 2 }, cost: 2 }],
+      targetCity: 'Frankfurt',
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: buildPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Frankfurt', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // No solvency retry needed when initial build succeeds
+    expect(mockBuildAdvisorRetry).not.toHaveBeenCalled();
+  });
 });
 
 // ── filterByDirection (AC12 / R10) ─────────────────────────────────────────
