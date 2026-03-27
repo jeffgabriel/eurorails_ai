@@ -268,7 +268,7 @@ export class TurnExecutorPlanner {
               const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
 
               if (replanResult.route) {
-                const enrichedRoute = RouteEnrichmentAdvisor.enrich(replanResult.route);
+                const enrichedRoute = await RouteEnrichmentAdvisor.enrich(replanResult.route, snapshot, context, brain, gridPoints);
                 activeRoute = TurnExecutorPlanner.skipCompletedStops(enrichedRoute, context);
                 console.log(
                   `${tag} Post-delivery replan succeeded. New route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,

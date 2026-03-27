@@ -16,6 +16,7 @@ import type {
   GameContext,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
+import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ jest.mock('../../services/ai/TripPlanner', () => ({
 
 jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
   RouteEnrichmentAdvisor: {
-    enrich: jest.fn((route: StrategicRoute) => route),
+    enrich: jest.fn(async (route: StrategicRoute) => route),
   },
 }));
 
@@ -979,7 +980,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       currentStopIndex: 0,
     });
     mockPlanTrip.mockResolvedValue({ route: newRoute, llmLog: [] });
-    mockEnrich.mockReturnValue(newRoute);
+    mockEnrich.mockResolvedValue(newRoute);
 
     const route = makeRoute({
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
@@ -993,7 +994,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
 
     expect(mockPlanTrip).toHaveBeenCalledWith(snapshot, context, fakeGridPoints, expect.anything());
-    expect(mockEnrich).toHaveBeenCalledWith(newRoute);
+    expect(mockEnrich).toHaveBeenCalledWith(newRoute, snapshot, context, fakeBrain, fakeGridPoints);
   });
 
   it('replaces active route with the enriched route returned by TripPlanner', async () => {
@@ -1012,7 +1013,7 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       reasoning: 'replanned route',
     });
     mockPlanTrip.mockResolvedValue({ route: newRoute, llmLog: [] });
-    mockEnrich.mockReturnValue(newRoute);
+    mockEnrich.mockResolvedValue(newRoute);
 
     const route = makeRoute({
       stops: [makeStop('deliver', 'Berlin', 'Coal')],
@@ -1084,14 +1085,14 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     expect(mockRevalidate).toHaveBeenCalled();
   });
 
-  it('RouteEnrichmentAdvisor.enrich() stub returns the route unchanged', () => {
+  it('RouteEnrichmentAdvisor.enrich() returns the route unchanged when mocked as pass-through', async () => {
     // Reset enrich to the default pass-through behaviour (previous tests may override it)
-    mockEnrich.mockImplementation((r: StrategicRoute) => r);
+    mockEnrich.mockImplementation(async (r: StrategicRoute) => r);
 
-    // Direct unit test of the stub behaviour (independent of execute())
+    // Direct unit test of the mock behaviour (independent of execute())
     const route = makeRoute({ reasoning: 'original route' });
-    const result = RouteEnrichmentAdvisor.enrich(route);
-    // In Project 1 the stub returns the same route object
+    const result = await RouteEnrichmentAdvisor.enrich(route, null as unknown as WorldSnapshot, null as unknown as GameContext, null as unknown as LLMStrategyBrain, []);
+    // The mock returns the same route object
     expect(result).toBe(route);
   });
 });
