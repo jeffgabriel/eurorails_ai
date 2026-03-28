@@ -1101,6 +1101,159 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     // The mock returns the same route object
     expect(result).toBe(route);
   });
+
+  // ── Demand filtering on delivery (AC: post-delivery replan filters stale demand) ──
+
+  it('filters the delivered demand from context.demands before calling TripPlanner.planTrip', async () => {
+    // AC: After delivering Beer@Beograd, the post-delivery TripPlanner call does NOT see a Beer→Beograd demand
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Beer',
+      city: 'Beograd',
+      cardId: 10,
+      payout: 12,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // Return a fresh route so we can inspect what was passed to planTrip
+    let capturedContext: GameContext | undefined;
+    mockPlanTrip.mockImplementation(async (_snap: unknown, ctx: GameContext) => {
+      capturedContext = { ...ctx, demands: [...ctx.demands] };
+      return { route: null, llmLog: [] };
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Beograd', 'Beer')],
+      currentStopIndex: 0,
+    });
+    // context.demands includes the Beer→Beograd demand that is about to be fulfilled
+    const context = makeContext({
+      position: { city: 'Beograd', row: 3, col: 3 },
+      demands: [
+        {
+          cardIndex: 0,
+          loadType: 'Beer',
+          supplyCity: 'München',
+          deliveryCity: 'Beograd',
+          payout: 12,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: false,
+          isLoadOnTrain: true,
+          ferryRequired: false,
+          loadChipTotal: 3,
+          loadChipCarried: 1,
+          estimatedTurns: 2,
+          demandScore: 5,
+          efficiencyPerTurn: 2.5,
+          networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 112,
+        },
+        {
+          cardIndex: 1,
+          loadType: 'Wine',
+          supplyCity: 'Lyon',
+          deliveryCity: 'Madrid',
+          payout: 10,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: false,
+          isDeliveryOnNetwork: false,
+          estimatedTrackCostToSupply: 5,
+          estimatedTrackCostToDelivery: 5,
+          isLoadAvailable: true,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          loadChipTotal: 3,
+          loadChipCarried: 0,
+          estimatedTurns: 4,
+          demandScore: 2,
+          efficiencyPerTurn: 0.5,
+          networkCitiesUnlocked: 2,
+          victoryMajorCitiesEnRoute: 1,
+          isAffordable: true,
+          projectedFundsAfterDelivery: 112,
+        },
+      ],
+    });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(mockPlanTrip).toHaveBeenCalled();
+    // The Beer→Beograd demand must NOT appear in the context passed to planTrip
+    expect(capturedContext).toBeDefined();
+    const beerBeogradDemand = capturedContext!.demands.find(
+      d => d.loadType === 'Beer' && d.deliveryCity === 'Beograd',
+    );
+    expect(beerBeogradDemand).toBeUndefined();
+    // Other demands should still be present
+    const wineMadridDemand = capturedContext!.demands.find(
+      d => d.loadType === 'Wine' && d.deliveryCity === 'Madrid',
+    );
+    expect(wineMadridDemand).toBeDefined();
+  });
+
+  it('filters the fulfilled card from snapshot.bot.resolvedDemands before calling TripPlanner.planTrip', async () => {
+    // AC: snapshot.bot.resolvedDemands no longer contains the Beer→Beograd card after delivery
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Beer',
+      city: 'Beograd',
+      cardId: 10,
+      payout: 12,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    let capturedSnapshot: WorldSnapshot | undefined;
+    mockPlanTrip.mockImplementation(async (snap: WorldSnapshot) => {
+      capturedSnapshot = snap;
+      return { route: null, llmLog: [] };
+    });
+
+    const route = makeRoute({
+      stops: [{ action: 'deliver', city: 'Beograd', loadType: 'Beer', demandCardId: 10 }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Beograd', row: 3, col: 3 } });
+    const snapshot = {
+      ...makeSnapshot(),
+      bot: {
+        ...makeSnapshot().bot,
+        resolvedDemands: [
+          {
+            cardId: 10,
+            demands: [{ city: 'Beograd', loadType: 'Beer', payment: 12 }],
+          },
+          {
+            cardId: 11,
+            demands: [{ city: 'Madrid', loadType: 'Wine', payment: 10 }],
+          },
+        ],
+      },
+    } as unknown as WorldSnapshot;
+
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1 }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    expect(capturedSnapshot).toBeDefined();
+    // Card 10 (Beer→Beograd) must be removed from resolvedDemands
+    const beerCard = capturedSnapshot!.bot.resolvedDemands.find(rd => rd.cardId === 10);
+    expect(beerCard).toBeUndefined();
+    // Card 11 (Wine→Madrid) must remain
+    const wineCard = capturedSnapshot!.bot.resolvedDemands.find(rd => rd.cardId === 11);
+    expect(wineCard).toBeDefined();
+  });
 });
 
 // ── Route mutation invariants (AC13) ──────────────────────────────────────

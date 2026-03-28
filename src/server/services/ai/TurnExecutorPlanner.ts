@@ -266,6 +266,36 @@ export class TurnExecutorPlanner {
           }
           console.log(`${tag} Context updated: loads=[${context.loads.join(',')}]`);
 
+          // Filter the just-delivered demand from context.demands so TripPlanner
+          // does not re-select a fulfilled demand during the post-delivery replan.
+          // Match by loadType AND deliveryCity (or demandCardId if available).
+          const deliveredLoadType = currentStop.loadType;
+          const deliveredCity = targetCity;
+          const deliveredCardId = currentStop.demandCardId;
+          const prevDemandCount = context.demands.length;
+          context.demands = context.demands.filter(d =>
+            !(d.loadType === deliveredLoadType && d.deliveryCity === deliveredCity),
+          );
+          if (context.demands.length < prevDemandCount) {
+            console.log(`${tag} Filtered delivered demand (${deliveredLoadType}→${deliveredCity}) from context.demands`);
+          }
+
+          // Also filter from snapshot.bot.resolvedDemands so that downstream helpers
+          // (including isDeliveryComplete) see the updated demand list.
+          if (snapshot.bot.resolvedDemands) {
+            snapshot.bot.resolvedDemands = snapshot.bot.resolvedDemands.filter(rd => {
+              // If we have a demandCardId, use it for exact matching
+              if (deliveredCardId !== undefined && rd.cardId === deliveredCardId) {
+                return false;
+              }
+              // Otherwise filter any card that contains this loadType+deliveryCity demand
+              const matchesDemand = rd.demands.some(
+                d => d.loadType === deliveredLoadType && d.city === deliveredCity,
+              );
+              return !matchesDemand;
+            });
+          }
+
           console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Triggering post-delivery replan.`);
 
           // Advance stop index
@@ -347,7 +377,7 @@ export class TurnExecutorPlanner {
         const dest = movePlan.path[movePlan.path.length - 1];
         if (dest && gridPoints) {
           const arrivedGp = gridPoints.find(gp => gp.row === dest.row && gp.col === dest.col);
-          const cityName = arrivedGp?.city?.name ?? null;
+          const cityName = arrivedGp?.city?.name ?? undefined;
           context.position = { row: dest.row, col: dest.col, city: cityName };
           snapshot.bot.position = { row: dest.row, col: dest.col };
           console.log(`${tag} Context updated: position=${dest.row},${dest.col} (${cityName ?? 'no city'})`);
