@@ -14,9 +14,12 @@ import {
   LlmAttempt,
   RouteStop,
   StrategicRoute,
+  TrainType,
+  TRAIN_PROPERTIES,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
+import { estimateHopDistance } from './MapTopology';
 import { RouteValidator } from './RouteValidator';
 import { TRIP_PLAN_SCHEMA } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
@@ -158,7 +161,7 @@ export class TripPlanner {
         }
 
         // Convert and validate each candidate
-        const candidates = this.scoreCandidates(parsed, context, snapshot);
+        const candidates = this.scoreCandidates(parsed, context, snapshot, gridPoints);
 
         if (candidates.length === 0) {
           const err = 'All candidates failed validation';
@@ -241,12 +244,19 @@ export class TripPlanner {
 
   /**
    * Score and validate LLM candidates. Returns only valid candidates sorted by score.
+   *
+   * Uses chain-aware sequential turn estimation for multi-stop trips:
+   * - First deliver stop: uses existing estimatedTurns from DemandContext (bot→supply→delivery)
+   * - Subsequent deliver stops: computes fresh legs via estimateHopDistance
+   *   (prevDelivery→nextSupply + supply→delivery + build turns)
    */
   private scoreCandidates(
     parsed: LLMTripPlanResponse,
     context: GameContext,
     snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
   ): TripCandidate[] {
+    const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
     const validCandidates: TripCandidate[] = [];
 
     for (const rawCandidate of parsed.candidates) {
@@ -281,6 +291,8 @@ export class TripPlanner {
       let totalPayout = 0;
       let totalBuildCost = 0;
       let totalEstimatedTurns = 0;
+      // Track the last delivery city for chain-aware sequential estimation
+      let lastDeliveryCity: string | null = null;
 
       for (const stop of finalStops) {
         if (stop.action === 'deliver' && stop.payment) {
@@ -297,9 +309,30 @@ export class TripPlanner {
           if (stop.action === 'pickup') {
             totalBuildCost += matchingDemand.estimatedTrackCostToSupply;
           } else {
+            // Deliver stop: accumulate build cost and chain-aware turn estimation
             totalBuildCost += matchingDemand.estimatedTrackCostToDelivery;
+
+            if (lastDeliveryCity === null) {
+              // First deliver stop: use pre-computed estimatedTurns (bot→supply→delivery + build + ferry)
+              totalEstimatedTurns += matchingDemand.estimatedTurns;
+            } else {
+              // Subsequent deliver stop: compute fresh via estimateHopDistance
+              // We need to find the supply city for this demand
+              const supplyCity = matchingDemand.supplyCity;
+              const chainTurns = this.computeChainLegTurns(
+                lastDeliveryCity,
+                supplyCity,
+                stop.city,
+                matchingDemand.estimatedTrackCostToDelivery,
+                gridPoints,
+                trainSpeed,
+                matchingDemand.estimatedTurns,
+              );
+              totalEstimatedTurns += chainTurns;
+            }
+
+            lastDeliveryCity = stop.city;
           }
-          totalEstimatedTurns = Math.max(totalEstimatedTurns, matchingDemand.estimatedTurns);
         }
       }
 
@@ -320,5 +353,78 @@ export class TripPlanner {
     }
 
     return validCandidates.sort((a, b) => b.score - a.score);
+  }
+
+  /**
+   * Compute travel turns for a chain leg: prevDeliveryCity → supplyCity → deliveryCity.
+   *
+   * Uses estimateHopDistance (BFS over hex grid) for accurate hop counts.
+   * Falls back to Euclidean distance when estimateHopDistance returns 0 (unreachable).
+   * Falls back to existingEstimatedTurns when gridPoints are unavailable for either city.
+   */
+  private computeChainLegTurns(
+    fromCity: string,
+    supplyCity: string,
+    deliveryCity: string,
+    buildCostToDelivery: number,
+    gridPoints: GridPoint[],
+    trainSpeed: number,
+    existingEstimatedTurns: number,
+  ): number {
+    const fromPoints = gridPoints.filter(gp => gp.city?.name === fromCity);
+    const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+    const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
+
+    // Fall back to existing estimatedTurns if we can't resolve any city
+    if (fromPoints.length === 0 || supplyPoints.length === 0 || deliveryPoints.length === 0) {
+      return existingEstimatedTurns;
+    }
+
+    // Leg 1: prevDelivery → nextSupply
+    let hopFromToSupply = Infinity;
+    for (const fp of fromPoints) {
+      for (const sp of supplyPoints) {
+        const d = estimateHopDistance(fp.row, fp.col, sp.row, sp.col);
+        if (d > 0 && d < hopFromToSupply) hopFromToSupply = d;
+      }
+    }
+    // Euclidean fallback when BFS can't reach
+    if (hopFromToSupply === Infinity) {
+      let minEuc = Infinity;
+      for (const fp of fromPoints) {
+        for (const sp of supplyPoints) {
+          const d = Math.sqrt((sp.row - fp.row) ** 2 + (sp.col - fp.col) ** 2);
+          if (d < minEuc) minEuc = d;
+        }
+      }
+      if (minEuc < Infinity) hopFromToSupply = minEuc;
+    }
+
+    // Leg 2: supply → delivery
+    let hopSupplyToDelivery = Infinity;
+    for (const sp of supplyPoints) {
+      for (const dp of deliveryPoints) {
+        const d = estimateHopDistance(sp.row, sp.col, dp.row, dp.col);
+        if (d > 0 && d < hopSupplyToDelivery) hopSupplyToDelivery = d;
+      }
+    }
+    // Euclidean fallback when BFS can't reach
+    if (hopSupplyToDelivery === Infinity) {
+      let minEuc = Infinity;
+      for (const sp of supplyPoints) {
+        for (const dp of deliveryPoints) {
+          const d = Math.sqrt((dp.row - sp.row) ** 2 + (dp.col - sp.col) ** 2);
+          if (d < minEuc) minEuc = d;
+        }
+      }
+      if (minEuc < Infinity) hopSupplyToDelivery = minEuc;
+    }
+
+    const travelHops = (hopFromToSupply < Infinity ? hopFromToSupply : 0)
+      + (hopSupplyToDelivery < Infinity ? hopSupplyToDelivery : 0);
+    const travelTurns = travelHops > 0 ? Math.ceil(travelHops / trainSpeed) : 1;
+    const buildTurns = Math.ceil(buildCostToDelivery / 20);
+
+    return travelTurns + buildTurns;
   }
 }

@@ -7,10 +7,12 @@
 
 import { TripPlanner, TripPlanResult } from '../../services/ai/TripPlanner';
 import { RouteValidator } from '../../services/ai/RouteValidator';
+import { estimateHopDistance } from '../../services/ai/MapTopology';
 import {
   BotSkillLevel,
   BotMemoryState,
   GameContext,
+  GridPoint,
   WorldSnapshot,
   LLMProvider,
   LLMStrategyConfig,
@@ -28,6 +30,9 @@ jest.mock('../../services/ai/schemas', () => ({
 }));
 jest.mock('../../services/ai/prompts/systemPrompts', () => ({
   getTripPlanningPrompt: jest.fn(() => 'system-prompt'),
+}));
+jest.mock('../../services/ai/MapTopology', () => ({
+  estimateHopDistance: jest.fn(() => 0),
 }));
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -930,6 +935,352 @@ describe('TripPlanner', () => {
       expect(chatFn).toHaveBeenCalledTimes(1);
       const chatArgs = chatFn.mock.calls[0][0];
       expect(chatArgs.userPrompt).toContain('Plan the best multi-stop trip');
+    });
+  });
+
+  // ── Chain-aware multi-stop turn estimation (JIRA-160) ──────────────────
+
+  describe('chain-aware multi-stop turn estimation (JIRA-160)', () => {
+    const mockedEstimateHopDistance = estimateHopDistance as jest.MockedFunction<typeof estimateHopDistance>;
+
+    /** Build a minimal GridPoint with city info at given row/col */
+    function makeGridPoint(name: string, row: number, col: number): GridPoint {
+      return {
+        id: `${row},${col}`,
+        row,
+        col,
+        x: col * 10,
+        y: row * 10,
+        terrain: 0 as any,
+        city: { name, type: 'major' as any },
+      } as unknown as GridPoint;
+    }
+
+    it('single-stop trip produces identical score to original behavior', async () => {
+      // Single deliver stop: should use matchingDemand.estimatedTurns directly (no chaining)
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+          ],
+          reasoning: 'Direct coal delivery',
+        },
+      ]);
+
+      const context = makeContext({
+        demands: [makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 })],
+      });
+
+      const gridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+      ];
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, gridPoints, makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.candidates).toHaveLength(1);
+      // Single-stop: estimatedTurns = demand.estimatedTurns (3), clamped to max(3,1) = 3
+      expect(result!.candidates[0].estimatedTurns).toBe(3);
+      // score = (15 - 0) / 3 = 5
+      expect(result!.candidates[0].score).toBeCloseTo(5);
+    });
+
+    it('multi-stop trip with distant second leg scores lower than Math.max would', async () => {
+      // Coal: estimatedTurns=3, Wine: estimatedTurns=2
+      // Math.max would produce 3 total turns
+      // Chain-aware: 3 (coal) + chain leg turns for wine = more than 3
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+            { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+          ],
+          reasoning: 'Double delivery',
+        },
+      ]);
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, estimatedTurns: 2 }),
+        ],
+      });
+
+      const gridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Bordeaux', 50, 2),   // far from Berlin
+        makeGridPoint('Paris', 45, 8),
+      ];
+
+      // estimateHopDistance returns 20 hops for Berlin→Bordeaux (distant), 5 for Bordeaux→Paris
+      mockedEstimateHopDistance.mockImplementation((fr, fc, tr, tc) => {
+        // Berlin(15,10) → Bordeaux(50,2)
+        if (fr === 15 && fc === 10 && tr === 50 && tc === 2) return 20;
+        // Bordeaux(50,2) → Paris(45,8)
+        if (fr === 50 && fc === 2 && tr === 45 && tc === 8) return 5;
+        return 0;
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, gridPoints, makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.candidates).toHaveLength(1);
+
+      const candidate = result!.candidates[0];
+      // Chain-aware total: 3 (coal first leg) + ceil((20+5)/9) = 3 + 3 = 6 turns
+      expect(candidate.estimatedTurns).toBe(6);
+      // Math.max would give 3, so chain-aware turns (6) > Math.max turns (3)
+      expect(candidate.estimatedTurns).toBeGreaterThan(3);
+      // score = (15+12-0) / 6 = 27/6 = 4.5
+      expect(candidate.score).toBeCloseTo(4.5);
+    });
+
+    it('multi-stop trip with adjacent second leg scores appropriately (fewer turns)', async () => {
+      // When the second pickup is adjacent to the first delivery,
+      // the chain leg should be short → fewer total turns → better score
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Steel', city: 'Hamburg' },
+            { action: 'deliver', load: 'Steel', city: 'Dresden', demandCardId: 2, payment: 12 },
+          ],
+          reasoning: 'Adjacent double delivery',
+        },
+      ]);
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 }),
+          makeDemand({ cardIndex: 2, loadType: 'Steel', supplyCity: 'Hamburg', deliveryCity: 'Dresden', payout: 12, estimatedTurns: 2 }),
+        ],
+      });
+
+      const gridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Hamburg', 16, 9),   // adjacent to Berlin
+        makeGridPoint('Dresden', 18, 12),
+      ];
+
+      // estimateHopDistance returns 2 hops for Berlin→Hamburg (adjacent), 3 for Hamburg→Dresden
+      mockedEstimateHopDistance.mockImplementation((fr, fc, tr, tc) => {
+        // Berlin(15,10) → Hamburg(16,9)
+        if (fr === 15 && fc === 10 && tr === 16 && tc === 9) return 2;
+        // Hamburg(16,9) → Dresden(18,12)
+        if (fr === 16 && fc === 9 && tr === 18 && tc === 12) return 3;
+        return 0;
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, gridPoints, makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.candidates).toHaveLength(1);
+
+      const candidate = result!.candidates[0];
+      // Chain-aware total: 3 (coal first leg) + ceil((2+3)/9) = 3 + 1 = 4 turns
+      expect(candidate.estimatedTurns).toBe(4);
+      // score = (15+12) / 4 = 6.75
+      expect(candidate.score).toBeCloseTo(6.75);
+    });
+
+    it('distant pair scores lower than adjacent pair', async () => {
+      // Build two single-candidate LLM responses and compare scores directly
+      const distantResponse = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+            { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+          ],
+          reasoning: 'Distant second leg',
+        },
+      ]);
+
+      const adjacentResponse = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Wine', city: 'Hamburg' },
+            { action: 'deliver', load: 'Wine', city: 'Dresden', demandCardId: 3, payment: 12 },
+          ],
+          reasoning: 'Adjacent second leg',
+        },
+      ]);
+
+      const baseContext = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, estimatedTurns: 2 }),
+          makeDemand({ cardIndex: 3, loadType: 'Wine', supplyCity: 'Hamburg', deliveryCity: 'Dresden', payout: 12, estimatedTurns: 2 }),
+        ],
+      });
+
+      const distantGridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Bordeaux', 50, 2),  // far from Berlin
+        makeGridPoint('Paris', 45, 8),
+      ];
+
+      const adjacentGridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Hamburg', 16, 9),  // adjacent to Berlin
+        makeGridPoint('Dresden', 18, 12),
+      ];
+
+      // Test distant pair
+      mockedEstimateHopDistance.mockImplementation((fr, fc, tr, tc) => {
+        if (fr === 15 && fc === 10 && tr === 50 && tc === 2) return 20; // Berlin→Bordeaux
+        if (fr === 50 && fc === 2 && tr === 45 && tc === 8) return 5;  // Bordeaux→Paris
+        return 0;
+      });
+
+      const { brain: brain1, chatFn: chatFn1 } = makeMockBrain();
+      chatFn1.mockResolvedValue({ text: distantResponse, usage: { input: 100, output: 50 } });
+
+      const planner1 = new TripPlanner(brain1);
+      const distantResult = await planner1.planTrip(makeSnapshot(), baseContext, distantGridPoints, makeMemory());
+      const distantScore = distantResult!.candidates[0].score;
+
+      // Test adjacent pair
+      mockedEstimateHopDistance.mockImplementation((fr, fc, tr, tc) => {
+        if (fr === 15 && fc === 10 && tr === 16 && tc === 9) return 2; // Berlin→Hamburg
+        if (fr === 16 && fc === 9 && tr === 18 && tc === 12) return 3; // Hamburg→Dresden
+        return 0;
+      });
+
+      const { brain: brain2, chatFn: chatFn2 } = makeMockBrain();
+      chatFn2.mockResolvedValue({ text: adjacentResponse, usage: { input: 100, output: 50 } });
+
+      const planner2 = new TripPlanner(brain2);
+      const adjacentResult = await planner2.planTrip(makeSnapshot(), baseContext, adjacentGridPoints, makeMemory());
+      const adjacentScore = adjacentResult!.candidates[0].score;
+
+      // Adjacent pair should score higher (fewer turns for same payout)
+      expect(adjacentScore).toBeGreaterThan(distantScore);
+    });
+
+    it('train speed affects turn calculation — faster train means fewer turns', async () => {
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Wine', city: 'Hamburg' },
+            { action: 'deliver', load: 'Wine', city: 'Dresden', demandCardId: 2, payment: 12 },
+          ],
+          reasoning: 'Double delivery',
+        },
+      ]);
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Hamburg', deliveryCity: 'Dresden', payout: 12, estimatedTurns: 2 }),
+        ],
+      });
+
+      const gridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Hamburg', 16, 20),  // 10 hops from Berlin
+        makeGridPoint('Dresden', 20, 25),  // 10 hops from Hamburg
+      ];
+
+      // 10 hops for each leg of the chain
+      mockedEstimateHopDistance.mockImplementation((fr, fc, tr, tc) => {
+        if (fr === 15 && fc === 10 && tr === 16 && tc === 20) return 10; // Berlin→Hamburg
+        if (fr === 16 && fc === 20 && tr === 20 && tc === 25) return 10; // Hamburg→Dresden
+        return 0;
+      });
+
+      // Freight train (speed=9): chain leg = ceil(20/9) = 3 turns
+      const freightSnapshot = makeSnapshot();
+      freightSnapshot.bot.trainType = 'freight'; // TrainType.Freight enum value
+
+      const { brain: freightBrain, chatFn: freightChatFn } = makeMockBrain();
+      freightChatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const freightPlanner = new TripPlanner(freightBrain);
+      const freightResult = await freightPlanner.planTrip(freightSnapshot, context, gridPoints, makeMemory());
+      const freightTurns = freightResult!.candidates[0].estimatedTurns;
+
+      // FastFreight train (speed=12): chain leg = ceil(20/12) = 2 turns
+      const fastSnapshot = makeSnapshot();
+      fastSnapshot.bot.trainType = 'fast_freight'; // TrainType.FastFreight enum value
+
+      const { brain: fastBrain, chatFn: fastChatFn } = makeMockBrain();
+      fastChatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const fastPlanner = new TripPlanner(fastBrain);
+      const fastResult = await fastPlanner.planTrip(fastSnapshot, context, gridPoints, makeMemory());
+      const fastTurns = fastResult!.candidates[0].estimatedTurns;
+
+      // Faster train should take fewer turns for the chain leg
+      expect(fastTurns).toBeLessThan(freightTurns);
+    });
+
+    it('falls back to existingEstimatedTurns when gridPoints cannot resolve city', async () => {
+      // Supply city for second demand not in gridPoints → fallback
+      const response = buildLlmResponse([
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            { action: 'pickup', load: 'Wine', city: 'UnknownCity' },
+            { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+          ],
+          reasoning: 'Fallback test',
+        },
+      ]);
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 3 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'UnknownCity', deliveryCity: 'Paris', payout: 12, estimatedTurns: 4 }),
+        ],
+      });
+
+      // gridPoints does NOT include UnknownCity → fallback to existingEstimatedTurns
+      const gridPoints = [
+        makeGridPoint('Essen', 10, 5),
+        makeGridPoint('Berlin', 15, 10),
+        makeGridPoint('Paris', 45, 8),
+        // UnknownCity intentionally missing
+      ];
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, gridPoints, makeMemory());
+
+      expect(result).not.toBeNull();
+      expect(result!.candidates).toHaveLength(1);
+      // Falls back: 3 (coal) + 4 (wine fallback) = 7 turns
+      expect(result!.candidates[0].estimatedTurns).toBe(7);
     });
   });
 
