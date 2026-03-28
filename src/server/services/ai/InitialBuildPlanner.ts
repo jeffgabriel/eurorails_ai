@@ -421,9 +421,9 @@ export class InitialBuildPlanner {
       // Shared hub: first legs already in first.totalBuildCost; add chain leg + fresh second supply→delivery
       totalBuildCost = first.totalBuildCost + chainLegCost + freshSecondSupplyToDeliveryCost;
     } else {
-      // Different hubs: first's full cost + min(second's full cost, chain leg + fresh second supply→delivery)
-      const chainedSecondCost = chainLegCost + freshSecondSupplyToDeliveryCost;
-      totalBuildCost = first.totalBuildCost + Math.min(second.totalBuildCost, chainedSecondCost);
+      // Different hubs: first's full cost + chain leg + second supply→delivery
+      // Cannot use second.totalBuildCost — it assumes starting from a disconnected city
+      totalBuildCost = first.totalBuildCost + chainLegCost + freshSecondSupplyToDeliveryCost;
     }
 
     // Fix 4: Use hex distance for travel time estimation, not build cost
