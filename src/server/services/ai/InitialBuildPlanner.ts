@@ -252,7 +252,7 @@ export class InitialBuildPlanner {
               efficiency,
             };
 
-            if (!bestForPair || costs.totalBuildCost < bestForPair.totalBuildCost) {
+            if (!bestForPair || estimatedTurns < bestForPair.estimatedTurns || (estimatedTurns === bestForPair.estimatedTurns && costs.totalBuildCost < bestForPair.totalBuildCost)) {
               bestForPair = option;
             }
           }
