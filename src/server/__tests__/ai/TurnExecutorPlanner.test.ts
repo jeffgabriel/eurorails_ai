@@ -801,6 +801,9 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     };
     mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
     mockComputeEffectivePathLength.mockReturnValue(5); // consumed 5 mileposts
+    // After the move, bot arrives at Berlin (3,3). The pickup at Berlin succeeds.
+    const pickupPlan = { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' };
+    mockResolve.mockResolvedValue({ success: true, plan: pickupPlan });
 
     const route = makeRoute({
       stops: [makeStop('pickup', 'Berlin', 'Coal')],
@@ -812,9 +815,12 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
       citiesOnNetwork: ['Berlin'],
     });
     const snapshot = makeSnapshot();
+    // Provide gridPoints so context.position is updated to Berlin after the move
+    const gridPoints = [{ row: 3, col: 3, city: { name: 'Berlin' } }] as any;
 
-    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
 
+    // 5 mileposts consumed by the move
     expect(result.compositionTrace.moveBudget.used).toBe(5);
   });
 });
@@ -1672,5 +1678,272 @@ describe('TurnExecutorPlanner.filterByDirection', () => {
     );
     expect(result).toContain('Equidistant'); // equidistant → keep
     expect(result).toContain('München');
+  });
+});
+
+// ── Bug C: context.position updated after MoveTrain ───────────────────────
+//
+// After a successful move that reaches the target city with remaining budget,
+// context.position must be updated so isBotAtCity() detects arrival and the
+// action (pickup/deliver) can execute in the same turn.
+
+describe('TurnExecutorPlanner — Bug C: mutable context.position after MoveTrain', () => {
+  let mockPlanTrip: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+
+    mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('executes delivery in the same turn after arriving at destination city', async () => {
+    // Bot starts at Paris, needs to go to Berlin (on network), then deliver Coal
+    // Move consumes 3mp of 9mp budget → 6mp remain → loop continues → detects arrival → delivers
+    const movePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 1, col: 1 }, { row: 2, col: 2 }], // ends at Berlin's position
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 10,
+    };
+
+    // First resolveMove call returns the move plan (arriving at Berlin)
+    mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
+    // DeliverLoad resolve: succeeds
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+    // Move consumes 3mp out of 9mp speed
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    const gridPoints = [
+      { row: 2, col: 2, city: { name: 'Berlin' } },
+    ] as any;
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    // Bot at Paris (not Berlin) — needs to move first
+    const context = makeContext({
+      position: { city: 'Paris', row: 1, col: 1 },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
+
+    // Should have both a MoveTrain AND a DeliverLoad in same turn
+    expect(result.plans.some(p => p.type === AIActionType.MoveTrain)).toBe(true);
+    expect(result.plans.some(p => p.type === AIActionType.DeliverLoad)).toBe(true);
+    expect(result.hasDelivery).toBe(true);
+  });
+
+  it('updates context.position to destination city after successful move', async () => {
+    const movePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 1, col: 1 }, { row: 2, col: 2 }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+
+    // Move succeeds but delivery fails (to test that position was updated)
+    mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
+    mockResolve.mockResolvedValue({ success: false, error: 'No demand card' });
+    mockComputeEffectivePathLength.mockReturnValue(3); // leaves 6mp remaining
+
+    const gridPoints = [
+      { row: 2, col: 2, city: { name: 'Berlin' } },
+    ] as any;
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Paris', row: 1, col: 1 },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
+
+    // context.position should be updated to Berlin (row=2, col=2)
+    expect(context.position?.city).toBe('Berlin');
+    expect(context.position?.row).toBe(2);
+    expect(context.position?.col).toBe(2);
+  });
+
+  it('breaks at budget_exhausted when move consumes all budget', async () => {
+    const movePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 1, col: 1 }, { row: 2, col: 2 }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+
+    mockResolveMove.mockResolvedValue({ success: true, plan: movePlan });
+    // Move consumes ALL 9mp
+    mockComputeEffectivePathLength.mockReturnValue(9);
+
+    const gridPoints = [{ row: 2, col: 2, city: { name: 'Berlin' } }] as any;
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Paris', row: 1, col: 1 },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
+
+    // Budget exhausted → no delivery/pickup in same turn
+    expect(result.compositionTrace.a2.terminationReason).toBe('budget_exhausted');
+    expect(result.plans.some(p => p.type === AIActionType.PickupLoad)).toBe(false);
+  });
+});
+
+// ── Bug D: context.loads updated after DeliverLoad ────────────────────────
+//
+// After delivering a load, context.loads must have the delivered load removed
+// so that isStopComplete() / skipCompletedStops() does not treat the delivery
+// stop as still pending, causing a 20x re-delivery loop.
+
+describe('TurnExecutorPlanner — Bug D: mutable context.loads after DeliverLoad', () => {
+  let mockPlanTrip: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('removes delivered load from context.loads after successful delivery', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal', 'Wine'],
+    });
+    const snapshot = makeSnapshot();
+
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // 'Coal' should be removed; 'Wine' stays
+    expect(context.loads).not.toContain('Coal');
+    expect(context.loads).toContain('Wine');
+  });
+
+  it('removes delivered load from snapshot.bot.loads after successful delivery', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, loads: ['Coal'] });
+    const snapshot = {
+      ...makeSnapshot(),
+      bot: { ...makeSnapshot().bot, loads: ['Coal'] },
+    } as unknown as WorldSnapshot;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(snapshot.bot.loads).not.toContain('Coal');
+  });
+
+  it('executes delivery exactly once when stop is complete after removal', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // DeliverLoad should appear exactly once
+    const deliveries = result.plans.filter(p => p.type === AIActionType.DeliverLoad);
+    expect(deliveries).toHaveLength(1);
+    expect(result.hasDelivery).toBe(true);
+  });
+
+  it('does not modify context.loads when delivered load is not in the array', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    // context.loads does NOT contain Coal (edge case)
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Wine'],
+    });
+    const snapshot = makeSnapshot();
+
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // Wine should still be there — no mutation to unrelated loads
+    expect(context.loads).toContain('Wine');
+    expect(context.loads).toHaveLength(1);
   });
 });

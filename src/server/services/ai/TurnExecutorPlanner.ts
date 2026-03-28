@@ -119,8 +119,8 @@ export class TurnExecutorPlanner {
    *
    * Phase A (Movement): Advances through route stops within the movement budget.
    *   - Pickup stop: pick up load, advance stop index, continue moving (no reorder)
-   *   - Delivery stop: deliver load, advance stop index, replan via TripPlanner
-   *     (stub in this project), continue on NEW route with remaining budget
+   *   - Delivery stop: deliver load, advance stop index, replan via TripPlanner,
+   *     continue on NEW route with remaining budget
    *
    * Phase B (Build): Resolves a build target and optionally appends a BuildTrack
    *   plan after movement completes.
@@ -252,6 +252,20 @@ export class TurnExecutorPlanner {
           // Delivery
           hasDelivery = true;
           trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
+
+          // Remove delivered load from context so that skipCompletedStops / isStopComplete
+          // sees the correct carried loads on subsequent iterations (prevents 20x re-delivery).
+          const deliveredIdx = context.loads.indexOf(currentStop.loadType);
+          if (deliveredIdx !== -1) {
+            context.loads.splice(deliveredIdx, 1);
+          }
+          // Also remove from snapshot for downstream helpers
+          const snapLoadIdx = snapshot.bot.loads.indexOf(currentStop.loadType);
+          if (snapLoadIdx !== -1) {
+            snapshot.bot.loads.splice(snapLoadIdx, 1);
+          }
+          console.log(`${tag} Context updated: loads=[${context.loads.join(',')}]`);
+
           console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Triggering post-delivery replan.`);
 
           // Advance stop index
@@ -259,8 +273,7 @@ export class TurnExecutorPlanner {
 
           // Post-delivery replan (ADR-3):
           // If brain is available, call TripPlanner.planTrip() to get a fresh route.
-          // Then enrich via RouteEnrichmentAdvisor (stub in Project 1 — returns unchanged).
-          // Continue moving on the NEW route with remaining budget.
+          // Then enrich via RouteEnrichmentAdvisor and continue moving with remaining budget.
           if (brain && gridPoints && gridPoints.length > 0) {
             try {
               const memory = getMemory(snapshot.gameId, snapshot.bot.playerId);
@@ -328,15 +341,20 @@ export class TurnExecutorPlanner {
           break;
         }
 
-        // If the path ended at the target city (reached it), the next loop iteration
-        // will detect isBotAtCity and execute the action.
-        // However, context.position is read-only here (it reflects start-of-turn state).
-        // We cannot update context mid-loop, so after a MOVE we break — the next
-        // turn will pick up where we left off.
-        // NOTE: In a future iteration when context is mutable mid-turn, this can be
-        // replaced with a continue to execute the action in the same turn.
-        trace.a2.terminationReason = 'moved_toward_stop';
-        break;
+        // Update context.position to where the bot actually ended up so that
+        // isBotAtCity() detects arrival at the destination on the next iteration.
+        // This allows deliveries/pickups to be executed in the same turn.
+        const dest = movePlan.path[movePlan.path.length - 1];
+        if (dest && gridPoints) {
+          const arrivedGp = gridPoints.find(gp => gp.row === dest.row && gp.col === dest.col);
+          const cityName = arrivedGp?.city?.name ?? null;
+          context.position = { row: dest.row, col: dest.col, city: cityName };
+          snapshot.bot.position = { row: dest.row, col: dest.col };
+          console.log(`${tag} Context updated: position=${dest.row},${dest.col} (${cityName ?? 'no city'})`);
+        }
+
+        // Continue loop — bot may deliver/pickup at the destination with remaining budget
+        continue;
       }
 
       // ── Stop city not on network → A3 frontier approach, then Phase B ───

@@ -13,6 +13,7 @@ import { LoadService } from "../services/LoadService";
 import { config } from "../config/apiConfig";
 import { LoadsReferencePanel } from "../components/LoadsReferencePanel";
 import { DebugOverlay } from "../components/DebugOverlay";
+import { LLMTranscriptOverlay } from "../components/LLMTranscriptOverlay";
 import { BotTrainAnimator } from "../components/BotTrainAnimator";
 import { GameToastManager } from "../components/GameToastManager";
 import { WhisperPanel, WhisperTurnEntry } from "../components/WhisperPanel";
@@ -60,6 +61,8 @@ export class GameScene extends Phaser.Scene {
   private socketUnsubWhisperTurnHistory?: () => void;
   private autoRunBadge?: AutoRunBadge;
   private socketUnsubAutoRunStatus?: () => void;
+  private llmTranscriptOverlay?: LLMTranscriptOverlay;
+  private socketUnsubLLMTranscript?: () => void;
 
   // Game state
   public gameState: GameState; // Keep public for compatibility with SettingsScene
@@ -634,6 +637,9 @@ export class GameScene extends Phaser.Scene {
     // Debug overlay (toggled with backtick key)
     this.debugOverlay = new DebugOverlay(this, this.gameStateService);
 
+    // LLM transcript overlay (toggled with spacebar)
+    this.llmTranscriptOverlay = new LLMTranscriptOverlay();
+
     // JIRA-36: Bot train animation system
     this.botTrainAnimator = new BotTrainAnimator(this);
 
@@ -676,6 +682,15 @@ export class GameScene extends Phaser.Scene {
           overlay.logSocketEvent(eventName, args.length === 1 ? args[0] : args);
         });
 
+        // LLM transcript overlay: ingest bot:turn-complete payloads
+        const transcriptOverlay = this.llmTranscriptOverlay;
+        if (transcriptOverlay) {
+          this.socketUnsubLLMTranscript = svc.onAnyEvent((eventName: string, ...args: any[]) => {
+            if (eventName !== 'bot:turn-complete') return;
+            transcriptOverlay.ingestBotTurnComplete(args[0]);
+          });
+        }
+
         // Game event toast notifications from bot:turn-complete
         this.socketUnsubBotToast = svc.onAnyEvent((eventName: string, ...args: any[]) => {
           if (eventName !== 'bot:turn-complete') return;
@@ -705,8 +720,13 @@ export class GameScene extends Phaser.Scene {
           if (data.actionTimeline?.length > 0) return;
 
           // Delivery announcements — with payment flourish
+          // Deduplicate by {loadType, city} to prevent toast spam from duplicate delivery entries
           if (data.loadsDelivered?.length > 0) {
+            const seenDeliveries = new Set<string>();
             for (const d of data.loadsDelivered) {
+              const key = `${d.loadType}:${d.city}`;
+              if (seenDeliveries.has(key)) continue;
+              seenDeliveries.add(key);
               toast.show(
                 `💰 ${botName} delivered ${d.loadType} to ${d.city} — earned ${d.payment}M ECU!`,
                 { color: botColor, flourish: true },
@@ -1457,6 +1477,9 @@ export class GameScene extends Phaser.Scene {
     this.socketUnsubDebugAny?.();
     this.socketUnsubDebugAny = undefined;
     this.debugOverlay?.destroy();
+    this.socketUnsubLLMTranscript?.();
+    this.socketUnsubLLMTranscript = undefined;
+    this.llmTranscriptOverlay?.destroy();
     this.socketUnsubWhisperTurnHistory?.();
     this.socketUnsubWhisperTurnHistory = undefined;
     this.whisperPanel?.destroy();

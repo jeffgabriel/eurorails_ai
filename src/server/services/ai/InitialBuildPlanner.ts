@@ -400,14 +400,29 @@ export class InitialBuildPlanner {
     }
     if (chainLegCost === Infinity) chainLegCost = chainDistance * 1.5;
 
+    // Recompute second supply→delivery cost fresh (Bug B fix).
+    // second.buildCostSupplyToDelivery was evaluated from a different starting city context
+    // and may be deflated. Use costBetween() directly from the actual grid point positions.
+    const secondDeliveryPointsEarly = gridPoints.filter(gp => gp.city?.name === second.deliveryCity);
+    let freshSecondSupplyToDeliveryCost = Infinity;
+    for (const sp of secondSupplyPoints) {
+      for (const dp of secondDeliveryPointsEarly) {
+        const c = InitialBuildPlanner.costBetween(sp.row, sp.col, dp.row, dp.col);
+        if (c < freshSecondSupplyToDeliveryCost) freshSecondSupplyToDeliveryCost = c;
+      }
+    }
+    if (freshSecondSupplyToDeliveryCost === Infinity) {
+      freshSecondSupplyToDeliveryCost = second.buildCostSupplyToDelivery; // fallback to stored
+    }
+
     // Fix 1 & 3: Estimate combined build cost using terrain-aware costs for both branches
     let totalBuildCost: number;
     if (sharedStartingCity) {
-      // Shared hub: first legs already in first.totalBuildCost; add chain leg + second supply→delivery
-      totalBuildCost = first.totalBuildCost + chainLegCost + second.buildCostSupplyToDelivery;
+      // Shared hub: first legs already in first.totalBuildCost; add chain leg + fresh second supply→delivery
+      totalBuildCost = first.totalBuildCost + chainLegCost + freshSecondSupplyToDeliveryCost;
     } else {
-      // Different hubs: first's full cost + min(second's full cost, chain leg + second's supply→delivery)
-      const chainedSecondCost = chainLegCost + second.buildCostSupplyToDelivery;
+      // Different hubs: first's full cost + min(second's full cost, chain leg + fresh second supply→delivery)
+      const chainedSecondCost = chainLegCost + freshSecondSupplyToDeliveryCost;
       totalBuildCost = first.totalBuildCost + Math.min(second.totalBuildCost, chainedSecondCost);
     }
 

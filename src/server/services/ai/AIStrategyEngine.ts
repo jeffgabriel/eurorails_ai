@@ -48,6 +48,7 @@ import { initTurnLog, logPhase, flushTurnLog, LLMPhaseFields } from './DecisionL
 import { TurnValidator } from './TurnValidator';
 import { TripPlanner, TripPlanResult } from './TripPlanner';
 import { InitialBuildPlanner } from './InitialBuildPlanner';
+import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 
 /**
@@ -266,7 +267,7 @@ export class AIStrategyEngine {
       let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
       let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
 
-      if (!activeRoute && context.isInitialBuild) {
+      if (context.isInitialBuild) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
         // Plan the route and produce a BuildTrack decision with targetCity.
         // Don't go through PlanExecutor.executeInitialBuild — its cold-start
@@ -390,6 +391,15 @@ export class AIStrategyEngine {
         if (routeResult.route) {
           activeRoute = routeResult.route;
           console.log(`${tag} Trip planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
+
+          // ── Route Enrichment Advisor (JIRA-156 P2): enrich new route with corridor map ──
+          if (brain && gridPoints.length > 0) {
+            try {
+              activeRoute = await RouteEnrichmentAdvisor.enrich(activeRoute, snapshot, context, brain, gridPoints);
+            } catch (enrichErr) {
+              console.warn(`${tag} RouteEnrichmentAdvisor failed (${(enrichErr as Error).message}), using original route`);
+            }
+          }
 
           // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
           if (activeRoute.upgradeOnRoute) {

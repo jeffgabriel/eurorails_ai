@@ -98,7 +98,7 @@ export class ActionResolver {
     }
   }
 
-  // ─── Individual Resolvers (stubs, implemented in BE-010 through BE-013) ───
+  // ─── Individual Resolvers ───────────────────────────────────────────────
 
   /**
    * Resolve a BUILD intent into a TurnPlanBuildTrack.
