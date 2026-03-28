@@ -1262,6 +1262,13 @@ export class TurnExecutorPlanner {
           );
           if (!hasSegment) continue;
 
+          // Directional filter: only expand nodes that are closer to the
+          // destination than the current node. This ensures we measure runway
+          // toward the build target, not total network depth in all directions.
+          const neighborDistToDest = hexDistance(neighbor.row, neighbor.col, destPosition.row, destPosition.col);
+          const nodeDistToDest = hexDistance(node.row, node.col, destPosition.row, destPosition.col);
+          if (neighborDistToDest >= nodeDistToDest) continue;
+
           const newDepth = node.depth + 1;
           if (newDepth > maxDepthOnNetwork) maxDepthOnNetwork = newDepth;
           nextFrontier.push({ row: neighbor.row, col: neighbor.col, depth: newDepth });

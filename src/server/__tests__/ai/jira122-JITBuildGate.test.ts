@@ -418,6 +418,24 @@ describe('TurnExecutorPlanner.estimateIntermediateStopTurns', () => {
 });
 
 describe('TurnExecutorPlanner.calculateTrackRunway', () => {
+  const { hexDistance: mockHexDistance } = require('../../services/ai/MapTopology');
+
+  // Real hex distance implementation for directional tests
+  function realHexDistance(r1: number, c1: number, r2: number, c2: number): number {
+    const x1 = c1 - Math.floor(r1 / 2);
+    const z1 = r1;
+    const y1 = -x1 - z1;
+    const x2 = c2 - Math.floor(r2 / 2);
+    const z2 = r2;
+    const y2 = -x2 - z2;
+    return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+  }
+
+  beforeEach(() => {
+    mockHexDistance.mockReset();
+    mockHexDistance.mockImplementation(realHexDistance);
+  });
+
   it('returns 0 when bot has no position', () => {
     const snapshot = makeSnapshot({ bot: { ...makeSnapshot().bot, position: null } });
     const context = makeContext();
@@ -432,7 +450,7 @@ describe('TurnExecutorPlanner.calculateTrackRunway', () => {
     expect(result).toBe(0);
   });
 
-  it('returns high runway when destination is on network', () => {
+  it('returns 10 when destination is on network (AC3)', () => {
     const snapshot = makeSnapshot();
     const context = makeContext({ citiesOnNetwork: ['Berlin'] });
     const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Berlin', 9, context);
@@ -445,6 +463,114 @@ describe('TurnExecutorPlanner.calculateTrackRunway', () => {
     loadGridPoints.mockReturnValue(new Map());
     const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'UnknownCity', 9, context);
     expect(result).toBe(0);
+  });
+
+  it('returns 0 when large network has no track toward off-network destination (AC1 — directional filter)', () => {
+    // Bot at (5,5). Destination (Budapest) at (5,14) — far to the right.
+    // Existing segments run LEFT from bot position: (5,5)→(5,4)→(5,3)→(5,2)→(5,1)→(5,0)
+    // These segments go AWAY from destination — directional filter should block all of them.
+    const grid = buildTestGrid();
+    grid.set('5,14', { row: 5, col: 14, terrain: TerrainType.Clear, name: 'Budapest' });
+    loadGridPoints.mockReturnValue(grid);
+
+    const leftwardSegments = [
+      makeSegment(5, 5, 5, 4),
+      makeSegment(5, 4, 5, 3),
+      makeSegment(5, 3, 5, 2),
+      makeSegment(5, 2, 5, 1),
+      makeSegment(5, 1, 5, 0),
+    ];
+    const snapshot = makeSnapshot({
+      bot: {
+        ...makeSnapshot().bot,
+        position: { row: 5, col: 5 },
+        existingSegments: leftwardSegments,
+      },
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Budapest', 9, context);
+
+    // No track extends toward Budapest (col 14) — all track goes left (col 0)
+    expect(result).toBe(0);
+  });
+
+  it('returns correct directional runway when track partially extends toward destination (AC2)', () => {
+    // Bot at (5,5). Destination (Rome) at (5,14) — to the right.
+    // Existing segments run RIGHT from bot: (5,5)→(5,6)→(5,7)→(5,8) — 3 segments toward dest.
+    // Also some leftward segments that should be ignored by directional filter.
+    const grid = buildTestGrid();
+    grid.set('5,14', { row: 5, col: 14, terrain: TerrainType.Clear, name: 'Rome' });
+    loadGridPoints.mockReturnValue(grid);
+
+    const segments = [
+      // Toward destination (right)
+      makeSegment(5, 5, 5, 6),
+      makeSegment(5, 6, 5, 7),
+      makeSegment(5, 7, 5, 8),
+      // Away from destination (left) — should be excluded by directional filter
+      makeSegment(5, 5, 5, 4),
+      makeSegment(5, 4, 5, 3),
+    ];
+    const snapshot = makeSnapshot({
+      bot: {
+        ...makeSnapshot().bot,
+        position: { row: 5, col: 5 },
+        existingSegments: segments,
+      },
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+
+    const result = TurnExecutorPlanner.calculateTrackRunway(snapshot, 'Rome', 9, context);
+
+    // 3 segments toward destination / trainSpeed 9 = 3/9 ≈ 0.33
+    // But the directional depth from bot (5,5) to (5,8) is 3 hops
+    expect(result).toBeGreaterThan(0);
+    expect(result).toBeLessThan(1); // 3/9 = 0.333
+  });
+
+  it('shouldDeferBuild returns deferred:false when no directional runway exists (AC4)', () => {
+    // Bot at (5,5) with large network going LEFT, Budapest off-network to the RIGHT.
+    // With directional filter: runway = 0 → shouldDeferBuild should NOT defer.
+    const grid = buildTestGrid();
+    grid.set('5,14', { row: 5, col: 14, terrain: TerrainType.Clear, name: 'Budapest' });
+    loadGridPoints.mockReturnValue(grid);
+
+    const leftwardSegments: TrackSegment[] = [];
+    for (let col = 0; col < 5; col++) {
+      leftwardSegments.push(makeSegment(5, col + 1, 5, col));
+    }
+    // 41 total segments: also add many segments spreading in other non-Budapest directions
+    for (let row = 0; row < 8; row++) {
+      leftwardSegments.push(makeSegment(row, 0, row + 1, 0));
+    }
+    for (let col = 0; col < 4; col++) {
+      leftwardSegments.push(makeSegment(0, col, 0, col + 1));
+    }
+
+    const snapshot = makeSnapshot({
+      bot: {
+        ...makeSnapshot().bot,
+        position: { row: 5, col: 5 },
+        money: 36,
+        existingSegments: leftwardSegments,
+      },
+    });
+    const context = makeContext({
+      money: 36,
+      turnNumber: 17,
+      citiesOnNetwork: [],
+    });
+    const route = makeRoute({
+      phase: 'build',
+      stops: [{ action: 'pickup', loadType: 'Coal', city: 'Budapest' }],
+    });
+
+    const result = TurnExecutorPlanner.shouldDeferBuild(snapshot, context, route, 'Budapest', 9);
+
+    // With no directional runway toward Budapest, should NOT defer
+    expect(result.deferred).toBe(false);
+    expect(result.trackRunway).toBe(0);
   });
 });
 
