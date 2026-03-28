@@ -43,6 +43,8 @@ export interface BotTurnEntry {
   demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number }>;
   // FE-002: Dynamic upgrade advice
   upgradeAdvice?: string;
+  // JIRA-161: Reason upgrade was suppressed (if applicable)
+  upgradeSuppressionReason?: string | null;
   // FE-003: Hand quality metrics
   handQuality?: { score: number; staleCards: number; assessment: string };
   // JIRA-19: LLM decision metadata
@@ -302,6 +304,9 @@ export class DebugOverlay {
       }
       if (payload?.upgradeAdvice) {
         entry.upgradeAdvice = payload.upgradeAdvice;
+      }
+      if (payload?.upgradeSuppressionReason != null) {
+        entry.upgradeSuppressionReason = payload.upgradeSuppressionReason;
       }
       if (payload?.handQuality) {
         entry.handQuality = payload.handQuality;
@@ -587,6 +592,9 @@ export class DebugOverlay {
       }
       if (latest.upgradeAdvice) {
         latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.08);border-radius:4px;border-left:3px solid #fbbf24;"><div style="color:#fbbf24;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Path</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeAdvice}</div></div>`;
+      }
+      if (latest.upgradeSuppressionReason) {
+        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(239,68,68,0.08);border-radius:4px;border-left:3px solid #ef4444;"><div style="color:#ef4444;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Suppressed</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeSuppressionReason}</div></div>`;
       }
       // JIRA-129: Build Advisor section
       if (latest.advisorAction) {

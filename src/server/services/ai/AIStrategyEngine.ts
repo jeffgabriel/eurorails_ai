@@ -92,6 +92,8 @@ export interface BotTurnResult {
   handQuality?: { score: number; staleCards: number; assessment: string };
   // FE-002: Dynamic upgrade advice for debug overlay
   upgradeAdvice?: string;
+  // JIRA-161: Reason upgrade was suppressed (if applicable), for debug overlay visibility
+  upgradeSuppressionReason?: string | null;
   // JIRA-31: LLM attempt log for debug overlay
   llmLog?: LlmAttempt[];
   // JIRA-36: Movement path for animated bot train movement
@@ -218,6 +220,13 @@ export class AIStrategyEngine {
       // JIRA-60: Inject delivery count from memory for upgrade advice gating
       context.deliveryCount = memory.deliveryCount ?? 0;
 
+      // JIRA-161: Recalculate upgradeAdvice now that deliveryCount is known.
+      // ContextBuilder.build() computed advice without delivery count (no memory at that point).
+      // This ensures advice is suppressed when the gate will block the upgrade anyway.
+      context.upgradeAdvice = ContextBuilder.computeUpgradeAdvice(
+        snapshot, context.demands, context.canBuild, context.deliveryCount,
+      );
+
       // JIRA-87: Inject en-route pickup opportunities from active route
       if (memory.activeRoute?.stops) {
         context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
@@ -264,6 +273,7 @@ export class AIStrategyEngine {
       let secondaryDeliveryLog: { action: string; reasoning: string; pickupCity?: string; loadType?: string; deliveryCity?: string; deadLoadsDropped?: string[] } | undefined;
       const deadLoadDropActions: TurnPlanDropLoad[] = [];
       let pendingUpgradeAction: TurnPlanUpgradeTrain | null = null; // JIRA-105
+      let upgradeSuppressionReason: string | null = null; // JIRA-161: tracks why an upgrade was blocked
       let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
       let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
 
@@ -403,9 +413,11 @@ export class AIStrategyEngine {
 
           // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
           if (activeRoute.upgradeOnRoute) {
-            const upgradeResult = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag, memory.deliveryCount ?? 0);
-            if (upgradeResult) {
-              pendingUpgradeAction = upgradeResult;
+            const { action: upgradeAction, reason: upgradeReason } = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag, memory.deliveryCount ?? 0);
+            if (upgradeAction) {
+              pendingUpgradeAction = upgradeAction;
+            } else if (upgradeReason) {
+              upgradeSuppressionReason = upgradeReason;
             }
           }
 
@@ -467,7 +479,8 @@ export class AIStrategyEngine {
             const currentCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
             if (
               pendingUpgradeAction === null &&
-              currentCapacity < 3
+              currentCapacity < 3 &&
+              (memory.deliveryCount ?? 0) >= MIN_DELIVERIES_BEFORE_UPGRADE
             ) {
               // Find capacity-increasing upgrade options (filter ActionResolver.UPGRADE_PATHS to targets with capacity > current)
               const allPaths = ActionResolver.UPGRADE_PATHS[snapshot.bot.trainType] ?? {};
@@ -514,7 +527,10 @@ export class AIStrategyEngine {
                       console.warn(`${tag} JIRA-105b: LLM suggested "${upgradeResult.targetTrain}" but not in valid options, falling through to cargo conflict`);
                     }
                   } else {
-                    console.log(`${tag} JIRA-105b: Upgrade-before-drop → skip — ${upgradeResult?.reasoning ?? 'LLM returned null'}`);
+                    const skipReason = upgradeResult?.reasoning ?? 'LLM returned null';
+                    console.log(`${tag} JIRA-105b: Upgrade-before-drop → skip — ${skipReason}`);
+                    // JIRA-161: Capture suppression reason for debug overlay
+                    upgradeSuppressionReason = `LLM chose drop over upgrade: ${skipReason}`;
                   }
                 } catch (err) {
                   console.warn(`${tag} JIRA-105b: Upgrade-before-drop LLM call failed:`, err instanceof Error ? err.message : err);
@@ -649,14 +665,9 @@ export class AIStrategyEngine {
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
 
       // ── JIRA-105: Inject pending upgrade action into decision plan (before TurnComposer) ──
-      // ── JIRA-119: Gate 2 — suppress pending upgrade if delivery count too low ──
-      if (pendingUpgradeAction) {
-        const effectiveDeliveryCount = memory.deliveryCount ?? 0;
-        if (effectiveDeliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) {
-          console.warn(`${tag} JIRA-119: Suppressed pending upgrade — only ${effectiveDeliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`);
-          pendingUpgradeAction = null;
-        }
-      }
+      // JIRA-161: Gate 2 removed — redundant with Gate 1 in tryConsumeUpgrade and
+      // the delivery count guard in the upgrade-before-drop path. Gate 2 used stale
+      // memory.deliveryCount and silently blocked valid upgrades after the LLM decided to upgrade.
       if (pendingUpgradeAction) {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
         decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, pendingUpgradeAction] };
@@ -1081,6 +1092,8 @@ export class AIStrategyEngine {
         retried: decision.retried,
         handQuality,
         upgradeAdvice: context.upgradeAdvice,
+        // JIRA-161: Upgrade suppression reason for debug overlay
+        upgradeSuppressionReason: upgradeSuppressionReason ?? undefined,
         // JIRA-31: LLM attempt log for debug overlay
         llmLog: decision.llmLog,
         // JIRA-32: Strategic context and composition trace for game log
@@ -1410,37 +1423,44 @@ export class AIStrategyEngine {
    * JIRA-105: Consume upgradeOnRoute from a route, returning a TurnPlanUpgradeTrain if valid.
    * Clears upgradeOnRoute from the route after consumption (one-time use).
    */
+  /**
+   * JIRA-161: Return shape for tryConsumeUpgrade — exposes rejection reason alongside the action
+   * so callers can surface suppression information to the debug overlay.
+   */
   private static tryConsumeUpgrade(
     route: StrategicRoute,
     snapshot: WorldSnapshot,
     tag: string,
     deliveryCount: number,
-  ): TurnPlanUpgradeTrain | null {
+  ): { action: TurnPlanUpgradeTrain | null; reason?: string } {
     const targetTrain = route.upgradeOnRoute!;
     route.upgradeOnRoute = undefined; // one-time consumption
 
     // JIRA-119: Gate 1 — block upgrade before sufficient deliveries
     if (deliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) {
-      console.warn(`${tag} JIRA-119: upgradeOnRoute blocked — only ${deliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`);
-      return null;
+      const reason = `only ${deliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`;
+      console.warn(`${tag} JIRA-119: upgradeOnRoute blocked — ${reason}`);
+      return { action: null, reason: `Upgrade blocked: ${reason}` };
     }
 
     // Validate upgrade path using ActionResolver.UPGRADE_PATHS
     const currentTrain = snapshot.bot.trainType;
     const paths = ActionResolver.UPGRADE_PATHS[currentTrain];
     if (!paths || !(targetTrain in paths)) {
+      const reason = `invalid upgrade path "${targetTrain}" from "${currentTrain}"`;
       console.warn(`${tag} JIRA-105: upgradeOnRoute "${targetTrain}" invalid from "${currentTrain}" — skipping`);
-      return null;
+      return { action: null, reason: `Upgrade blocked: ${reason}` };
     }
 
     const cost = paths[targetTrain];
     if (snapshot.bot.money < cost) {
+      const reason = `insufficient funds (need ${cost}M, have ${snapshot.bot.money}M)`;
       console.warn(`${tag} JIRA-105: upgradeOnRoute "${targetTrain}" unaffordable (need ${cost}M, have ${snapshot.bot.money}M) — skipping`);
-      return null;
+      return { action: null, reason: `Upgrade blocked: ${reason}` };
     }
 
     console.log(`${tag} JIRA-105: Consuming upgradeOnRoute → ${targetTrain} (cost=${cost}M)`);
-    return { type: AIActionType.UpgradeTrain, targetTrain, cost };
+    return { action: { type: AIActionType.UpgradeTrain, targetTrain, cost } };
   }
 
   private static readonly ENV_KEY_MAP: Record<LLMProvider, string> = {

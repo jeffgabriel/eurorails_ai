@@ -1827,13 +1827,20 @@ export class ContextBuilder {
     return lines.join('\n');
   }
 
-  /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C) */
-  private static computeUpgradeAdvice(
+  /** Generate dynamic upgrade advice with ROI data (JIRA-55 Part C)
+   * @param deliveryCount - Current delivery count; advice is suppressed below MIN_DELIVERIES_BEFORE_UPGRADE
+   *   to prevent telling the bot to upgrade when the gate will block it anyway (JIRA-161).
+   */
+  static computeUpgradeAdvice(
     snapshot: WorldSnapshot,
     demands: DemandContext[] = [],
     canBuild: boolean = true,
+    deliveryCount: number = 0,
   ): string | undefined {
     if (snapshot.gameStatus === 'initialBuild') return undefined;
+    // JIRA-161: Suppress advice when delivery count is below the upgrade gate threshold.
+    // Advice that can't be acted on is noise — align advice generation with gating logic.
+    if (deliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) return undefined;
     const trainType = snapshot.bot.trainType as TrainType;
     const money = snapshot.bot.money;
     const turn = snapshot.turnNumber;
