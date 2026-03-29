@@ -88,8 +88,6 @@ export interface BotTurnResult {
   llmLatencyMs?: number;
   tokenUsage?: { input: number; output: number };
   retried?: boolean;
-  // Hand quality metrics for audit logging
-  handQuality?: { score: number; staleCards: number; assessment: string };
   // FE-002: Dynamic upgrade advice for debug overlay
   upgradeAdvice?: string;
   // JIRA-161: Reason upgrade was suppressed (if applicable), for debug overlay visibility
@@ -367,28 +365,6 @@ export class AIStrategyEngine {
           hasDelivery = true;
         }
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
-        // ── Pre-LLM discard gate: broke bot with no deliverable hand ──
-        // If cash < 5M, no affordable demands, and no immediate delivery,
-        // skip the LLM entirely and discard immediately (saves 1-3 LLM calls).
-        const isBroke = snapshot.bot.money < 5;
-        const noAffordableDemands = context.demands.length > 0 && context.demands.every(d => !d.isAffordable);
-        const noDelivery = !context.canDeliver || context.canDeliver.length === 0;
-        const noDeliverableOnNetwork = context.demands.every(d =>
-          !(d.isLoadOnTrain && d.isDeliveryOnNetwork),
-        );
-
-        if (!context.isInitialBuild && isBroke && noAffordableDemands && noDelivery && noDeliverableOnNetwork) {
-          console.warn(`${tag} [pre-LLM] Broke bot gate — cash=${snapshot.bot.money}M, no affordable demands, no delivery. Skipping LLM, discarding hand.`);
-          decision = {
-            plan: { type: AIActionType.DiscardHand },
-            reasoning: `[broke-bot-gate] Cash=${snapshot.bot.money}M with no affordable demands — discarding hand (LLM skipped)`,
-            planHorizon: 'Immediate',
-            model: 'broke-bot-heuristic',
-            latencyMs: 0,
-            retried: false,
-            userPrompt: `[Heuristic] Broke bot gate — cash=${snapshot.bot.money}M, discarding hand`,
-          };
-        } else {
         // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
         const tripPlanner = new TripPlanner(brain!);
 
@@ -647,7 +623,6 @@ export class AIStrategyEngine {
             };
           }
         }
-        } // close broke-bot-gate else
       } else {
         // No LLM key — pass turn with debug logging
         console.error(`${tag} [LLM] No API key configured — passing turn`);
@@ -980,13 +955,6 @@ export class AIStrategyEngine {
           };
         });
 
-      // INF-001: Compute hand quality for audit logging
-      const handQuality = AIStrategyEngine.computeHandQuality(freshDemands, snapshot.turnNumber, snapshot.bot.money);
-      const bestDemandTurns = freshDemands.length > 0
-        ? Math.min(...freshDemands.map(d => d.estimatedTurns))
-        : 0;
-      console.log(`${tag} [Hand Quality] score=${handQuality.score} (threshold=3.0), stale cards: ${handQuality.staleCards}, best demand: ${bestDemandTurns} turns`);
-
       // JIRA-32: Extract movement data from composed plan for game log
       // JIRA-36: Also extract concatenated movement path for client animation
       // JIRA-116: Prepend early-executed MOVE paths so movementPath reflects the complete turn trajectory
@@ -1090,7 +1058,6 @@ export class AIStrategyEngine {
         llmLatencyMs: decision.latencyMs,
         tokenUsage: decision.tokenUsage,
         retried: decision.retried,
-        handQuality,
         upgradeAdvice: context.upgradeAdvice,
         // JIRA-161: Upgrade suppression reason for debug overlay
         upgradeSuppressionReason: upgradeSuppressionReason ?? undefined,
@@ -1269,48 +1236,6 @@ export class AIStrategyEngine {
       }
     }
     return timeline;
-  }
-
-  /**
-   * INF-001: Compute hand quality metrics from demand contexts.
-   * Groups demands by card, picks the best demand per card, then averages scores.
-   */
-  private static computeHandQuality(
-    demands: DemandContext[],
-    turnNumber: number,
-    money: number = Infinity,
-  ): { score: number; staleCards: number; assessment: string } {
-    if (demands.length === 0) {
-      return { score: 0, staleCards: 0, assessment: 'Poor' };
-    }
-
-    // Group by cardIndex, pick best demand per card
-    const cardGroups = new Map<number, DemandContext[]>();
-    for (const d of demands) {
-      if (!cardGroups.has(d.cardIndex)) cardGroups.set(d.cardIndex, []);
-      cardGroups.get(d.cardIndex)!.push(d);
-    }
-
-    let totalBestScore = 0;
-    let staleCards = 0;
-    for (const [, cardDemands] of cardGroups) {
-      const best = cardDemands.reduce((a, b) => a.demandScore > b.demandScore ? a : b);
-      totalBestScore += best.demandScore;
-      // Cards held for 12+ turns are stale
-      if (best.estimatedTurns >= 12) staleCards++;
-    }
-
-    const avgScore = totalBestScore / cardGroups.size;
-
-    // JIRA-71: If bot is broke (cash < 5M) and no demand is affordable, clamp to "Poor"
-    const isBroke = money < 5 && demands.every(d => !d.isAffordable);
-    const assessment = isBroke ? 'Poor' : avgScore >= 3 ? 'Good' : avgScore >= 1 ? 'Fair' : 'Poor';
-
-    return {
-      score: isBroke ? 0 : Math.round(avgScore * 100) / 100,
-      staleCards,
-      assessment,
-    };
   }
 
   /**

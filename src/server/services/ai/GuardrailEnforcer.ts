@@ -62,8 +62,9 @@ export class GuardrailEnforcer {
 
     // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
     // JIRA-68: Skip when bot has an active route — traveling toward a pickup is progress
-    // JIRA-120: Removed loads.length === 0 gate — carrying loads is not a reason to keep a bad hand
-    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && !hasActiveRoute) {
+    // JIRA-164: Skip when bot is carrying loads deliverable on-network — discarding destroys value
+    const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
+    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && !hasActiveRoute && !hasDeliverableLoad) {
       console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
       return {
         plan: { type: AIActionType.DiscardHand },

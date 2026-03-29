@@ -45,8 +45,6 @@ export interface BotTurnEntry {
   upgradeAdvice?: string;
   // JIRA-161: Reason upgrade was suppressed (if applicable)
   upgradeSuppressionReason?: string | null;
-  // FE-003: Hand quality metrics
-  handQuality?: { score: number; staleCards: number; assessment: string };
   // JIRA-19: LLM decision metadata
   model?: string;
   llmLatencyMs?: number;
@@ -307,9 +305,6 @@ export class DebugOverlay {
       }
       if (payload?.upgradeSuppressionReason != null) {
         entry.upgradeSuppressionReason = payload.upgradeSuppressionReason;
-      }
-      if (payload?.handQuality) {
-        entry.handQuality = payload.handQuality;
       }
       // JIRA-19: LLM decision metadata
       entry.model = payload?.model;
@@ -584,11 +579,6 @@ export class DebugOverlay {
       if (rankingSource && rankingSource.length > 0) {
         const isStale = rankingSource !== latest.demandRanking;
         latestDetail += this.renderDemandRanking(rankingSource, color, isStale);
-      }
-      if (latest.handQuality) {
-        const hq = latest.handQuality;
-        const assessColor = hq.assessment === 'Good' ? '#34d399' : hq.assessment === 'Fair' ? '#fbbf24' : '#f87171';
-        latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(96,165,250,0.08);border-radius:4px;border-left:3px solid #60a5fa;"><div style="color:#60a5fa;font-size:14px;font-weight:bold;margin-bottom:2px;">Hand Quality</div><div style="color:#e5e7eb;font-size:13px;">Score: ${hq.score} (threshold=3.0) | Assessment: <span style="color:${assessColor};font-weight:bold;">${hq.assessment}</span> | Stale: ${hq.staleCards} card(s)</div></div>`;
       }
       if (latest.upgradeAdvice) {
         latestDetail += `<div style="margin-top:8px;padding:6px 10px;background:rgba(251,191,36,0.08);border-radius:4px;border-left:3px solid #fbbf24;"><div style="color:#fbbf24;font-size:14px;font-weight:bold;margin-bottom:2px;">Upgrade Path</div><div style="color:#e5e7eb;font-size:13px;">${latest.upgradeAdvice}</div></div>`;

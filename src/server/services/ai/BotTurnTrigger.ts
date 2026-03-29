@@ -143,7 +143,6 @@ export async function onTurnChange(
         retried: result.retried ?? false,
         guardrailOverride: result.guardrailOverride ?? false,
         guardrailReason: result.guardrailReason ?? null,
-        handQuality: result.handQuality ?? null,
         llmLog: result.llmLog ?? null,
       };
       await db.query(
@@ -178,7 +177,6 @@ export async function onTurnChange(
       demandRanking: result.demandRanking,
       upgradeAdvice: result.upgradeAdvice,
       upgradeSuppressionReason: result.upgradeSuppressionReason,
-      handQuality: result.handQuality,
       // JIRA-19: LLM decision metadata
       model: result.model,
       llmLatencyMs: result.llmLatencyMs,
@@ -228,7 +226,6 @@ export async function onTurnChange(
         tokenUsage: result.tokenUsage,
         composition: result.compositionTrace,
         demandRanking: result.demandRanking,
-        handQuality: result.handQuality,
         gamePhase: result.gamePhase,
         cash: result.cash,
         train: result.trainType,

@@ -75,7 +75,6 @@ export interface GameTurnLogEntry {
   }>;
 
   // Strategic Context
-  handQuality?: { score: number; staleCards: number; assessment: string };
   gamePhase?: string;
   cash?: number;
   train?: string;

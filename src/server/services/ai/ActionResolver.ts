@@ -1087,10 +1087,7 @@ export class ActionResolver {
     }
 
     // 1b. Try to PICKUP if there are available loads at current position
-    // JIRA-94: Skip pickup when broke — picking up a load you can't afford to deliver
-    // just creates a drop/pickup loop. Let step 1c fire to discard for new demand cards.
-    const isBrokeWithNoAffordableDemands = snapshot.bot.money < 5 && context.demands.every(d => !d.isAffordable);
-    if (context.canPickup && context.canPickup.length > 0 && !isBrokeWithNoAffordableDemands) {
+    if (context.canPickup && context.canPickup.length > 0) {
       const best = context.canPickup.reduce((a, b) => (a.bestPayout > b.bestPayout ? a : b));
       const result = await ActionResolver.resolvePickup(
         { load: best.loadType, at: best.supplyCity },
@@ -1100,20 +1097,7 @@ export class ActionResolver {
       if (result.success) return result;
     }
 
-    // 1c. JIRA-71: Broke-bot discard — if cash < 5M and no demand is affordable,
-    // discard immediately instead of cycling through futile move/build/drop actions.
-    // Only skip if bot can deliver right now (step 1 above would have returned).
-    if (!context.isInitialBuild && snapshot.bot.money < 5 && context.demands.length > 0 &&
-        context.demands.every(d => !d.isAffordable) &&
-        (!context.canDeliver || context.canDeliver.length === 0)) {
-      console.warn(
-        `[heuristicFallback] JIRA-71: Broke bot detected — cash=${snapshot.bot.money}M, ` +
-        `no affordable demands. Discarding hand immediately.`,
-      );
-      return ActionResolver.resolveDiscard(snapshot);
-    }
-
-    // 1d. (moved to step 0 above — JIRA-120 forced discard is now first check)
+    // 1c. (moved to step 0 above — JIRA-120 forced discard is now first check)
 
     // 2. Try to MOVE toward a pickup or delivery city on the network
     if (snapshot.bot.position && !context.isInitialBuild) {

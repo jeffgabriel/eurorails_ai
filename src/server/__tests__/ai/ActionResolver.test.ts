@@ -2712,7 +2712,7 @@ describe('ActionResolver', () => {
       expect(result.plan!.type).toBe(AIActionType.BuildTrack);
     });
 
-    it('should discard hand when load on train but delivery not on network and unaffordable (JIRA-54)', async () => {
+    it('should drop load when load on train but delivery not on network (JIRA-54)', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
       const context = makeGameContext({
         canDeliver: [],
@@ -2736,14 +2736,11 @@ describe('ActionResolver', () => {
       const snapshot = makeWorldSnapshot({
         bot: { position: { row: 5, col: 5 }, loads: ['Wine'], money: 1 } as any,
       });
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
       expect(result.success).toBe(true);
-      // JIRA-71: Broke bot (money=1, no affordable demands) → discard immediately
-      // instead of dropping load and wasting turns
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      warnSpy.mockRestore();
+      // JIRA-164: Broke-bot cash gate removed — bot drops dead-weight load (BE-004) rather than discarding hand
+      expect(result.plan!.type).toBe(AIActionType.DropLoad);
     });
 
     // ── BE-004: DROP dead-weight loads before PASS ──────────────────────────
@@ -2884,7 +2881,8 @@ describe('ActionResolver', () => {
       expect(result.plan!.type).toBe(AIActionType.DeliverLoad);
     });
 
-    it('JIRA-71: should discard when broke (cash=0) even with load on train and delivery on network', async () => {
+    it('JIRA-164: should NOT discard when broke (cash=0) with load on train and delivery on network', async () => {
+      // JIRA-164: Broke-bot cash gate removed — bot keeps load and tries to move/deliver
       setupGridPoints([{ row: 5, col: 5, name: 'HomeCity' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -2916,22 +2914,16 @@ describe('ActionResolver', () => {
         ],
       });
 
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
       expect(result.success).toBe(true);
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('JIRA-71: Broke bot detected'),
-      );
-      warnSpy.mockRestore();
+      // Bot should NOT discard — it's carrying a deliverable load
+      expect(result.plan!.type).not.toBe(AIActionType.DiscardHand);
     });
 
-    it('JIRA-94: should skip pickup and discard when broke with no affordable demands', async () => {
-      // Bot is at a city with available loads and has a matching demand card,
-      // but is broke ($0M) with no affordable demands. Should skip pickup (step 1b)
-      // and fall through to broke-discard (step 1c) instead of picking up a load
-      // it can never deliver.
+    it('JIRA-164: should pick up load even when broke with no affordable demands', async () => {
+      // JIRA-164: Broke-bot cash gate removed — pickups are free, bot should pick up load
+      // even at $0 cash. Movement on own track is also free.
       setupGridPoints([{ row: 5, col: 5, name: 'Warszawa' }]);
       const snapshot = makeWorldSnapshot({
         bot: {
@@ -2942,6 +2934,8 @@ describe('ActionResolver', () => {
             { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Ham', payment: 20 }] },
           ],
         } as any,
+        // Ham is available at Warszawa in the load availability map
+        loadAvailability: { Warszawa: ['Ham'] },
       });
 
       const context = makeGameContext({
@@ -2957,8 +2951,8 @@ describe('ActionResolver', () => {
             cardIndex: 0, loadType: 'Ham', supplyCity: 'Warszawa',
             deliveryCity: 'Berlin', payout: 20,
             isSupplyReachable: true, isDeliveryReachable: false,
-            isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
-            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 15,
+            isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+            estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
             isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
             loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 5,
             demandScore: 3, efficiencyPerTurn: 1, networkCitiesUnlocked: 0,
@@ -2967,16 +2961,11 @@ describe('ActionResolver', () => {
         ],
       });
 
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
       const result = await ActionResolver.heuristicFallback(context, snapshot);
 
-      // Should discard (step 1c), NOT pickup (step 1b)
+      // Should pick up (step 1b), NOT discard — cash gates are removed
       expect(result.success).toBe(true);
-      expect(result.plan!.type).toBe(AIActionType.DiscardHand);
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('JIRA-71: Broke bot detected'),
-      );
-      warnSpy.mockRestore();
+      expect(result.plan!.type).toBe(AIActionType.PickupLoad);
     });
 
     it('JIRA-71: should NOT discard when cash >= 5 and some demand is affordable', async () => {
