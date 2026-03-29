@@ -211,7 +211,7 @@ export class RouteValidator {
 
     // Check if the supply city matches any demand's supply city
     const supplyMatch = matchingDemands.find(
-      d => d.supplyCity.toLowerCase() === stop.city.toLowerCase(),
+      d => d.supplyCity && d.supplyCity.toLowerCase() === stop.city.toLowerCase(),
     );
     if (!supplyMatch) {
       // The stop's city doesn't match any known supply city for this load
@@ -503,7 +503,7 @@ export class RouteValidator {
     if (stop.action === 'pickup') {
       return context.demands.find(
         d => d.loadType === stop.loadType &&
-          d.supplyCity.toLowerCase() === stop.city.toLowerCase(),
+          d.supplyCity != null && d.supplyCity.toLowerCase() === stop.city.toLowerCase(),
       );
     }
     return context.demands.find(

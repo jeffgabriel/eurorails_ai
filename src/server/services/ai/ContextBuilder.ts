@@ -754,7 +754,7 @@ export class ContextBuilder {
     return {
       cardIndex,
       loadType,
-      supplyCity: supplyCity ?? 'OnTrain',
+      supplyCity: supplyCity ?? null,
       deliveryCity,
       payout: demand.payment,
       isSupplyReachable,
@@ -1105,7 +1105,7 @@ export class ContextBuilder {
       // Collect route stop cities from demands (supply + delivery)
       const routeStopCities = new Set<string>();
       for (const d of context.demands) {
-        routeStopCities.add(d.supplyCity);
+        if (d.supplyCity) routeStopCities.add(d.supplyCity);
         routeStopCities.add(d.deliveryCity);
       }
 
@@ -1319,7 +1319,7 @@ export class ContextBuilder {
     for (const d of shown) {
       const cardNum = seenCards.get(d.cardIndex) ?? 0;
       const buildCost = d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery;
-      const supplyNote = d.isLoadOnTrain ? 'OnTrain' : d.supplyCity;
+      const supplyNote = d.isLoadOnTrain ? '(already carried)' : d.supplyCity;
 
       let detail: string;
       if (d.isLoadOnTrain || buildCost === 0) {
@@ -1425,7 +1425,7 @@ export class ContextBuilder {
       // Penalise track cost (lower is better)
       score -= (d.estimatedTrackCostToSupply + d.estimatedTrackCostToDelivery);
       // Prefer core cities
-      if (CORE_CITIES.has(d.supplyCity)) score += 20;
+      if (d.supplyCity && CORE_CITIES.has(d.supplyCity)) score += 20;
       if (CORE_CITIES.has(d.deliveryCity)) score += 20;
       // Penalise ferry
       if (d.ferryRequired) score -= 50;
@@ -2804,8 +2804,8 @@ export class ContextBuilder {
 
         const delPosI = cityPos(di.deliveryCity);
         const delPosJ = cityPos(dj.deliveryCity);
-        const supPosI = cityPos(di.supplyCity);
-        const supPosJ = cityPos(dj.supplyCity);
+        const supPosI = di.supplyCity ? cityPos(di.supplyCity) : null;
+        const supPosJ = dj.supplyCity ? cityPos(dj.supplyCity) : null;
 
         if (!delPosI || !delPosJ || !supPosI || !supPosJ) continue;
 
@@ -2958,7 +2958,7 @@ export class ContextBuilder {
       // Skip if both cities already on network
       if (d.isSupplyOnNetwork && d.isDeliveryOnNetwork) continue;
 
-      if (!d.isSupplyOnNetwork) {
+      if (!d.isSupplyOnNetwork && d.supplyCity) {
         results.push({
           demandIndex: i,
           city: d.supplyCity,
@@ -2998,6 +2998,7 @@ export class ContextBuilder {
 
     for (const d of demands) {
       if (d.isSupplyOnNetwork) continue;
+      if (!d.supplyCity) continue;
       if (seen.has(d.supplyCity)) continue;
 
       // Find the supply city's grid position(s)
@@ -3050,7 +3051,7 @@ export class ContextBuilder {
       const corridorCityPositions: Array<{ row: number; col: number }> = [];
       for (const idx of corridor.demandIndices) {
         const d = demands[idx];
-        const sp = cityPos(d.supplyCity);
+        const sp = d.supplyCity ? cityPos(d.supplyCity) : null;
         const dp = cityPos(d.deliveryCity);
         if (sp) corridorCityPositions.push(sp);
         if (dp) corridorCityPositions.push(dp);
@@ -3061,7 +3062,7 @@ export class ContextBuilder {
         if (corridor.onTheWayDemands.includes(i)) continue;
 
         const d = demands[i];
-        const sp = cityPos(d.supplyCity);
+        const sp = d.supplyCity ? cityPos(d.supplyCity) : null;
         const dp = cityPos(d.deliveryCity);
 
         for (const cPos of corridorCityPositions) {

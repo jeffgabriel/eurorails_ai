@@ -644,7 +644,8 @@ export const AI_ACTION_LABELS: Record<AIActionType, string> = {
 export interface DemandContext {
     cardIndex: number;
     loadType: string;
-    supplyCity: string;
+    /** Supply city name, or null when the load is already on the train */
+    supplyCity: string | null;
     deliveryCity: string;
     payout: number;
     isSupplyReachable: boolean;

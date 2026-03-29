@@ -261,13 +261,16 @@ export class TripPlanner {
 
     for (const rawCandidate of parsed.candidates) {
       // Convert LLM stops to RouteStop format
-      const stops: RouteStop[] = rawCandidate.stops.map(s => ({
-        action: s.action.toLowerCase() as 'pickup' | 'deliver',
-        loadType: s.load,
-        city: s.city,
-        demandCardId: s.demandCardId,
-        payment: s.payment,
-      }));
+      // JIRA-164: Filter out sentinel city names that LLMs may hallucinate from context serialization
+      const stops: RouteStop[] = rawCandidate.stops
+        .filter(s => s.city !== 'OnTrain' && s.city !== '(already carried)')
+        .map(s => ({
+          action: s.action.toLowerCase() as 'pickup' | 'deliver',
+          loadType: s.load,
+          city: s.city,
+          demandCardId: s.demandCardId,
+          payment: s.payment,
+        }));
 
       // Build a temporary StrategicRoute for validation
       const tempRoute: StrategicRoute = {
@@ -318,7 +321,7 @@ export class TripPlanner {
             } else {
               // Subsequent deliver stop: compute fresh via estimateHopDistance
               // We need to find the supply city for this demand
-              const supplyCity = matchingDemand.supplyCity;
+              const supplyCity = matchingDemand.supplyCity ?? null;
               const chainTurns = this.computeChainLegTurns(
                 lastDeliveryCity,
                 supplyCity,
@@ -364,7 +367,7 @@ export class TripPlanner {
    */
   private computeChainLegTurns(
     fromCity: string,
-    supplyCity: string,
+    supplyCity: string | null,
     deliveryCity: string,
     buildCostToDelivery: number,
     gridPoints: GridPoint[],
@@ -372,7 +375,7 @@ export class TripPlanner {
     existingEstimatedTurns: number,
   ): number {
     const fromPoints = gridPoints.filter(gp => gp.city?.name === fromCity);
-    const supplyPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
+    const supplyPoints = supplyCity ? gridPoints.filter(gp => gp.city?.name === supplyCity) : [];
     const deliveryPoints = gridPoints.filter(gp => gp.city?.name === deliveryCity);
 
     // Fall back to existing estimatedTurns if we can't resolve any city

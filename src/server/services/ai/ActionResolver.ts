@@ -1114,7 +1114,7 @@ export class ActionResolver {
 
       // 2b. If not carrying a load, move toward supply city on network
       for (const demand of [...context.demands].sort((a, b) => b.payout - a.payout)) {
-        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork && !demand.isSupplyReachable) {
+        if (!demand.isLoadOnTrain && demand.isSupplyOnNetwork && !demand.isSupplyReachable && demand.supplyCity) {
           const result = await ActionResolver.resolveMove(
             { to: demand.supplyCity },
             snapshot,

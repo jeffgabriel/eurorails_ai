@@ -1791,7 +1791,7 @@ describe('ContextBuilder proximity computation methods', () => {
 
   /** Build a DemandContext with the required fields */
   function makeDemand(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
-    supplyCity: string;
+    supplyCity: string | null;
     deliveryCity: string;
     loadType: string;
     payout: number;
@@ -2320,7 +2320,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
   }
 
   function makeD(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
-    supplyCity: string;
+    supplyCity: string | null;
     deliveryCity: string;
     loadType: string;
     payout: number;
@@ -2449,7 +2449,7 @@ describe('ContextBuilder card-grouped demands and hand quality (JIRA-16)', () =>
 
 describe('ContextBuilder.formatDemandView (JIRA-133)', () => {
   function makeD(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
-    supplyCity: string;
+    supplyCity: string | null;
     deliveryCity: string;
     loadType: string;
     payout: number;
@@ -2506,7 +2506,7 @@ describe('ContextBuilder.formatDemandView (JIRA-133)', () => {
 
   it('should show cargo cross-reference when bot carries loads matching demands', () => {
     const demands = [
-      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'OnTrain', deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: null, deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
       makeD({ cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Berlin', payout: 17 }),
     ];
 
@@ -2575,19 +2575,20 @@ describe('ContextBuilder.formatDemandView (JIRA-133)', () => {
 
   it('should show "no build needed" for on-train demands', () => {
     const demands = [
-      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: 'OnTrain', deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
+      makeD({ cardIndex: 0, loadType: 'Marble', supplyCity: null, deliveryCity: 'London', payout: 31, isLoadOnTrain: true }),
     ];
 
     const output = ContextBuilder.formatDemandView(demands, { loads: ['Marble'], unconnectedMajorCities: [] });
     expect(output).toContain('no build needed');
-    expect(output).toContain('OnTrain→London');
+    // JIRA-164: sentinel changed from 'OnTrain' to '(already carried)' to prevent LLM hallucination
+    expect(output).toContain('(already carried)→London');
   });
 });
 
 describe('ContextBuilder demand scoring (JIRA-13)', () => {
   /** Build a DemandContext for scoring tests */
   function makeScoringDemand(overrides: Partial<import('../../../shared/types/GameTypes').DemandContext> & {
-    supplyCity: string;
+    supplyCity: string | null;
     deliveryCity: string;
     loadType: string;
     payout: number;
@@ -3308,7 +3309,8 @@ describe('ContextBuilder.build — JIRA-82: no supply cities without load on tra
 
     expect(demand).toBeDefined();
     expect(demand!.isLoadOnTrain).toBe(true);
-    expect(demand!.supplyCity).toBe('OnTrain');
+    // JIRA-164: supplyCity is null when load is on train (no sentinel string)
+    expect(demand!.supplyCity).toBeNull();
     expect(demand!.demandScore).not.toBe(-999);
   });
 });

@@ -36,7 +36,7 @@ export interface GameTurnLogEntry {
   // Strategic state
   connectedMajorCities?: string[];
   activeRoute?: { stops: Array<{ action: string; loadType: string; city: string }>; currentStopIndex: number } | null;
-  demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
+  demandCards?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number }>;
 
   // LLM Decision
   action: string;
@@ -61,7 +61,7 @@ export interface GameTurnLogEntry {
   // Demand Ranking (enriched)
   demandRanking?: Array<{
     loadType: string;
-    supplyCity: string;
+    supplyCity: string | null;
     deliveryCity: string;
     payout: number;
     score: number;

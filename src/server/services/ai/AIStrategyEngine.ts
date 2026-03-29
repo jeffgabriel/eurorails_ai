@@ -77,7 +77,7 @@ export interface BotTurnResult {
   guardrailOverride?: boolean;
   guardrailReason?: string;
   // JIRA-13: demand ranking for debug overlay
-  demandRanking?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>;
+  demandRanking?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; score: number; rank: number; supplyRarity?: string; isStale?: boolean; efficiencyPerTurn?: number; estimatedTurns?: number; trackCostToSupply?: number; trackCostToDelivery?: number; ferryRequired?: boolean }>;
   // JIRA-32: Strategic context and composition trace for NDJSON game log
   gamePhase?: string;
   cash?: number;
@@ -119,7 +119,7 @@ export interface BotTurnResult {
   connectedMajorCities?: string[];
   trainSpeed?: number;
   trainCapacity?: number;
-  demandCards?: Array<{ loadType: string; supplyCity: string; deliveryCity: string; payout: number; cardIndex: number }>;
+  demandCards?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number }>;
   // JIRA-126: Trip planning results
   tripPlanning?: {
     trigger: string;
@@ -931,7 +931,7 @@ export class AIStrategyEngine {
       const supplyCityCounts = new Map<string, Set<string>>();
       for (const d of freshDemands) {
         if (!supplyCityCounts.has(d.loadType)) supplyCityCounts.set(d.loadType, new Set());
-        supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
+        if (d.supplyCity) supplyCityCounts.get(d.loadType)!.add(d.supplyCity);
       }
       const demandRanking = [...freshDemands]
         .sort((a, b) => b.demandScore - a.demandScore)

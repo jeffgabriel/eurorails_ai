@@ -236,8 +236,10 @@ export class MapRenderer {
     for (const d of demands) {
       const dc = cityCoordMap.get(d.deliveryCity.toLowerCase());
       if (dc) deliveryCityKeys.add(`${dc.row},${dc.col}`);
-      const pc = cityCoordMap.get(d.supplyCity.toLowerCase());
-      if (pc) pickupCityKeys.add(`${pc.row},${pc.col}`);
+      if (d.supplyCity) {
+        const pc = cityCoordMap.get(d.supplyCity.toLowerCase());
+        if (pc) pickupCityKeys.add(`${pc.row},${pc.col}`);
+      }
     }
 
     const targetCityKeys = new Set<string>();
