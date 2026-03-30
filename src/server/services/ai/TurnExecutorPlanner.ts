@@ -43,6 +43,8 @@ import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { capture } from './WorldSnapshotService';
+import { ContextBuilder } from './ContextBuilder';
 
 // ── CompositionTrace ────────────────────────────────────────────────────────
 
@@ -294,6 +296,27 @@ export class TurnExecutorPlanner {
               );
               return !matchesDemand;
             });
+          }
+
+          // JIRA-165: Refresh demands from DB after delivery so the replan
+          // uses fresh card data instead of the pre-delivery stale snapshot.
+          // The delivered card has already been replaced in the DB — rebuildDemands()
+          // reads the new cards so TripPlanner never chases a phantom demand.
+          if (gridPoints && gridPoints.length > 0) {
+            try {
+              const freshSnapshot = await capture(snapshot.gameId, snapshot.bot.playerId);
+              context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
+              snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
+              console.log(
+                `${tag} JIRA-165: Refreshed demands from DB after delivery — ` +
+                `${context.demands.length} demand(s) now in context`,
+              );
+            } catch (refreshErr) {
+              console.warn(
+                `${tag} JIRA-165: Demand refresh failed (${(refreshErr as Error).message}), ` +
+                `continuing with locally-filtered demands`,
+              );
+            }
           }
 
           console.log(`${tag} Delivered ${currentStop.loadType} at ${targetCity}. Triggering post-delivery replan.`);

@@ -90,6 +90,47 @@ jest.mock('../../services/ai/BotMemory', () => ({
   })),
 }));
 
+jest.mock('../../services/ai/WorldSnapshotService', () => ({
+  capture: jest.fn().mockResolvedValue({
+    gameId: 'game-1',
+    gameStatus: 'active',
+    turnNumber: 1,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-1',
+      money: 100,
+      position: { row: 5, col: 5 },
+      existingSegments: [],
+      demandCards: [2, 3, 4],
+      resolvedDemands: [],
+      trainType: 'Freight',
+      loads: [],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  }),
+}));
+
+jest.mock('../../services/ai/ContextBuilder', () => ({
+  ContextBuilder: {
+    rebuildDemands: jest.fn(() => [
+      {
+        loadType: 'Wine',
+        deliveryCity: 'Madrid',
+        supplyCity: 'Lyon',
+        payout: 12,
+        isLoadOnTrain: false,
+        isDeliveryOnNetwork: false,
+        isPickupOnNetwork: false,
+        cardIndex: 2,
+        demandRanking: 1,
+      },
+    ]),
+  },
+}));
+
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
@@ -97,6 +138,8 @@ import { TripPlanner } from '../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
 import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { capture } from '../../services/ai/WorldSnapshotService';
+import { ContextBuilder } from '../../services/ai/ContextBuilder';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
@@ -1203,7 +1246,9 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
   });
 
   it('filters the fulfilled card from snapshot.bot.resolvedDemands before calling TripPlanner.planTrip', async () => {
-    // AC: snapshot.bot.resolvedDemands no longer contains the Beer→Beograd card after delivery
+    // AC: snapshot.bot.resolvedDemands no longer contains the Beer→Beograd card after delivery.
+    // JIRA-165: resolvedDemands are now refreshed from DB via capture() after delivery —
+    // the DB snapshot already has card 10 replaced, so only card 11 remains.
     const deliverPlan = {
       type: AIActionType.DeliverLoad,
       load: 'Beer',
@@ -1212,6 +1257,36 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
       payout: 12,
     };
     mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // JIRA-165: mock capture() to return a fresh snapshot where card 10 is already gone
+    // (the DB has replaced it with a new card after the delivery was committed)
+    const mockCapture = capture as jest.Mock;
+    mockCapture.mockResolvedValueOnce({
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 1,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 100,
+        position: { row: 3, col: 3 },
+        existingSegments: [],
+        demandCards: [11, 12, 13],
+        resolvedDemands: [
+          // Card 10 (Beer→Beograd) is gone — DB replaced it after delivery
+          {
+            cardId: 11,
+            demands: [{ city: 'Madrid', loadType: 'Wine', payment: 10 }],
+          },
+        ],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {},
+    });
 
     let capturedSnapshot: WorldSnapshot | undefined;
     mockPlanTrip.mockImplementation(async (snap: WorldSnapshot) => {
@@ -1247,10 +1322,10 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
     await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
 
     expect(capturedSnapshot).toBeDefined();
-    // Card 10 (Beer→Beograd) must be removed from resolvedDemands
+    // Card 10 (Beer→Beograd) must be removed — JIRA-165 DB refresh removed it
     const beerCard = capturedSnapshot!.bot.resolvedDemands.find(rd => rd.cardId === 10);
     expect(beerCard).toBeUndefined();
-    // Card 11 (Wine→Madrid) must remain
+    // Card 11 (Wine→Madrid) must remain — DB snapshot still has it
     const wineCard = capturedSnapshot!.bot.resolvedDemands.find(rd => rd.cardId === 11);
     expect(wineCard).toBeDefined();
   });
@@ -2098,5 +2173,241 @@ describe('TurnExecutorPlanner — Bug D: mutable context.loads after DeliverLoad
     // Wine should still be there — no mutation to unrelated loads
     expect(context.loads).toContain('Wine');
     expect(context.loads).toHaveLength(1);
+  });
+});
+
+// ── JIRA-165: Post-delivery demand freshness ───────────────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery demand refresh', () => {
+  const mockCapture = capture as jest.Mock;
+  const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    // Reset TripPlanner mock
+    const mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('calls capture() and ContextBuilder.rebuildDemands() after delivery when gridPoints provided', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const freshDemands = [
+      {
+        loadType: 'Wine',
+        deliveryCity: 'Madrid',
+        supplyCity: 'Lyon',
+        payout: 12,
+        isLoadOnTrain: false,
+        isDeliveryOnNetwork: false,
+        isPickupOnNetwork: false,
+        cardIndex: 2,
+        demandRanking: 1,
+      },
+    ];
+    mockRebuildDemands.mockReturnValue(freshDemands);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+      demands: [
+        {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          supplyCity: 'Essen',
+          payout: 8,
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: true,
+          isPickupOnNetwork: false,
+          cardIndex: 1,
+          demandRanking: 0,
+        } as any,
+      ],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // capture() should have been called with gameId and playerId from snapshot
+    expect(mockCapture).toHaveBeenCalledWith(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+    );
+    // rebuildDemands should have been called with the fresh snapshot and gridPoints
+    expect(mockRebuildDemands).toHaveBeenCalledWith(
+      expect.objectContaining({ gameId: 'game-1' }),
+      fakeGridPoints,
+    );
+    // context.demands should now reflect the fresh demands from DB
+    expect(context.demands).toEqual(freshDemands);
+  });
+
+  it('does not call capture() when gridPoints is empty', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    // Empty gridPoints — should not attempt DB refresh
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, []);
+
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockRebuildDemands).not.toHaveBeenCalled();
+  });
+
+  it('does not call capture() when gridPoints is undefined', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    // No gridPoints — should not attempt DB refresh
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockRebuildDemands).not.toHaveBeenCalled();
+  });
+
+  it('updates snapshot.bot.resolvedDemands from fresh snapshot after delivery', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const freshResolvedDemands = [
+      { cardId: 2, demands: [{ loadType: 'Wine', city: 'Madrid', payout: 12 }] },
+    ];
+    const freshSnapshot = {
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 1,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 100,
+        position: { row: 5, col: 5 },
+        existingSegments: [],
+        demandCards: [2, 3, 4],
+        resolvedDemands: freshResolvedDemands,
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {},
+    };
+    mockCapture.mockResolvedValue(freshSnapshot);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // snapshot.bot.resolvedDemands should be updated from the fresh snapshot
+    expect(snapshot.bot.resolvedDemands).toEqual(freshResolvedDemands);
+  });
+
+  it('continues with locally-filtered demands when capture() throws', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // Simulate DB failure
+    mockCapture.mockRejectedValue(new Error('DB connection failed'));
+
+    const staleLocalDemand = {
+      loadType: 'Steel',
+      deliveryCity: 'Hamburg',
+      supplyCity: 'Dortmund',
+      payout: 10,
+      isLoadOnTrain: false,
+      isDeliveryOnNetwork: false,
+      isPickupOnNetwork: false,
+      cardIndex: 3,
+      demandRanking: 2,
+    } as any;
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+      demands: [staleLocalDemand],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    // Should NOT throw — gracefully degrades
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints),
+    ).resolves.not.toThrow();
+
+    // rebuildDemands should NOT have been called since capture() failed
+    expect(mockRebuildDemands).not.toHaveBeenCalled();
   });
 });
