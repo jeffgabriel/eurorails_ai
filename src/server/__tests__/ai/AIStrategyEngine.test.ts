@@ -3732,4 +3732,168 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(execRoute.reasoning).toBe('Enriched by advisor');
     });
   });
+
+  // ── JIRA-165: Oscillation detection ────────────────────────────────────────
+
+  describe('JIRA-165: Oscillation detection — abandon stuck routes at $0', () => {
+    let mockPlanRoute: jest.Mock;
+
+    const stuckRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Aberdeen' },
+        { action: 'deliver', loadType: 'Coal', city: 'Glasgow', demandCardId: 42, payment: 15 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build' as const,
+      createdAtTurn: 2,
+      reasoning: 'Build toward Aberdeen',
+    };
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      mockPlanRoute = jest.fn().mockResolvedValue(null);
+
+      // Set up the TripPlanner mock to call mockPlanRoute
+      const { TripPlanner } = jest.requireMock('../../services/ai/TripPlanner');
+      TripPlanner.mockImplementation(() => ({
+        planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
+      }));
+    });
+
+    it('abandons activeRoute and falls through to LLM replan when noProgressTurns>=3 and money<5', async () => {
+      // Memory: bot is stuck — 3+ no-progress turns, has active route
+      mockGetMemory.mockReturnValue({
+        turnNumber: 10,
+        noProgressTurns: 3,
+        consecutiveDiscards: 0,
+        lastAction: 'pass',
+        activeRoute: stuckRoute,
+        turnsOnRoute: 5,
+        routeHistory: [],
+        currentBuildTarget: 'Aberdeen',
+        turnsOnTarget: 5,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      // Snapshot: bot is broke
+      const snapshot = makeSnapshot({ money: 2 });
+      const context = makeContext({ money: 2 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // TripPlanner should be called (LLM replan) — return a PassTurn (no LLM key)
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TurnExecutorPlanner should NOT have been called with the stuck route
+      // (oscillation detection cleared activeRoute before the dispatch)
+      expect(mockTurnExecutorPlannerExecute).not.toHaveBeenCalledWith(
+        stuckRoute,
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it('does NOT abandon activeRoute when noProgressTurns<3 (not stuck yet)', async () => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        noProgressTurns: 2, // only 2 — gate requires >=3
+        consecutiveDiscards: 0,
+        lastAction: 'build',
+        activeRoute: stuckRoute,
+        turnsOnRoute: 2,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({ money: 2 }); // broke
+      const context = makeContext({ money: 2 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: stuckRoute,
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TurnExecutorPlanner SHOULD have been called — route was kept
+      expect(mockTurnExecutorPlannerExecute).toHaveBeenCalled();
+    });
+
+    it('does NOT abandon activeRoute when money>=5 (can still build)', async () => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        noProgressTurns: 5, // many stuck turns
+        consecutiveDiscards: 0,
+        lastAction: 'build',
+        activeRoute: stuckRoute,
+        turnsOnRoute: 5,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({ money: 10 }); // has funds
+      const context = makeContext({ money: 10 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: stuckRoute,
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TurnExecutorPlanner SHOULD have been called — route was kept (has money)
+      expect(mockTurnExecutorPlannerExecute).toHaveBeenCalled();
+    });
+
+    it('does NOT abandon activeRoute when activeRoute is null', async () => {
+      mockGetMemory.mockReturnValue({
+        turnNumber: 8,
+        noProgressTurns: 5,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: null, // no route
+        turnsOnRoute: 0,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({ money: 0 });
+      const context = makeContext({ money: 0 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TurnExecutorPlanner should not be called — no route to execute
+      expect(mockTurnExecutorPlannerExecute).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -626,3 +626,186 @@ describe('getNetworkFrontier — city name lookup', () => {
     expect(cityNames).toContain('Berlin');
   });
 });
+
+// ── JIRA-165: Capital allocation gate ─────────────────────────────────────
+
+/** Helper to build a minimal DemandContext for testing */
+function makeDemandContext(overrides: Partial<{
+  loadType: string;
+  deliveryCity: string;
+  supplyCity: string | null;
+  isLoadOnTrain: boolean;
+  isDeliveryOnNetwork: boolean;
+  payout: number;
+}> = {}): import('../../../shared/types/GameTypes').DemandContext {
+  return {
+    cardIndex: 1,
+    loadType: overrides.loadType ?? 'Coal',
+    supplyCity: overrides.supplyCity ?? 'Essen',
+    deliveryCity: overrides.deliveryCity ?? 'Berlin',
+    payout: overrides.payout ?? 10,
+    isSupplyReachable: true,
+    isDeliveryReachable: true,
+    isSupplyOnNetwork: true,
+    isDeliveryOnNetwork: overrides.isDeliveryOnNetwork ?? false,
+    estimatedTrackCostToSupply: 0,
+    estimatedTrackCostToDelivery: 0,
+    isLoadAvailable: true,
+    isLoadOnTrain: overrides.isLoadOnTrain ?? false,
+    ferryRequired: false,
+    loadChipTotal: 4,
+    loadChipCarried: 0,
+    estimatedTurns: 3,
+    demandScore: 8,
+    efficiencyPerTurn: 8,
+    networkCitiesUnlocked: 1,
+    victoryMajorCitiesEnRoute: 0,
+  } as any;
+}
+
+describe('resolveBuildTarget — JIRA-165 capital allocation gate', () => {
+  it('returns null when bot has <5M, off-network build target, and carries deliverable on-network load', () => {
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 3, // broke
+      citiesOnNetwork: [], // Berlin is off-network (build target)
+      demands: [
+        makeDemandContext({
+          loadType: 'Wine',
+          deliveryCity: 'München',
+          isLoadOnTrain: true,   // carrying it
+          isDeliveryOnNetwork: true, // München is on-network
+        }),
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Should skip build — deliver Wine@München first for income
+    expect(result).toBeNull();
+  });
+
+  it('does NOT skip build when bot has <5M but no load on train', () => {
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 0,
+      citiesOnNetwork: [],
+      demands: [
+        makeDemandContext({
+          loadType: 'Coal',
+          deliveryCity: 'Paris',
+          isLoadOnTrain: false,   // NOT carrying it
+          isDeliveryOnNetwork: false,
+        }),
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // No carried load — capital gate should not block
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Berlin');
+  });
+
+  it('does NOT skip build when bot has <5M, carries load, but delivery is off-network', () => {
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 0,
+      citiesOnNetwork: [],
+      demands: [
+        makeDemandContext({
+          loadType: 'Wine',
+          deliveryCity: 'Frankfurt',
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: false, // delivery is also off-network — can't deliver yet
+        }),
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Delivery is also off-network — gate should not block building
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Berlin');
+  });
+
+  it('does NOT skip build when bot has enough money (>=5M)', () => {
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 10, // has funds
+      citiesOnNetwork: [],
+      demands: [
+        makeDemandContext({
+          loadType: 'Wine',
+          deliveryCity: 'München',
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+
+    const result = resolveBuildTarget(route, context);
+
+    // Has enough money — capital gate not triggered
+    expect(result).not.toBeNull();
+    expect(result!.targetCity).toBe('Berlin');
+  });
+
+  it('returns null immediately for victory build even if capital gate condition met (victory overrides)', () => {
+    // Victory build takes priority and bypasses the route-based capital gate
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      money: 1, // broke
+      citiesOnNetwork: [],
+      // Make victory check pass
+      unconnectedMajorCities: [{ cityName: 'Roma', estimatedCost: 5 }],
+      connectedMajorCities: ['Paris', 'Berlin', 'München', 'Wien', 'Hamburg', 'Barcelona'],
+      demands: [
+        makeDemandContext({
+          loadType: 'Wine',
+          deliveryCity: 'München',
+          isLoadOnTrain: true,
+          isDeliveryOnNetwork: true,
+        }),
+      ],
+    });
+    // Override money to victory threshold for the context check
+    context.money = 250; // victory threshold
+
+    const result = resolveBuildTarget(route, context);
+
+    // Victory build found Roma — capital gate does not apply to victory builds
+    expect(result).not.toBeNull();
+    expect(result!.isVictoryBuild).toBe(true);
+    expect(result!.targetCity).toBe('Roma');
+  });
+});

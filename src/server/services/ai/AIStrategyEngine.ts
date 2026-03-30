@@ -263,6 +263,20 @@ export class AIStrategyEngine {
       // JIRA-143: Reset LLM call tracking at turn start
       if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
+
+      // ── JIRA-165 Fix 3: Oscillation detection — abandon stuck routes at $0 ──
+      // When a bot has made no progress for 3+ turns while holding an active route
+      // AND has <5M (can't afford to build anything), the route is pointing to an
+      // unreachable or unaffordable city. Clear the route so the bot falls through
+      // to the LLM replan path instead of repeating PassTurn indefinitely.
+      if (activeRoute && (memory.noProgressTurns ?? 0) >= 3 && snapshot.bot.money < 5) {
+        console.warn(
+          `${tag} JIRA-165: Abandoning stuck route after ${memory.noProgressTurns} no-progress turns ` +
+          `at $${snapshot.bot.money}M — forcing LLM replan`,
+        );
+        activeRoute = null;
+      }
+
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
       let hasDelivery = false; // set true by TurnExecutorPlanner when a delivery occurs
