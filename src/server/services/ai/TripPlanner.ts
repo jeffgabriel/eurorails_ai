@@ -342,7 +342,32 @@ export class TripPlanner {
       // Prevent division by zero
       const estimatedTurns = Math.max(totalEstimatedTurns, 1);
       const netValue = totalPayout - totalBuildCost;
-      const score = netValue / estimatedTurns;
+      const baseScore = netValue / estimatedTurns;
+
+      // JIRA-166: Geographic distance penalty — penalize routes with high total travel
+      // spread so compact routes score higher than cross-map zigzags with equal payout/turns.
+      // Compute total hop distance across consecutive stops and apply a divisor penalty.
+      // DISTANCE_NORMALIZATION = 20 hops ≈ ~2 turns of travel at Freight speed (9 mp/turn).
+      const DISTANCE_NORMALIZATION = 20;
+      let totalHopDistance = 0;
+      for (let i = 0; i + 1 < finalStops.length; i++) {
+        const fromStop = finalStops[i];
+        const toStop = finalStops[i + 1];
+        const fromPoints = gridPoints.filter(gp => gp.city?.name === fromStop.city);
+        const toPoints = gridPoints.filter(gp => gp.city?.name === toStop.city);
+        if (fromPoints.length > 0 && toPoints.length > 0) {
+          let minHops = Infinity;
+          for (const fp of fromPoints) {
+            for (const tp of toPoints) {
+              const d = estimateHopDistance(fp.row, fp.col, tp.row, tp.col);
+              if (d > 0 && d < minHops) minHops = d;
+            }
+          }
+          if (minHops < Infinity) totalHopDistance += minHops;
+        }
+      }
+      const distancePenaltyDivisor = 1 + totalHopDistance / DISTANCE_NORMALIZATION;
+      const score = baseScore / distancePenaltyDivisor;
 
       validCandidates.push({
         stops: finalStops,
