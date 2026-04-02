@@ -1044,8 +1044,11 @@ describe('TripPlanner', () => {
       expect(candidate.estimatedTurns).toBe(6);
       // Math.max would give 3, so chain-aware turns (6) > Math.max turns (3)
       expect(candidate.estimatedTurns).toBeGreaterThan(3);
-      // score = (15+12-0) / 6 = 27/6 = 4.5
-      expect(candidate.score).toBeCloseTo(4.5);
+      // JIRA-166: Geographic distance penalty applied:
+      // totalHopDistance = Essen→Berlin(0) + Berlin→Bordeaux(20) + Bordeaux→Paris(5) = 25
+      // distancePenaltyDivisor = 1 + 25/20 = 2.25
+      // baseScore = (15+12) / 6 = 4.5, adjustedScore = 4.5 / 2.25 = 2.0
+      expect(candidate.score).toBeCloseTo(2.0);
     });
 
     it('multi-stop trip with adjacent second leg scores appropriately (fewer turns)', async () => {
@@ -1098,8 +1101,11 @@ describe('TripPlanner', () => {
       const candidate = result!.candidates[0];
       // Chain-aware total: 3 (coal first leg) + ceil((2+3)/9) = 3 + 1 = 4 turns
       expect(candidate.estimatedTurns).toBe(4);
-      // score = (15+12) / 4 = 6.75
-      expect(candidate.score).toBeCloseTo(6.75);
+      // JIRA-166: Geographic distance penalty applied:
+      // totalHopDistance = Essen→Berlin(0) + Berlin→Hamburg(2) + Hamburg→Dresden(3) = 5
+      // distancePenaltyDivisor = 1 + 5/20 = 1.25
+      // baseScore = (15+12) / 4 = 6.75, adjustedScore = 6.75 / 1.25 = 5.4
+      expect(candidate.score).toBeCloseTo(5.4);
     });
 
     it('distant pair scores lower than adjacent pair', async () => {

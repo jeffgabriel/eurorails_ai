@@ -61,12 +61,57 @@ interface TurnEntry {
   turnValidation?: { hardGates: Array<{ gate: string; passed: boolean; detail?: string }>; outcome: string; recomposeCount: number };
 }
 
+/** Shape of a single LLM transcript entry (mirrors LLMTranscriptLogger.LLMTranscriptEntry). */
+interface LlmTranscriptEntry {
+  callId: string;
+  gameId: string;
+  playerId: string;
+  turn: number;
+  timestamp: string;
+  caller: string;
+  method: string;
+  model: string;
+  status: 'success' | 'error' | 'timeout' | 'validation_error';
+  error?: string;
+  latencyMs: number;
+  tokenUsage?: { input: number; output: number };
+  attemptNumber: number;
+  totalAttempts: number;
+}
+
 function loadLog(filePath: string): TurnEntry[] {
   const raw = fs.readFileSync(filePath, 'utf8').trim();
   if (!raw) return [];
   return raw.split('\n').map(line => {
     try { return JSON.parse(line); } catch { return null; }
   }).filter(Boolean) as TurnEntry[];
+}
+
+/**
+ * Load the LLM transcript file for a game. Returns empty array if not found.
+ * Transcript files are at logs/llm-{gameId}.ndjson (or matching glob).
+ */
+function loadLlmTranscript(gameId: string): LlmTranscriptEntry[] {
+  const logsDir = path.join(process.cwd(), 'logs');
+  if (!fs.existsSync(logsDir)) return [];
+  const transcriptFile = fs.readdirSync(logsDir).find(
+    f => f.startsWith(`llm-`) && f.includes(gameId) && f.endsWith('.ndjson'),
+  );
+  if (!transcriptFile) {
+    console.warn(`[game-analysis] No LLM transcript file found for game ${gameId} — LLM call data may be incomplete`);
+    return [];
+  }
+  try {
+    const filePath = path.join(logsDir, transcriptFile);
+    const raw = fs.readFileSync(filePath, 'utf8').trim();
+    if (!raw) return [];
+    return raw.split('\n').map(line => {
+      try { return JSON.parse(line); } catch { return null; }
+    }).filter(Boolean) as LlmTranscriptEntry[];
+  } catch (err) {
+    console.warn(`[game-analysis] Failed to read LLM transcript: ${err instanceof Error ? err.message : err}`);
+    return [];
+  }
 }
 
 function fmt(n: number): string {
@@ -691,12 +736,28 @@ function sectionHeadToHead(playerMap: Map<string, TurnEntry[]>): string[] {
 
 // ─── Section 10: LLM Interaction Analysis ────────────────────────────────────
 
-function sectionLlmAnalysis(name: string, entries: TurnEntry[]): string[] {
+/**
+ * JIRA-166: sectionLlmAnalysis now accepts transcript entries alongside game log entries.
+ * Transcript entries (from logs/llm-{gameId}.ndjson) are the authoritative source of LLM
+ * call counts — game log entries may miss calls recorded only in the transcript.
+ */
+function sectionLlmAnalysis(
+  name: string,
+  entries: TurnEntry[],
+  transcriptEntries: LlmTranscriptEntry[],
+): string[] {
   const lines: string[] = [];
   lines.push(`#### ${name}`);
   lines.push('');
 
+  // Filter transcript entries to this player (by playerId or playerName match)
+  const playerIds = new Set(entries.map(e => e.playerId));
+  const playerTranscript = transcriptEntries.filter(t => playerIds.has(t.playerId));
+
+  // Use transcript entries when available, fall back to game log entries
   const llmEntries = entries.filter(e => isLlmModel(e.model));
+  const hasTranscriptData = playerTranscript.length > 0;
+
   let totalTokensIn = 0;
   let totalTokensOut = 0;
   let totalLatency = 0;
@@ -705,31 +766,64 @@ function sectionLlmAnalysis(name: string, entries: TurnEntry[]): string[] {
   let totalFailures = 0;
   let buildPhaseCount = 0;
 
-  for (const e of llmEntries) {
-    if (e.tokenUsage) { totalTokensIn += e.tokenUsage.input; totalTokensOut += e.tokenUsage.output; }
-    if (e.llmLatencyMs) { totalLatency += e.llmLatencyMs; latencyCount++; }
-    if (!isPlayingPhase(e)) buildPhaseCount++;
-  }
-
-  for (const e of entries) {
-    if (e.llmLog) {
-      if (e.llmLog.length > 1) totalRetries += e.llmLog.length - 1;
-      totalFailures += e.llmLog.filter(a => a.status !== 'success').length;
+  if (hasTranscriptData) {
+    // Compute stats from transcript (authoritative — includes all LLM calls)
+    const successfulCalls = playerTranscript.filter(t => t.status === 'success');
+    for (const t of successfulCalls) {
+      if (t.tokenUsage) { totalTokensIn += t.tokenUsage.input; totalTokensOut += t.tokenUsage.output; }
+      totalLatency += t.latencyMs;
+      latencyCount++;
+    }
+    totalFailures = playerTranscript.filter(t => t.status !== 'success').length;
+    // Retries = entries with attemptNumber > 1
+    totalRetries = playerTranscript.filter(t => t.attemptNumber > 1).length;
+  } else {
+    // Fall back to game log entries
+    for (const e of llmEntries) {
+      if (e.tokenUsage) { totalTokensIn += e.tokenUsage.input; totalTokensOut += e.tokenUsage.output; }
+      if (e.llmLatencyMs) { totalLatency += e.llmLatencyMs; latencyCount++; }
+      if (!isPlayingPhase(e)) buildPhaseCount++;
+    }
+    for (const e of entries) {
+      if (e.llmLog) {
+        if (e.llmLog.length > 1) totalRetries += e.llmLog.length - 1;
+        totalFailures += e.llmLog.filter(a => a.status !== 'success').length;
+      }
     }
   }
 
+  const totalLlmCalls = hasTranscriptData ? playerTranscript.length : llmEntries.length;
   const avgLatency = latencyCount > 0 ? (totalLatency / latencyCount / 1000).toFixed(1) + 's' : 'N/A';
+  const dataSource = hasTranscriptData ? 'transcript file' : 'game log (transcript not found)';
 
-  lines.push(`- Total LLM calls: ${llmEntries.length}`);
+  lines.push(`- Total LLM calls: ${totalLlmCalls} *(source: ${dataSource})*`);
   lines.push(`- Total tokens: ${fmt(totalTokensIn)} in / ${fmt(totalTokensOut)} out`);
   lines.push(`- Total retries: ${totalRetries}`);
   lines.push(`- Total failures: ${totalFailures}`);
   lines.push(`- Avg latency: ${avgLatency}`);
-  lines.push(`- LLM calls during initial_build: ${buildPhaseCount}`);
+  if (!hasTranscriptData) {
+    lines.push(`- LLM calls during initial_build: ${buildPhaseCount}`);
+  }
   lines.push('');
 
-  // LLM calls table (first 20)
-  if (llmEntries.length > 0) {
+  // LLM calls table — use transcript entries if available, else game log
+  if (hasTranscriptData && playerTranscript.length > 0) {
+    const showEntries = playerTranscript.slice(0, 20);
+    lines.push('**LLM calls (from transcript):**');
+    lines.push('');
+    lines.push('| Turn | Model | Caller | Status | Latency | Tokens In | Tokens Out |');
+    lines.push('|------|-------|--------|--------|---------|-----------|------------|');
+    for (const t of showEntries) {
+      const lat = (t.latencyMs / 1000).toFixed(1) + 's';
+      const tokIn = t.tokenUsage?.input ?? '-';
+      const tokOut = t.tokenUsage?.output ?? '-';
+      lines.push(`| ${t.turn} | ${t.model} | ${t.caller} | ${t.status} | ${lat} | ${fmt(Number(tokIn))} | ${fmt(Number(tokOut))} |`);
+    }
+    if (playerTranscript.length > 20) {
+      lines.push(`| ... | (${playerTranscript.length - 20} more calls truncated) | | | | | |`);
+    }
+    lines.push('');
+  } else if (llmEntries.length > 0) {
     const showEntries = llmEntries.slice(0, 20);
     lines.push('**LLM calls:**');
     lines.push('');
@@ -926,6 +1020,8 @@ function run(): void {
   }
 
   let entries = loadLog(path.join(logsDir, logFile));
+  // JIRA-166: Load LLM transcript file for accurate LLM call counts
+  const transcriptEntries = loadLlmTranscript(gameId);
 
   if (playerFilter) {
     const pf = playerFilter.toLowerCase();
@@ -1014,7 +1110,7 @@ function run(): void {
   output.push('## 10. LLM Interaction Analysis');
   output.push('');
   for (const [name, pEntries] of playerMap) {
-    output.push(...sectionLlmAnalysis(name, pEntries));
+    output.push(...sectionLlmAnalysis(name, pEntries, transcriptEntries));
   }
 
   // Section 11
