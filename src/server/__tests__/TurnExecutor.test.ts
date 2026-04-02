@@ -5,6 +5,7 @@ import {
   AIActionType,
   TerrainType,
   TrackSegment,
+  TrainType,
 } from '../../shared/types/GameTypes';
 import { emitToGame, emitStatePatch } from '../services/socketService';
 import { db } from '../db/index';
@@ -990,5 +991,165 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
 
     expect(result.success).toBe(true);
     expect(result.payment).toBe(19);
+  });
+});
+
+describe('TurnExecutor — handleUpgradeTrain', () => {
+  const mockPurchaseTrainType = PlayerService.purchaseTrainType as jest.Mock;
+  const mockGetPlayers = PlayerService.getPlayers as jest.Mock;
+
+  function makeUpgradeOption(targetTrainType: TrainType, upgradeKind: 'upgrade' | 'crossgrade'): FeasibleOption {
+    return {
+      action: AIActionType.UpgradeTrain,
+      feasible: true,
+      reason: 'Upgrade',
+      targetTrainType,
+      upgradeKind,
+      estimatedCost: upgradeKind === 'upgrade' ? 20 : 5,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockPurchaseTrainType.mockResolvedValue({
+      id: 'bot-1',
+      money: 30,
+      trainType: TrainType.FastFreight,
+    });
+    mockGetPlayers.mockResolvedValue([
+      { id: 'bot-1', money: 30, trainType: TrainType.FastFreight },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.purchaseTrainType with correct params', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockPurchaseTrainType).toHaveBeenCalledTimes(1);
+    expect(mockPurchaseTrainType).toHaveBeenCalledWith(
+      'game-1',
+      'user-bot-1',
+      'upgrade',
+      TrainType.FastFreight,
+    );
+  });
+
+  it('should return success result with cost 20 for upgrade', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.UpgradeTrain);
+    expect(result.cost).toBe(20);
+    expect(result.remainingMoney).toBe(30); // from purchaseTrainType return value
+    expect(result.segmentsBuilt).toBe(0);
+  });
+
+  it('should return success result with cost 5 for crossgrade', async () => {
+    mockPurchaseTrainType.mockResolvedValue({
+      id: 'bot-1',
+      money: 45,
+      trainType: TrainType.HeavyFreight,
+    });
+    const plan = makeUpgradeOption(TrainType.HeavyFreight, 'crossgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.FastFreight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.cost).toBe(5);
+    expect(result.remainingMoney).toBe(45);
+  });
+
+  it('should update snapshot.bot.trainType after upgrade', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.trainType).toBe(TrainType.FastFreight);
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[0]).toBe('game-1');      // game_id
+    expect(params[1]).toBe('bot-1');       // player_id
+    expect(params[2]).toBe(3);             // turn_number
+    expect(params[3]).toBe(AIActionType.UpgradeTrain); // action
+    expect(params[4]).toBe(20);            // cost
+    expect(params[5]).toBe(30);            // remaining_money
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.UpgradeTrain);
+  });
+
+  it('should emit state patch with updated player data (best-effort)', async () => {
+    const updatedPlayer = { id: 'bot-1', money: 30, trainType: TrainType.FastFreight };
+    mockPurchaseTrainType.mockResolvedValue(updatedPlayer);
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({ players: [updatedPlayer] }),
+    );
+  });
+
+  it('should still succeed when socket emit fails', async () => {
+    mockEmitStatePatch.mockRejectedValueOnce(new Error('socket error'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should return failure when targetTrainType is missing', async () => {
+    const plan: FeasibleOption = {
+      action: AIActionType.UpgradeTrain,
+      feasible: true,
+      reason: 'Upgrade',
+    };
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/targetTrainType/);
+    expect(mockPurchaseTrainType).not.toHaveBeenCalled();
+  });
+
+  it('should throw when PlayerService.purchaseTrainType throws', async () => {
+    mockPurchaseTrainType.mockRejectedValueOnce(new Error('Not your turn'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await expect(TurnExecutor.execute(plan, snapshot)).rejects.toThrow('Not your turn');
   });
 });

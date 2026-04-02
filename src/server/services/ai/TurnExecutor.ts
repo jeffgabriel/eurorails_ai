@@ -838,8 +838,9 @@ export class TurnExecutor {
   }
 
   /**
-   * UpgradeTrain: update train type and deduct money directly.
-   * Does NOT use PlayerService.purchaseTrainType to avoid turn-management conflicts.
+   * UpgradeTrain: delegate to PlayerService.purchaseTrainType which handles
+   * validation, cost deduction, and DB update in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleUpgradeTrain(
     plan: FeasibleOption,
@@ -860,24 +861,19 @@ export class TurnExecutor {
       };
     }
 
-    const cost = kind === 'upgrade' ? 20 : 5;
-    const client = await db.connect();
-    let remainingMoney = snapshot.bot.money - cost;
+    // Delegate to PlayerService — handles validation, cost calculation, and DB update
+    const updatedPlayer = await PlayerService.purchaseTrainType(
+      snapshot.gameId,
+      snapshot.bot.userId,
+      kind,
+      targetType,
+    );
 
-    try {
-      await client.query('BEGIN');
-      const moneyResult = await client.query(
-        'UPDATE players SET train_type = $1, money = money - $2 WHERE id = $3 RETURNING money',
-        [targetType, cost, snapshot.bot.playerId],
-      );
-      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    const cost = kind === 'upgrade' ? 20 : 5;
+    const remainingMoney = updatedPlayer.money;
+
+    // Update snapshot so subsequent steps see the correct train type
+    snapshot.bot.trainType = targetType;
 
     // Audit (best-effort)
     try {
@@ -892,11 +888,7 @@ export class TurnExecutor {
 
     // Socket emit (best-effort)
     try {
-      const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
-      const botPlayer = publicPlayers.find((p: any) => p.id === snapshot.bot.playerId);
-      if (botPlayer) {
-        await emitStatePatch(snapshot.gameId, { players: [botPlayer] } as any);
-      }
+      await emitStatePatch(snapshot.gameId, { players: [updatedPlayer] } as any);
     } catch (emitError) {
       console.error('[TurnExecutor] UpgradeTrain post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
     }
