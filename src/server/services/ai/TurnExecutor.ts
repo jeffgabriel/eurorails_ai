@@ -19,7 +19,7 @@ import { PlayerService } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from './MapTopology';
-import { getTrainCapacity } from '../../../shared/services/trainProperties';
+import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
 
 export interface ExecutionResult {
