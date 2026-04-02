@@ -816,7 +816,22 @@ export class AIStrategyEngine {
       const hadDelivery = (result.payment ?? 0) > 0 || hasDelivery; // JIRA-84: also check pre-execution composed steps
       const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
       const hadNewTrack = result.segmentsBuilt > 0;
-      const isActivelyTraveling = activeRoute != null;
+      // JIRA-166: Narrow isActivelyTraveling — don't count as progress when bot is broke
+      // and the next route stop is off-network (requires building track the bot can't afford).
+      // This allows noProgressTurns to increment so the oscillation guard at line 272 can fire.
+      const nextRouteStop = activeRoute
+        ? activeRoute.stops[activeRoute.currentStopIndex] ?? null
+        : null;
+      const nextStopIsOffNetwork = nextRouteStop != null
+        && !context.citiesOnNetwork.includes(nextRouteStop.city);
+      const botIsBroke = result.remainingMoney < 5;
+      const isActivelyTraveling = activeRoute != null
+        && !(botIsBroke && nextStopIsOffNetwork);
+      if (activeRoute != null && botIsBroke && nextStopIsOffNetwork) {
+        console.log(
+          `${tag} JIRA-166: isActivelyTraveling=false — broke ($${result.remainingMoney}M) with off-network next stop (${nextRouteStop?.city})`,
+        );
+      }
       const hadDiscard = executedAction === AIActionType.DiscardHand; // JIRA-59: discard = fresh cards = progress
       const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling || hadDiscard;
 
