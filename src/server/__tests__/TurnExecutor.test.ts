@@ -91,20 +91,9 @@ function makePassOption(): FeasibleOption {
   };
 }
 
-function makeMockClient() {
-  return {
-    query: jest.fn().mockResolvedValue({ rows: [] }),
-    release: jest.fn(),
-  };
-}
-
 describe('TurnExecutor', () => {
-  let mockClient: ReturnType<typeof makeMockClient>;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    mockClient = makeMockClient();
-    (mockDb.connect as jest.Mock).mockResolvedValue(mockClient);
     (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
   });
 
@@ -815,13 +804,9 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
     // Empty grid = no city at bot position
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
-    // Mock DB for build step
-    const mockClient = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-      release: jest.fn(),
-    };
-    (db.connect as jest.Mock).mockResolvedValue(mockClient);
-    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    // Mock PlayerService for build step
+    (PlayerService.buildTrackForPlayer as jest.Mock).mockResolvedValue({ remainingMoney: 49 });
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
     mockEmitStatePatch.mockResolvedValue(undefined);
 
     const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
@@ -855,12 +840,9 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
     const { loadGridPoints } = require('../services/ai/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
-    const mockClient = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-      release: jest.fn(),
-    };
-    (db.connect as jest.Mock).mockResolvedValue(mockClient);
-    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    // Mock PlayerService for build step
+    (PlayerService.buildTrackForPlayer as jest.Mock).mockResolvedValue({ remainingMoney: 49 });
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
     mockEmitStatePatch.mockResolvedValue(undefined);
 
     const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
