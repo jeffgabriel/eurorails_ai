@@ -95,6 +95,10 @@ jest.mock('../../services/playerService', () => ({
     updateCurrentPlayerIndex: jest.fn(),
     deliverLoadForUser: jest.fn(),
     getPlayers: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue([]),
+    buildTrackForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ remainingMoney: 47 }),
+    pickupLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ updatedLoads: [] }),
+    dropLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined),
+    purchaseTrainType: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ id: 'bot-1', money: 30 }),
   },
 }));
 

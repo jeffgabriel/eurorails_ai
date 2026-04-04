@@ -277,8 +277,9 @@ export class TurnExecutor {
   }
 
   /**
-   * BuildTrack: save track, deduct money, insert audit — all in one transaction.
-   * Emit socket events only after successful commit.
+   * BuildTrack: delegate to PlayerService.buildTrackForPlayer which handles
+   * UPSERT player_tracks and UPDATE money in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleBuildTrack(
     plan: FeasibleOption,
@@ -287,38 +288,15 @@ export class TurnExecutor {
   ): Promise<ExecutionResult> {
     const newSegments = plan.segments ?? [];
     const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
-    const allSegments = [...snapshot.bot.existingSegments, ...newSegments];
-    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
 
-    const client = await db.connect();
-    let remainingMoney = snapshot.bot.money - cost;
-
-    try {
-      await client.query('BEGIN');
-
-      // 1. Save track state (UPSERT directly — avoids TrackService's separate transaction)
-      await client.query(
-        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         ON CONFLICT (game_id, player_id)
-         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
-        [snapshot.gameId, snapshot.bot.playerId, JSON.stringify(allSegments), totalCost, cost],
-      );
-
-      // 2. Deduct money from bot player
-      const moneyResult = await client.query(
-        'UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money',
-        [cost, snapshot.bot.playerId],
-      );
-      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    // Delegate to PlayerService — handles UPSERT + money deduction in a transaction
+    const { remainingMoney } = await PlayerService.buildTrackForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      newSegments,
+      snapshot.bot.existingSegments,
+      cost,
+    );
 
     // 3. Post-commit: audit record (best-effort — don't let a missing table
     //    undo a successful track build)

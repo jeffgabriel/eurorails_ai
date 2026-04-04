@@ -108,86 +108,77 @@ describe('TurnExecutor', () => {
     (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
   });
 
-  describe('BuildTrack — successful execution', () => {
-    it('should UPSERT track state directly into player_tracks', async () => {
-      const seg = makeSegment(3);
-      const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
+  describe('TurnExecutor — handleBuildTrack', () => {
+    const mockBuildTrackForPlayer = PlayerService.buildTrackForPlayer as jest.Mock;
 
-      await TurnExecutor.execute(plan, snapshot);
-
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('INSERT INTO player_tracks'),
-      );
-      expect(upsertCall).toBeDefined();
-      const params = upsertCall![1] as unknown[];
-      expect(params[0]).toBe('game-1');
-      expect(params[1]).toBe('bot-1');
-      expect(JSON.parse(params[2] as string)).toEqual([seg]);
-      expect(params[3]).toBe(3); // total_cost
-      expect(params[4]).toBe(3); // turn_build_cost
+    beforeEach(() => {
+      jest.clearAllMocks();
+      (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+      mockBuildTrackForPlayer.mockResolvedValue({ remainingMoney: 47 });
+      mockEmitStatePatch.mockResolvedValue(undefined);
     });
 
-    it('should append to existing segments', async () => {
+    it('should call PlayerService.buildTrackForPlayer with correct params', async () => {
+      const seg = makeSegment(3);
+      const plan = makeBuildOption([seg]);
       const existingSeg = makeSegment(2);
-      const newSeg = makeSegment(1);
-      const plan = makeBuildOption([newSeg]);
       const snapshot = makeSnapshot({ existingSegments: [existingSeg] });
 
       await TurnExecutor.execute(plan, snapshot);
 
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('INSERT INTO player_tracks'),
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledTimes(1);
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledWith(
+        'game-1',
+        'bot-1',
+        [seg],
+        [existingSeg],
+        3,
       );
-      expect(upsertCall).toBeDefined();
-      const params = upsertCall![1] as unknown[];
-      expect(JSON.parse(params[2] as string)).toEqual([existingSeg, newSeg]);
-      expect(params[3]).toBe(3); // total_cost (2 + 1)
     });
 
-    it('should deduct money from bot player', async () => {
-      const seg = makeSegment(5);
+    it('should return success result with correct fields', async () => {
+      const seg = makeSegment(4);
       const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
+      mockBuildTrackForPlayer.mockResolvedValue({ remainingMoney: 46 });
 
-      await TurnExecutor.execute(plan, snapshot);
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      const moneyCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('UPDATE players SET money'),
-      );
-      expect(moneyCall).toBeDefined();
-      expect(moneyCall![1]).toEqual([5, 'bot-1']);
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.cost).toBe(4);
+      expect(result.segmentsBuilt).toBe(1);
+      expect(result.remainingMoney).toBe(46);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
     });
 
-    it('should insert audit record post-commit via db.query', async () => {
+    it('should insert audit record (best-effort)', async () => {
       const seg = makeSegment(3);
       const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
 
-      await TurnExecutor.execute(plan, snapshot);
+      await TurnExecutor.execute(plan, makeSnapshot());
 
-      // Audit INSERT now goes through db.query (best-effort, outside transaction)
       const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
         (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
       );
       expect(auditCall).toBeDefined();
       const params = auditCall![1] as unknown[];
-      expect(params[0]).toBe('game-1');        // game_id
-      expect(params[1]).toBe('bot-1');         // player_id
-      expect(params[2]).toBe(3);               // turn_number
-      expect(params[3]).toBe('BuildTrack');    // action
-      expect(params[5]).toBe(3);               // cost
+      expect(params[0]).toBe('game-1');
+      expect(params[1]).toBe('bot-1');
+      expect(params[2]).toBe(3);
+      expect(params[3]).toBe('BuildTrack');
+      expect(params[5]).toBe(3);
     });
 
-    it('should use BEGIN and COMMIT for transaction', async () => {
-      const seg = makeSegment(1);
+    it('should still succeed when audit insert fails', async () => {
+      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+      const seg = makeSegment(2);
       const plan = makeBuildOption([seg]);
 
-      await TurnExecutor.execute(plan, makeSnapshot());
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries[0]).toBe('BEGIN');
-      expect(queries[queries.length - 1]).toBe('COMMIT');
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.segmentsBuilt).toBe(1);
     });
 
     it('should emit track:updated event post-commit', async () => {
@@ -222,47 +213,6 @@ describe('TurnExecutor', () => {
       );
     });
 
-    it('should release client after execution', async () => {
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await TurnExecutor.execute(plan, makeSnapshot());
-
-      expect(mockClient.release).toHaveBeenCalledTimes(1);
-    });
-
-    it('should return success result with correct fields', async () => {
-      const seg = makeSegment(4);
-      const plan = makeBuildOption([seg]);
-
-      const result = await TurnExecutor.execute(plan, makeSnapshot());
-
-      expect(result.success).toBe(true);
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.cost).toBe(4);
-      expect(result.segmentsBuilt).toBe(1);
-      expect(result.durationMs).toBeGreaterThanOrEqual(0);
-      expect(result.error).toBeUndefined();
-    });
-
-    it('should still succeed when BuildTrack audit insert fails', async () => {
-      // First db.query call will be the audit INSERT — make it fail
-      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
-      const seg = makeSegment(2);
-      const plan = makeBuildOption([seg]);
-
-      const result = await TurnExecutor.execute(plan, makeSnapshot());
-
-      // Track save succeeded (transaction committed) — result should still be success
-      expect(result.success).toBe(true);
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.segmentsBuilt).toBe(1);
-      // Verify the transaction still committed
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries).toContain('COMMIT');
-      expect(queries).not.toContain('ROLLBACK');
-    });
-
     it('should still succeed when emitStatePatch throws post-commit', async () => {
       mockEmitStatePatch.mockRejectedValueOnce(new Error('server_seq failed'));
       const seg = makeSegment(2);
@@ -270,61 +220,25 @@ describe('TurnExecutor', () => {
 
       const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      // DB write succeeded — result should still be success
       expect(result.success).toBe(true);
       expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.segmentsBuilt).toBe(1);
-      // track:updated should have been called before emitStatePatch threw
       expect(mockEmitToGame).toHaveBeenCalledWith(
         'game-1',
         'track:updated',
         expect.objectContaining({ gameId: 'game-1', playerId: 'bot-1' }),
       );
     });
-  });
 
-  describe('BuildTrack — failure and rollback', () => {
-    it('should ROLLBACK and throw on DB failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })   // BEGIN
-        .mockRejectedValueOnce(new Error('DB write failed')); // UPSERT fails
-
+    it('should throw when PlayerService.buildTrackForPlayer throws', async () => {
+      mockBuildTrackForPlayer.mockRejectedValueOnce(new Error('Insufficient funds'));
       const seg = makeSegment(1);
       const plan = makeBuildOption([seg]);
 
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow('DB write failed');
-
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries).toContain('BEGIN');
-      expect(queries).toContain('ROLLBACK');
-      expect(queries).not.toContain('COMMIT');
-    });
-
-    it('should NOT emit socket events on failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })
-        .mockRejectedValueOnce(new Error('fail'));
-
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow();
+      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow('Insufficient funds');
 
       expect(mockEmitToGame).not.toHaveBeenCalled();
       expect(mockEmitStatePatch).not.toHaveBeenCalled();
-    });
-
-    it('should release client even on failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })
-        .mockRejectedValueOnce(new Error('fail'));
-
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow();
-
-      expect(mockClient.release).toHaveBeenCalledTimes(1);
     });
   });
 
