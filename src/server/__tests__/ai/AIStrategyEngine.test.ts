@@ -99,6 +99,7 @@ jest.mock('../../services/playerService', () => ({
     pickupLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ updatedLoads: [] }),
     dropLoadForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue(undefined),
     purchaseTrainType: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ id: 'bot-1', money: 30 }),
+    discardHandForPlayer: jest.fn<(...args: any[]) => Promise<any>>().mockResolvedValue({ newHandIds: [10, 20, 30] }),
   },
 }));
 

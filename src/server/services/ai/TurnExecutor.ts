@@ -798,36 +798,24 @@ export class TurnExecutor {
   }
 
   /**
-   * DiscardHand: discard current hand and draw 3 new cards directly.
-   * Does NOT use PlayerService.discardHandForUser to avoid turn-advancement conflicts
-   * (BotTurnTrigger handles turn advancement separately).
+   * DiscardHand: delegate to PlayerService.discardHandForPlayer which handles
+   * deck discard/draw and DB update in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleDiscardHand(
     snapshot: WorldSnapshot,
     startTime: number,
   ): Promise<ExecutionResult> {
-    const demandDeck = DemandDeckService.getInstance();
-
     console.warn(`[TurnExecutor] DiscardHand: discarding ${snapshot.bot.demandCards.length} demand cards (turn ${snapshot.turnNumber})`);
 
-    // Discard current hand
-    for (const cardId of snapshot.bot.demandCards) {
-      demandDeck.discardCard(cardId);
-    }
-
-    // Draw 3 new cards
-    const newCardIds: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const card = demandDeck.drawCard();
-      if (!card) break;
-      newCardIds.push(card.id);
-    }
-
-    // Update player's hand in DB
-    await db.query(
-      'UPDATE players SET hand = $1 WHERE id = $2',
-      [newCardIds, snapshot.bot.playerId],
+    // Delegate to PlayerService — handles discard, draw, and DB update
+    const { newHandIds } = await PlayerService.discardHandForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
     );
+
+    // Update snapshot so subsequent steps see the correct hand
+    snapshot.bot.demandCards = newHandIds;
 
     // Audit (best-effort)
     try {

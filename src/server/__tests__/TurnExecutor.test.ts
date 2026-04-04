@@ -1228,3 +1228,102 @@ describe('TurnExecutor — handleDropLoad', () => {
     await expect(TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }))).rejects.toThrow('Player is not carrying load');
   });
 });
+
+describe('TurnExecutor — handleDiscardHand', () => {
+  const mockDiscardHandForPlayer = PlayerService.discardHandForPlayer as jest.Mock;
+
+  function makeDiscardOption(): FeasibleOption {
+    return {
+      action: AIActionType.DiscardHand,
+      feasible: true,
+      reason: 'Discard hand',
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockDiscardHandForPlayer.mockResolvedValue({ newHandIds: [10, 20, 30] });
+    (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
+      { id: 'bot-1', money: 50, hand: [10, 20, 30] },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.discardHandForPlayer with correct params', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(mockDiscardHandForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockDiscardHandForPlayer).toHaveBeenCalledWith('game-1', 'bot-1');
+  });
+
+  it('should return success with zero cost', async () => {
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.DiscardHand);
+    expect(result.cost).toBe(0);
+    expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.demandCards after discard', async () => {
+    const plan = makeDiscardOption();
+    const snapshot = makeSnapshot({ demandCards: [1, 2, 3] });
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.demandCards).toEqual([10, 20, 30]);
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[3]).toBe(AIActionType.DiscardHand);
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('audit table missing'));
+
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should emit state patch with updated player data (best-effort)', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        players: expect.arrayContaining([
+          expect.objectContaining({ id: 'bot-1' }),
+        ]),
+      }),
+    );
+  });
+
+  it('should still succeed when socket emit fails', async () => {
+    mockEmitStatePatch.mockRejectedValueOnce(new Error('emit failed'));
+
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should throw when PlayerService.discardHandForPlayer throws', async () => {
+    mockDiscardHandForPlayer.mockRejectedValueOnce(new Error('No cards in deck'));
+
+    const plan = makeDiscardOption();
+    await expect(TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }))).rejects.toThrow('No cards in deck');
+  });
+});
