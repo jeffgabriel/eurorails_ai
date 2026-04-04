@@ -231,6 +231,12 @@ export async function onTurnChange(
       console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
     }
 
+    // Clear the double-execution guard BEFORE advancing so that if the next
+    // player is the same bot (e.g., round 1→2 transition where the build order
+    // reverses and the bot goes first again), the fire-and-forget trigger from
+    // emitTurnChange can re-enter onTurnChange.
+    pendingBotTurns.delete(gameId);
+
     // Advance to next player
     await advanceTurnAfterBot(gameId);
 
