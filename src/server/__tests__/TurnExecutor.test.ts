@@ -5,6 +5,7 @@ import {
   AIActionType,
   TerrainType,
   TrackSegment,
+  TrainType,
 } from '../../shared/types/GameTypes';
 import { emitToGame, emitStatePatch } from '../services/socketService';
 import { db } from '../db/index';
@@ -90,103 +91,83 @@ function makePassOption(): FeasibleOption {
   };
 }
 
-function makeMockClient() {
-  return {
-    query: jest.fn().mockResolvedValue({ rows: [] }),
-    release: jest.fn(),
-  };
-}
-
 describe('TurnExecutor', () => {
-  let mockClient: ReturnType<typeof makeMockClient>;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    mockClient = makeMockClient();
-    (mockDb.connect as jest.Mock).mockResolvedValue(mockClient);
     (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
   });
 
-  describe('BuildTrack — successful execution', () => {
-    it('should UPSERT track state directly into player_tracks', async () => {
-      const seg = makeSegment(3);
-      const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
+  describe('TurnExecutor — handleBuildTrack', () => {
+    const mockBuildTrackForPlayer = PlayerService.buildTrackForPlayer as jest.Mock;
 
-      await TurnExecutor.execute(plan, snapshot);
-
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('INSERT INTO player_tracks'),
-      );
-      expect(upsertCall).toBeDefined();
-      const params = upsertCall![1] as unknown[];
-      expect(params[0]).toBe('game-1');
-      expect(params[1]).toBe('bot-1');
-      expect(JSON.parse(params[2] as string)).toEqual([seg]);
-      expect(params[3]).toBe(3); // total_cost
-      expect(params[4]).toBe(3); // turn_build_cost
+    beforeEach(() => {
+      jest.clearAllMocks();
+      (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+      mockBuildTrackForPlayer.mockResolvedValue({ remainingMoney: 47 });
+      mockEmitStatePatch.mockResolvedValue(undefined);
     });
 
-    it('should append to existing segments', async () => {
+    it('should call PlayerService.buildTrackForPlayer with correct params', async () => {
+      const seg = makeSegment(3);
+      const plan = makeBuildOption([seg]);
       const existingSeg = makeSegment(2);
-      const newSeg = makeSegment(1);
-      const plan = makeBuildOption([newSeg]);
       const snapshot = makeSnapshot({ existingSegments: [existingSeg] });
 
       await TurnExecutor.execute(plan, snapshot);
 
-      const upsertCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('INSERT INTO player_tracks'),
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledTimes(1);
+      expect(mockBuildTrackForPlayer).toHaveBeenCalledWith(
+        'game-1',
+        'bot-1',
+        [seg],
+        [existingSeg],
+        3,
       );
-      expect(upsertCall).toBeDefined();
-      const params = upsertCall![1] as unknown[];
-      expect(JSON.parse(params[2] as string)).toEqual([existingSeg, newSeg]);
-      expect(params[3]).toBe(3); // total_cost (2 + 1)
     });
 
-    it('should deduct money from bot player', async () => {
-      const seg = makeSegment(5);
+    it('should return success result with correct fields', async () => {
+      const seg = makeSegment(4);
       const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
+      mockBuildTrackForPlayer.mockResolvedValue({ remainingMoney: 46 });
 
-      await TurnExecutor.execute(plan, snapshot);
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      const moneyCall = mockClient.query.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('UPDATE players SET money'),
-      );
-      expect(moneyCall).toBeDefined();
-      expect(moneyCall![1]).toEqual([5, 'bot-1']);
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.cost).toBe(4);
+      expect(result.segmentsBuilt).toBe(1);
+      expect(result.remainingMoney).toBe(46);
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
     });
 
-    it('should insert audit record post-commit via db.query', async () => {
+    it('should insert audit record (best-effort)', async () => {
       const seg = makeSegment(3);
       const plan = makeBuildOption([seg]);
-      const snapshot = makeSnapshot();
 
-      await TurnExecutor.execute(plan, snapshot);
+      await TurnExecutor.execute(plan, makeSnapshot());
 
-      // Audit INSERT now goes through db.query (best-effort, outside transaction)
       const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
         (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
       );
       expect(auditCall).toBeDefined();
       const params = auditCall![1] as unknown[];
-      expect(params[0]).toBe('game-1');        // game_id
-      expect(params[1]).toBe('bot-1');         // player_id
-      expect(params[2]).toBe(3);               // turn_number
-      expect(params[3]).toBe('BuildTrack');    // action
-      expect(params[5]).toBe(3);               // cost
+      expect(params[0]).toBe('game-1');
+      expect(params[1]).toBe('bot-1');
+      expect(params[2]).toBe(3);
+      expect(params[3]).toBe('BuildTrack');
+      expect(params[5]).toBe(3);
     });
 
-    it('should use BEGIN and COMMIT for transaction', async () => {
-      const seg = makeSegment(1);
+    it('should still succeed when audit insert fails', async () => {
+      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+      const seg = makeSegment(2);
       const plan = makeBuildOption([seg]);
 
-      await TurnExecutor.execute(plan, makeSnapshot());
+      const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries[0]).toBe('BEGIN');
-      expect(queries[queries.length - 1]).toBe('COMMIT');
+      expect(result.success).toBe(true);
+      expect(result.action).toBe(AIActionType.BuildTrack);
+      expect(result.segmentsBuilt).toBe(1);
     });
 
     it('should emit track:updated event post-commit', async () => {
@@ -221,47 +202,6 @@ describe('TurnExecutor', () => {
       );
     });
 
-    it('should release client after execution', async () => {
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await TurnExecutor.execute(plan, makeSnapshot());
-
-      expect(mockClient.release).toHaveBeenCalledTimes(1);
-    });
-
-    it('should return success result with correct fields', async () => {
-      const seg = makeSegment(4);
-      const plan = makeBuildOption([seg]);
-
-      const result = await TurnExecutor.execute(plan, makeSnapshot());
-
-      expect(result.success).toBe(true);
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.cost).toBe(4);
-      expect(result.segmentsBuilt).toBe(1);
-      expect(result.durationMs).toBeGreaterThanOrEqual(0);
-      expect(result.error).toBeUndefined();
-    });
-
-    it('should still succeed when BuildTrack audit insert fails', async () => {
-      // First db.query call will be the audit INSERT — make it fail
-      (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
-      const seg = makeSegment(2);
-      const plan = makeBuildOption([seg]);
-
-      const result = await TurnExecutor.execute(plan, makeSnapshot());
-
-      // Track save succeeded (transaction committed) — result should still be success
-      expect(result.success).toBe(true);
-      expect(result.action).toBe(AIActionType.BuildTrack);
-      expect(result.segmentsBuilt).toBe(1);
-      // Verify the transaction still committed
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries).toContain('COMMIT');
-      expect(queries).not.toContain('ROLLBACK');
-    });
-
     it('should still succeed when emitStatePatch throws post-commit', async () => {
       mockEmitStatePatch.mockRejectedValueOnce(new Error('server_seq failed'));
       const seg = makeSegment(2);
@@ -269,61 +209,25 @@ describe('TurnExecutor', () => {
 
       const result = await TurnExecutor.execute(plan, makeSnapshot());
 
-      // DB write succeeded — result should still be success
       expect(result.success).toBe(true);
       expect(result.action).toBe(AIActionType.BuildTrack);
       expect(result.segmentsBuilt).toBe(1);
-      // track:updated should have been called before emitStatePatch threw
       expect(mockEmitToGame).toHaveBeenCalledWith(
         'game-1',
         'track:updated',
         expect.objectContaining({ gameId: 'game-1', playerId: 'bot-1' }),
       );
     });
-  });
 
-  describe('BuildTrack — failure and rollback', () => {
-    it('should ROLLBACK and throw on DB failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })   // BEGIN
-        .mockRejectedValueOnce(new Error('DB write failed')); // UPSERT fails
-
+    it('should throw when PlayerService.buildTrackForPlayer throws', async () => {
+      mockBuildTrackForPlayer.mockRejectedValueOnce(new Error('Insufficient funds'));
       const seg = makeSegment(1);
       const plan = makeBuildOption([seg]);
 
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow('DB write failed');
-
-      const queries = mockClient.query.mock.calls.map((c: unknown[]) => c[0]);
-      expect(queries).toContain('BEGIN');
-      expect(queries).toContain('ROLLBACK');
-      expect(queries).not.toContain('COMMIT');
-    });
-
-    it('should NOT emit socket events on failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })
-        .mockRejectedValueOnce(new Error('fail'));
-
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow();
+      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow('Insufficient funds');
 
       expect(mockEmitToGame).not.toHaveBeenCalled();
       expect(mockEmitStatePatch).not.toHaveBeenCalled();
-    });
-
-    it('should release client even on failure', async () => {
-      mockClient.query
-        .mockResolvedValueOnce({ rows: [] })
-        .mockRejectedValueOnce(new Error('fail'));
-
-      const seg = makeSegment(1);
-      const plan = makeBuildOption([seg]);
-
-      await expect(TurnExecutor.execute(plan, makeSnapshot())).rejects.toThrow();
-
-      expect(mockClient.release).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -651,37 +555,50 @@ function makePickupSnapshot2(overrides?: Partial<WorldSnapshot['bot']>): WorldSn
 }
 
 describe('TurnExecutor — handlePickupLoad', () => {
-  let mockClient2: ReturnType<typeof makeMockClient>;
+  const mockPickupLoadForPlayer = PlayerService.pickupLoadForPlayer as jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockClient2 = makeMockClient();
-    (mockDb.connect as jest.Mock).mockResolvedValue(mockClient2);
     (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Coal'] });
     (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
       { id: 'bot-1', money: 50, trainState: { loads: ['Coal'] } },
     ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
   });
 
-  it('should append load to player via array_append SQL', async () => {
+  it('should call PlayerService.pickupLoadForPlayer with correct params', async () => {
     const plan = makePickupPlan('Coal');
     await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
 
-    const appendCall = mockClient2.query.mock.calls.find(
-      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('array_append'),
+    expect(mockPickupLoadForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockPickupLoadForPlayer).toHaveBeenCalledWith(
+      'game-1',
+      'bot-1',
+      'Coal',
+      expect.any(String), // cityName resolved from position
     );
-    expect(appendCall).toBeDefined();
-    expect(appendCall![1]).toEqual(['Coal', 'bot-1']);
   });
 
   it('should return success with zero cost', async () => {
     const plan = makePickupPlan('Iron');
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Iron'] });
     const result = await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
 
     expect(result.success).toBe(true);
     expect(result.action).toBe(AIActionType.PickupLoad);
     expect(result.cost).toBe(0);
     expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.loads after pickup', async () => {
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Coal', 'Iron'] });
+    const plan = makePickupPlan('Iron');
+    const snapshot = makePickupSnapshot2({ loads: ['Coal'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.loads).toEqual(['Coal', 'Iron']);
   });
 
   it('should return failure when no loadType specified', async () => {
@@ -694,6 +611,7 @@ describe('TurnExecutor — handlePickupLoad', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('No loadType');
+    expect(mockPickupLoadForPlayer).not.toHaveBeenCalled();
   });
 
   it('should still succeed when audit insert fails', async () => {
@@ -742,6 +660,13 @@ describe('TurnExecutor — handlePickupLoad', () => {
 
     expect(result.success).toBe(true);
     expect(result.action).toBe(AIActionType.PickupLoad);
+  });
+
+  it('should throw when PlayerService.pickupLoadForPlayer throws', async () => {
+    mockPickupLoadForPlayer.mockRejectedValueOnce(new Error('Train at full capacity'));
+    const plan = makePickupPlan('Coal');
+
+    await expect(TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }))).rejects.toThrow('Train at full capacity');
   });
 });
 
@@ -879,13 +804,9 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
     // Empty grid = no city at bot position
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
-    // Mock DB for build step
-    const mockClient = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-      release: jest.fn(),
-    };
-    (db.connect as jest.Mock).mockResolvedValue(mockClient);
-    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    // Mock PlayerService for build step
+    (PlayerService.buildTrackForPlayer as jest.Mock).mockResolvedValue({ remainingMoney: 49 });
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
     mockEmitStatePatch.mockResolvedValue(undefined);
 
     const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
@@ -919,12 +840,9 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
     const { loadGridPoints } = require('../services/ai/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
-    const mockClient = {
-      query: jest.fn().mockResolvedValue({ rows: [] }),
-      release: jest.fn(),
-    };
-    (db.connect as jest.Mock).mockResolvedValue(mockClient);
-    (db.query as jest.Mock).mockResolvedValue({ rows: [{ money: 49 }] });
+    // Mock PlayerService for build step
+    (PlayerService.buildTrackForPlayer as jest.Mock).mockResolvedValue({ remainingMoney: 49 });
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
     mockEmitStatePatch.mockResolvedValue(undefined);
 
     const snapshot = makeSnapshot({ position: { row: 5, col: 5 }, money: 50 });
@@ -990,5 +908,404 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
 
     expect(result.success).toBe(true);
     expect(result.payment).toBe(19);
+  });
+});
+
+describe('TurnExecutor — handleUpgradeTrain', () => {
+  const mockPurchaseTrainType = PlayerService.purchaseTrainType as jest.Mock;
+  const mockGetPlayers = PlayerService.getPlayers as jest.Mock;
+
+  function makeUpgradeOption(targetTrainType: TrainType, upgradeKind: 'upgrade' | 'crossgrade'): FeasibleOption {
+    return {
+      action: AIActionType.UpgradeTrain,
+      feasible: true,
+      reason: 'Upgrade',
+      targetTrainType,
+      upgradeKind,
+      estimatedCost: upgradeKind === 'upgrade' ? 20 : 5,
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockPurchaseTrainType.mockResolvedValue({
+      id: 'bot-1',
+      money: 30,
+      trainType: TrainType.FastFreight,
+    });
+    mockGetPlayers.mockResolvedValue([
+      { id: 'bot-1', money: 30, trainType: TrainType.FastFreight },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.purchaseTrainType with correct params', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockPurchaseTrainType).toHaveBeenCalledTimes(1);
+    expect(mockPurchaseTrainType).toHaveBeenCalledWith(
+      'game-1',
+      'user-bot-1',
+      'upgrade',
+      TrainType.FastFreight,
+    );
+  });
+
+  it('should return success result with cost 20 for upgrade', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.UpgradeTrain);
+    expect(result.cost).toBe(20);
+    expect(result.remainingMoney).toBe(30); // from purchaseTrainType return value
+    expect(result.segmentsBuilt).toBe(0);
+  });
+
+  it('should return success result with cost 5 for crossgrade', async () => {
+    mockPurchaseTrainType.mockResolvedValue({
+      id: 'bot-1',
+      money: 45,
+      trainType: TrainType.HeavyFreight,
+    });
+    const plan = makeUpgradeOption(TrainType.HeavyFreight, 'crossgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.FastFreight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.cost).toBe(5);
+    expect(result.remainingMoney).toBe(45);
+  });
+
+  it('should update snapshot.bot.trainType after upgrade', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.trainType).toBe(TrainType.FastFreight);
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[0]).toBe('game-1');      // game_id
+    expect(params[1]).toBe('bot-1');       // player_id
+    expect(params[2]).toBe(3);             // turn_number
+    expect(params[3]).toBe(AIActionType.UpgradeTrain); // action
+    expect(params[4]).toBe(20);            // cost
+    expect(params[5]).toBe(30);            // remaining_money
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('bot_turn_audits does not exist'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.UpgradeTrain);
+  });
+
+  it('should emit state patch with updated player data (best-effort)', async () => {
+    const updatedPlayer = { id: 'bot-1', money: 30, trainType: TrainType.FastFreight };
+    mockPurchaseTrainType.mockResolvedValue(updatedPlayer);
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({ players: [updatedPlayer] }),
+    );
+  });
+
+  it('should still succeed when socket emit fails', async () => {
+    mockEmitStatePatch.mockRejectedValueOnce(new Error('socket error'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should return failure when targetTrainType is missing', async () => {
+    const plan: FeasibleOption = {
+      action: AIActionType.UpgradeTrain,
+      feasible: true,
+      reason: 'Upgrade',
+    };
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/targetTrainType/);
+    expect(mockPurchaseTrainType).not.toHaveBeenCalled();
+  });
+
+  it('should throw when PlayerService.purchaseTrainType throws', async () => {
+    mockPurchaseTrainType.mockRejectedValueOnce(new Error('Not your turn'));
+    const plan = makeUpgradeOption(TrainType.FastFreight, 'upgrade');
+    const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50 });
+
+    await expect(TurnExecutor.execute(plan, snapshot)).rejects.toThrow('Not your turn');
+  });
+});
+
+describe('TurnExecutor — handleDropLoad', () => {
+  const mockDropLoadForPlayer = PlayerService.dropLoadForPlayer as jest.Mock;
+
+  function makeDropOption(loadType: string): FeasibleOption {
+    return {
+      action: AIActionType.DropLoad,
+      feasible: true,
+      reason: `Drop ${loadType}`,
+      loadType: loadType as LoadType,
+      targetCity: 'Berlin',
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockDropLoadForPlayer.mockResolvedValue(undefined);
+    (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
+      { id: 'bot-1', money: 50, loads: [] },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.dropLoadForPlayer with correct params', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const snapshot = makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockDropLoadForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockDropLoadForPlayer).toHaveBeenCalledWith(
+      'game-1',
+      'bot-1',
+      'Coal',
+      'Berlin',
+    );
+  });
+
+  it('should return success with zero cost', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.DropLoad);
+    expect(result.cost).toBe(0);
+    expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.loads after drop', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const snapshot = makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal', 'Iron'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.loads).toEqual(['Iron']);
+  });
+
+  it('should return failure when no loadType specified', async () => {
+    const plan: FeasibleOption = {
+      action: AIActionType.DropLoad,
+      feasible: true,
+      reason: 'Drop',
+    };
+    const result = await TurnExecutor.execute(plan, makeSnapshot());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No loadType');
+    expect(mockDropLoadForPlayer).not.toHaveBeenCalled();
+  });
+
+  it('should return failure when bot is not at a named city', async () => {
+    // Position not in grid points — returns empty city name
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map());
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 99, col: 99 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('named city');
+    expect(mockDropLoadForPlayer).not.toHaveBeenCalled();
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[3]).toBe(AIActionType.DropLoad);
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('audit table missing'));
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should throw when PlayerService.dropLoadForPlayer throws', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+    mockDropLoadForPlayer.mockRejectedValueOnce(new Error('Player is not carrying load'));
+
+    const plan = makeDropOption('Coal');
+    await expect(TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }))).rejects.toThrow('Player is not carrying load');
+  });
+});
+
+describe('TurnExecutor — handleDiscardHand', () => {
+  const mockDiscardHandForPlayer = PlayerService.discardHandForPlayer as jest.Mock;
+
+  function makeDiscardOption(): FeasibleOption {
+    return {
+      action: AIActionType.DiscardHand,
+      feasible: true,
+      reason: 'Discard hand',
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockDiscardHandForPlayer.mockResolvedValue({ newHandIds: [10, 20, 30] });
+    (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
+      { id: 'bot-1', money: 50, hand: [10, 20, 30] },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.discardHandForPlayer with correct params', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(mockDiscardHandForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockDiscardHandForPlayer).toHaveBeenCalledWith('game-1', 'bot-1');
+  });
+
+  it('should return success with zero cost', async () => {
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.DiscardHand);
+    expect(result.cost).toBe(0);
+    expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.demandCards after discard', async () => {
+    const plan = makeDiscardOption();
+    const snapshot = makeSnapshot({ demandCards: [1, 2, 3] });
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.demandCards).toEqual([10, 20, 30]);
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[3]).toBe(AIActionType.DiscardHand);
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('audit table missing'));
+
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should emit state patch with updated player data (best-effort)', async () => {
+    const plan = makeDiscardOption();
+    await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(mockEmitStatePatch).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        players: expect.arrayContaining([
+          expect.objectContaining({ id: 'bot-1' }),
+        ]),
+      }),
+    );
+  });
+
+  it('should still succeed when socket emit fails', async () => {
+    mockEmitStatePatch.mockRejectedValueOnce(new Error('emit failed'));
+
+    const plan = makeDiscardOption();
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should throw when PlayerService.discardHandForPlayer throws', async () => {
+    mockDiscardHandForPlayer.mockRejectedValueOnce(new Error('No cards in deck'));
+
+    const plan = makeDiscardOption();
+    await expect(TurnExecutor.execute(plan, makeSnapshot({ demandCards: [1, 2, 3] }))).rejects.toThrow('No cards in deck');
   });
 });

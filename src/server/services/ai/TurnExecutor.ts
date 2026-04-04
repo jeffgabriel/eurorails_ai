@@ -19,7 +19,7 @@ import { PlayerService } from '../playerService';
 import { LoadService } from '../loadService';
 import { DemandDeckService } from '../demandDeckService';
 import { gridToPixel, loadGridPoints } from './MapTopology';
-import { getTrainCapacity } from '../../../shared/services/trainProperties';
+import { getTrainCapacity, getTrainSpeed } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
 
 export interface ExecutionResult {
@@ -277,8 +277,9 @@ export class TurnExecutor {
   }
 
   /**
-   * BuildTrack: save track, deduct money, insert audit — all in one transaction.
-   * Emit socket events only after successful commit.
+   * BuildTrack: delegate to PlayerService.buildTrackForPlayer which handles
+   * UPSERT player_tracks and UPDATE money in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleBuildTrack(
     plan: FeasibleOption,
@@ -287,38 +288,15 @@ export class TurnExecutor {
   ): Promise<ExecutionResult> {
     const newSegments = plan.segments ?? [];
     const cost = plan.estimatedCost ?? newSegments.reduce((s, seg) => s + seg.cost, 0);
-    const allSegments = [...snapshot.bot.existingSegments, ...newSegments];
-    const totalCost = allSegments.reduce((s, seg) => s + seg.cost, 0);
 
-    const client = await db.connect();
-    let remainingMoney = snapshot.bot.money - cost;
-
-    try {
-      await client.query('BEGIN');
-
-      // 1. Save track state (UPSERT directly — avoids TrackService's separate transaction)
-      await client.query(
-        `INSERT INTO player_tracks (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
-         VALUES ($1, $2, $3, $4, $5, NOW())
-         ON CONFLICT (game_id, player_id)
-         DO UPDATE SET segments = $3, total_cost = $4, turn_build_cost = $5, last_build_timestamp = NOW()`,
-        [snapshot.gameId, snapshot.bot.playerId, JSON.stringify(allSegments), totalCost, cost],
-      );
-
-      // 2. Deduct money from bot player
-      const moneyResult = await client.query(
-        'UPDATE players SET money = money - $1 WHERE id = $2 RETURNING money',
-        [cost, snapshot.bot.playerId],
-      );
-      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    // Delegate to PlayerService — handles UPSERT + money deduction in a transaction
+    const { remainingMoney } = await PlayerService.buildTrackForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      newSegments,
+      snapshot.bot.existingSegments,
+      cost,
+    );
 
     // 3. Post-commit: audit record (best-effort — don't let a missing table
     //    undo a successful track build)
@@ -451,9 +429,9 @@ export class TurnExecutor {
   }
 
   /**
-   * PickupLoad: append load to player's loads array.
-   * If it's a dropped load, also clear it from load_chips via LoadService.
-   * Audit INSERT and socket emit are best-effort post-commit.
+   * PickupLoad: delegate to PlayerService.pickupLoadForPlayer which handles
+   * capacity validation, array_append, and dropped-load clearing in a transaction.
+   * Audit INSERT, turn_actions INSERT, and socket emit are best-effort post-commit.
    */
   private static async handlePickupLoad(
     plan: FeasibleOption,
@@ -478,82 +456,23 @@ export class TurnExecutor {
       ? getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints()) ?? ''
       : '';
 
-    // Server-side capacity check: reject pickup if train is full
-    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
-    if (snapshot.bot.loads.length >= capacity) {
-      return {
-        success: false,
-        action: AIActionType.PickupLoad,
-        cost: 0,
-        segmentsBuilt: 0,
-        remainingMoney: snapshot.bot.money,
-        durationMs: Date.now() - startTime,
-        error: `Train at full capacity (${snapshot.bot.loads.length}/${capacity})`,
-      };
-    }
+    // Delegate to PlayerService — handles capacity check, array_append, dropped-load clear
+    const { updatedLoads } = await PlayerService.pickupLoadForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      loadType as LoadType,
+      cityName,
+    );
 
-    // Critical DB op: append load to player's loads array
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Double-check capacity in DB to prevent race conditions
-      const currentLoads = await client.query(
-        'SELECT array_length(loads, 1) as load_count FROM players WHERE id = $1 FOR UPDATE',
-        [snapshot.bot.playerId],
-      );
-      const dbLoadCount = currentLoads.rows[0]?.load_count ?? 0;
-      if (dbLoadCount >= capacity) {
-        await client.query('ROLLBACK');
-        return {
-          success: false,
-          action: AIActionType.PickupLoad,
-          cost: 0,
-          segmentsBuilt: 0,
-          remainingMoney: snapshot.bot.money,
-          durationMs: Date.now() - startTime,
-          error: `Train at full capacity in DB (${dbLoadCount}/${capacity})`,
-        };
-      }
-
-      await client.query(
-        'UPDATE players SET loads = array_append(loads, $1) WHERE id = $2',
-        [loadType, snapshot.bot.playerId],
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    // If this is a dropped load at the city, clear it (best-effort — separate from critical tx)
-    if (cityName) {
-      try {
-        const loadSvc = LoadService.getInstance();
-        await loadSvc.pickupDroppedLoad(cityName, loadType as LoadType, snapshot.gameId);
-      } catch (droppedErr) {
-        console.error('[TurnExecutor] PickupLoad dropped-load clear failed (load was picked up):', droppedErr instanceof Error ? droppedErr.message : droppedErr);
-      }
-    }
+    // Update snapshot so subsequent steps see the correct loads
+    snapshot.bot.loads = updatedLoads;
 
     // Post-commit: audit record (best-effort)
     try {
-      const auditDurationMs = Date.now() - startTime;
       await db.query(
         `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          snapshot.gameId,
-          snapshot.bot.playerId,
-          snapshot.turnNumber,
-          AIActionType.PickupLoad,
-          0,
-          snapshot.bot.money,
-          auditDurationMs,
-        ],
+        [snapshot.gameId, snapshot.bot.playerId, snapshot.turnNumber, AIActionType.PickupLoad, 0, snapshot.bot.money, Date.now() - startTime],
       );
     } catch (auditError) {
       console.error('[TurnExecutor] PickupLoad audit insert failed (load was picked up):', auditError instanceof Error ? auditError.message : auditError);
@@ -561,11 +480,7 @@ export class TurnExecutor {
 
     // Post-commit: record in turn_actions for traceability (best-effort)
     try {
-      const pickupAction = {
-        kind: 'pickup',
-        city: cityName,
-        loadType,
-      };
+      const pickupAction = { kind: 'pickup', city: cityName, loadType };
       await db.query(
         `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
          VALUES ($1, $2, $3, $4::jsonb)
@@ -731,9 +646,10 @@ export class TurnExecutor {
   }
 
   /**
-   * DropLoad: remove a load from the bot's train and drop it at the current city.
+   * DropLoad: delegate to PlayerService.dropLoadForPlayer which handles
+   * array_remove and city placement (LoadService) in a transaction.
    * Per game rules: "Any load may be dropped at any city without a payoff."
-   * If the load is native to this city, return it to the tray instead.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleDropLoad(
     plan: FeasibleOption,
@@ -772,38 +688,16 @@ export class TurnExecutor {
       };
     }
 
-    // Critical DB op: remove load from player's loads array
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
+    // Delegate to PlayerService — handles array_remove and city placement
+    await PlayerService.dropLoadForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      loadType as LoadType,
+      cityName,
+    );
 
-      // Remove the first occurrence of this load type from the array
-      await client.query(
-        `UPDATE players SET loads = array_remove(loads, $1) WHERE id = $2`,
-        [loadType, snapshot.bot.playerId],
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    // Drop the load at the city (best-effort — separate from critical tx)
-    try {
-      const loadSvc = LoadService.getInstance();
-      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
-        // Load is native to this city — return to tray
-        await loadSvc.returnLoad(cityName, loadType as LoadType, snapshot.gameId);
-      } else {
-        // Drop as a non-native load at this city
-        await loadSvc.setLoadInCity(cityName, loadType as LoadType, snapshot.gameId);
-      }
-    } catch (dropErr) {
-      console.error('[TurnExecutor] DropLoad city placement failed (load was removed from train):', dropErr instanceof Error ? dropErr.message : dropErr);
-    }
+    // Update snapshot so subsequent steps see the correct loads
+    snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== loadType);
 
     // Post-commit: audit record (best-effort)
     try {
@@ -838,8 +732,9 @@ export class TurnExecutor {
   }
 
   /**
-   * UpgradeTrain: update train type and deduct money directly.
-   * Does NOT use PlayerService.purchaseTrainType to avoid turn-management conflicts.
+   * UpgradeTrain: delegate to PlayerService.purchaseTrainType which handles
+   * validation, cost deduction, and DB update in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleUpgradeTrain(
     plan: FeasibleOption,
@@ -860,24 +755,19 @@ export class TurnExecutor {
       };
     }
 
-    const cost = kind === 'upgrade' ? 20 : 5;
-    const client = await db.connect();
-    let remainingMoney = snapshot.bot.money - cost;
+    // Delegate to PlayerService — handles validation, cost calculation, and DB update
+    const updatedPlayer = await PlayerService.purchaseTrainType(
+      snapshot.gameId,
+      snapshot.bot.userId,
+      kind,
+      targetType,
+    );
 
-    try {
-      await client.query('BEGIN');
-      const moneyResult = await client.query(
-        'UPDATE players SET train_type = $1, money = money - $2 WHERE id = $3 RETURNING money',
-        [targetType, cost, snapshot.bot.playerId],
-      );
-      remainingMoney = moneyResult.rows[0]?.money ?? remainingMoney;
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    const cost = kind === 'upgrade' ? 20 : 5;
+    const remainingMoney = updatedPlayer.money;
+
+    // Update snapshot so subsequent steps see the correct train type
+    snapshot.bot.trainType = targetType;
 
     // Audit (best-effort)
     try {
@@ -892,11 +782,7 @@ export class TurnExecutor {
 
     // Socket emit (best-effort)
     try {
-      const publicPlayers = await PlayerService.getPlayers(snapshot.gameId, '');
-      const botPlayer = publicPlayers.find((p: any) => p.id === snapshot.bot.playerId);
-      if (botPlayer) {
-        await emitStatePatch(snapshot.gameId, { players: [botPlayer] } as any);
-      }
+      await emitStatePatch(snapshot.gameId, { players: [updatedPlayer] } as any);
     } catch (emitError) {
       console.error('[TurnExecutor] UpgradeTrain post-commit emit failed:', emitError instanceof Error ? emitError.message : emitError);
     }
@@ -912,36 +798,24 @@ export class TurnExecutor {
   }
 
   /**
-   * DiscardHand: discard current hand and draw 3 new cards directly.
-   * Does NOT use PlayerService.discardHandForUser to avoid turn-advancement conflicts
-   * (BotTurnTrigger handles turn advancement separately).
+   * DiscardHand: delegate to PlayerService.discardHandForPlayer which handles
+   * deck discard/draw and DB update in a transaction.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleDiscardHand(
     snapshot: WorldSnapshot,
     startTime: number,
   ): Promise<ExecutionResult> {
-    const demandDeck = DemandDeckService.getInstance();
-
     console.warn(`[TurnExecutor] DiscardHand: discarding ${snapshot.bot.demandCards.length} demand cards (turn ${snapshot.turnNumber})`);
 
-    // Discard current hand
-    for (const cardId of snapshot.bot.demandCards) {
-      demandDeck.discardCard(cardId);
-    }
-
-    // Draw 3 new cards
-    const newCardIds: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const card = demandDeck.drawCard();
-      if (!card) break;
-      newCardIds.push(card.id);
-    }
-
-    // Update player's hand in DB
-    await db.query(
-      'UPDATE players SET hand = $1 WHERE id = $2',
-      [newCardIds, snapshot.bot.playerId],
+    // Delegate to PlayerService — handles discard, draw, and DB update
+    const { newHandIds } = await PlayerService.discardHandForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
     );
+
+    // Update snapshot so subsequent steps see the correct hand
+    snapshot.bot.demandCards = newHandIds;
 
     // Audit (best-effort)
     try {
