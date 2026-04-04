@@ -1174,3 +1174,143 @@ describe('TurnExecutor — handleUpgradeTrain', () => {
     await expect(TurnExecutor.execute(plan, snapshot)).rejects.toThrow('Not your turn');
   });
 });
+
+describe('TurnExecutor — handleDropLoad', () => {
+  const mockDropLoadForPlayer = PlayerService.dropLoadForPlayer as jest.Mock;
+
+  function makeDropOption(loadType: string): FeasibleOption {
+    return {
+      action: AIActionType.DropLoad,
+      feasible: true,
+      reason: `Drop ${loadType}`,
+      loadType: loadType as LoadType,
+      targetCity: 'Berlin',
+    };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockDropLoadForPlayer.mockResolvedValue(undefined);
+    (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
+      { id: 'bot-1', money: 50, loads: [] },
+    ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
+  });
+
+  it('should call PlayerService.dropLoadForPlayer with correct params', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const snapshot = makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(mockDropLoadForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockDropLoadForPlayer).toHaveBeenCalledWith(
+      'game-1',
+      'bot-1',
+      'Coal',
+      'Berlin',
+    );
+  });
+
+  it('should return success with zero cost', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.DropLoad);
+    expect(result.cost).toBe(0);
+    expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.loads after drop', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    const snapshot = makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal', 'Iron'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.loads).toEqual(['Iron']);
+  });
+
+  it('should return failure when no loadType specified', async () => {
+    const plan: FeasibleOption = {
+      action: AIActionType.DropLoad,
+      feasible: true,
+      reason: 'Drop',
+    };
+    const result = await TurnExecutor.execute(plan, makeSnapshot());
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('No loadType');
+    expect(mockDropLoadForPlayer).not.toHaveBeenCalled();
+  });
+
+  it('should return failure when bot is not at a named city', async () => {
+    // Position not in grid points — returns empty city name
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map());
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 99, col: 99 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('named city');
+    expect(mockDropLoadForPlayer).not.toHaveBeenCalled();
+  });
+
+  it('should insert audit record (best-effort)', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+
+    const plan = makeDropOption('Coal');
+    await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    const auditCall = (mockDb.query as jest.Mock).mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('bot_turn_audits'),
+    );
+    expect(auditCall).toBeDefined();
+    const params = auditCall![1] as unknown[];
+    expect(params[3]).toBe(AIActionType.DropLoad);
+  });
+
+  it('should still succeed when audit insert fails', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+    (mockDb.query as jest.Mock).mockRejectedValueOnce(new Error('audit table missing'));
+
+    const plan = makeDropOption('Coal');
+    const result = await TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }));
+
+    expect(result.success).toBe(true);
+  });
+
+  it('should throw when PlayerService.dropLoadForPlayer throws', async () => {
+    const { loadGridPoints } = require('../services/ai/MapTopology');
+    (loadGridPoints as jest.Mock).mockReturnValue(new Map([
+      ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
+    ]));
+    mockDropLoadForPlayer.mockRejectedValueOnce(new Error('Player is not carrying load'));
+
+    const plan = makeDropOption('Coal');
+    await expect(TurnExecutor.execute(plan, makeSnapshot({ position: { row: 29, col: 32 }, loads: ['Coal'] }))).rejects.toThrow('Player is not carrying load');
+  });
+});

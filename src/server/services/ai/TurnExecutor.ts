@@ -668,9 +668,10 @@ export class TurnExecutor {
   }
 
   /**
-   * DropLoad: remove a load from the bot's train and drop it at the current city.
+   * DropLoad: delegate to PlayerService.dropLoadForPlayer which handles
+   * array_remove and city placement (LoadService) in a transaction.
    * Per game rules: "Any load may be dropped at any city without a payoff."
-   * If the load is native to this city, return it to the tray instead.
+   * Audit INSERT and socket emit are best-effort post-commit.
    */
   private static async handleDropLoad(
     plan: FeasibleOption,
@@ -709,38 +710,16 @@ export class TurnExecutor {
       };
     }
 
-    // Critical DB op: remove load from player's loads array
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
+    // Delegate to PlayerService — handles array_remove and city placement
+    await PlayerService.dropLoadForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      loadType as LoadType,
+      cityName,
+    );
 
-      // Remove the first occurrence of this load type from the array
-      await client.query(
-        `UPDATE players SET loads = array_remove(loads, $1) WHERE id = $2`,
-        [loadType, snapshot.bot.playerId],
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    // Drop the load at the city (best-effort — separate from critical tx)
-    try {
-      const loadSvc = LoadService.getInstance();
-      if (loadSvc.isLoadAvailableAtCity(loadType, cityName)) {
-        // Load is native to this city — return to tray
-        await loadSvc.returnLoad(cityName, loadType as LoadType, snapshot.gameId);
-      } else {
-        // Drop as a non-native load at this city
-        await loadSvc.setLoadInCity(cityName, loadType as LoadType, snapshot.gameId);
-      }
-    } catch (dropErr) {
-      console.error('[TurnExecutor] DropLoad city placement failed (load was removed from train):', dropErr instanceof Error ? dropErr.message : dropErr);
-    }
+    // Update snapshot so subsequent steps see the correct loads
+    snapshot.bot.loads = snapshot.bot.loads.filter(l => l !== loadType);
 
     // Post-commit: audit record (best-effort)
     try {
