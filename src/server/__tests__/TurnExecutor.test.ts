@@ -652,37 +652,50 @@ function makePickupSnapshot2(overrides?: Partial<WorldSnapshot['bot']>): WorldSn
 }
 
 describe('TurnExecutor — handlePickupLoad', () => {
-  let mockClient2: ReturnType<typeof makeMockClient>;
+  const mockPickupLoadForPlayer = PlayerService.pickupLoadForPlayer as jest.Mock;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockClient2 = makeMockClient();
-    (mockDb.connect as jest.Mock).mockResolvedValue(mockClient2);
     (mockDb.query as jest.Mock).mockResolvedValue({ rows: [] });
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Coal'] });
     (PlayerService.getPlayers as jest.Mock).mockResolvedValue([
       { id: 'bot-1', money: 50, trainState: { loads: ['Coal'] } },
     ]);
+    mockEmitStatePatch.mockResolvedValue(undefined);
   });
 
-  it('should append load to player via array_append SQL', async () => {
+  it('should call PlayerService.pickupLoadForPlayer with correct params', async () => {
     const plan = makePickupPlan('Coal');
     await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
 
-    const appendCall = mockClient2.query.mock.calls.find(
-      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('array_append'),
+    expect(mockPickupLoadForPlayer).toHaveBeenCalledTimes(1);
+    expect(mockPickupLoadForPlayer).toHaveBeenCalledWith(
+      'game-1',
+      'bot-1',
+      'Coal',
+      expect.any(String), // cityName resolved from position
     );
-    expect(appendCall).toBeDefined();
-    expect(appendCall![1]).toEqual(['Coal', 'bot-1']);
   });
 
   it('should return success with zero cost', async () => {
     const plan = makePickupPlan('Iron');
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Iron'] });
     const result = await TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }));
 
     expect(result.success).toBe(true);
     expect(result.action).toBe(AIActionType.PickupLoad);
     expect(result.cost).toBe(0);
     expect(result.remainingMoney).toBe(50);
+  });
+
+  it('should update snapshot.bot.loads after pickup', async () => {
+    mockPickupLoadForPlayer.mockResolvedValue({ updatedLoads: ['Coal', 'Iron'] });
+    const plan = makePickupPlan('Iron');
+    const snapshot = makePickupSnapshot2({ loads: ['Coal'] });
+
+    await TurnExecutor.execute(plan, snapshot);
+
+    expect(snapshot.bot.loads).toEqual(['Coal', 'Iron']);
   });
 
   it('should return failure when no loadType specified', async () => {
@@ -695,6 +708,7 @@ describe('TurnExecutor — handlePickupLoad', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('No loadType');
+    expect(mockPickupLoadForPlayer).not.toHaveBeenCalled();
   });
 
   it('should still succeed when audit insert fails', async () => {
@@ -743,6 +757,13 @@ describe('TurnExecutor — handlePickupLoad', () => {
 
     expect(result.success).toBe(true);
     expect(result.action).toBe(AIActionType.PickupLoad);
+  });
+
+  it('should throw when PlayerService.pickupLoadForPlayer throws', async () => {
+    mockPickupLoadForPlayer.mockRejectedValueOnce(new Error('Train at full capacity'));
+    const plan = makePickupPlan('Coal');
+
+    await expect(TurnExecutor.execute(plan, makePickupSnapshot2({ loads: [] }))).rejects.toThrow('Train at full capacity');
   });
 });
 

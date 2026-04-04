@@ -451,9 +451,9 @@ export class TurnExecutor {
   }
 
   /**
-   * PickupLoad: append load to player's loads array.
-   * If it's a dropped load, also clear it from load_chips via LoadService.
-   * Audit INSERT and socket emit are best-effort post-commit.
+   * PickupLoad: delegate to PlayerService.pickupLoadForPlayer which handles
+   * capacity validation, array_append, and dropped-load clearing in a transaction.
+   * Audit INSERT, turn_actions INSERT, and socket emit are best-effort post-commit.
    */
   private static async handlePickupLoad(
     plan: FeasibleOption,
@@ -478,82 +478,23 @@ export class TurnExecutor {
       ? getCityNameAtPosition(snapshot.bot.position.row, snapshot.bot.position.col, loadGridPoints()) ?? ''
       : '';
 
-    // Server-side capacity check: reject pickup if train is full
-    const capacity = getTrainCapacity(snapshot.bot.trainType as TrainType);
-    if (snapshot.bot.loads.length >= capacity) {
-      return {
-        success: false,
-        action: AIActionType.PickupLoad,
-        cost: 0,
-        segmentsBuilt: 0,
-        remainingMoney: snapshot.bot.money,
-        durationMs: Date.now() - startTime,
-        error: `Train at full capacity (${snapshot.bot.loads.length}/${capacity})`,
-      };
-    }
+    // Delegate to PlayerService — handles capacity check, array_append, dropped-load clear
+    const { updatedLoads } = await PlayerService.pickupLoadForPlayer(
+      snapshot.gameId,
+      snapshot.bot.playerId,
+      loadType as LoadType,
+      cityName,
+    );
 
-    // Critical DB op: append load to player's loads array
-    const client = await db.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Double-check capacity in DB to prevent race conditions
-      const currentLoads = await client.query(
-        'SELECT array_length(loads, 1) as load_count FROM players WHERE id = $1 FOR UPDATE',
-        [snapshot.bot.playerId],
-      );
-      const dbLoadCount = currentLoads.rows[0]?.load_count ?? 0;
-      if (dbLoadCount >= capacity) {
-        await client.query('ROLLBACK');
-        return {
-          success: false,
-          action: AIActionType.PickupLoad,
-          cost: 0,
-          segmentsBuilt: 0,
-          remainingMoney: snapshot.bot.money,
-          durationMs: Date.now() - startTime,
-          error: `Train at full capacity in DB (${dbLoadCount}/${capacity})`,
-        };
-      }
-
-      await client.query(
-        'UPDATE players SET loads = array_append(loads, $1) WHERE id = $2',
-        [loadType, snapshot.bot.playerId],
-      );
-
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
-
-    // If this is a dropped load at the city, clear it (best-effort — separate from critical tx)
-    if (cityName) {
-      try {
-        const loadSvc = LoadService.getInstance();
-        await loadSvc.pickupDroppedLoad(cityName, loadType as LoadType, snapshot.gameId);
-      } catch (droppedErr) {
-        console.error('[TurnExecutor] PickupLoad dropped-load clear failed (load was picked up):', droppedErr instanceof Error ? droppedErr.message : droppedErr);
-      }
-    }
+    // Update snapshot so subsequent steps see the correct loads
+    snapshot.bot.loads = updatedLoads;
 
     // Post-commit: audit record (best-effort)
     try {
-      const auditDurationMs = Date.now() - startTime;
       await db.query(
         `INSERT INTO bot_turn_audits (game_id, player_id, turn_number, action, cost, remaining_money, duration_ms)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          snapshot.gameId,
-          snapshot.bot.playerId,
-          snapshot.turnNumber,
-          AIActionType.PickupLoad,
-          0,
-          snapshot.bot.money,
-          auditDurationMs,
-        ],
+        [snapshot.gameId, snapshot.bot.playerId, snapshot.turnNumber, AIActionType.PickupLoad, 0, snapshot.bot.money, Date.now() - startTime],
       );
     } catch (auditError) {
       console.error('[TurnExecutor] PickupLoad audit insert failed (load was picked up):', auditError instanceof Error ? auditError.message : auditError);
@@ -561,11 +502,7 @@ export class TurnExecutor {
 
     // Post-commit: record in turn_actions for traceability (best-effort)
     try {
-      const pickupAction = {
-        kind: 'pickup',
-        city: cityName,
-        loadType,
-      };
+      const pickupAction = { kind: 'pickup', city: cityName, loadType };
       await db.query(
         `INSERT INTO turn_actions (player_id, game_id, turn_number, actions)
          VALUES ($1, $2, $3, $4::jsonb)
