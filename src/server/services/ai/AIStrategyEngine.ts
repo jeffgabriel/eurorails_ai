@@ -954,9 +954,10 @@ export class AIStrategyEngine {
       const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
       const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
+      const majorCityLookupForLog = getMajorCityLookup();
       for (const step of allSteps) {
         if (step.type === AIActionType.MoveTrain) {
-          milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? step.path.length - 1 : 0);
+          milepostsMoved = (milepostsMoved ?? 0) + (step.path.length > 0 ? computeEffectivePathLength(step.path, majorCityLookupForLog) : 0);
           trackUsageFee = (trackUsageFee ?? 0) + step.totalFee;
           if (step.path.length > 0) {
             const last = movementPath[movementPath.length - 1];

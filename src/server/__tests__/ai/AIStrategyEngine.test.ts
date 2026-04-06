@@ -4197,4 +4197,111 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(snapshot.bot.loads).toEqual(['Hops', 'Wine']);
     });
   });
+
+  describe('JIRA-32: milepostsMoved uses computeEffectivePathLength', () => {
+    it('should report effective mileposts (excluding intra-city hops) in milepostsMoved', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const { computeEffectivePathLength } = require('../../../shared/services/majorCityGroups');
+
+      // Simulate a path of 12 raw edges (13 nodes) with 2 intra-city hops discounted,
+      // so computeEffectivePathLength returns 10 instead of 12
+      const path = Array.from({ length: 13 }, (_, i) => ({ row: 10, col: i }));
+      (computeEffectivePathLength as jest.Mock).mockReturnValueOnce(10);
+
+      // Mock moveTrainForUser to return a successful result
+      (PlayerService.moveTrainForUser as any).mockResolvedValue({
+        feeTotal: 0,
+        updatedMoney: 50,
+        affectedPlayerIds: [],
+      });
+
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup' as const, loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'test',
+        createdAtTurn: 1,
+      };
+      mockPlanRoute.mockResolvedValue({ route, model: 'test', latencyMs: 0, llmLog: [] });
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path, fees: new Set<string>(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving',
+      });
+      mockClient.query.mockResolvedValue(mockResult([]));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Should report 10 (effective) not 12 (raw path.length - 1)
+      expect(result.milepostsMoved).toBe(10);
+      expect(computeEffectivePathLength).toHaveBeenCalledWith(path, expect.any(Map));
+    });
+
+    it('should sum effective mileposts across multiple MoveTrain steps', async () => {
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+
+      const { computeEffectivePathLength } = require('../../../shared/services/majorCityGroups');
+
+      const path1 = [{ row: 10, col: 10 }, { row: 10, col: 11 }, { row: 10, col: 12 }];
+      const path2 = [{ row: 10, col: 12 }, { row: 10, col: 13 }];
+      // path1 has 2 raw edges, discount to 1 (one intra-city hop)
+      // path2 has 1 raw edge, no discount
+      (computeEffectivePathLength as jest.Mock)
+        .mockReturnValueOnce(1)
+        .mockReturnValueOnce(1);
+
+      // Mock moveTrainForUser to return a successful result (called once for TurnExecutor MultiAction)
+      (PlayerService.moveTrainForUser as any).mockResolvedValue({
+        feeTotal: 0,
+        updatedMoney: 50,
+        affectedPlayerIds: [],
+      });
+
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const context = makeContext();
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup' as const, loadType: 'Steel', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'test',
+        createdAtTurn: 1,
+      };
+      mockPlanRoute.mockResolvedValue({ route, model: 'test', latencyMs: 0, llmLog: [] });
+      mockPlanExecutorExecute.mockResolvedValue({
+        plan: { type: AIActionType.MoveTrain, path: path1, fees: new Set<string>(), totalFee: 0 },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+        description: 'Moving',
+      });
+      // TurnComposer enriches with a MultiAction containing two move steps
+      mockTurnComposerCompose.mockResolvedValue({
+        plan: {
+          type: 'MultiAction' as const,
+          steps: [
+            { type: AIActionType.MoveTrain, path: path1, fees: new Set<string>(), totalFee: 0 },
+            { type: AIActionType.MoveTrain, path: path2, fees: new Set<string>(), totalFee: 0 },
+          ],
+        },
+        trace: {} as any,
+      });
+      mockClient.query.mockResolvedValue(mockResult([]));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // 1 + 1 = 2 total effective mileposts
+      expect(result.milepostsMoved).toBe(2);
+    });
+  });
 });
