@@ -291,12 +291,21 @@ router.post('/updateCurrentPlayer', async (req, res) => {
 
         // Check game status for phase-aware routing
         const gameResult = await db.query(
-            'SELECT status FROM games WHERE id = $1',
+            'SELECT status, current_player_index FROM games WHERE id = $1',
             [gameId],
         );
-        const gameStatus = gameResult.rows[0]?.status;
+        const gameRow = gameResult.rows[0];
+        const gameStatus = gameRow?.status;
 
         if (gameStatus === 'initialBuild') {
+            // Reject stale requests: the client must be advancing the current player's turn.
+            // A mismatch means another caller already advanced the turn (race condition guard).
+            if (gameRow.current_player_index !== currentPlayerIndex) {
+                return res.status(409).json({
+                    error: 'Conflict',
+                    details: `Turn already advanced: expected currentPlayerIndex ${gameRow.current_player_index}, got ${currentPlayerIndex}`,
+                });
+            }
             // During initial build phase, use InitialBuildService for turn advancement
             await InitialBuildService.advanceTurn(gameId);
             const gameState = await PlayerService.getGameState(gameId);

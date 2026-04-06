@@ -4,6 +4,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 jest.mock('../db/index', () => ({
   db: {
     query: jest.fn<() => Promise<any>>(),
+    connect: jest.fn<() => Promise<any>>(),
   },
 }));
 
@@ -18,12 +19,28 @@ import { emitTurnChange, emitStatePatch } from '../services/socketService';
 import { InitialBuildService } from '../services/InitialBuildService';
 
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
+const mockConnect = (db as any).connect as unknown as jest.Mock<() => Promise<any>>;
 const mockEmitTurnChange = emitTurnChange as jest.MockedFunction<typeof emitTurnChange>;
 const mockEmitStatePatch = emitStatePatch as jest.MockedFunction<typeof emitStatePatch>;
 
 // Helper to create a mock QueryResult
 function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
+}
+
+// Helper to create a mock transaction client for advanceTurn tests
+// advanceTurn uses db.connect() + client.query() within a transaction
+function makeClientMock(queryResponses: any[]) {
+  let callIndex = 0;
+  const clientQuery = jest.fn<(...args: any[]) => Promise<any>>().mockImplementation(() => {
+    const response = queryResponses[callIndex] ?? mockResult([]);
+    callIndex++;
+    return Promise.resolve(response);
+  });
+  return {
+    query: clientQuery,
+    release: jest.fn<() => void>(),
+  };
 }
 
 describe('InitialBuildService', () => {
@@ -94,40 +111,52 @@ describe('InitialBuildService', () => {
   describe('advanceTurn', () => {
     describe('Round 1 progression', () => {
       it('should advance to next player within round 1', async () => {
-        // Game state: round 1, order [A, B, C], current is A (index 0)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB, playerC],
-          current_player_index: 0,
-        }]));
-        // Players query
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        // UPDATE query
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        // Transaction client query sequence:
+        // 0: BEGIN
+        // 1: SELECT ... FOR UPDATE (game state)
+        // 2: SELECT players
+        // 3: UPDATE games
+        // 4: COMMIT
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{    // SELECT FOR UPDATE
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 0,
+          }]),
+          mockResult(standardPlayers), // SELECT players
+          mockResult([]),              // UPDATE
+          mockResult([]),              // COMMIT
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // Should advance to playerB (index 1)
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1]).toEqual([1, gameId]);
         expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 1, playerB);
       });
 
       it('should advance from second to third player in round 1', async () => {
-        // Current is B (index 1), next should be C (index 2)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB, playerC],
-          current_player_index: 1,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 1,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1]).toEqual([2, gameId]);
         expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 2, playerC);
       });
@@ -135,20 +164,24 @@ describe('InitialBuildService', () => {
 
     describe('Round 1 to Round 2 transition', () => {
       it('should transition to round 2 with reversed order when last player in round 1 finishes', async () => {
-        // Current is C (last in round 1 order [A, B, C])
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB, playerC],
-          current_player_index: 2, // C is at standard index 2
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 2, // C is at standard index 2
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // Should set round 2 with reversed order [C, B, A]
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[0]).toContain('initial_build_round = 2');
         expect(updateCall[1][0]).toBe(JSON.stringify([playerC, playerB, playerA]));
         // First player in reversed order is C (index 2)
@@ -158,19 +191,23 @@ describe('InitialBuildService', () => {
 
       it('should reverse a 2-player order correctly', async () => {
         const twoPlayers = [{ id: playerA }, { id: playerB }];
-        // Round 1 order [A, B], current is B (last)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB],
-          current_player_index: 1,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(twoPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB],
+            current_player_index: 1,
+          }]),
+          mockResult(twoPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1][0]).toBe(JSON.stringify([playerB, playerA]));
         // First in reversed order is B (index 1)
         expect(updateCall[1][1]).toBe(1);
@@ -180,39 +217,47 @@ describe('InitialBuildService', () => {
 
     describe('Round 2 progression', () => {
       it('should advance to next player within round 2', async () => {
-        // Round 2, order [C, B, A], current is C (index 2)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 2,
-          initial_build_order: [playerC, playerB, playerA],
-          current_player_index: 2, // C is at standard index 2
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 2,
+            initial_build_order: [playerC, playerB, playerA],
+            current_player_index: 2, // C is at standard index 2
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // Next in order is B (index 1)
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1]).toEqual([1, gameId]);
         expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 1, playerB);
       });
 
       it('should advance from second to third player in round 2', async () => {
-        // Round 2, order [C, B, A], current is B (index 1)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 2,
-          initial_build_order: [playerC, playerB, playerA],
-          current_player_index: 1,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 2,
+            initial_build_order: [playerC, playerB, playerA],
+            current_player_index: 1,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // Next is A (index 0)
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1]).toEqual([0, gameId]);
         expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 0, playerA);
       });
@@ -220,52 +265,65 @@ describe('InitialBuildService', () => {
 
     describe('Round 2 to Active transition', () => {
       it('should transition to active status when last player in round 2 finishes', async () => {
-        // Round 2, order [C, B, A], current is A (last in round 2)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 2,
-          initial_build_order: [playerC, playerB, playerA],
-          current_player_index: 0, // A is at standard index 0
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 2,
+            initial_build_order: [playerC, playerB, playerA],
+            current_player_index: 0, // A is at standard index 0
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[0]).toContain("status = 'active'");
         expect(updateCall[0]).toContain('initial_build_round = 0');
         expect(updateCall[0]).toContain('initial_build_order = NULL');
       });
 
       it('should set current_player_index to the last player in round 2 (per game rules)', async () => {
-        // Round 2, order [C, B, A], last player is A (index 0 in standard order)
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 2,
-          initial_build_order: [playerC, playerB, playerA],
-          current_player_index: 0,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 2,
+            initial_build_order: [playerC, playerB, playerA],
+            current_player_index: 0,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // "The last player from the second building turn becomes the first player"
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[1][0]).toBe(0); // playerA's index
         expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 0, playerA);
       });
 
       it('should emit state:patch with active status', async () => {
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 2,
-          initial_build_order: [playerC, playerB, playerA],
-          current_player_index: 0,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 2,
+            initial_build_order: [playerC, playerB, playerA],
+            current_player_index: 0,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
@@ -277,14 +335,19 @@ describe('InitialBuildService', () => {
 
       it('should not emit state:patch during round transitions', async () => {
         // Round 1 → Round 2 transition should NOT emit state:patch
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB, playerC],
-          current_player_index: 2,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(standardPlayers));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 2,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
@@ -294,7 +357,12 @@ describe('InitialBuildService', () => {
 
     describe('error handling', () => {
       it('should throw when game is not found', async () => {
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([]), // SELECT FOR UPDATE → no rows
+          mockResult([]), // ROLLBACK
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await expect(
           InitialBuildService.advanceTurn(gameId),
@@ -302,36 +370,134 @@ describe('InitialBuildService', () => {
       });
 
       it('should throw when game is not in initialBuild phase', async () => {
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'active',
-          initial_build_round: 0,
-          initial_build_order: null,
-          current_player_index: 0,
-        }]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{  // SELECT FOR UPDATE
+            status: 'active',
+            initial_build_round: 0,
+            initial_build_order: null,
+            current_player_index: 0,
+          }]),
+          mockResult([]), // ROLLBACK
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await expect(
           InitialBuildService.advanceTurn(gameId),
         ).rejects.toThrow('not in initialBuild phase');
       });
+
+      it('should rollback and rethrow on unexpected errors', async () => {
+        const client = makeClientMock([
+          mockResult([]),        // BEGIN
+          mockResult([{          // SELECT FOR UPDATE
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 0,
+          }]),
+          mockResult(standardPlayers), // SELECT players
+        ]);
+        // Make the UPDATE throw
+        client.query.mockImplementationOnce(() => {
+          throw new Error('DB write error');
+        });
+        mockConnect.mockResolvedValueOnce(client);
+
+        await expect(
+          InitialBuildService.advanceTurn(gameId),
+        ).rejects.toThrow('DB write error');
+
+        // ROLLBACK should have been called
+        const calls = client.query.mock.calls.map((c: any[]) => c[0]);
+        expect(calls).toContain('ROLLBACK');
+        // Client should be released
+        expect(client.release).toHaveBeenCalled();
+      });
+
+      it('should always release the client even on error', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([]), // SELECT → not found → ROLLBACK
+          mockResult([]), // ROLLBACK
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
+
+        await expect(
+          InitialBuildService.advanceTurn(gameId),
+        ).rejects.toThrow();
+
+        expect(client.release).toHaveBeenCalled();
+      });
+    });
+
+    describe('SELECT FOR UPDATE locking', () => {
+      it('should use SELECT ... FOR UPDATE to acquire row-level lock', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB],
+            current_player_index: 0,
+          }]),
+          mockResult([{ id: playerA }, { id: playerB }]),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
+
+        await InitialBuildService.advanceTurn(gameId);
+
+        // Second client.query call (index 1, after BEGIN) must use FOR UPDATE
+        const selectCall = client.query.mock.calls[1];
+        expect(selectCall[0]).toContain('FOR UPDATE');
+        expect(selectCall[1]).toEqual([gameId]);
+      });
+
+      it('should wrap all DB operations in a transaction (BEGIN ... COMMIT)', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB],
+            current_player_index: 0,
+          }]),
+          mockResult([{ id: playerA }, { id: playerB }]),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
+
+        await InitialBuildService.advanceTurn(gameId);
+
+        const calls = client.query.mock.calls.map((c: any[]) => c[0]);
+        expect(calls[0]).toBe('BEGIN');
+        expect(calls[calls.length - 1]).toBe('COMMIT');
+      });
     });
 
     describe('player index mapping', () => {
       it('should correctly map non-sequential player IDs to standard indices', async () => {
-        // Standard order: [X, Y, Z] at indices [0, 1, 2]
-        // Round 1 order: [Y, Z, X] — Y is first
         const playerX = 'player-x';
         const playerY = 'player-y';
         const playerZ = 'player-z';
         const players = [{ id: playerX }, { id: playerY }, { id: playerZ }];
 
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerY, playerZ, playerX],
-          current_player_index: 1, // Y is at standard index 1
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult(players));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerY, playerZ, playerX],
+            current_player_index: 1, // Y is at standard index 1
+          }]),
+          mockResult(players),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
@@ -340,42 +506,52 @@ describe('InitialBuildService', () => {
       });
 
       it('should handle single-player game (edge case)', async () => {
-        // Single player, round 1, they just took their turn
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA],
-          current_player_index: 0,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult([{ id: playerA }]));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA],
+            current_player_index: 0,
+          }]),
+          mockResult([{ id: playerA }]),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
         // Should transition to round 2
-        const updateCall = mockQuery.mock.calls[2];
+        const updateCall = client.query.mock.calls[3];
         expect(updateCall[0]).toContain('initial_build_round = 2');
       });
     });
 
     describe('DB query verification', () => {
-      it('should query game state with correct SQL', async () => {
-        mockQuery.mockResolvedValueOnce(mockResult([{
-          status: 'initialBuild',
-          initial_build_round: 1,
-          initial_build_order: [playerA, playerB],
-          current_player_index: 0,
-        }]));
-        mockQuery.mockResolvedValueOnce(mockResult([{ id: playerA }, { id: playerB }]));
-        mockQuery.mockResolvedValueOnce(mockResult([]));
+      it('should query game state with correct SQL using FOR UPDATE', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB],
+            current_player_index: 0,
+          }]),
+          mockResult([{ id: playerA }, { id: playerB }]),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
 
         await InitialBuildService.advanceTurn(gameId);
 
-        // First query: game state
-        expect(mockQuery.mock.calls[0][1]).toEqual([gameId]);
-        // Second query: players
-        expect(mockQuery.mock.calls[1][0]).toContain('ORDER BY created_at ASC');
-        expect(mockQuery.mock.calls[1][1]).toEqual([gameId]);
+        // Second call (index 1): game state with FOR UPDATE
+        expect(client.query.mock.calls[1][1]).toEqual([gameId]);
+        expect(client.query.mock.calls[1][0]).toContain('FOR UPDATE');
+        // Third call (index 2): players
+        expect(client.query.mock.calls[2][0]).toContain('ORDER BY created_at ASC');
+        expect(client.query.mock.calls[2][1]).toEqual([gameId]);
       });
     });
   });
