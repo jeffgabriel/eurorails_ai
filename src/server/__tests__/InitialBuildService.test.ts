@@ -369,6 +369,47 @@ describe('InitialBuildService', () => {
         ).rejects.toThrow('Game game-1 not found');
       });
 
+      it('should throw with stale flag when expectedCurrentIndex mismatches', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{  // SELECT FOR UPDATE — DB says index is 1
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 1,
+          }]),
+          mockResult([]), // ROLLBACK
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
+
+        // Caller expected index 0, but DB has 1 (another caller already advanced)
+        const err = await InitialBuildService.advanceTurn(gameId, 0).catch((e: any) => e);
+        expect(err.message).toContain('Stale request');
+        expect(err.stale).toBe(true);
+        // Should not have reached the players query (BEGIN, SELECT, ROLLBACK from catch)
+        expect(client.query.mock.calls.length).toBe(3);
+      });
+
+      it('should proceed normally when expectedCurrentIndex matches', async () => {
+        const client = makeClientMock([
+          mockResult([]), // BEGIN
+          mockResult([{
+            status: 'initialBuild',
+            initial_build_round: 1,
+            initial_build_order: [playerA, playerB, playerC],
+            current_player_index: 0,
+          }]),
+          mockResult(standardPlayers),
+          mockResult([]),
+          mockResult([]),
+        ]);
+        mockConnect.mockResolvedValueOnce(client);
+
+        await InitialBuildService.advanceTurn(gameId, 0);
+
+        expect(mockEmitTurnChange).toHaveBeenCalledWith(gameId, 1, playerB);
+      });
+
       it('should throw when game is not in initialBuild phase', async () => {
         const client = makeClientMock([
           mockResult([]), // BEGIN

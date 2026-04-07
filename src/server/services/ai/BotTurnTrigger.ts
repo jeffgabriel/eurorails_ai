@@ -276,7 +276,7 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
   if (!game) return;
 
   if (game.status === 'initialBuild') {
-    await InitialBuildService.advanceTurn(gameId);
+    await InitialBuildService.advanceTurn(gameId, game.current_player_index);
   } else if (game.status === 'active') {
     const countResult = await db.query(
       'SELECT COUNT(*)::int as count FROM players WHERE game_id = $1',

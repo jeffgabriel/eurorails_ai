@@ -298,16 +298,21 @@ router.post('/updateCurrentPlayer', async (req, res) => {
         const gameStatus = gameRow?.status;
 
         if (gameStatus === 'initialBuild') {
-            // Reject stale requests: the client must be advancing the current player's turn.
-            // A mismatch means another caller already advanced the turn (race condition guard).
-            if (gameRow.current_player_index !== currentPlayerIndex) {
-                return res.status(409).json({
-                    error: 'Conflict',
-                    details: `Turn already advanced: expected currentPlayerIndex ${gameRow.current_player_index}, got ${currentPlayerIndex}`,
-                });
+            // During initial build phase, use InitialBuildService for turn advancement.
+            // Pass the DB's current_player_index so advanceTurn can detect stale/duplicate
+            // requests inside its serialised transaction (the client sends the *next* index,
+            // so we cannot compare it here — the check lives inside the FOR UPDATE lock).
+            try {
+                await InitialBuildService.advanceTurn(gameId, gameRow.current_player_index);
+            } catch (err: any) {
+                if (err.stale) {
+                    return res.status(409).json({
+                        error: 'Conflict',
+                        details: err.message,
+                    });
+                }
+                throw err;
             }
-            // During initial build phase, use InitialBuildService for turn advancement
-            await InitialBuildService.advanceTurn(gameId);
             const gameState = await PlayerService.getGameState(gameId);
             return res.status(200).json(gameState);
         }

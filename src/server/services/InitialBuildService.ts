@@ -57,8 +57,11 @@ export class InitialBuildService {
    * and round 2→active transition.
    *
    * @param gameId - The game UUID
+   * @param expectedCurrentIndex - If provided, the caller's snapshot of current_player_index.
+   *   Verified inside the transaction after acquiring the row lock. A mismatch means the turn
+   *   was already advanced by a concurrent caller (race condition guard).
    */
-  static async advanceTurn(gameId: string): Promise<void> {
+  static async advanceTurn(gameId: string, expectedCurrentIndex?: number): Promise<void> {
     const client = await db.connect();
     try {
       await client.query('BEGIN');
@@ -77,6 +80,16 @@ export class InitialBuildService {
       if (game.status !== 'initialBuild') {
         await client.query('ROLLBACK');
         throw new Error(`Game ${gameId} is not in initialBuild phase (status: ${game.status})`);
+      }
+
+      // Staleness check: reject if the caller's snapshot of current_player_index
+      // no longer matches the locked row (another caller already advanced the turn).
+      if (expectedCurrentIndex !== undefined && game.current_player_index !== expectedCurrentIndex) {
+        const err = new Error(
+          `Stale request: expected current_player_index ${expectedCurrentIndex}, got ${game.current_player_index}`,
+        );
+        (err as any).stale = true;
+        throw err;
       }
 
       // Get standard player ordering (within the same transaction)
@@ -160,7 +173,11 @@ export class InitialBuildService {
       await client.query('COMMIT');
       await emitCallback();
     } catch (err) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        // Swallow rollback error so the original error propagates
+      }
       throw err;
     } finally {
       client.release();

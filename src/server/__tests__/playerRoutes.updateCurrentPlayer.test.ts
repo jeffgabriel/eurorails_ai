@@ -103,24 +103,28 @@ describe('POST /api/players/updateCurrentPlayer', () => {
   });
 
   describe('initialBuild phase', () => {
-    it('should return 409 when currentPlayerIndex does not match game current_player_index', async () => {
-      // Game has current_player_index = 1, but request says 0 (stale)
+    it('should return 409 when advanceTurn detects a stale request', async () => {
+      // Game has current_player_index = 0; advanceTurn's FOR UPDATE lock discovers
+      // another caller already advanced, so it throws with stale = true.
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'initialBuild',
-        current_player_index: 1,
+        current_player_index: 0,
       }]));
+      const staleErr = new Error('Stale request: expected current_player_index 0, got 1');
+      (staleErr as any).stale = true;
+      mockAdvanceTurn.mockRejectedValueOnce(staleErr);
 
       const response = await request(app)
         .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 0 })
+        .send({ gameId, currentPlayerIndex: 1 })
         .expect(409);
 
       expect(response.body.error).toBe('Conflict');
-      expect(response.body.details).toContain('Turn already advanced');
-      expect(mockAdvanceTurn).not.toHaveBeenCalled();
+      expect(response.body.details).toContain('Stale request');
+      expect(mockAdvanceTurn).toHaveBeenCalledWith(gameId, 0);
     });
 
-    it('should call InitialBuildService.advanceTurn when currentPlayerIndex matches', async () => {
+    it('should call InitialBuildService.advanceTurn with expectedCurrentIndex', async () => {
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'initialBuild',
         current_player_index: 0,
@@ -128,10 +132,10 @@ describe('POST /api/players/updateCurrentPlayer', () => {
 
       const response = await request(app)
         .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 0 })
+        .send({ gameId, currentPlayerIndex: 1 })
         .expect(200);
 
-      expect(mockAdvanceTurn).toHaveBeenCalledWith(gameId);
+      expect(mockAdvanceTurn).toHaveBeenCalledWith(gameId, 0);
       expect(response.body).toEqual(mockGameState);
     });
 
@@ -143,7 +147,7 @@ describe('POST /api/players/updateCurrentPlayer', () => {
 
       await request(app)
         .post('/api/players/updateCurrentPlayer')
-        .send({ gameId, currentPlayerIndex: 0 })
+        .send({ gameId, currentPlayerIndex: 1 })
         .expect(200);
 
       expect(mockUpdateCurrentPlayerIndex).not.toHaveBeenCalled();
