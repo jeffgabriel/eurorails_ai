@@ -61,7 +61,8 @@ function mockResult(rows: any[]) {
 }
 
 const gameId = 'game-123';
-const mockGameState = { id: gameId, status: 'initialBuild', currentPlayerIndex: 0 };
+// PlayerService.getGameState returns only { currentPlayerIndex }
+const mockGameState = { currentPlayerIndex: 0 };
 
 describe('POST /api/players/updateCurrentPlayer', () => {
   beforeEach(() => {
