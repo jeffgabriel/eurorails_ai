@@ -291,14 +291,28 @@ router.post('/updateCurrentPlayer', async (req, res) => {
 
         // Check game status for phase-aware routing
         const gameResult = await db.query(
-            'SELECT status FROM games WHERE id = $1',
+            'SELECT status, current_player_index FROM games WHERE id = $1',
             [gameId],
         );
-        const gameStatus = gameResult.rows[0]?.status;
+        const gameRow = gameResult.rows[0];
+        const gameStatus = gameRow?.status;
 
         if (gameStatus === 'initialBuild') {
-            // During initial build phase, use InitialBuildService for turn advancement
-            await InitialBuildService.advanceTurn(gameId);
+            // During initial build phase, use InitialBuildService for turn advancement.
+            // Pass the DB's current_player_index so advanceTurn can detect stale/duplicate
+            // requests inside its serialised transaction (the client sends the *next* index,
+            // so we cannot compare it here — the check lives inside the FOR UPDATE lock).
+            try {
+                await InitialBuildService.advanceTurn(gameId, gameRow.current_player_index);
+            } catch (err: any) {
+                if (err.stale) {
+                    return res.status(409).json({
+                        error: 'Conflict',
+                        details: err.message,
+                    });
+                }
+                throw err;
+            }
             const gameState = await PlayerService.getGameState(gameId);
             return res.status(200).json(gameState);
         }

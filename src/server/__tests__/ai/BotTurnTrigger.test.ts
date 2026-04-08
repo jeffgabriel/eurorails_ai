@@ -1,11 +1,12 @@
 /**
- * BotTurnTrigger tests — JIRA-19
+ * BotTurnTrigger tests
  *
- * Tests the best-effort persistence of LLM decision metadata
- * to the bot_turn_audits.details JSONB column.
+ * Covers: core behavior (enable flag, connected human, turn execution,
+ * reconnect, advanceTurnAfterBot), JIRA-19 (LLM metadata persistence),
+ * and JIRA-106 (bot victory check).
  */
 
-import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
 // ── Mock external systems ─────────────────────────────────────────────────
 
@@ -17,6 +18,7 @@ jest.mock('../../db/index', () => ({
 
 jest.mock('../../services/socketService', () => ({
   emitToGame: jest.fn<() => void>(),
+  emitTurnChange: jest.fn<() => void>(),
   getSocketIO: jest.fn<() => any>().mockReturnValue(null),
   emitVictoryTriggered: jest.fn<() => void>(),
   emitGameOver: jest.fn<() => void>(),
@@ -70,10 +72,15 @@ jest.mock('../../services/ai/connectedMajorCities', () => ({
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────
 
-import { onTurnChange, pendingBotTurns, checkBotVictory } from '../../services/ai/BotTurnTrigger';
+import {
+  onTurnChange, pendingBotTurns, queuedBotTurns, checkBotVictory,
+  isAIBotsEnabled, hasConnectedHuman, onHumanReconnect, advanceTurnAfterBot,
+} from '../../services/ai/BotTurnTrigger';
 import { AIStrategyEngine } from '../../services/ai/AIStrategyEngine';
 import { db } from '../../db/index';
-import { emitToGame, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
+import { emitToGame, getSocketIO, emitVictoryTriggered, emitGameOver } from '../../services/socketService';
+import { PlayerService } from '../../services/playerService';
+import { InitialBuildService } from '../../services/InitialBuildService';
 import { AIActionType } from '../../../shared/types/GameTypes';
 import { VictoryService } from '../../services/victoryService';
 import { TrackService } from '../../services/trackService';
@@ -82,6 +89,7 @@ import { getConnectedMajorCities } from '../../services/ai/connectedMajorCities'
 const mockQuery = db.query as unknown as jest.Mock<(...args: any[]) => Promise<any>>;
 const mockTakeTurn = AIStrategyEngine.takeTurn as jest.MockedFunction<typeof AIStrategyEngine.takeTurn>;
 const mockEmitToGame = emitToGame as jest.MockedFunction<typeof emitToGame>;
+const mockGetSocketIO = getSocketIO as jest.MockedFunction<typeof getSocketIO>;
 
 function mockResult(rows: any[]) {
   return { rows, command: '', rowCount: rows.length, oid: 0, fields: [] };
@@ -385,5 +393,322 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     expect(result).toBe(false);
     expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+});
+
+// ── Core behavior tests ──────────────────────────────────────────────────
+
+describe('BotTurnTrigger — core behavior', () => {
+  const originalEnv = process.env.ENABLE_AI_BOTS;
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.resetAllMocks();
+    process.env.ENABLE_AI_BOTS = 'true';
+    mockTakeTurn.mockResolvedValue({
+      action: 'PassTurn' as any,
+      segmentsBuilt: 0,
+      cost: 0,
+      durationMs: 10,
+      success: true,
+    });
+  });
+
+  afterEach(async () => {
+    jest.useRealTimers();
+    if (originalEnv === undefined) {
+      delete process.env.ENABLE_AI_BOTS;
+    } else {
+      process.env.ENABLE_AI_BOTS = originalEnv;
+    }
+    pendingBotTurns.clear();
+    queuedBotTurns.clear();
+  });
+
+  describe('isAIBotsEnabled', () => {
+    it('should return true when ENABLE_AI_BOTS is unset', () => {
+      delete process.env.ENABLE_AI_BOTS;
+      expect(isAIBotsEnabled()).toBe(true);
+    });
+
+    it('should return true when ENABLE_AI_BOTS is "true"', () => {
+      process.env.ENABLE_AI_BOTS = 'true';
+      expect(isAIBotsEnabled()).toBe(true);
+    });
+
+    it('should return false when ENABLE_AI_BOTS is "false"', () => {
+      process.env.ENABLE_AI_BOTS = 'false';
+      expect(isAIBotsEnabled()).toBe(false);
+    });
+
+    it('should return false when ENABLE_AI_BOTS is "FALSE" (case-insensitive)', () => {
+      process.env.ENABLE_AI_BOTS = 'FALSE';
+      expect(isAIBotsEnabled()).toBe(false);
+    });
+
+    it('should return true when ENABLE_AI_BOTS is empty string', () => {
+      process.env.ENABLE_AI_BOTS = '';
+      expect(isAIBotsEnabled()).toBe(true);
+    });
+  });
+
+  describe('hasConnectedHuman', () => {
+    it('should return true when io is null (testing fallback)', async () => {
+      mockGetSocketIO.mockReturnValue(null);
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(true);
+    });
+
+    it('should return true when room has connected sockets', async () => {
+      const mockRoom = new Set(['socket-1', 'socket-2']);
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map([['game-1', mockRoom]]),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(true);
+    });
+
+    it('should return false when room has no sockets', async () => {
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map(),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(false);
+    });
+
+    it('should return false when room exists but is empty', async () => {
+      const mockRoom = new Set();
+      const mockIO = {
+        sockets: {
+          adapter: {
+            rooms: new Map([['game-1', mockRoom]]),
+          },
+        },
+      };
+      mockGetSocketIO.mockReturnValue(mockIO as any);
+      const result = await hasConnectedHuman('game-1');
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('onTurnChange', () => {
+    it('should return immediately when ENABLE_AI_BOTS is false', async () => {
+      process.env.ENABLE_AI_BOTS = 'false';
+      await onTurnChange('game-1', 0, 'player-1');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('should return when player is not a bot', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: false }], command: '', rowCount: 1, oid: 0, fields: [] });
+      await onTurnChange('game-1', 0, 'player-1');
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockEmitToGame).not.toHaveBeenCalled();
+    });
+
+    it('should return when game status is completed', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] })
+        .mockResolvedValueOnce({ rows: [{ status: 'completed' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      await onTurnChange('game-1', 0, 'bot-1');
+      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockEmitToGame).not.toHaveBeenCalled();
+    });
+
+    it('should return when game status is abandoned', async () => {
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] })
+        .mockResolvedValueOnce({ rows: [{ status: 'abandoned' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      await onTurnChange('game-1', 0, 'bot-1');
+      expect(mockEmitToGame).not.toHaveBeenCalled();
+    });
+
+    it('should execute bot turn with delay for bot player in active game', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 3 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 3 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      const promise = onTurnChange('game-1', 0, 'bot-1');
+      await jest.advanceTimersByTimeAsync(1500);
+      await promise;
+
+      expect(mockEmitToGame).toHaveBeenCalledWith('game-1', 'bot:turn-start', expect.objectContaining({
+        botPlayerId: 'bot-1',
+        turnNumber: 3,
+      }));
+      expect(mockTakeTurn).toHaveBeenCalledWith('game-1', 'bot-1');
+      expect(mockEmitToGame).toHaveBeenCalledWith('game-1', 'bot:turn-complete', expect.objectContaining({
+        botPlayerId: 'bot-1',
+        action: 'PassTurn',
+        segmentsBuilt: 0,
+        cost: 0,
+      }));
+    });
+
+    it('should prevent double execution with pendingBotTurns guard', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 2 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      const promise1 = onTurnChange('game-1', 0, 'bot-1');
+      const promise2 = onTurnChange('game-1', 0, 'bot-1');
+
+      await jest.advanceTimersByTimeAsync(1500);
+      await promise1;
+      await promise2;
+
+      const startCalls = mockEmitToGame.mock.calls.filter(
+        (c: any[]) => c[1] === 'bot:turn-start'
+      );
+      expect(startCalls).toHaveLength(1);
+    });
+
+    it('should clean up pendingBotTurns after execution', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 2 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      const promise = onTurnChange('game-1', 0, 'bot-1');
+
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(pendingBotTurns.has('game-1')).toBe(true);
+      await jest.advanceTimersByTimeAsync(1500);
+      await promise;
+      expect(pendingBotTurns.has('game-1')).toBe(false);
+    });
+
+    it('should clean up pendingBotTurns even on error', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockRejectedValueOnce(new Error('DB connection lost'));
+
+      const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const promise = onTurnChange('game-1', 0, 'bot-1');
+      await jest.advanceTimersByTimeAsync(1500);
+      await promise;
+
+      expect(pendingBotTurns.has('game-1')).toBe(false);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error executing bot turn'),
+        expect.any(Error),
+      );
+      consoleSpy.mockRestore();
+    });
+  });
+
+  describe('onHumanReconnect', () => {
+    it('should return immediately when ENABLE_AI_BOTS is false', async () => {
+      process.env.ENABLE_AI_BOTS = 'false';
+      await onHumanReconnect('game-1');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('should do nothing when no queued turn exists', async () => {
+      await onHumanReconnect('game-1');
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+
+    it('should dequeue and execute when queued turn exists', async () => {
+      queuedBotTurns.set('game-1', {
+        gameId: 'game-1',
+        currentPlayerIndex: 0,
+        currentPlayerId: 'bot-1',
+      });
+
+      mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 2 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      const promise = onHumanReconnect('game-1');
+      await jest.advanceTimersByTimeAsync(1500);
+      await promise;
+
+      expect(queuedBotTurns.has('game-1')).toBe(false);
+      expect(mockEmitToGame).toHaveBeenCalledWith('game-1', 'bot:turn-start', expect.any(Object));
+    });
+  });
+
+  describe('advanceTurnAfterBot', () => {
+    beforeEach(() => {
+      jest.useRealTimers();
+    });
+
+    afterEach(() => {
+      jest.useFakeTimers();
+    });
+
+    it('should call PlayerService.updateCurrentPlayerIndex for active games', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 3 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
+
+      await advanceTurnAfterBot('game-1');
+
+      expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith('game-1', 2);
+    });
+
+    it('should wrap around player index for active games', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 2 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: 3 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      (PlayerService.updateCurrentPlayerIndex as jest.Mock<() => Promise<void>>).mockResolvedValue(undefined);
+
+      await advanceTurnAfterBot('game-1');
+
+      expect(PlayerService.updateCurrentPlayerIndex).toHaveBeenCalledWith('game-1', 0);
+    });
+
+    it('should do nothing for completed games', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'completed', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      await advanceTurnAfterBot('game-1');
+
+      expect(PlayerService.updateCurrentPlayerIndex).not.toHaveBeenCalled();
+    });
+
+    it('should do nothing for abandoned games', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'abandoned', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      await advanceTurnAfterBot('game-1');
+
+      expect(PlayerService.updateCurrentPlayerIndex).not.toHaveBeenCalled();
+    });
+
+    it('should call InitialBuildService.advanceTurn for initialBuild games', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'initialBuild', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+
+      await advanceTurnAfterBot('game-1');
+
+      expect(InitialBuildService.advanceTurn).toHaveBeenCalledWith('game-1', 0);
+    });
   });
 });
