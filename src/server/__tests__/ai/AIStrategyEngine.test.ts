@@ -3733,167 +3733,341 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
   });
 
-  // ── JIRA-165: Oscillation detection ────────────────────────────────────────
-
-  describe('JIRA-165: Oscillation detection — abandon stuck routes at $0', () => {
-    let mockPlanRoute: jest.Mock;
-
-    const stuckRoute: StrategicRoute = {
-      stops: [
-        { action: 'pickup', loadType: 'Coal', city: 'Aberdeen' },
-        { action: 'deliver', loadType: 'Coal', city: 'Glasgow', demandCardId: 42, payment: 15 },
-      ],
-      currentStopIndex: 0,
-      phase: 'build' as const,
-      createdAtTurn: 2,
-      reasoning: 'Build toward Aberdeen',
+  describe('JIRA-170: Auto-deliver before LLM consultation', () => {
+    const defaultMemory = {
+      turnNumber: 0,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      lastAction: null,
+      activeRoute: null,
+      turnsOnRoute: 0,
+      routeHistory: [],
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      deliveryCount: 0,
+      totalEarnings: 0,
+      consecutiveLlmFailures: 0,
     };
 
     beforeEach(() => {
-      jest.clearAllMocks();
-      mockPlanRoute = jest.fn().mockResolvedValue(null);
-
-      // Set up the TripPlanner mock to call mockPlanRoute
-      const { TripPlanner } = jest.requireMock('../../services/ai/TripPlanner');
-      TripPlanner.mockImplementation(() => ({
-        planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
-      }));
+      process.env.ANTHROPIC_API_KEY = 'test-key';
+      mockGetMemory.mockReturnValue(defaultMemory);
+      // Set up loadGridPoints so TurnExecutor.handleDeliverLoad can resolve city name
+      const gridMap = new Map();
+      gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
+      gridMap.set('10,11', { row: 10, col: 11, name: 'Paris', terrain: 2 });
+      (loadGridPoints as any).mockReturnValue(gridMap);
     });
 
-    it('abandons activeRoute and falls through to LLM replan when noProgressTurns>=3 and money<5', async () => {
-      // Memory: bot is stuck — 3+ no-progress turns, has active route
-      mockGetMemory.mockReturnValue({
-        turnNumber: 10,
-        noProgressTurns: 3,
-        consecutiveDiscards: 0,
-        lastAction: 'pass',
-        activeRoute: stuckRoute,
-        turnsOnRoute: 5,
-        routeHistory: [],
-        currentBuildTarget: 'Aberdeen',
-        turnsOnTarget: 5,
-        deliveryCount: 0,
-        totalEarnings: 0,
-        consecutiveLlmFailures: 0,
+    afterEach(() => {
+      delete process.env.ANTHROPIC_API_KEY;
+    });
+
+    it('AC1/AC2: auto-delivers before TripPlanner when canDeliver is non-empty and no active route', async () => {
+      const delivery: DeliveryOpportunity = {
+        loadType: 'Coal',
+        deliveryCity: 'Berlin',
+        payout: 25,
+        cardIndex: 42,
+      };
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
+        ],
+      } as any);
+      const freshSnapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: [],
+        resolvedDemands: [
+          { cardId: 99, demands: [{ city: 'Paris', loadType: 'Steel', payment: 30 }] },
+        ],
+      } as any);
+      const context = makeContext({ canDeliver: [delivery] });
+      const freshContext = makeContext({ canDeliver: [], demands: [] });
+
+      // First capture returns original snapshot, second capture (after delivery) returns fresh snapshot
+      mockCapture
+        .mockResolvedValueOnce(snapshot)
+        .mockResolvedValueOnce(freshSnapshot)
+        .mockResolvedValue(freshSnapshot); // subsequent captures for ranking etc.
+
+      mockContextBuild
+        .mockResolvedValueOnce(context)
+        .mockResolvedValueOnce(freshContext); // after auto-delivery refresh
+
+      // PlayerService.deliverLoadForUser succeeds
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 25,
+        updatedMoney: 75,
+        newCard: { id: 99, demands: [{ city: 'Paris', loadType: 'Steel', payment: 30 }] },
       });
 
-      // Snapshot: bot is broke
-      const snapshot = makeSnapshot({ money: 2 });
-      const context = makeContext({ money: 2 });
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
+      // LLM plans a new route after delivery
+      const newRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'New trip after delivery',
+        createdAtTurn: 5,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route: newRoute,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 400,
+        llmLog: [],
+      });
 
-      // TripPlanner should be called (LLM replan) — return a PassTurn (no LLM key)
-      mockHeuristicFallback.mockResolvedValue({ success: false });
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: newRoute,
+      }));
 
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // TurnExecutorPlanner should NOT have been called with the stuck route
-      // (oscillation detection cleared activeRoute before the dispatch)
-      expect(mockTurnExecutorPlannerExecute).not.toHaveBeenCalledWith(
-        stuckRoute,
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
-        expect.anything(),
+      // Delivery was executed via PlayerService
+      expect(PlayerService.deliverLoadForUser).toHaveBeenCalledWith(
+        'game-1',
+        snapshot.bot.userId,
+        'Berlin',
+        'Coal',
+        42,
       );
+
+      // Context was refreshed (capture called at least twice: initial + post-delivery)
+      const captureCallCount = (mockCapture as jest.MockedFunction<typeof capture>).mock.calls.length;
+      expect(captureCallCount).toBeGreaterThanOrEqual(2);
+
+      // TripPlanner was still called (LLM consulted after delivery)
+      expect(mockPlanRoute).toHaveBeenCalled();
+
+      // Result should include the auto-delivered load
+      expect(result.loadsDelivered).toBeDefined();
+      expect(result.loadsDelivered).toContainEqual({
+        loadType: 'Coal',
+        city: 'Berlin',
+        payment: 25,
+        cardId: 42,
+      });
     });
 
-    it('does NOT abandon activeRoute when noProgressTurns<3 (not stuck yet)', async () => {
-      mockGetMemory.mockReturnValue({
-        turnNumber: 8,
-        noProgressTurns: 2, // only 2 — gate requires >=3
-        consecutiveDiscards: 0,
-        lastAction: 'build',
-        activeRoute: stuckRoute,
-        turnsOnRoute: 2,
-        routeHistory: [],
-        currentBuildTarget: null,
-        turnsOnTarget: 0,
-        deliveryCount: 0,
-        totalEarnings: 0,
-        consecutiveLlmFailures: 0,
+    it('AC3: BotTurnResult includes delivery payment and cardId from auto-delivered loads', async () => {
+      const delivery: DeliveryOpportunity = {
+        loadType: 'Steel',
+        deliveryCity: 'Berlin',
+        payout: 30,
+        cardIndex: 77,
+      };
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Steel'],
+        resolvedDemands: [
+          { cardId: 77, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 30 }] },
+        ],
+      } as any);
+      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+
+      mockCapture
+        .mockResolvedValueOnce(snapshot)
+        .mockResolvedValue(freshSnapshot);
+      mockContextBuild
+        .mockResolvedValueOnce(makeContext({ canDeliver: [delivery] }))
+        .mockResolvedValue(makeContext({ canDeliver: [] }));
+
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 30,
+        updatedMoney: 80,
+        newCard: { id: 100, demands: [] },
       });
 
-      const snapshot = makeSnapshot({ money: 2 }); // broke
-      const context = makeContext({ money: 2 });
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
-
-      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
-        plan: { type: AIActionType.PassTurn },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: stuckRoute,
-      }));
-
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // TurnExecutorPlanner SHOULD have been called — route was kept
-      expect(mockTurnExecutorPlannerExecute).toHaveBeenCalled();
-    });
-
-    it('does NOT abandon activeRoute when money>=5 (can still build)', async () => {
-      mockGetMemory.mockReturnValue({
-        turnNumber: 8,
-        noProgressTurns: 5, // many stuck turns
-        consecutiveDiscards: 0,
-        lastAction: 'build',
-        activeRoute: stuckRoute,
-        turnsOnRoute: 5,
-        routeHistory: [],
-        currentBuildTarget: null,
-        turnsOnTarget: 0,
-        deliveryCount: 0,
-        totalEarnings: 0,
-        consecutiveLlmFailures: 0,
-      });
-
-      const snapshot = makeSnapshot({ money: 10 }); // has funds
-      const context = makeContext({ money: 10 });
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
-
-      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
-        plan: { type: AIActionType.PassTurn },
-        routeComplete: false,
-        routeAbandoned: false,
-        updatedRoute: stuckRoute,
-      }));
-
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
-
-      // TurnExecutorPlanner SHOULD have been called — route was kept (has money)
-      expect(mockTurnExecutorPlannerExecute).toHaveBeenCalled();
-    });
-
-    it('does NOT abandon activeRoute when activeRoute is null', async () => {
-      mockGetMemory.mockReturnValue({
-        turnNumber: 8,
-        noProgressTurns: 5,
-        consecutiveDiscards: 0,
-        lastAction: null,
-        activeRoute: null, // no route
-        turnsOnRoute: 0,
-        routeHistory: [],
-        currentBuildTarget: null,
-        turnsOnTarget: 0,
-        deliveryCount: 0,
-        totalEarnings: 0,
-        consecutiveLlmFailures: 0,
-      });
-
-      const snapshot = makeSnapshot({ money: 0 });
-      const context = makeContext({ money: 0 });
-      mockCapture.mockResolvedValue(snapshot);
-      mockContextBuild.mockResolvedValue(context);
-
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
       mockHeuristicFallback.mockResolvedValue({ success: false });
 
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      expect(result.loadsDelivered).toBeDefined();
+      expect(result.loadsDelivered).toContainEqual({
+        loadType: 'Steel',
+        city: 'Berlin',
+        payment: 30,
+        cardId: 77,
+      });
+    });
+
+    it('AC4: auto-delivery failure does not block TripPlanner from executing', async () => {
+      const delivery: DeliveryOpportunity = {
+        loadType: 'Coal',
+        deliveryCity: 'Berlin',
+        payout: 25,
+        cardIndex: 42,
+      };
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal'],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
+        ],
+      } as any);
+
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(makeContext({ canDeliver: [delivery] }));
+
+      // PlayerService.deliverLoadForUser throws — simulates delivery failure
+      (PlayerService.deliverLoadForUser as any).mockRejectedValue(new Error('Delivery DB error'));
+
+      const newRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Fallback route',
+        createdAtTurn: 5,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route: newRoute,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 300,
+        llmLog: [],
+      });
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: newRoute,
+      }));
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // TripPlanner still called despite delivery failure
+      expect(mockPlanRoute).toHaveBeenCalled();
+      // No auto-delivered loads since delivery failed
+      expect(result.loadsDelivered).toBeUndefined();
+    });
+
+    it('AC5: bot with active route at delivery city → no auto-delivery (TripPlanner NOT consulted)', async () => {
+      const activeRoute: StrategicRoute = {
+        stops: [{ action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 42, payment: 25 }],
+        currentStopIndex: 0,
+        phase: 'travel' as const,
+        reasoning: 'Delivering coal',
+        createdAtTurn: 3,
+      };
+
+      mockGetMemory.mockReturnValue({
+        ...defaultMemory,
+        activeRoute,
+        turnsOnRoute: 1,
+      });
+
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(makeContext({
+        canDeliver: [{ loadType: 'Coal', deliveryCity: 'Berlin', payout: 25, cardIndex: 42 }],
+      }));
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin', cardId: 42, payout: 25 },
+        routeComplete: true,
+        routeAbandoned: false,
+        updatedRoute: activeRoute,
+        hasDelivery: true,
+      }));
+
       await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
-      // TurnExecutorPlanner should not be called — no route to execute
-      expect(mockTurnExecutorPlannerExecute).not.toHaveBeenCalled();
+      // When there's an active route, the route executor branch handles delivery
+      // (not our JIRA-170 auto-delivery code). The LLM (TripPlanner) is NOT consulted.
+      // Auto-delivery (JIRA-170) only fires in the no-active-route branch.
+      expect(mockPlanRoute).not.toHaveBeenCalled();
+      // TurnExecutorPlanner IS called (for the active route branch)
+      expect(mockTurnExecutorPlannerExecute).toHaveBeenCalled();
+    });
+
+    it('AC6: bot not at delivery city (canDeliver empty) → normal TripPlanner flow unchanged', async () => {
+      const snapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+      const context = makeContext({ canDeliver: [] }); // No deliveries available
+
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      const newRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Steel', city: 'Ruhr' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Plan next trip',
+        createdAtTurn: 5,
+      };
+      mockPlanRoute.mockResolvedValue({
+        route: newRoute,
+        model: 'claude-sonnet-4-20250514',
+        latencyMs: 300,
+        llmLog: [],
+      });
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.PassTurn },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: newRoute,
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Auto-delivery should NOT have been attempted
+      expect(PlayerService.deliverLoadForUser).not.toHaveBeenCalled();
+      // TripPlanner still consulted normally
+      expect(mockPlanRoute).toHaveBeenCalled();
+      // capture called only the standard number of times (no extra post-delivery capture)
+      // Initial capture + ranking capture(s) — not an extra capture for auto-delivery refresh
+    });
+
+    it('AC7: multiple deliverable loads → all auto-delivered before LLM consultation', async () => {
+      const deliveries: DeliveryOpportunity[] = [
+        { loadType: 'Coal', deliveryCity: 'Berlin', payout: 25, cardIndex: 42 },
+        { loadType: 'Steel', deliveryCity: 'Berlin', payout: 20, cardIndex: 43 },
+      ];
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        loads: ['Coal', 'Steel'],
+        resolvedDemands: [
+          { cardId: 42, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 25 }] },
+          { cardId: 43, demands: [{ city: 'Berlin', loadType: 'Steel', payment: 20 }] },
+        ],
+      } as any);
+      const freshSnapshot = makeSnapshot({ botConfig: { skillLevel: 'medium' } } as any);
+
+      mockCapture
+        .mockResolvedValueOnce(snapshot)
+        .mockResolvedValue(freshSnapshot);
+      mockContextBuild
+        .mockResolvedValueOnce(makeContext({ canDeliver: deliveries }))
+        .mockResolvedValue(makeContext({ canDeliver: [] }));
+
+      (PlayerService.deliverLoadForUser as any).mockResolvedValue({
+        payment: 25,
+        updatedMoney: 75,
+        newCard: { id: 100, demands: [] },
+      });
+
+      mockPlanRoute.mockResolvedValue({ route: null, llmLog: [] });
+      mockHeuristicFallback.mockResolvedValue({ success: false });
+
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Both deliveries were attempted
+      expect(PlayerService.deliverLoadForUser).toHaveBeenCalledTimes(2);
+      // Both loads in result
+      expect(result.loadsDelivered).toHaveLength(2);
+      expect(result.loadsDelivered).toContainEqual({ loadType: 'Coal', city: 'Berlin', payment: 25, cardId: 42 });
+      expect(result.loadsDelivered).toContainEqual({ loadType: 'Steel', city: 'Berlin', payment: 25, cardId: 43 });
     });
   });
+
 });

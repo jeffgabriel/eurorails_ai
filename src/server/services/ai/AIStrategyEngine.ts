@@ -34,6 +34,7 @@ import {
   LlmAttempt,
   TimelineStep,
   TurnPlanDropLoad,
+  TurnPlanDeliverLoad,
   TurnPlanUpgradeTrain,
   TRAIN_PROPERTIES,
   TrainType,
@@ -189,7 +190,7 @@ export class AIStrategyEngine {
 
     try {
       // ── Stage 1: Capture world snapshot ──
-      const snapshot = await capture(gameId, botPlayerId);
+      let snapshot = await capture(gameId, botPlayerId);
       console.log(`${tag} Snapshot: status=${snapshot.gameStatus}, money=${snapshot.bot.money}, segments=${snapshot.bot.existingSegments.length}, position=${snapshot.bot.position ? `${snapshot.bot.position.row},${snapshot.bot.position.col}` : 'none'}, loads=[${snapshot.bot.loads.join(',')}]`);
 
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
@@ -213,7 +214,7 @@ export class AIStrategyEngine {
         : null;
 
       // ── Stage 2: Build game context ──
-      const context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
+      let context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
 
       // JIRA-60: Inject delivery count from memory for upgrade advice gating
       context.deliveryCount = memory.deliveryCount ?? 0;
@@ -275,6 +276,8 @@ export class AIStrategyEngine {
       let upgradeSuppressionReason: string | null = null; // JIRA-161: tracks why an upgrade was blocked
       let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
       let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
+      // JIRA-170: Auto-delivered loads (before TripPlanner consultation) to include in turn result
+      const autoDeliveredLoads: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
 
       if (context.isInitialBuild && (!activeRoute || activeRoute.phase !== 'build')) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
@@ -345,7 +348,7 @@ export class AIStrategyEngine {
         const routeSummary = `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
         decision = {
           plan: execPlan,
-          reasoning: `[route-executor] ${execResult.compositionTrace.a2.terminationReason}`,
+          reasoning: `[route-executor] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`,
           planHorizon: routeSummary,
           model: 'route-executor',
           latencyMs: 0,
@@ -369,6 +372,67 @@ export class AIStrategyEngine {
           hasDelivery = true;
         }
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
+        // ── JIRA-170: Auto-deliver before LLM consultation ──
+        // When the bot has no active route but can immediately deliver, execute deliveries
+        // against the DB now so TripPlanner sees fresh demand cards when planning next trip.
+        if (context.canDeliver.length > 0) {
+          console.log(`${tag} [JIRA-170] Auto-delivering ${context.canDeliver.length} load(s) before LLM consultation`);
+          for (const opp of context.canDeliver) {
+            const deliverPlan: TurnPlanDeliverLoad = {
+              type: AIActionType.DeliverLoad,
+              load: opp.loadType,
+              city: opp.deliveryCity,
+              cardId: opp.cardIndex,
+              payout: opp.payout,
+            };
+            try {
+              const deliverResult = await TurnExecutor.executePlan(deliverPlan, snapshot);
+              if (deliverResult.success) {
+                hasDelivery = true;
+                autoDeliveredLoads.push({
+                  loadType: opp.loadType,
+                  city: opp.deliveryCity,
+                  payment: deliverResult.payment ?? opp.payout,
+                  cardId: opp.cardIndex,
+                });
+                console.log(`${tag} [JIRA-170] Auto-delivered ${opp.loadType} at ${opp.deliveryCity} for ${deliverResult.payment ?? opp.payout}M`);
+              } else {
+                console.warn(`${tag} [JIRA-170] Auto-delivery of ${opp.loadType} at ${opp.deliveryCity} failed: ${deliverResult.error ?? 'unknown error'}`);
+              }
+            } catch (autoDeliveryErr) {
+              console.warn(`${tag} [JIRA-170] Auto-delivery of ${opp.loadType} at ${opp.deliveryCity} threw: ${(autoDeliveryErr as Error).message}`);
+            }
+          }
+
+          // Re-capture snapshot and rebuild context so TripPlanner sees fresh demand cards
+          if (autoDeliveredLoads.length > 0) {
+            try {
+              snapshot = await capture(gameId, botPlayerId);
+              context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
+              // Re-inject memory-dependent context fields
+              context.deliveryCount = memory.deliveryCount ?? 0;
+              context.upgradeAdvice = ContextBuilder.computeUpgradeAdvice(
+                snapshot, context.demands, context.canBuild, context.deliveryCount,
+              );
+              if (memory.activeRoute?.stops) {
+                context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
+                  snapshot, memory.activeRoute.stops, gridPoints,
+                );
+              }
+              if (memory.lastReasoning || memory.lastPlanHorizon) {
+                const parts: string[] = [];
+                if (memory.lastAction) parts.push(`Action: ${memory.lastAction}`);
+                if (memory.lastReasoning) parts.push(`Reasoning: ${memory.lastReasoning}`);
+                if (memory.lastPlanHorizon) parts.push(`Plan: ${memory.lastPlanHorizon}`);
+                context.previousTurnSummary = parts.join('. ');
+              }
+              console.log(`${tag} [JIRA-170] Refreshed snapshot and context after auto-delivery`);
+            } catch (refreshErr) {
+              console.warn(`${tag} [JIRA-170] Failed to refresh context after auto-delivery: ${(refreshErr as Error).message}`);
+            }
+          }
+        }
+
         // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
         const tripPlanner = new TripPlanner(brain!);
 
@@ -567,7 +631,7 @@ export class AIStrategyEngine {
 
           decision = {
             plan: execPlan,
-            reasoning: `[route-planned] ${activeRoute.reasoning}. ${execResult.compositionTrace.a2.terminationReason}`,
+            reasoning: `[route-planned] ${activeRoute.reasoning}`,
             planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
             model: routeResult.model ?? 'unknown',
             latencyMs: routeResult.latencyMs ?? 0,
@@ -980,7 +1044,8 @@ export class AIStrategyEngine {
       let milepostsMoved: number | undefined;
       let trackUsageFee: number | undefined;
       const movementPath: { row: number; col: number }[] = [];
-      const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
+      // JIRA-170: Prepend auto-delivered loads (executed before TripPlanner consultation)
+      const loadsDelivered: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [...autoDeliveredLoads];
       const loadsPickedUp: Array<{ loadType: string; city: string }> = [];
       const allSteps = finalPlan.type === 'MultiAction' ? finalPlan.steps : [finalPlan];
       for (const step of allSteps) {
