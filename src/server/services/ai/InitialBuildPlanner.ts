@@ -105,12 +105,24 @@ export class InitialBuildPlanner {
 
     // Choose double if any within-budget pairing exists (budget cap enforced in computeDoubleDeliveryPairings)
     if (bestDouble) {
-      const route: RouteStop[] = [
-        { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
-        { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
-        { action: 'pickup', loadType: bestDouble.second.loadType, city: bestDouble.second.supplyCity },
-        { action: 'deliver', loadType: bestDouble.second.loadType, city: bestDouble.second.deliveryCity, demandCardId: bestDouble.second.cardId, payment: bestDouble.second.payout },
-      ];
+      const isSharedPickup = bestDouble.first.supplyCity === bestDouble.second.supplyCity
+        && bestDouble.first.loadType === bestDouble.second.loadType;
+
+      const route: RouteStop[] = isSharedPickup
+        ? [
+          // Single pickup, two sequential deliveries
+          { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
+          { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
+          { action: 'deliver', loadType: bestDouble.second.loadType, city: bestDouble.second.deliveryCity, demandCardId: bestDouble.second.cardId, payment: bestDouble.second.payout },
+        ]
+        : [
+          // Serial chain: pickup, deliver, pickup, deliver
+          { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
+          { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
+          { action: 'pickup', loadType: bestDouble.second.loadType, city: bestDouble.second.supplyCity },
+          { action: 'deliver', loadType: bestDouble.second.loadType, city: bestDouble.second.deliveryCity, demandCardId: bestDouble.second.cardId, payment: bestDouble.second.payout },
+        ];
+
       return {
         startingCity: bestDouble.sharedStartingCity ?? bestDouble.first.startingCity,
         route,
@@ -269,6 +281,9 @@ export class InitialBuildPlanner {
 
   /**
    * Score all cross-card pairings for double delivery potential.
+   * Includes shared-pickup detection: when two demands share the same supplyCity
+   * and loadType, they are scored via scoreSharedPickupPairing() instead of
+   * the serial scorePairing() path.
    */
   static computeDoubleDeliveryPairings(
     options: DemandOption[],
@@ -284,11 +299,17 @@ export class InitialBuildPlanner {
         // Must be from different cards
         if (a.cardId === b.cardId) continue;
 
-        // Try both orderings (A→B and B→A) and pick the better one
-        const pairingAB = InitialBuildPlanner.scorePairing(a, b, gridPoints);
-        const pairingBA = InitialBuildPlanner.scorePairing(b, a, gridPoints);
+        let best: DeliveryPairing;
 
-        const best = pairingAB.pairingScore >= pairingBA.pairingScore ? pairingAB : pairingBA;
+        // Shared-pickup: same supply city and load type — pick up both at once
+        if (a.supplyCity === b.supplyCity && a.loadType === b.loadType) {
+          best = InitialBuildPlanner.scoreSharedPickupPairing(a, b, gridPoints);
+        } else {
+          // Serial chain: try both orderings (A→B and B→A) and pick the better one
+          const pairingAB = InitialBuildPlanner.scorePairing(a, b, gridPoints);
+          const pairingBA = InitialBuildPlanner.scorePairing(b, a, gridPoints);
+          best = pairingAB.pairingScore >= pairingBA.pairingScore ? pairingAB : pairingBA;
+        }
 
         // Budget cap on combined cost
         if (best.totalBuildCost > MAX_BUILD_BUDGET) continue;
@@ -479,6 +500,139 @@ export class InitialBuildPlanner {
     return {
       first,
       second,
+      sharedStartingCity,
+      chainDistance,
+      totalBuildCost,
+      totalPayout,
+      estimatedTurns,
+      efficiency,
+      pairingScore,
+    };
+  }
+
+  /**
+   * Score a shared-pickup pairing: both loads are picked up simultaneously at the
+   * same supply city, then delivered sequentially (closer delivery city first).
+   *
+   * Cost model differs from serial scorePairing:
+   *   totalBuildCost = first.totalBuildCost + deliveryChainCost
+   * where deliveryChainCost = costBetween(closerDelivery, fartherDelivery).
+   * No chain-back-to-supply leg needed — both loads already on board.
+   */
+  private static scoreSharedPickupPairing(
+    first: DemandOption,
+    second: DemandOption,
+    gridPoints: GridPoint[],
+  ): DeliveryPairing {
+    // Shared supply — use whichever option's startingCity is better (first's by convention)
+    const sharedStartingCity = first.startingCity === second.startingCity
+      ? first.startingCity
+      : null;
+
+    const supplyPoints = gridPoints.filter(gp => gp.city?.name === first.supplyCity);
+    const firstDeliveryPoints = gridPoints.filter(gp => gp.city?.name === first.deliveryCity);
+    const secondDeliveryPoints = gridPoints.filter(gp => gp.city?.name === second.deliveryCity);
+
+    // Compute hex distances from supply to each delivery city to determine ordering
+    let supplyToFirstHex = Infinity;
+    for (const sp of supplyPoints) {
+      for (const dp of firstDeliveryPoints) {
+        const d = hexDistance(sp.row, sp.col, dp.row, dp.col);
+        if (d < supplyToFirstHex) supplyToFirstHex = d;
+      }
+    }
+    let supplyToSecondHex = Infinity;
+    for (const sp of supplyPoints) {
+      for (const dp of secondDeliveryPoints) {
+        const d = hexDistance(sp.row, sp.col, dp.row, dp.col);
+        if (d < supplyToSecondHex) supplyToSecondHex = d;
+      }
+    }
+
+    // Deliver closer city first to minimize total travel distance
+    const [closer, farther] = supplyToFirstHex <= supplyToSecondHex
+      ? [first, second]
+      : [second, first];
+
+    const closerDeliveryPoints = gridPoints.filter(gp => gp.city?.name === closer.deliveryCity);
+    const fartherDeliveryPoints = gridPoints.filter(gp => gp.city?.name === farther.deliveryCity);
+
+    // Inter-delivery leg cost (terrain-aware), fallback to hex distance * 2.0
+    let deliveryChainCost = Infinity;
+    for (const cp of closerDeliveryPoints) {
+      for (const fp of fartherDeliveryPoints) {
+        const c = InitialBuildPlanner.costBetween(cp.row, cp.col, fp.row, fp.col);
+        if (c < deliveryChainCost) deliveryChainCost = c;
+      }
+    }
+    if (deliveryChainCost === Infinity) {
+      // Fallback: hex distance * 2.0 to match costBetween's own fallback
+      let interDeliveryHex = Infinity;
+      for (const cp of closerDeliveryPoints) {
+        for (const fp of fartherDeliveryPoints) {
+          const d = hexDistance(cp.row, cp.col, fp.row, fp.col);
+          if (d < interDeliveryHex) interDeliveryHex = d;
+        }
+      }
+      deliveryChainCost = interDeliveryHex === Infinity ? 99 : interDeliveryHex * 2.0;
+    }
+
+    // Chain distance (hex) between the two delivery cities, for travel time estimation
+    let chainDistance = Infinity;
+    for (const cp of closerDeliveryPoints) {
+      for (const fp of fartherDeliveryPoints) {
+        const d = hexDistance(cp.row, cp.col, fp.row, fp.col);
+        if (d < chainDistance) chainDistance = d;
+      }
+    }
+    if (chainDistance === Infinity) chainDistance = 99;
+
+    // totalBuildCost: first delivery route already in closer.totalBuildCost,
+    // add only the inter-delivery leg (no second supply leg needed)
+    const totalBuildCost = closer.totalBuildCost + deliveryChainCost;
+
+    // Travel time: start → supply → closerDelivery → fartherDelivery
+    const speed = 9; // Freight default
+    const startPoints = gridPoints.filter(gp => gp.city?.name === closer.startingCity);
+    let startToSupplyHex = Infinity;
+    for (const sp of startPoints) {
+      for (const sup of supplyPoints) {
+        const d = hexDistance(sp.row, sp.col, sup.row, sup.col);
+        if (d < startToSupplyHex) startToSupplyHex = d;
+      }
+    }
+    let supplyToCloserHex = Infinity;
+    for (const sup of supplyPoints) {
+      for (const dp of closerDeliveryPoints) {
+        const d = hexDistance(sup.row, sup.col, dp.row, dp.col);
+        if (d < supplyToCloserHex) supplyToCloserHex = d;
+      }
+    }
+
+    const totalHexDistance = (startToSupplyHex === Infinity ? 0 : startToSupplyHex)
+      + (supplyToCloserHex === Infinity ? 0 : supplyToCloserHex)
+      + chainDistance;
+
+    const totalPayout = closer.payout + farther.payout;
+    const buildTurns = Math.ceil(totalBuildCost / 20);
+    const travelTurns = Math.ceil(totalHexDistance / speed) + 1; // +1 for single pickup, two delivers
+    const estimatedTurns = Math.max(buildTurns + travelTurns, 2);
+    const efficiency = (totalPayout - totalBuildCost) / estimatedTurns;
+
+    const hubBonus = sharedStartingCity ? 15 : 0;
+    const peripheralPenalty = PERIPHERAL_CITIES.has(closer.startingCity) ? 30 : 0;
+
+    const ferryOnFirstLeg = InitialBuildPlanner.isFerryBetween(closer.supplyCity, closer.deliveryCity, gridPoints)
+      || InitialBuildPlanner.isFerryBetween(closer.startingCity, closer.supplyCity, gridPoints);
+    const ferryOnSecondLeg = InitialBuildPlanner.isFerryBetween(farther.supplyCity, farther.deliveryCity, gridPoints)
+      || InitialBuildPlanner.isFerryBetween(farther.startingCity, farther.supplyCity, gridPoints);
+    const ferryPenalty = (ferryOnFirstLeg || ferryOnSecondLeg) ? FERRY_PAIRING_PENALTY : 0;
+
+    const pairingScore = efficiency * 100 + hubBonus - peripheralPenalty - ferryPenalty;
+
+    return {
+      first: closer,
+      second: farther,
       sharedStartingCity,
       chainDistance,
       totalBuildCost,

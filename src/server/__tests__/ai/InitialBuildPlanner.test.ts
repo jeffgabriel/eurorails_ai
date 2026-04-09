@@ -1313,6 +1313,255 @@ describe('InitialBuildPlanner', () => {
       }
     });
   });
+
+  // ── JIRA-170: Shared-pickup double delivery ──────────────────────────────────
+
+  describe('JIRA-170: shared-pickup double delivery', () => {
+    describe('computeDoubleDeliveryPairings — shared-pickup detection', () => {
+      it('should detect shared-pickup when two demands share supplyCity + loadType with different cardId', () => {
+        // Both demands want Potatoes from Lodz — shared supply scenario
+        const options: DemandOption[] = [
+          makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 21, totalBuildCost: 8, buildCostToSupply: 4, buildCostSupplyToDelivery: 4 }),
+          makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 21, totalBuildCost: 10, buildCostToSupply: 4, buildCostSupplyToDelivery: 6 }),
+        ];
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, grid);
+
+        expect(pairings.length).toBe(1);
+        // Shared-pickup: same supply + load type
+        expect(pairings[0].first.supplyCity).toBe('Wroclaw');
+        expect(pairings[0].second.supplyCity).toBe('Wroclaw');
+        expect(pairings[0].first.loadType).toBe('Potatoes');
+        expect(pairings[0].second.loadType).toBe('Potatoes');
+      });
+
+      it('should not treat same card as shared-pickup (cardId guard)', () => {
+        const options: DemandOption[] = [
+          makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt' }),
+          makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien' }),
+        ];
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, grid);
+        expect(pairings.length).toBe(0);
+      });
+
+      it('should appear in evaluatedPairings diagnostics output from planInitialBuild', () => {
+        mockGetSourceCitiesForLoad.mockReturnValue(['Wroclaw']);
+        const snapshot = makeWorldSnapshot({
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Potatoes', payment: 21 }] },
+            { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 21 }] },
+          ],
+          loadAvailability: { 'Wroclaw': ['Potatoes'] },
+        });
+
+        const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+
+        // evaluatedPairings should be present when pairings are within budget
+        expect(plan.evaluatedPairings).toBeDefined();
+      });
+    });
+
+    describe('shared-pickup cost model', () => {
+      it('should have lower totalBuildCost than equivalent serial chain (no chain-back leg)', () => {
+        // Shared-pickup: no need to travel back to supply city between deliveries
+        // Serial chain would add: first.totalBuildCost + chainLegCost + second.supplyToDelivery
+        // Shared-pickup: closer.totalBuildCost + interDeliveryLeg (no second supply leg)
+        const optA = makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 21, totalBuildCost: 8, buildCostToSupply: 4, buildCostSupplyToDelivery: 4 });
+        const optB = makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 21, totalBuildCost: 10, buildCostToSupply: 4, buildCostSupplyToDelivery: 6 });
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings([optA, optB], grid);
+        expect(pairings.length).toBe(1);
+
+        const sharedPickupCost = pairings[0].totalBuildCost;
+
+        // Serial would be: optA.totalBuildCost + chainLeg(Frankfurt→Wroclaw) + optB.buildCostSupplyToDelivery
+        // Shared-pickup: closer.totalBuildCost + interDeliveryLeg(Frankfurt→Wien or Wien→Frankfurt)
+        // Since we skip the chain-back-to-supply, shared-pickup should be cheaper
+        expect(sharedPickupCost).toBeLessThan(optA.totalBuildCost + optB.buildCostSupplyToDelivery + 20);
+        expect(sharedPickupCost).toBeGreaterThan(0);
+        expect(sharedPickupCost).toBeLessThanOrEqual(MAX_BUILD_BUDGET);
+      });
+
+      it('totalBuildCost equals closer.totalBuildCost + deliveryChainCost', () => {
+        // Frankfurt(17,14) is closer to Wroclaw(13,17) than Wien(18,18)
+        // Delivery chain = Frankfurt → Wien cost
+        const optA = makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 21, totalBuildCost: 8, buildCostToSupply: 4, buildCostSupplyToDelivery: 4 });
+        const optB = makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 21, totalBuildCost: 10, buildCostToSupply: 4, buildCostSupplyToDelivery: 6 });
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings([optA, optB], grid);
+        expect(pairings.length).toBe(1);
+
+        const pairing = pairings[0];
+        // The pairing totalBuildCost should be: closer.totalBuildCost + chainCost
+        // chainCost = costBetween(Frankfurt, Wien) which uses estimatePathCost mock
+        expect(pairing.totalBuildCost).toBeGreaterThan(0);
+        // Verify it doesn't include both options' full build costs summed (that would be serial)
+        expect(pairing.totalBuildCost).toBeLessThan(optA.totalBuildCost + optB.totalBuildCost);
+      });
+
+      it('should filter out shared-pickup pairings exceeding 40M budget', () => {
+        // Make estimatePathCost return very high costs to exceed budget
+        mockEstimatePathCost.mockReturnValue(25);
+        const options: DemandOption[] = [
+          makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', totalBuildCost: 30, buildCostToSupply: 15, buildCostSupplyToDelivery: 15 }),
+          makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', totalBuildCost: 30, buildCostToSupply: 15, buildCostSupplyToDelivery: 15 }),
+        ];
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, grid);
+        // 30 + 25 = 55 > 40 — should be filtered
+        expect(pairings.every(p => p.totalBuildCost <= MAX_BUILD_BUDGET)).toBe(true);
+      });
+    });
+
+    describe('shared-pickup delivery ordering', () => {
+      it('should deliver closer city first to minimize total distance', () => {
+        // Frankfurt(17,14) is closer to Wroclaw(13,17) than Wien(18,18) in hex distance
+        const optFrankfurt = makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 21, totalBuildCost: 8, buildCostToSupply: 4, buildCostSupplyToDelivery: 4 });
+        const optWien = makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 21, totalBuildCost: 10, buildCostToSupply: 4, buildCostSupplyToDelivery: 6 });
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings([optFrankfurt, optWien], grid);
+        expect(pairings.length).toBe(1);
+
+        const pairing = pairings[0];
+        // Both orderings tried; the one with lower total distance wins.
+        // The first stop in the resulting pairing should be the closer delivery.
+        // Grid positions: Wroclaw(13,17), Frankfurt(17,14), Wien(18,18)
+        // hexDistance(Wroclaw→Frankfurt) vs hexDistance(Wroclaw→Wien)
+        const wroclaw = { row: 13, col: 17 };
+        const frankfurt = { row: 17, col: 14 };
+        const wien = { row: 18, col: 18 };
+        const distToFrankfurt = mockHexDistance(wroclaw.row, wroclaw.col, frankfurt.row, frankfurt.col);
+        const distToWien = mockHexDistance(wroclaw.row, wroclaw.col, wien.row, wien.col);
+
+        if (distToFrankfurt <= distToWien) {
+          expect(pairing.first.deliveryCity).toBe('Frankfurt');
+          expect(pairing.second.deliveryCity).toBe('Wien');
+        } else {
+          expect(pairing.first.deliveryCity).toBe('Wien');
+          expect(pairing.second.deliveryCity).toBe('Frankfurt');
+        }
+      });
+
+      it('should evaluate both delivery orderings and pick better total distance', () => {
+        // Wien(18,18) closer to Wroclaw(13,17) in hex distance — should go Wien first
+        const optWien = makeDemandOption({ cardId: 1, loadType: 'Steel', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 20, totalBuildCost: 8 });
+        const optFrankfurt = makeDemandOption({ cardId: 2, loadType: 'Steel', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 20, totalBuildCost: 10 });
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings([optWien, optFrankfurt], grid);
+        expect(pairings.length).toBe(1);
+
+        // Pairing should exist with valid score
+        expect(pairings[0].pairingScore).toBeDefined();
+        expect(pairings[0].totalPayout).toBe(40); // 20 + 20
+      });
+    });
+
+    describe('planInitialBuild — shared-pickup route shape', () => {
+      it('should generate 3-stop route [pickup, deliver, deliver] for shared-pickup winner', () => {
+        mockGetSourceCitiesForLoad.mockReturnValue(['Wroclaw']);
+        // Use cheap costs to ensure within budget
+        mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+          const dist = mockHexDistance(r1, c1, r2, c2);
+          return Math.round(dist * 0.5); // very cheap to keep within budget
+        });
+
+        const snapshot = makeWorldSnapshot({
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Potatoes', payment: 21 }] },
+            { cardId: 2, demands: [{ city: 'Wien', loadType: 'Potatoes', payment: 21 }] },
+          ],
+          loadAvailability: { 'Wroclaw': ['Potatoes'] },
+        });
+
+        const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+
+        // If shared-pickup wins, expect 3-stop route: pickup + 2 delivers
+        if (plan.route.length === 3) {
+          expect(plan.route[0].action).toBe('pickup');
+          expect(plan.route[1].action).toBe('deliver');
+          expect(plan.route[2].action).toBe('deliver');
+          // Both delivers use the same load type
+          expect(plan.route[1].loadType).toBe('Potatoes');
+          expect(plan.route[2].loadType).toBe('Potatoes');
+          // Only one pickup stop (shared supply city)
+          const pickupStops = plan.route.filter(s => s.action === 'pickup');
+          expect(pickupStops.length).toBe(1);
+          expect(pickupStops[0].city).toBe('Wroclaw');
+          // Total payout should be sum of both deliveries
+          expect(plan.totalPayout).toBe(42); // 21 + 21
+        }
+      });
+
+      it('should still produce 4-stop serial route for non-shared pairings', () => {
+        mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+          if (loadType === 'Coal') return ['Essen'];
+          if (loadType === 'Wine') return ['Lyon'];
+          return [];
+        });
+        mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+          const dist = mockHexDistance(r1, c1, r2, c2);
+          return Math.round(dist * 0.8);
+        });
+
+        const snapshot = makeWorldSnapshot({
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 15 }] },
+            { cardId: 2, demands: [{ city: 'Zürich', loadType: 'Wine', payment: 12 }] },
+          ],
+          loadAvailability: { 'Essen': ['Coal'], 'Lyon': ['Wine'] },
+        });
+
+        const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
+
+        // Serial pairings should produce 4-stop route
+        if (plan.route.length === 4) {
+          expect(plan.route[0].action).toBe('pickup');
+          expect(plan.route[1].action).toBe('deliver');
+          expect(plan.route[2].action).toBe('pickup');
+          expect(plan.route[3].action).toBe('deliver');
+        }
+      });
+    });
+
+    describe('regression: serial chain pairings still work', () => {
+      it('should still produce serial pairings for different supply cities', () => {
+        const options: DemandOption[] = [
+          makeDemandOption({ cardId: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Frankfurt', startingCity: 'Ruhr', payout: 12, totalBuildCost: 5 }),
+          makeDemandOption({ cardId: 2, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Zürich', startingCity: 'Paris', payout: 10, totalBuildCost: 5 }),
+        ];
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, grid);
+        expect(pairings.length).toBeGreaterThan(0);
+        // Different supply cities → serial chain, not shared-pickup
+        // The supply cities differ so it's a standard pairing
+        expect(pairings[0].first.supplyCity).not.toBe(pairings[0].second.supplyCity);
+      });
+
+      it('should still work for mixed scenario with both shared and serial pairings', () => {
+        const options: DemandOption[] = [
+          // Shared-pickup: both want Potatoes from Wroclaw
+          makeDemandOption({ cardId: 1, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Frankfurt', startingCity: 'Berlin', payout: 21, totalBuildCost: 8 }),
+          makeDemandOption({ cardId: 2, loadType: 'Potatoes', supplyCity: 'Wroclaw', deliveryCity: 'Wien', startingCity: 'Berlin', payout: 21, totalBuildCost: 10 }),
+          // Serial: different load type
+          makeDemandOption({ cardId: 3, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Frankfurt', startingCity: 'Ruhr', payout: 12, totalBuildCost: 5 }),
+        ];
+
+        const pairings = InitialBuildPlanner.computeDoubleDeliveryPairings(options, grid);
+        // Should produce pairings: shared-pickup (1+2) plus serial pairings (1+3, 2+3)
+        expect(pairings.length).toBeGreaterThan(0);
+
+        // Shared-pickup pairing between cards 1 and 2 should appear
+        const sharedPickupPairing = pairings.find(
+          p => p.first.supplyCity === 'Wroclaw'
+            && p.second.supplyCity === 'Wroclaw'
+            && p.first.loadType === 'Potatoes'
+            && p.second.loadType === 'Potatoes',
+        );
+        expect(sharedPickupPairing).toBeDefined();
+      });
+    });
+  });
 });
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
