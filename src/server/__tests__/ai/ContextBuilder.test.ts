@@ -1824,9 +1824,8 @@ describe('ContextBuilder proximity computation methods', () => {
 
   describe('NEARBY CITIES section in serializeRoutePlanningPrompt', () => {
 
-    it('should include nearby off-network cities when segments are provided', () => {
-      // Demand: Coal from Munich -> Berlin
-      // Munich is a route stop; Leipzig is a nearby off-network city (3 hexes from Munich)
+    it('should NOT include NEARBY CITIES section (removed as low-value)', () => {
+      // NEARBY CITIES was removed from serializeRoutePlanningPrompt (JIRA-169)
       const ctx = makeProximityContext({
         demands: [
           makeDemand({
@@ -1845,7 +1844,7 @@ describe('ContextBuilder proximity computation methods', () => {
         ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
       );
 
-      expect(output).toContain('NEARBY CITIES');
+      expect(output).not.toContain('NEARBY CITIES');
     });
 
     it('should exclude on-network cities from the nearby cities list', () => {
@@ -1957,9 +1956,8 @@ describe('ContextBuilder proximity computation methods', () => {
 
   describe('UNCONNECTED DEMAND CITIES section in serializeRoutePlanningPrompt', () => {
 
-    it('should list off-network demand supply/delivery cities with cost and payout', () => {
-      // Demand: Coal from Munich -> Hamburg
-      // Munich is off-network (supply), Hamburg is on-network (delivery)
+    it('should NOT include UNCONNECTED DEMAND CITIES section (removed as low-value)', () => {
+      // UNCONNECTED DEMAND CITIES was removed from serializeRoutePlanningPrompt (JIRA-169)
       const ctx = makeProximityContext({
         demands: [
           makeDemand({
@@ -1978,14 +1976,11 @@ describe('ContextBuilder proximity computation methods', () => {
         ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
       );
 
-      expect(output).toContain('UNCONNECTED DEMAND CITIES');
-      expect(output).toContain('Munich');
-      expect(output).toContain('track to connect');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
     });
 
-    it('should list off-network delivery city when supply is on-network', () => {
-      // Demand: Steel from Berlin -> Rome
-      // Berlin on-network, Rome off-network (6 hexes from nearest network node)
+    it('should NOT include UNCONNECTED DEMAND CITIES for off-network delivery city either (removed)', () => {
+      // UNCONNECTED DEMAND CITIES was removed from serializeRoutePlanningPrompt (JIRA-169)
       const ctx = makeProximityContext({
         demands: [
           makeDemand({
@@ -2004,8 +1999,7 @@ describe('ContextBuilder proximity computation methods', () => {
         ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
       );
 
-      expect(output).toContain('UNCONNECTED DEMAND CITIES');
-      expect(output).toContain('Rome');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
     });
 
     it('should exclude demands where both cities are on-network', () => {
@@ -2190,8 +2184,8 @@ describe('ContextBuilder proximity computation methods', () => {
       expect(output).not.toContain('RESOURCE PROXIMITY');
     });
 
-    it('should include both supply and delivery in UNCONNECTED when both are off-network', () => {
-      // Demand: Coal from Munich -> Rome — both off-network
+    it('should NOT include UNCONNECTED DEMAND CITIES even when both cities are off-network (removed)', () => {
+      // UNCONNECTED DEMAND CITIES was removed from serializeRoutePlanningPrompt (JIRA-169)
       const ctx = makeProximityContext({
         demands: [
           makeDemand({
@@ -2210,11 +2204,7 @@ describe('ContextBuilder proximity computation methods', () => {
         ctx, BotSkillLevel.Medium, proximityGridPoints, proximitySegments,
       );
 
-      expect(output).toContain('UNCONNECTED DEMAND CITIES');
-      // Both Munich and Rome should appear
-      const section = output.split('UNCONNECTED DEMAND CITIES')[1].split('\n\n')[0];
-      expect(section).toContain('Munich');
-      expect(section).toContain('Rome');
+      expect(output).not.toContain('UNCONNECTED DEMAND CITIES');
     });
   });
 });
@@ -3820,12 +3810,14 @@ describe('JIRA-125: Endgame victory context shaping', () => {
     expect(output).not.toContain('ROUTE SELECTION: Prefer demands');
   });
 
-  it('includes ROUTE SELECTION directive in route planning prompt', () => {
+  it('does NOT include ROUTE SELECTION directive in route planning prompt (VICTORY PROGRESS removed)', () => {
+    // JIRA-169: VICTORY PROGRESS section was removed from serializeRoutePlanningPrompt,
+    // which also removed the ROUTE SELECTION directive it contained.
     const context = makeEndgameContext();
     const output = ContextBuilder.serializeRoutePlanningPrompt(
       context as any, BotSkillLevel.Medium, [], [],
     );
-    expect(output).toContain('ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city');
+    expect(output).not.toContain('ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city');
   });
 
   it('computePhase returns Victory Imminent for 5 cities / 250M', () => {

@@ -142,7 +142,7 @@ RESPONSE FORMAT (JSON only, no markdown):
 // ── Skill Level Modifiers ─────────────────────────────────────────────
 
 const SKILL_LEVEL_TEXT: Record<BotSkillLevel, string> = {
-  [BotSkillLevel.Easy]: 'You are a casual player. Pick whatever seems good. Don\'t overthink it.',
+  [BotSkillLevel.Easy]: 'You are a competent player. Think 1-2 turns ahead.',
   [BotSkillLevel.Medium]: 'You are a competent player. Think 2-3 turns ahead.',
   [BotSkillLevel.Hard]: 'You are an expert player. Think 5+ turns ahead. Consider what opponents are doing and whether you can exploit or deny their plans.',
 };

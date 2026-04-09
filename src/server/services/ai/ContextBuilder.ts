@@ -1049,26 +1049,6 @@ export class ContextBuilder {
     lines.push(`- Track network: ${context.trackSummary}`);
     lines.push('');
 
-    // ── VICTORY PROGRESS (same as serializePrompt) ──
-    const cashRemaining = Math.max(0, 250 - context.money);
-    lines.push('VICTORY PROGRESS:');
-    lines.push(`- Cash: ${context.money}M / 250M needed (${cashRemaining}M remaining)`);
-    lines.push(`- Cities connected: ${context.connectedMajorCities.length}/7 needed (${context.connectedMajorCities.join(', ') || 'none'})`);
-
-    if (context.unconnectedMajorCities.length === 0) {
-      lines.push('- All cities connected! Earn more cash to win.');
-    } else {
-      const unconnectedStr = context.unconnectedMajorCities
-        .map(u => `${u.cityName} (~${u.estimatedCost}M to connect)`)
-        .join(', ');
-      lines.push(`- Cities NOT connected: ${unconnectedStr}`);
-      // JIRA-125: Dynamic route selection directive for endgame (route planning)
-      if (context.money >= 250 && context.connectedMajorCities.length < 7) {
-        lines.push(`- ROUTE SELECTION: Prefer demands whose supply or delivery city IS an unconnected major city. Building track toward these cities happens automatically — choose routes that take you there. Do NOT chase high-payout deliveries to non-major cities.`);
-      }
-    }
-    lines.push('');
-
     // ── YOUR DEMANDS (unified view — JIRA-133) ──
     lines.push(ContextBuilder.formatDemandView(context.demands, context));
     lines.push('You may ONLY plan deliveries for demands listed above. Do not reference loads or cities not shown here.');
@@ -1102,39 +1082,6 @@ export class ContextBuilder {
     // ── PROXIMITY CONTEXT (JIRA-10) ──
     // Only include proximity sections when the bot has track segments
     if (segments.length > 0) {
-      // Collect route stop cities from demands (supply + delivery)
-      const routeStopCities = new Set<string>();
-      for (const d of context.demands) {
-        if (d.supplyCity) routeStopCities.add(d.supplyCity);
-        routeStopCities.add(d.deliveryCity);
-      }
-
-      const nearbyCities = ContextBuilder.computeNearbyCities(
-        Array.from(routeStopCities), gridPoints, segments,
-      );
-      if (nearbyCities.length > 0) {
-        lines.push('NEARBY CITIES (per route stop):');
-        for (const entry of nearbyCities) {
-          const citiesStr = entry.nearbyCities
-            .map(c => `${c.city} (${c.estimatedCost}M, ${c.distance} hexes)`)
-            .join(', ');
-          lines.push(`  ${entry.routeStop}: ${citiesStr}`);
-        }
-        lines.push('');
-      }
-
-      const unconnected = ContextBuilder.computeUnconnectedDemandCosts(
-        context.demands, segments, gridPoints,
-      );
-      if (unconnected.length > 0) {
-        lines.push('UNCONNECTED DEMAND CITIES (build costs):');
-        for (const u of unconnected) {
-          const d = context.demands[u.demandIndex];
-          lines.push(`  ${d.loadType} from ${d.supplyCity} \u2192 ${d.deliveryCity} (${d.payout}M payout): ${u.city} needs ~${u.estimatedCost}M track to connect`);
-        }
-        lines.push('');
-      }
-
       const resourceProx = ContextBuilder.computeResourceProximity(
         context.demands, segments, gridPoints,
       );
