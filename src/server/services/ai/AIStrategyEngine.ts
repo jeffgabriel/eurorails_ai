@@ -4,7 +4,7 @@
  * Thin orchestrator that delegates to focused services in a 6-stage pipeline:
  *   1. WorldSnapshotService.capture()  — frozen game state
  *   2. ContextBuilder.build()          — decision-relevant context for LLM
- *   3. LLMStrategyBrain.decideAction() — LLM intent → ActionResolver → TurnPlan
+ *   3. TripPlanner / PlanExecutor      — LLM route planning → TurnPlan
  *   4. GuardrailEnforcer.checkPlan()   — hard safety rules
  *   5. TurnExecutor.executePlan()      — execute against DB
  *
@@ -171,7 +171,7 @@ export class AIStrategyEngine {
    * Execute a complete bot turn via the 6-stage pipeline:
    *   1. WorldSnapshot.capture()
    *   2. ContextBuilder.build()
-   *   3. LLMStrategyBrain.decideAction() (includes retry loop)
+   *   3. TripPlanner / PlanExecutor (includes retry loop)
    *   4. GuardrailEnforcer.checkPlan()
    *   5. TurnExecutor.executePlan()
    *
@@ -264,19 +264,6 @@ export class AIStrategyEngine {
       if (brain) brain.providerAdapter.resetCallIds();
       let activeRoute = memory.activeRoute;
 
-      // ── JIRA-165 Fix 3: Oscillation detection — abandon stuck routes at $0 ──
-      // When a bot has made no progress for 3+ turns while holding an active route
-      // AND has <5M (can't afford to build anything), the route is pointing to an
-      // unreachable or unaffordable city. Clear the route so the bot falls through
-      // to the LLM replan path instead of repeating PassTurn indefinitely.
-      if (activeRoute && (memory.noProgressTurns ?? 0) >= 3 && snapshot.bot.money < 5) {
-        console.warn(
-          `${tag} JIRA-165: Abandoning stuck route after ${memory.noProgressTurns} no-progress turns ` +
-          `at $${snapshot.bot.money}M — forcing LLM replan`,
-        );
-        activeRoute = null;
-      }
-
       let routeWasCompleted = false;
       let routeWasAbandoned = false;
       let hasDelivery = false; // set true by TurnExecutorPlanner when a delivery occurs
@@ -289,8 +276,11 @@ export class AIStrategyEngine {
       let initialBuildEvaluatedOptions: InitialBuildPlan['evaluatedOptions']; // JIRA-148
       let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
 
-      if (context.isInitialBuild) {
+      if (context.isInitialBuild && (!activeRoute || activeRoute.phase !== 'build')) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
+        // JIRA-167: Only plan on the FIRST initial-build turn. On subsequent turns,
+        // activeRoute already has phase='build' from the prior turn, so we fall
+        // through to the executor branch to continue building the existing plan.
         // Plan the route and produce a BuildTrack decision with targetCity.
         // Don't go through PlanExecutor.executeInitialBuild — its cold-start
         // segment computation fails. Instead, let TurnComposer Phase B

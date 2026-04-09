@@ -182,177 +182,7 @@ describe('LLMStrategyBrain', () => {
     });
   }
 
-  describe('decideAction — successful LLM decision', () => {
-    it('should return resolved plan on successful LLM call', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.plan.type).toBe(AIActionType.BuildTrack);
-      expect(result.reasoning).toBe('Build toward Berlin');
-      expect(result.planHorizon).toBe('2 turns');
-      expect(result.model).toBeDefined();
-      expect(result.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(result.tokenUsage).toEqual({ input: 100, output: 50 });
-      expect(result.retried).toBe(false);
-    });
-  });
-
-  describe('decideAction — retry and fallback', () => {
-    it('should fall back to heuristic when all LLM attempts fail', async () => {
-      mockChat.mockRejectedValue(new Error('API down'));
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.plan.type).toBe(AIActionType.PassTurn);
-      expect(result.reasoning).toContain('heuristic fallback');
-      // 3 attempts total (initial + 2 retries)
-      expect(mockChat).toHaveBeenCalledTimes(3);
-    });
-
-    it('should fall back immediately on auth error (no retry)', async () => {
-      const { ProviderAuthError } = jest.requireActual('../../services/ai/providers/errors');
-      mockChat.mockRejectedValue(new ProviderAuthError('Invalid key'));
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.reasoning).toContain('heuristic fallback');
-      // Should only call API once (no retry on auth error)
-      expect(mockChat).toHaveBeenCalledTimes(1);
-    });
-
-    it('should retry with error context on action resolution failure', async () => {
-      mockChat.mockResolvedValue({
-        text: '{"action":"BuildTrack"}',
-        usage: { input: 50, output: 20 },
-      });
-      mockParseActionIntent.mockReturnValue({
-        action: 'BuildTrack',
-        reasoning: 'Build',
-        planHorizon: '',
-      });
-
-      // First resolve fails, second succeeds
-      mockResolve
-        .mockResolvedValueOnce({ success: false, error: 'Not enough money' })
-        .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.PassTurn } });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.plan.type).toBe(AIActionType.PassTurn);
-      expect(mockChat).toHaveBeenCalledTimes(2);
-      expect(result.retried).toBe(true);
-    });
-
-    it('should default to PassTurn when heuristic fallback also fails', async () => {
-      mockChat.mockRejectedValue(new Error('fail'));
-      mockHeuristicFallback.mockResolvedValue({
-        success: false,
-        error: 'No options available',
-      });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.plan.type).toBe(AIActionType.PassTurn);
-      expect(result.reasoning).toContain('Heuristic also failed');
-    });
-  });
-
-  // --- BE-023: Model selection by skill level ---
-  describe('model selection by skill level (BE-023)', () => {
-    it('should use Haiku for Easy skill level (Anthropic)', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Easy);
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.model).toBe(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Easy]);
-      expect(result.model).toBe('claude-haiku-4-5-20251001');
-    });
-
-    it('should use Sonnet 4.6 for Medium skill level (Anthropic)', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Medium);
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.model).toBe(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Medium]);
-      expect(result.model).toBe('claude-sonnet-4-6');
-    });
-
-    it('should use Opus 4.6 for Hard skill level (Anthropic)', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Hard);
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.model).toBe(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Hard]);
-      expect(result.model).toBe('claude-opus-4-6');
-    });
-
-    it('should allow explicit model override regardless of skill level', async () => {
-      setupSuccessfulDecision(mockChat);
-
-      const brain = new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Easy,
-        provider: LLMProvider.Anthropic,
-        model: 'custom-model-v1',
-        apiKey: 'test-key',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-      expect(result.model).toBe('custom-model-v1');
-    });
-
-    it('should pass correct model to adapter.chat()', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Easy);
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: 'claude-haiku-4-5-20251001',
-        }),
-      );
-    });
-
-    it('should use higher temperature for Easy skill level', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Easy);
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          temperature: 0.7,
-          maxTokens: 2048,
-        }),
-      );
-    });
-
-    it('should use lower temperature for Hard skill level', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Hard);
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          temperature: 0.2,
-          maxTokens: 8192,
-        }),
-      );
-    });
-  });
+  // decideAction() was removed in JIRA-169 (dead code — superseded by TripPlanner)
 
   describe('createAdapter — OpenAI provider', () => {
     it('should create brain with OpenAI provider without error', () => {
@@ -369,32 +199,7 @@ describe('LLMStrategyBrain', () => {
 
   // --- JIRA-17: Structured output schemas and effort levels ---
   describe('Anthropic structured output and thinking (JIRA-17)', () => {
-    it.each([
-      [BotSkillLevel.Medium, 'low'],
-      [BotSkillLevel.Hard, 'medium'],
-    ])('decideAction — skill %s (4.6 default) should pass schema, thinking, effort=%s', async (skill, expectedEffort) => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(skill);
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      const callArgs = mockChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.outputSchema.type).toBe('object');
-      expect(callArgs.outputSchema.oneOf).toBeDefined(); // ACTION_SCHEMA has oneOf
-      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe(expectedEffort);
-    });
-
-    it('decideAction — Easy (Haiku) should pass schema but not thinking (JIRA-81)', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain(BotSkillLevel.Easy);
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      const callArgs = mockChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.thinking).toBeUndefined();
-      expect(callArgs.effort).toBeUndefined();
-    });
+    // decideAction() tests removed in JIRA-169 (dead code — superseded by TripPlanner)
 
     it.each([
       [BotSkillLevel.Medium, 'medium'],
@@ -450,108 +255,7 @@ describe('LLMStrategyBrain', () => {
       expect(callArgs.timeoutMs).toBe(60000);
     });
 
-    it('decideAction — should pass outputSchema and thinking for Google provider at Medium skill', async () => {
-      const mockGoogleChat = jest.fn().mockResolvedValue({
-        text: '{"action":"PASS","reasoning":"skip"}',
-        usage: { input: 50, output: 20 },
-      });
-      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
-        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
-      );
-      mockParseActionIntent.mockReturnValue({
-        action: 'PASS',
-        reasoning: 'skip',
-        planHorizon: '',
-      });
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Medium,
-        provider: LLMProvider.Google,
-        apiKey: 'google-key',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('low');
-    });
-
-    it('decideAction — should pass outputSchema and thinking for Google provider at Hard skill', async () => {
-      const mockGoogleChat = jest.fn().mockResolvedValue({
-        text: '{"action":"BUILD","reasoning":"expand network"}',
-        usage: { input: 80, output: 40 },
-      });
-      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
-        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
-      );
-      mockParseActionIntent.mockReturnValue({
-        action: 'BuildTrack',
-        reasoning: 'expand network',
-        planHorizon: '3 turns',
-      });
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.BuildTrack },
-      });
-
-      const brain = new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Hard,
-        provider: LLMProvider.Google,
-        apiKey: 'google-key',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.thinking).toEqual({ type: 'adaptive' });
-      expect(callArgs.effort).toBe('medium');
-      expect(callArgs.maxTokens).toBe(8192);
-      expect(callArgs.temperature).toBe(0.2);
-    });
-
-    it('decideAction — should pass outputSchema but not thinking for Google provider at Easy skill (JIRA-81)', async () => {
-      const mockGoogleChat = jest.fn().mockResolvedValue({
-        text: '{"action":"PASS","reasoning":"easy bot"}',
-        usage: { input: 30, output: 10 },
-      });
-      (GoogleAdapter as jest.MockedClass<typeof GoogleAdapter>).mockImplementation(
-        () => ({ chat: mockGoogleChat }) as unknown as GoogleAdapter,
-      );
-      mockParseActionIntent.mockReturnValue({
-        action: 'PASS',
-        reasoning: 'easy bot',
-        planHorizon: '',
-      });
-      mockResolve.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Easy,
-        provider: LLMProvider.Google,
-        apiKey: 'google-key',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      const callArgs = mockGoogleChat.mock.calls[0][0];
-      expect(callArgs.outputSchema).toBeDefined();
-      expect(callArgs.thinking).toBeUndefined();
-      expect(callArgs.effort).toBeUndefined();
-      expect(callArgs.maxTokens).toBe(2048);
-      expect(callArgs.temperature).toBe(0.7);
-    });
+    // Google decideAction() tests removed in JIRA-169 (dead code — superseded by TripPlanner)
 
     it('planRoute — should pass ROUTE_SCHEMA and thinking for Google provider at Medium skill', async () => {
       const mockGoogleChat = jest.fn().mockResolvedValue({
@@ -1107,116 +811,10 @@ describe('LLMStrategyBrain', () => {
         .not.toBe(LLM_DEFAULT_MODELS[LLMProvider.Google][BotSkillLevel.Hard]);
     });
 
-    it('should use model override when provided', async () => {
-      setupSuccessfulDecision(mockChat);
-
-      const brain = new LLMStrategyBrain({
-        skillLevel: BotSkillLevel.Easy,
-        provider: LLMProvider.Anthropic,
-        model: 'custom-model-override',
-        apiKey: 'test-key',
-        timeoutMs: 5000,
-        maxRetries: 1,
-      });
-
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(mockChat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          model: 'custom-model-override',
-        }),
-      );
-      expect(result.model).toBe('custom-model-override');
-    });
+    // model override test using decideAction() removed in JIRA-169
   });
 
-  describe('llmLog collection — decideAction()', () => {
-    it('should return llmLog with success entry on first attempt', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.llmLog).toHaveLength(1);
-      expect(result.llmLog![0]).toMatchObject({
-        attemptNumber: 1,
-        status: 'success',
-        latencyMs: expect.any(Number),
-      });
-      expect(result.llmLog![0].error).toBeUndefined();
-    });
-
-    it('should log validation_error when ActionResolver rejects', async () => {
-      mockChat.mockResolvedValue({
-        text: '{"action":"BuildTrack"}',
-        usage: { input: 100, output: 50 },
-      });
-      mockParseActionIntent.mockReturnValue({
-        action: 'BuildTrack',
-        reasoning: 'test',
-        planHorizon: 'now',
-      });
-      // Fail first attempt, succeed second
-      mockResolve
-        .mockResolvedValueOnce({ success: false, error: 'No valid segments' })
-        .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.PassTurn } });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.llmLog).toHaveLength(2);
-      expect(result.llmLog![0].status).toBe('validation_error');
-      expect(result.llmLog![0].error).toBe('No valid segments');
-      expect(result.llmLog![1].status).toBe('success');
-    });
-
-    it('should log api_error when adapter.chat() throws', async () => {
-      mockChat.mockRejectedValue(new Error('Network timeout'));
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.llmLog!.length).toBeGreaterThanOrEqual(1);
-      expect(result.llmLog![0].status).toBe('api_error');
-      expect(result.llmLog![0].error).toContain('Network timeout');
-    });
-
-    it('should log parse_error when ResponseParser throws ParseError', async () => {
-      const { ParseError } = jest.requireMock('../../services/ai/ResponseParser');
-      mockChat.mockResolvedValue({ text: 'garbage', usage: { input: 10, output: 5 } });
-      mockParseActionIntent.mockImplementation(() => { throw new ParseError('Invalid JSON'); });
-      mockHeuristicFallback.mockResolvedValue({
-        success: true,
-        plan: { type: AIActionType.PassTurn },
-      });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.llmLog!.length).toBeGreaterThanOrEqual(1);
-      expect(result.llmLog![0].status).toBe('parse_error');
-      expect(result.llmLog![0].error).toContain('Parsing error');
-    });
-
-    it('should preserve full responseText without truncation', async () => {
-      const longText = 'x'.repeat(1000);
-      mockChat.mockResolvedValue({ text: longText, usage: { input: 10, output: 5 } });
-      mockParseActionIntent.mockReturnValue({
-        action: 'BuildTrack',
-        reasoning: 'test',
-        planHorizon: 'now',
-      });
-      mockResolve.mockResolvedValue({ success: true, plan: { type: AIActionType.BuildTrack } });
-
-      const brain = createBrain();
-      const result = await brain.decideAction(makeSnapshot(), makeContext());
-
-      expect(result.llmLog![0].responseText.length).toBe(1000);
-    });
-  });
+  // decideAction() llmLog tests removed in JIRA-169 (dead code — superseded by TripPlanner)
 
   describe('llmLog collection — planRoute()', () => {
     const validRoute = {
@@ -1444,24 +1042,7 @@ describe('LLMStrategyBrain', () => {
   // ── JIRA-143: setContext() called before each chat() ──
 
   describe('setContext — caller context before chat() (JIRA-143)', () => {
-    it('should call setContext with strategy-brain/planRoute before chat in decideAction', async () => {
-      setupSuccessfulDecision(mockChat);
-      const brain = createBrain();
-      const snapshot = makeSnapshot();
-      await brain.decideAction(snapshot, makeContext());
-
-      expect(setContextSpy).toHaveBeenCalledWith({
-        gameId: 'g1',
-        playerId: 'bot-1',
-        turn: 5,
-        caller: 'strategy-brain',
-        method: 'planRoute',
-      });
-      // setContext must be called before chat
-      const setContextOrder = setContextSpy.mock.invocationCallOrder[0];
-      const chatOrder = mockChat.mock.invocationCallOrder[0];
-      expect(setContextOrder).toBeLessThan(chatOrder);
-    });
+    // decideAction setContext test removed in JIRA-169 (dead code)
 
     it('should call setContext with strategy-brain/planRoute before chat in planRoute', async () => {
       mockChat.mockResolvedValue({
@@ -1532,27 +1113,7 @@ describe('LLMStrategyBrain', () => {
       });
     });
 
-    it('should call setContext on each retry in decideAction', async () => {
-      mockChat.mockResolvedValue({
-        text: '{"action":"BuildTrack"}',
-        usage: { input: 50, output: 20 },
-      });
-      mockParseActionIntent.mockReturnValue({
-        action: 'BuildTrack',
-        reasoning: 'Build',
-        planHorizon: '',
-      });
-      // First resolve fails, second succeeds
-      mockResolve
-        .mockResolvedValueOnce({ success: false, error: 'Not enough money' })
-        .mockResolvedValueOnce({ success: true, plan: { type: AIActionType.PassTurn } });
-
-      const brain = createBrain();
-      await brain.decideAction(makeSnapshot(), makeContext());
-
-      // setContext should be called before each chat attempt
-      expect(setContextSpy).toHaveBeenCalledTimes(2);
-    });
+    // decideAction retry setContext test removed in JIRA-169 (dead code)
   });
 
   // ── JIRA-105b: evaluateUpgradeBeforeDrop ──

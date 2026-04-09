@@ -1,11 +1,7 @@
 /**
  * LLMStrategyBrain — LLM-driven strategic decision-making for bot turns.
  *
- * v6.3 pipeline:
- *   ContextBuilder.serializePrompt() → ProviderAdapter.chat() →
- *   ResponseParser.parseActionIntent() → ActionResolver.resolve()
- *
- * Retry chain: full prompt (with error feedback) → heuristic fallback.
+ * Active pipeline: TripPlanner → PlanExecutor (route-based planning).
  * Created per-turn in AIStrategyEngine (not singleton).
  */
 
@@ -15,11 +11,7 @@ import {
   LLMProvider,
   LLM_DEFAULT_MODELS,
   LLMStrategyConfig,
-  LLMDecisionResult,
-  LLMActionIntent,
   GameContext,
-  TurnPlan,
-  AIActionType,
   StrategicRoute,
   GridPoint,
   RouteStop,
@@ -28,7 +20,7 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
-import { getSystemPrompt, getRoutePlanningPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPrompt } from './prompts/systemPrompts';
+import { getRoutePlanningPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
 import { OpenAIAdapter } from './providers/OpenAIAdapter';
@@ -36,7 +28,7 @@ import { ProviderAdapter } from './providers/ProviderAdapter';
 import { LoggingProviderAdapter } from './LoggingProviderAdapter';
 import { ProviderAuthError } from './providers/errors';
 import { RouteValidator } from './RouteValidator';
-import { ACTION_SCHEMA, ROUTE_SCHEMA, CARGO_CONFLICT_SCHEMA, UPGRADE_BEFORE_DROP_SCHEMA } from './schemas';
+import { ROUTE_SCHEMA, CARGO_CONFLICT_SCHEMA, UPGRADE_BEFORE_DROP_SCHEMA } from './schemas';
 
 /** JIRA-92: Result of cargo conflict evaluation */
 export interface CargoConflictResult {
@@ -100,7 +92,6 @@ const TEMPERATURE_BY_SKILL: Record<BotSkillLevel, number> = {
 export class LLMStrategyBrain {
   private readonly config: LLMStrategyConfig;
   private readonly adapter: LoggingProviderAdapter;
-  private readonly systemPrompt: string;
   private readonly model: string;
 
   constructor(config: LLMStrategyConfig) {
@@ -108,9 +99,6 @@ export class LLMStrategyBrain {
 
     // Resolve model from config or default lookup
     this.model = config.model ?? LLM_DEFAULT_MODELS[config.provider][config.skillLevel];
-
-    // Build system prompt from skill level
-    this.systemPrompt = getSystemPrompt(config.skillLevel);
 
     // Create provider adapter wrapped with logging decorator
     this.adapter = new LoggingProviderAdapter(
@@ -127,149 +115,8 @@ export class LLMStrategyBrain {
   /** Expose config for TripPlanner (JIRA-126) */
   get strategyConfig(): LLMStrategyConfig { return this.config; }
 
-  /** Max LLM retries for decideAction (initial attempt + retries = MAX_LLM_RETRIES+1 total) */
+  /** Max LLM retries for route/cargo/upgrade calls (initial attempt + retries = MAX_LLM_RETRIES+1 total) */
   private static readonly MAX_LLM_RETRIES = 2;
-
-  /**
-   * Decide a strategic action via LLM (v6.3 pipeline).
-   *
-   * Pipeline: serializePrompt → LLM call → parseActionIntent → ActionResolver.resolve
-   * Retry loop feeds error context back to the LLM. Falls back to heuristicFallback
-   * after MAX_LLM_RETRIES failures.
-   */
-  async decideAction(
-    snapshot: WorldSnapshot,
-    context: GameContext,
-  ): Promise<LLMDecisionResult> {
-    let attempt = 0;
-    let lastError: string | undefined;
-    let finalPlan: TurnPlan | undefined;
-    let finalReasoning = '';
-    let finalPlanHorizon = '';
-    let totalLatencyMs = 0;
-    let totalInputTokens = 0;
-    let totalOutputTokens = 0;
-    const llmLog: LlmAttempt[] = [];
-    const initialUserPrompt = ContextBuilder.serializePrompt(context, this.config.skillLevel);
-
-    while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
-      let userPrompt = initialUserPrompt;
-
-      // On retry, append error context so the LLM can correct itself
-      if (lastError) {
-        userPrompt += `\n\nYOUR PREVIOUS CHOICE FAILED VALIDATION:\n${lastError}\nPlease choose a different action.`;
-      }
-
-      const startTime = Date.now();
-
-      try {
-        const useThinking = this.config.skillLevel !== BotSkillLevel.Easy;
-        // JIRA-143: Set caller context for LLM transcript logging
-        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'planRoute' });
-        const response = await this.adapter.chat({
-          model: this.model,
-          maxTokens: ACTION_MAX_TOKENS[this.config.skillLevel],
-          temperature: TEMPERATURE_BY_SKILL[this.config.skillLevel],
-          systemPrompt: this.systemPrompt,
-          userPrompt,
-          outputSchema: ACTION_SCHEMA,
-          ...(useThinking && {
-            thinking: { type: 'adaptive' },
-            effort: ACTION_EFFORT[this.config.skillLevel],
-          }),
-        });
-        const attemptLatency = Date.now() - startTime;
-        totalLatencyMs += attemptLatency;
-        totalInputTokens += response.usage?.input ?? 0;
-        totalOutputTokens += response.usage?.output ?? 0;
-
-        const intent: LLMActionIntent = ResponseParser.parseActionIntent(response.text);
-        const resolved = await ActionResolver.resolve(intent, snapshot, context);
-
-        if (resolved.success && resolved.plan) {
-          llmLog.push({
-            attemptNumber: attempt + 1,
-            status: 'success',
-            responseText: response.text,
-            latencyMs: attemptLatency,
-          });
-          finalPlan = resolved.plan;
-          finalReasoning = intent.reasoning || '';
-          finalPlanHorizon = intent.planHorizon || '';
-          break;
-        } else {
-          lastError = resolved.error || 'Action resolution failed without specific error.';
-          llmLog.push({
-            attemptNumber: attempt + 1,
-            status: 'validation_error',
-            responseText: response.text,
-            error: lastError,
-            latencyMs: attemptLatency,
-          });
-          console.warn(
-            `[LLMStrategyBrain] Action resolution failed (attempt ${attempt + 1}): ${lastError}`,
-          );
-        }
-      } catch (e: unknown) {
-        const attemptLatency = Date.now() - startTime;
-        totalLatencyMs += attemptLatency;
-        if (e instanceof ProviderAuthError) {
-          llmLog.push({
-            attemptNumber: attempt + 1,
-            status: 'api_error',
-            responseText: '',
-            error: `Auth error: ${e.message}`,
-            latencyMs: attemptLatency,
-          });
-          console.error('[LLMStrategyBrain] Auth error — using heuristic fallback');
-          break; // Don't retry auth errors
-        }
-        const isParse = e instanceof ParseError;
-        lastError = isParse
-          ? `Parsing error: ${e.message}`
-          : `LLM call error: ${e instanceof Error ? e.message : String(e)}`;
-        llmLog.push({
-          attemptNumber: attempt + 1,
-          status: isParse ? 'parse_error' : 'api_error',
-          responseText: '',
-          error: lastError,
-          latencyMs: attemptLatency,
-        });
-        console.warn(
-          `[LLMStrategyBrain] LLM/Parsing failed (attempt ${attempt + 1}): ${lastError}`,
-        );
-      }
-      attempt++;
-    }
-
-    // If all retries fail, use heuristic fallback
-    if (!finalPlan) {
-      console.warn('[LLMStrategyBrain] All LLM attempts failed. Falling back to heuristic.');
-      const fallback = await ActionResolver.heuristicFallback(context, snapshot, { llmFailed: true });
-      if (fallback.success && fallback.plan) {
-        finalPlan = fallback.plan;
-        finalReasoning = `[heuristic fallback] ${lastError ?? 'LLM failed to provide a valid plan.'}`;
-        finalPlanHorizon = 'Immediate';
-      } else {
-        finalPlan = { type: AIActionType.PassTurn };
-        finalReasoning = '[heuristic fallback] Heuristic also failed. Defaulting to PassTurn.';
-        finalPlanHorizon = 'Immediate';
-      }
-    }
-
-    return {
-      plan: finalPlan,
-      reasoning: finalReasoning,
-      planHorizon: finalPlanHorizon,
-      model: this.model,
-      latencyMs: totalLatencyMs,
-      tokenUsage: { input: totalInputTokens, output: totalOutputTokens },
-      retried: attempt > 0,
-      llmLog,
-      systemPrompt: this.systemPrompt,
-      userPrompt: initialUserPrompt,
-    };
-  }
 
   /**
    * Plan a multi-stop strategic route via LLM.
