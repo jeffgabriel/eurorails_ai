@@ -329,7 +329,7 @@ export class TurnExecutorPlanner {
           // Then enrich via RouteEnrichmentAdvisor and continue moving with remaining budget.
           if (brain && gridPoints && gridPoints.length > 0) {
             try {
-              const memory = getMemory(snapshot.gameId, snapshot.bot.playerId);
+              const memory = await getMemory(snapshot.gameId, snapshot.bot.playerId);
               const tripPlanner = new TripPlanner(brain);
               const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
 

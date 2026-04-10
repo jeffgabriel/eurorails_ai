@@ -80,7 +80,7 @@ export async function onTurnChange(
   );
   const status = gameResult.rows[0]?.status;
   if (status === 'completed' || status === 'abandoned') {
-    clearMemory(gameId, currentPlayerId);
+    await clearMemory(gameId, currentPlayerId);
     return;
   }
 

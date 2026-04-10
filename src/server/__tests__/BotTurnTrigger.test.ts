@@ -183,10 +183,11 @@ describe('BotTurnTrigger', () => {
     it('should return when game status is completed', async () => {
       mockQuery
         .mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] })
-        .mockResolvedValueOnce({ rows: [{ status: 'completed' }], command: '', rowCount: 1, oid: 0, fields: [] });
+        .mockResolvedValueOnce({ rows: [{ status: 'completed' }], command: '', rowCount: 1, oid: 0, fields: [] })
+        .mockResolvedValueOnce({ rows: [], command: '', rowCount: 0, oid: 0, fields: [] }); // clearMemory DB call
       const { onTurnChange } = await import('../services/ai/BotTurnTrigger');
       await onTurnChange('game-1', 0, 'bot-1');
-      expect(mockQuery).toHaveBeenCalledTimes(2);
+      expect(mockQuery).toHaveBeenCalledTimes(3);
       expect(mockEmitToGame).not.toHaveBeenCalled();
     });
 

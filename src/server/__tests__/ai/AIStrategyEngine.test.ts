@@ -100,7 +100,7 @@ jest.mock('../../services/playerService', () => ({
 
 // Mock BotMemory
 jest.mock('../../services/ai/BotMemory', () => ({
-  getMemory: jest.fn(() => ({
+  getMemory: jest.fn(() => Promise.resolve({
     turnNumber: 0,
     noProgressTurns: 0,
     consecutiveDiscards: 0,
@@ -109,7 +109,7 @@ jest.mock('../../services/ai/BotMemory', () => ({
     turnsOnRoute: 0,
     routeHistory: [],
   })),
-  updateMemory: jest.fn(),
+  updateMemory: jest.fn<() => Promise<void>>().mockResolvedValue(),
 }));
 
 // Mock RouteValidator
@@ -702,7 +702,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -802,7 +802,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       // Set memory with active route
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -848,7 +848,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
     it('should consult LLM for new route when no active route', async () => {
       // Reset memory to default (no active route)
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -909,7 +909,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
     it('should try heuristicFallback when route planning fails, PassTurn only if both fail', async () => {
       // Reset memory to default (no active route)
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -951,7 +951,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
 
     it('JIRA-63: should propagate llmLog into heuristic fallback decision', async () => {
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1071,7 +1071,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should use heuristicFallback BUILD when LLM planRoute returns null', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1112,7 +1112,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should PassTurn when both LLM and heuristicFallback fail', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1153,7 +1153,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should PassTurn when heuristicFallback returns PassTurn plan', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1212,7 +1212,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 3,
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 7,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1276,7 +1276,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 3,
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 6,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1334,7 +1334,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1392,7 +1392,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1443,7 +1443,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1502,7 +1502,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver tourists to Torino',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 8,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1582,7 +1582,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Pick up coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1639,7 +1639,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal to Berlin',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 6,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1723,7 +1723,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 6,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1777,7 +1777,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Pick up coal',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1826,7 +1826,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should populate model/latency/tokenUsage/retried from LLM route planning', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1891,7 +1891,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Test route',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1933,7 +1933,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.GOOGLE_AI_API_KEY;
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -1964,7 +1964,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should set model="heuristic-fallback" when LLM fails and heuristic succeeds', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2017,7 +2017,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   describe('BE-009: pipeline error audit records', () => {
     beforeEach(() => {
       // Reset getMemory to default since other tests may set mockReturnValue
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2099,7 +2099,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
   describe('BE-010: preserve remaining route context after delivery', () => {
     beforeEach(() => {
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2132,7 +2132,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 3,
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 7,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2191,7 +2191,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         { action: 'deliver' as const, loadType: 'Steel', city: 'Paris', demandCardId: 10, payment: 15 },
       ];
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 8,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2274,7 +2274,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 5,
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 6,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2322,7 +2322,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should handle null previousRouteStops in memory gracefully', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 10,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2370,7 +2370,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should thread llmLog from planRoute into BotTurnResult', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2441,7 +2441,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Test route',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2483,7 +2483,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
       delete process.env.GOOGLE_AI_API_KEY;
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2523,7 +2523,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'test',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 31,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2601,7 +2601,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'test',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2694,7 +2694,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'test',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 8,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2774,7 +2774,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     });
 
     it('should NOT call rebuildDemands when no delivery occurred', async () => {
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2851,7 +2851,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver potatoes',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 8,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -2967,7 +2967,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
             reasoning: 'Deliver beer then pickup chocolate',
           };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3134,7 +3134,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
       // Ensure no activeRoute from previous tests — forces the LLM/planRoute branch
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3298,7 +3298,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         reasoning: 'Deliver beer then pickup chocolate',
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain, activeRoute: route,
         turnsOnRoute: 2, routeHistory: [], deliveryCount: 1, totalEarnings: 15,
@@ -3379,7 +3379,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // No API key → no early execution path
       delete process.env.ANTHROPIC_API_KEY;
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
         lastAction: null, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], deliveryCount: 0, totalEarnings: 0,
@@ -3449,7 +3449,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     function setupBase() {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 4,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3566,7 +3566,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockContextBuild.mockResolvedValue(context);
 
       // No active route — TripPlanner path is taken
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3628,7 +3628,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3677,7 +3677,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       mockCapture.mockResolvedValue(snapshot);
       mockContextBuild.mockResolvedValue(context);
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         turnNumber: 0,
         noProgressTurns: 0,
         consecutiveDiscards: 0,
@@ -3751,7 +3751,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
     beforeEach(() => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
-      mockGetMemory.mockReturnValue(defaultMemory);
+      mockGetMemory.mockResolvedValue(defaultMemory);
       // Set up loadGridPoints so TurnExecutor.handleDeliverLoad can resolve city name
       const gridMap = new Map();
       gridMap.set('10,10', { row: 10, col: 10, name: 'Berlin', terrain: 2 });
@@ -3959,7 +3959,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         createdAtTurn: 3,
       };
 
-      mockGetMemory.mockReturnValue({
+      mockGetMemory.mockResolvedValue({
         ...defaultMemory,
         activeRoute,
         turnsOnRoute: 1,

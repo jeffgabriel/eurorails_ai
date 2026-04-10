@@ -2,6 +2,13 @@ import { getMemory, updateMemory, clearMemory } from '../services/ai/BotMemory';
 import { initTurnLog, logPhase, flushTurnLog, getCurrentLog, setOutputEnabled } from '../services/ai/DecisionLogger';
 import { BotMemoryState } from '../../shared/types/GameTypes';
 
+// Mock db so BotMemory doesn't try to connect to a real DB
+jest.mock('../db/index', () => ({
+  db: {
+    query: jest.fn().mockResolvedValue({ rows: [] }),
+  },
+}));
+
 describe('BotMemory and DecisionLogger module imports', () => {
   it('should export BotMemory functions', () => {
     expect(typeof getMemory).toBe('function');
@@ -17,8 +24,8 @@ describe('BotMemory and DecisionLogger module imports', () => {
     expect(typeof setOutputEnabled).toBe('function');
   });
 
-  it('getMemory returns default state for unknown game/player', () => {
-    const state: BotMemoryState = getMemory('unknown-game', 'unknown-player');
+  it('getMemory returns default state for unknown game/player', async () => {
+    const state: BotMemoryState = await getMemory('unknown-game', 'unknown-player');
     expect(state).toEqual({
       currentBuildTarget: null,
       turnsOnTarget: 0,
@@ -38,14 +45,14 @@ describe('BotMemory and DecisionLogger module imports', () => {
     });
   });
 
-  it('updateMemory merges partial state', () => {
-    updateMemory('test-game', 'test-bot', { noProgressTurns: 3 });
-    const state = getMemory('test-game', 'test-bot');
+  it('updateMemory merges partial state', async () => {
+    await updateMemory('test-game', 'test-bot', { noProgressTurns: 3 });
+    const state = await getMemory('test-game', 'test-bot');
     expect(state.noProgressTurns).toBe(3);
     expect(state.currentBuildTarget).toBeNull();
 
     // Clean up
-    clearMemory('test-game', 'test-bot');
+    await clearMemory('test-game', 'test-bot');
   });
 
   it('initTurnLog creates a log and flushTurnLog clears it', () => {

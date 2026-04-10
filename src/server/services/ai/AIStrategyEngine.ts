@@ -183,7 +183,7 @@ export class AIStrategyEngine {
     const tag = `[AIStrategy ${gameId.slice(0, 8)}]`;
 
     // Load bot memory for state continuity across turns
-    const memory = getMemory(gameId, botPlayerId);
+    const memory = await getMemory(gameId, botPlayerId);
 
     // Initialize decision logging for this turn
     initTurnLog(gameId, botPlayerId, memory.turnNumber + 1);
@@ -939,7 +939,7 @@ export class AIStrategyEngine {
         memoryPatch.previousRouteStops = null;
       }
 
-      updateMemory(gameId, botPlayerId, memoryPatch);
+      await updateMemory(gameId, botPlayerId, memoryPatch);
 
       flushTurnLog();
 
@@ -1206,7 +1206,7 @@ export class AIStrategyEngine {
       console.error(`${tag} PIPELINE ERROR (${durationMs}ms):`, error instanceof Error ? error.stack : error);
 
       // Update bot memory even on pipeline error
-      updateMemory(gameId, botPlayerId, {
+      await updateMemory(gameId, botPlayerId, {
         lastAction: AIActionType.PassTurn,
         noProgressTurns: (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: 0,
