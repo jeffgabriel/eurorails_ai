@@ -431,8 +431,46 @@ export class TurnExecutorPlanner {
           n => n.cityName && n.cityName !== currentCity,
         );
 
+        // Directional guard: only move to a frontier node if it is closer to the
+        // build target than the bot's current position. Moving to a farther node
+        // wastes movement budget by sending the bot in the wrong direction.
+        // (Mirrors the logic in filterByDirection() used elsewhere in this class.)
+        let directionalFrontier = reachableFrontier;
+        if (context.position) {
+          const grid = loadGridPoints();
+          let targetRow = -1, targetCol = -1;
+          for (const [, gp] of grid) {
+            if (gp.name && gp.name === targetCity) {
+              targetRow = gp.row;
+              targetCol = gp.col;
+              break;
+            }
+          }
+          if (targetRow >= 0) {
+            const botDist =
+              Math.abs(context.position.row - targetRow) +
+              Math.abs(context.position.col - targetCol);
+            directionalFrontier = reachableFrontier.filter(n => {
+              for (const [, gp] of grid) {
+                if (gp.name && gp.name === n.cityName) {
+                  const nodeDist =
+                    Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
+                  return nodeDist < botDist;
+                }
+              }
+              return false;
+            });
+            if (directionalFrontier.length === 0) {
+              console.log(
+                `${tag} A3 frontier move skipped — directional guard: bot is already ` +
+                `closer to "${targetCity}" (dist=${botDist}) than any frontier node`,
+              );
+            }
+          }
+        }
+
         let a3MoveSucceeded = false;
-        for (const frontierNode of reachableFrontier) {
+        for (const frontierNode of directionalFrontier) {
           if (!frontierNode.cityName) continue;
 
           const a3MoveResult = await ActionResolver.resolveMove(
