@@ -9,10 +9,12 @@
  * - LLM call fails/times out → fallback to keep, route unchanged
  * - LLM returns invalid JSON → fallback to keep after retries
  * - Graceful degradation: no throws
+ * - Hallucinated stops (Belfast pickup, Holland delivery) → rejected by RouteValidator, original route preserved
  */
 
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
+import { RouteValidator } from '../../services/ai/RouteValidator';
 import {
   StrategicRoute,
   WorldSnapshot,
@@ -25,6 +27,8 @@ import { RouteEnrichmentSchema } from '../../services/ai/schemas';
 
 // Mock LLMStrategyBrain so we don't need a real instance
 jest.mock('../../services/ai/LLMStrategyBrain');
+// Mock RouteValidator so we can control validation outcomes without full game state
+jest.mock('../../services/ai/RouteValidator');
 
 // ─── Test Fixtures ────────────────────────────────────────────────────────────
 
@@ -65,7 +69,7 @@ function makeRoute(stops?: Array<{ action: 'pickup' | 'deliver'; loadType: strin
 function makeSnapshot(): WorldSnapshot {
   return {
     gameId: 'game-1',
-    gameStatus: 'in_progress',
+    gameStatus: 'active',
     turnNumber: 3,
     bot: {
       playerId: 'bot-1',
@@ -164,6 +168,11 @@ function makeFailingBrain(): LLMStrategyBrain {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('RouteEnrichmentAdvisor.enrich', () => {
+  beforeEach(() => {
+    // Default: RouteValidator accepts all enriched routes (no hallucinations)
+    jest.mocked(RouteValidator.validate).mockReturnValue({ valid: true, errors: [] });
+  });
+
   afterEach(() => {
     jest.clearAllMocks();
   });
@@ -360,5 +369,87 @@ describe('RouteEnrichmentAdvisor.enrich', () => {
     const chatCall = mockChat.mock.calls[0][0];
     expect(chatCall.userPrompt).toContain('Corridor map');
     expect(chatCall.systemPrompt).toContain('route enrichment advisor');
+  });
+
+  it('rejects hallucinated stops when RouteValidator returns invalid (game 8d8724c8 turn 9 scenario)', async () => {
+    // LLM hallucinates: Belfast is not a Cattle supply city, Holland has no matching demand
+    const reorderResponse: RouteEnrichmentSchema = {
+      decision: 'reorder',
+      reorderedStops: [
+        { action: 'pickup', loadType: 'Cattle', city: 'Belfast' },   // hallucinated: Belfast is delivery, not supply
+        { action: 'deliver', loadType: 'Cattle', city: 'Holland' },  // hallucinated: no such demand
+        { action: 'deliver', loadType: 'Coal', city: 'Berlin' },     // real stop from original route
+      ],
+      reasoning: 'Optimized order',
+    };
+    const brain = makeMockBrain(JSON.stringify(reorderResponse));
+
+    // The original route: Nantes→Berlin (real delivery target)
+    const originalRoute = makeRoute([
+      { action: 'pickup', loadType: 'Coal', city: 'Lyon' },
+      { action: 'deliver', loadType: 'Coal', city: 'Berlin' },
+    ]);
+
+    // Configure the test grid to include Belfast (so city name validation passes)
+    const extendedGrid: GridPoint[] = [
+      ...testGrid,
+      gp(3, 0, TerrainType.MajorCity, 'Belfast'),
+      gp(3, 1, TerrainType.MajorCity, 'Holland'),
+    ];
+
+    // RouteValidator rejects the enriched route (hallucinated supply/demand)
+    jest.mocked(RouteValidator.validate).mockReturnValue({
+      valid: false,
+      errors: [
+        '"Belfast" is not a known supply city for Cattle.',
+        'No demand card for delivering Cattle to Holland.',
+      ],
+    });
+
+    const result = await RouteEnrichmentAdvisor.enrich(originalRoute, makeSnapshot(), makeContext(), brain, extendedGrid);
+
+    // Should fall back to original route, not the hallucinated one
+    expect(result).toBe(originalRoute);
+    expect(result.stops.length).toBe(2);
+    expect(result.stops[0].city).toBe('Lyon');
+    expect(result.stops[1].city).toBe('Berlin');
+  });
+
+  it('applies pruned route when RouteValidator prunes some hallucinated stops', async () => {
+    // LLM inserts one valid stop and one invalid stop
+    const insertResponse: RouteEnrichmentSchema = {
+      decision: 'insert',
+      insertions: [
+        {
+          afterStopIndex: 0,
+          action: 'deliver',
+          loadType: 'Coal',
+          city: 'Lyon',
+          reasoning: 'On the way',
+        },
+      ],
+      reasoning: 'Insert Lyon',
+    };
+    const brain = makeMockBrain(JSON.stringify(insertResponse));
+    const route = makeRoute();
+
+    // Validator accepts the route but prunes to only the feasible stops
+    const prunedRoute: StrategicRoute = {
+      ...route,
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Berlin' },
+        { action: 'deliver', loadType: 'Coal', city: 'Paris', payment: 12 },
+      ],
+    };
+    jest.mocked(RouteValidator.validate).mockReturnValue({
+      valid: true,
+      prunedRoute,
+      errors: ['Lyon deliver pruned'],
+    });
+
+    const result = await RouteEnrichmentAdvisor.enrich(route, makeSnapshot(), makeContext(), brain, testGrid);
+
+    // Should use the pruned route's stops
+    expect(result.stops).toEqual(prunedRoute.stops);
   });
 });

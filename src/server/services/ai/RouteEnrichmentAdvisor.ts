@@ -20,6 +20,7 @@ import {
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { MapRenderer } from './MapRenderer';
 import { ROUTE_ENRICHMENT_SCHEMA, RouteEnrichmentSchema } from './schemas';
+import { RouteValidator } from './RouteValidator';
 
 const MAX_RETRIES = 1;
 const ENRICHMENT_TIMEOUT_MS = 30000;
@@ -113,7 +114,25 @@ export class RouteEnrichmentAdvisor {
     }
 
     // 4. Apply the LLM decision
-    return RouteEnrichmentAdvisor.applyDecision(route, parsed, gridPoints);
+    let enrichedRoute = RouteEnrichmentAdvisor.applyDecision(route, parsed, gridPoints);
+
+    // 5. Validate the enriched route (skip if unchanged — 'keep' decision)
+    if (enrichedRoute !== route) {
+      const validation = RouteValidator.validate(
+        { ...enrichedRoute, currentStopIndex: 0 },
+        context,
+        snapshot,
+      );
+      if (!validation.valid && !validation.prunedRoute) {
+        console.warn('[RouteEnrichmentAdvisor] Enriched route rejected by validation, returning original route');
+        return route;
+      }
+      if (validation.prunedRoute) {
+        enrichedRoute = { ...enrichedRoute, stops: validation.prunedRoute.stops };
+      }
+    }
+
+    return enrichedRoute;
   }
 
   /**
