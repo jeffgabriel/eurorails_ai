@@ -17,7 +17,7 @@ import {
   computeFerryRouteInfo,
   GridCoord,
   GridPointData,
-} from './MapTopology';
+} from '../MapTopology';
 import { getMajorCityLookup, getMajorCityGroups, getFerryEdges, isIntraCityEdge } from '../../../shared/services/majorCityGroups';
 import { getWaterCrossingExtraCost } from '../../../shared/config/waterCrossings';
 

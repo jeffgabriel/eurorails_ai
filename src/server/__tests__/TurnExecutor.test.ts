@@ -23,7 +23,7 @@ jest.mock('../db/index', () => ({
   },
 }));
 jest.mock('../services/playerService');
-jest.mock('../services/ai/MapTopology', () => ({
+jest.mock('../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
@@ -624,7 +624,7 @@ describe('TurnExecutor — handlePickupLoad', () => {
   });
 
   it('should insert pickup action into turn_actions table', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -645,7 +645,7 @@ describe('TurnExecutor — handlePickupLoad', () => {
   });
 
   it('should still succeed when turn_actions insert fails', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -692,7 +692,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
   });
 
   it('should delegate to PlayerService.deliverLoadForUser', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -706,7 +706,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
   });
 
   it('should return success with payment and new card ID', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -734,7 +734,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
   });
 
   it('should return failure when bot is not at a named city', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map()); // empty grid = no city
 
     const plan = makeDeliveryPlan('Coal', 42);
@@ -745,7 +745,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
   });
 
   it('should emit bot:demandRankingUpdate with refreshed demand ranking after delivery (FE-001)', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -778,7 +778,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
   });
 
   it('should still succeed when demand ranking emit fails (FE-001)', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -800,7 +800,7 @@ describe('TurnExecutor — handleDeliverLoad', () => {
 
 describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
   it('should skip DELIVER step when bot is not at a named city and continue remaining steps', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     // Empty grid = no city at bot position
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
@@ -837,7 +837,7 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
   });
 
   it('should skip DROP step when bot is not at a named city', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
     // Mock PlayerService for build step
@@ -871,7 +871,7 @@ describe('JIRA-83: MultiAction DELIVER/DROP skip at unnamed milepost', () => {
   });
 
   it('should execute DELIVER normally when bot IS at a named city', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, name: 'Berlin', terrain: 2 }],
     ]));
@@ -1095,7 +1095,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should call PlayerService.dropLoadForPlayer with correct params', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -1115,7 +1115,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should return success with zero cost', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -1130,7 +1130,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should update snapshot.bot.loads after drop', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -1158,7 +1158,7 @@ describe('TurnExecutor — handleDropLoad', () => {
 
   it('should return failure when bot is not at a named city', async () => {
     // Position not in grid points — returns empty city name
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map());
 
     const plan = makeDropOption('Coal');
@@ -1170,7 +1170,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should insert audit record (best-effort)', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -1187,7 +1187,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should still succeed when audit insert fails', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));
@@ -1200,7 +1200,7 @@ describe('TurnExecutor — handleDropLoad', () => {
   });
 
   it('should throw when PlayerService.dropLoadForPlayer throws', async () => {
-    const { loadGridPoints } = require('../services/ai/MapTopology');
+    const { loadGridPoints } = require('../services/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([
       ['29,32', { row: 29, col: 32, terrain: TerrainType.MajorCity, name: 'Berlin' }],
     ]));

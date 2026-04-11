@@ -7,10 +7,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import { TerrainType, WaterCrossingType } from '../../../shared/types/GameTypes';
-import { getTerrainBuildCost } from '../../../shared/config/terrainCosts';
-import { getFerryEdges, type FerryEdge } from '../../../shared/services/majorCityGroups';
-import waterCrossingsData from '../../../../configuration/waterCrossings.json';
+import { TerrainType, WaterCrossingType } from '../../shared/types/GameTypes';
+import { getTerrainBuildCost } from '../../shared/config/terrainCosts';
+import { getFerryEdges, type FerryEdge } from '../../shared/services/majorCityGroups';
+import waterCrossingsData from '../../../configuration/waterCrossings.json';
 
 /** Parsed grid point from gridPoints.json */
 export interface GridPointData {
@@ -90,7 +90,7 @@ function mapTypeToTerrain(type: string): TerrainType {
 export function loadGridPoints(): Map<string, GridPointData> {
   if (gridPointsCache) return gridPointsCache;
 
-  const filePath = path.resolve(__dirname, '../../../../configuration/gridPoints.json');
+  const filePath = path.resolve(__dirname, '../../../configuration/gridPoints.json');
   const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as Array<{
     GridX: number;
     GridY: number;

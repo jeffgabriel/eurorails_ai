@@ -12,7 +12,7 @@ jest.mock('../../../shared/services/majorCityGroups', () => ({
   computeEffectivePathLength: jest.fn().mockReturnValue(0),
 }));
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   hexDistance: jest.fn(),
   loadGridPoints: jest.fn().mockReturnValue([]),
   estimateHopDistance: jest.fn().mockReturnValue(0),
@@ -23,7 +23,7 @@ jest.mock('../../services/ai/MapTopology', () => ({
 }));
 
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance } from '../../services/ai/MapTopology';
+import { hexDistance } from '../../services/MapTopology';
 
 const mockedGetFerryEdges = getFerryEdges as jest.MockedFunction<typeof getFerryEdges>;
 const mockedHexDistance = hexDistance as jest.MockedFunction<typeof hexDistance>;

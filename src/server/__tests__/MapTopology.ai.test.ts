@@ -1,4 +1,4 @@
-import { estimateHopDistance, estimatePathCost, hexDistance, _resetCache } from '../../services/ai/MapTopology';
+import { estimateHopDistance, estimatePathCost, hexDistance, _resetCache } from '../services/MapTopology';
 
 describe('estimateHopDistance', () => {
   afterEach(() => {

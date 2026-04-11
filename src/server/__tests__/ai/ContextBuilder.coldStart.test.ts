@@ -107,7 +107,7 @@ const mockHexDistance = jest.fn((r1: number, c1: number, r2: number, c2: number)
   return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
 });
 
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   estimatePathCost: (r1: number, c1: number, r2: number, c2: number) => mockEstimatePathCost(r1, c1, r2, c2),
   estimateHopDistance: (r1: number, c1: number, r2: number, c2: number) => mockEstimateHopDistance(r1, c1, r2, c2),
   hexDistance: (r1: number, c1: number, r2: number, c2: number) => mockHexDistance(r1, c1, r2, c2),

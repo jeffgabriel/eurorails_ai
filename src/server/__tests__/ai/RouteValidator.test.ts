@@ -12,12 +12,12 @@ import {
   TerrainType,
   DemandContext,
 } from '../../../shared/types/GameTypes';
-import { GridPointData } from '../../services/ai/MapTopology';
+import { GridPointData } from '../../services/MapTopology';
 
 // Mock MapTopology — loadGridPoints and estimateHopDistance return controllable values
 const mockGridPoints = new Map<string, GridPointData>();
 const mockEstimateHopDistance = jest.fn<number, [number, number, number, number]>(() => 10);
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => mockGridPoints),
   estimateHopDistance: (r1: number, c1: number, r2: number, c2: number) => mockEstimateHopDistance(r1, c1, r2, c2),
   getHexNeighbors: jest.fn(() => []),

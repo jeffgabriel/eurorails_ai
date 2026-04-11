@@ -54,7 +54,7 @@ jest.mock('../../services/ai/RouteValidator', () => ({
 }));
 
 // Mock MapTopology
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),

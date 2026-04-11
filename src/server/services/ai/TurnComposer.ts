@@ -25,7 +25,7 @@ import {
   TrainType,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints } from '../MapTopology';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { getTrainCapacity } from '../../../shared/services/trainProperties';
 

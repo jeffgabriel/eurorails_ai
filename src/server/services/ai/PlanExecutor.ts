@@ -28,7 +28,7 @@ import {
   ResolvedAction,
 } from '../../../shared/types/GameTypes';
 import { ActionResolver } from './ActionResolver';
-import { loadGridPoints } from './MapTopology';
+import { loadGridPoints } from '../MapTopology';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { ContextBuilder } from './ContextBuilder';
 
