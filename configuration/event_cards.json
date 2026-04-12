@@ -1,0 +1,222 @@
+[
+  {
+    "id": 121,
+    "type": "Strike",
+    "title": "Coastal Strike!",
+    "description": "No train may pick up or deliver any load at any city within 3 mileposts of any coast.",
+    "effectConfig": {
+      "type": "Strike",
+      "variant": "coastal",
+      "coastalRadius": 3
+    }
+  },
+  {
+    "id": 122,
+    "type": "Strike",
+    "title": "Coastal Strike!",
+    "description": "No train may pick up or deliver any load at any city within 3 mileposts of any coast.",
+    "effectConfig": {
+      "type": "Strike",
+      "variant": "coastal",
+      "coastalRadius": 3
+    }
+  },
+  {
+    "id": 123,
+    "type": "Strike",
+    "title": "Rail Strike!",
+    "description": "No train may move on the drawing player's rail lines. The drawing player may not build track during this event.",
+    "effectConfig": {
+      "type": "Strike",
+      "variant": "rail",
+      "affectsDrawingPlayerOnly": true
+    }
+  },
+  {
+    "id": 124,
+    "type": "ExcessProfitTax",
+    "title": "Excess Profit Tax!",
+    "description": "All players pay a sliding-scale tax based on their current cash holdings.",
+    "effectConfig": {
+      "type": "ExcessProfitTax",
+      "brackets": [
+        { "threshold": 200, "tax": 50 },
+        { "threshold": 150, "tax": 40 },
+        { "threshold": 100, "tax": 30 },
+        { "threshold": 50, "tax": 20 },
+        { "threshold": 0, "tax": 0 }
+      ]
+    }
+  },
+  {
+    "id": 125,
+    "type": "Derailment",
+    "title": "Derailment!",
+    "description": "All trains within 3 mileposts of Paris or Bruxelles lose 1 turn and 1 load.",
+    "effectConfig": {
+      "type": "Derailment",
+      "cities": ["Paris", "Bruxelles"],
+      "radius": 3
+    }
+  },
+  {
+    "id": 126,
+    "type": "Derailment",
+    "title": "Derailment!",
+    "description": "All trains within 3 mileposts of Frankfurt or Stuttgart lose 1 turn and 1 load.",
+    "effectConfig": {
+      "type": "Derailment",
+      "cities": ["Frankfurt", "Stuttgart"],
+      "radius": 3
+    }
+  },
+  {
+    "id": 127,
+    "type": "Derailment",
+    "title": "Derailment!",
+    "description": "All trains within 3 mileposts of Wien or Budapest lose 1 turn and 1 load.",
+    "effectConfig": {
+      "type": "Derailment",
+      "cities": ["Wien", "Budapest"],
+      "radius": 3
+    }
+  },
+  {
+    "id": 128,
+    "type": "Derailment",
+    "title": "Derailment!",
+    "description": "All trains within 3 mileposts of Milano or Torino lose 1 turn and 1 load.",
+    "effectConfig": {
+      "type": "Derailment",
+      "cities": ["Milano", "Torino"],
+      "radius": 3
+    }
+  },
+  {
+    "id": 129,
+    "type": "Derailment",
+    "title": "Derailment!",
+    "description": "All trains within 3 mileposts of Warszawa or Krakow lose 1 turn and 1 load.",
+    "effectConfig": {
+      "type": "Derailment",
+      "cities": ["Warszawa", "Krakow"],
+      "radius": 3
+    }
+  },
+  {
+    "id": 130,
+    "type": "Snow",
+    "title": "Snow!",
+    "description": "All trains within 6 mileposts of Torino move at half rate. No movement or railbuilding allowed in Alpine mileposts of the affected area.",
+    "effectConfig": {
+      "type": "Snow",
+      "centerCity": "Torino",
+      "radius": 6,
+      "blockedTerrain": [3]
+    }
+  },
+  {
+    "id": 131,
+    "type": "Snow",
+    "title": "Snow!",
+    "description": "All trains within 4 mileposts of München (Munich) move at half rate. No movement or railbuilding allowed in mountain mileposts of the affected area.",
+    "effectConfig": {
+      "type": "Snow",
+      "centerCity": "München",
+      "radius": 4,
+      "blockedTerrain": [2]
+    }
+  },
+  {
+    "id": 132,
+    "type": "Snow",
+    "title": "Snow!",
+    "description": "All trains within 4 mileposts of Praha (Prague) move at half rate. No movement or railbuilding allowed in mountain mileposts of the affected area.",
+    "effectConfig": {
+      "type": "Snow",
+      "centerCity": "Praha",
+      "radius": 4,
+      "blockedTerrain": [2]
+    }
+  },
+  {
+    "id": 133,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Rhein are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Rhein"
+    }
+  },
+  {
+    "id": 134,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Donau are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Donau"
+    }
+  },
+  {
+    "id": 135,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Elbe are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Elbe"
+    }
+  },
+  {
+    "id": 136,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Po are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Po"
+    }
+  },
+  {
+    "id": 137,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Loire are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Loire"
+    }
+  },
+  {
+    "id": 138,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Siene are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Siene"
+    }
+  },
+  {
+    "id": 139,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Oder are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Oder"
+    }
+  },
+  {
+    "id": 140,
+    "type": "Flood",
+    "title": "Flood!",
+    "description": "Bridges crossing the Vistula are immediately erased. Track may be rebuilt after this event card is discarded.",
+    "effectConfig": {
+      "type": "Flood",
+      "river": "Vistula"
+    }
+  }
+]
