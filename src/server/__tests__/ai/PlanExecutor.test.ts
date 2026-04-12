@@ -28,7 +28,7 @@ jest.mock('../../services/ai/ActionResolver', () => ({
 }));
 
 // Mock MapTopology
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
@@ -73,7 +73,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { getMajorCityLookup } from '../../../shared/services/majorCityGroups';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 
 const mockResolve = ActionResolver.resolve as jest.Mock;

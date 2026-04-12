@@ -7,7 +7,7 @@ import {
   hexDistance,
   _resetCache,
   GridCoord,
-} from '../services/ai/MapTopology';
+} from '../services/MapTopology';
 import { getMajorCityLookup, getMajorCityGroups, getFerryEdges } from '../../shared/services/majorCityGroups';
 
 describe('computeBuildSegments', () => {

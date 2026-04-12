@@ -21,7 +21,7 @@ import {
   DemandContext,
   TerrainType,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, estimateHopDistance, GridPointData } from './MapTopology';
+import { loadGridPoints, estimateHopDistance, GridPointData } from '../MapTopology';
 
 export interface RouteValidationResult {
   valid: boolean;

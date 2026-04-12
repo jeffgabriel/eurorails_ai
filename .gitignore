@@ -39,3 +39,10 @@ test-results/
 
 # Compounds local session data
 .compounds/
+
+# AI tool local data
+.claude/
+.cursor/
+
+# SQLite databases
+*.db

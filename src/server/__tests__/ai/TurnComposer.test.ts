@@ -14,7 +14,7 @@ jest.mock('../../services/ai/PlanExecutor', () => ({
     findDemandBuildTarget: jest.fn(),
   },
 }));
-jest.mock('../../services/ai/MapTopology', () => ({
+jest.mock('../../services/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
   getHexNeighbors: jest.fn(() => []),
   getTerrainCost: jest.fn(() => 1),
@@ -35,7 +35,7 @@ jest.mock('../../../shared/services/TrackNetworkService', () => ({
 import { TurnComposer } from '../../services/ai/TurnComposer';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PlanExecutor } from '../../services/ai/PlanExecutor';
-import { loadGridPoints } from '../../services/ai/MapTopology';
+import { loadGridPoints } from '../../services/MapTopology';
 import * as majorCityGroups from '../../../shared/services/majorCityGroups';
 import {
   AIActionType,

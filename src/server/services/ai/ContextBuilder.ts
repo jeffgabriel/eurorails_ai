@@ -25,7 +25,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from './MapTopology';
+import { hexDistance, estimateHopDistance, estimatePathCost, computeLandmass, computeFerryRouteInfo, makeKey, loadGridPoints } from '../MapTopology';
 import { getTrainSpeed, getTrainCapacity } from '../../../shared/services/trainProperties';
 import { getCityNameAtPosition } from '../../../shared/services/cityPositionResolver';
 

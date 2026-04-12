@@ -11,7 +11,7 @@ import { DemandDeckService } from '../demandDeckService';
 import { LoadService } from '../loadService';
 import { getConnectedMajorCityCount } from './connectedMajorCities';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
-import { loadGridPoints, gridToPixel } from './MapTopology';
+import { loadGridPoints, gridToPixel } from '../MapTopology';
 
 /**
  * Capture a frozen snapshot of the game world for AI evaluation.
