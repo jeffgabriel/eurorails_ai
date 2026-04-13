@@ -1,6 +1,7 @@
 /**
  * Mock for DemandDeckService.
  * Provides configurable getCard/drawCard/discardCard for test scenarios.
+ * drawCard() returns CardDrawResult format: { type: 'demand', card: DemandCard }
  */
 
 export interface MockDemandCard {
@@ -10,6 +11,10 @@ export interface MockDemandCard {
 
 const cards = new Map<number, MockDemandCard>();
 let nextCardId = 200;
+
+function makeDemandResult(card: MockDemandCard) {
+  return { type: 'demand' as const, card };
+}
 
 const mockInstance = {
   getCard: jest.fn((id: number) => cards.get(id) ?? undefined),
@@ -24,7 +29,7 @@ const mockInstance = {
       ],
     };
     cards.set(id, card);
-    return card;
+    return makeDemandResult(card);
   }),
   discardCard: jest.fn(),
 };
@@ -66,7 +71,7 @@ export function resetDemandDeckMock(): void {
       ],
     };
     cards.set(id, card);
-    return card;
+    return makeDemandResult(card);
   });
   mockInstance.discardCard.mockReset();
   mockDemandDeckService.getInstance.mockReset().mockReturnValue(mockInstance);

@@ -73,7 +73,7 @@ jest.mock('../../services/demandDeckService', () => ({
   DemandDeckService: {
     getInstance: jest.fn(() => ({
       getCard: jest.fn(() => undefined),
-      drawCard: jest.fn(() => ({ id: 99, demands: [] })),
+      drawCard: jest.fn(() => ({ type: 'demand', card: { id: 99, demands: [] } })),
       discardCard: jest.fn(),
     })),
   },
