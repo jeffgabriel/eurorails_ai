@@ -236,10 +236,10 @@ describe('PlayerService.discardHandForPlayer', () => {
         type: 'event' as const,
         card: {
           id,
-          type: 1, // EventCardType.Strike (numeric)
+          type: 'Strike' as const, // EventCardType.Strike
           title: 'Strike!',
           description: 'Test event',
-          effectConfig: { effectType: 'strike', variant: 'coastal', coastalRadius: 3 },
+          effectConfig: { type: 'Strike' as const, variant: 'coastal' as const, coastalRadius: 3 },
         },
       };
     }

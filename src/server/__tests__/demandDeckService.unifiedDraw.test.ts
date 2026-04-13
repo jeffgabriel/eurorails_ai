@@ -151,13 +151,26 @@ describe('DemandDeckService unified draw pile', () => {
 
   describe('discardCard() — both card types', () => {
     it('should discard a demand card by ID', () => {
-      const result = service.drawCard();
-      expect(result).not.toBeNull();
-      const cardId = result!.card.id;
+      // Draw until we get a demand card (unified deck may draw event cards first)
+      let demandResult: ReturnType<typeof service.drawCard> = null;
+      const eventCardsDrawn: number[] = [];
+      for (let i = 0; i < 166; i++) {
+        const r = service.drawCard();
+        if (!r) break;
+        if (r.type === 'demand') {
+          demandResult = r;
+          break;
+        }
+        // Discard event cards so they don't stay in dealt
+        service.discardEventCard(r.card.id);
+        eventCardsDrawn.push(r.card.id);
+      }
+      expect(demandResult).not.toBeNull();
+      const cardId = demandResult!.card.id;
 
       service.discardCard(cardId);
       const state = service.getDeckState();
-      expect(state.discardPileSize).toBe(1);
+      expect(state.discardPileSize).toBe(1 + eventCardsDrawn.length);
       expect(state.dealtCardsCount).toBe(0);
     });
 

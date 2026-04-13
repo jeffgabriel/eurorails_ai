@@ -250,6 +250,24 @@ export class DemandDeckService {
     return true;
   }
 
+  /**
+   * Return a discarded event card back to the top of the draw pile.
+   * Used for rollback compensation when a transaction fails after event cards were discarded.
+   */
+  public returnDiscardedEventCardToDrawPile(eventCardId: number): boolean {
+    if (!this.eventCardMap.has(eventCardId)) {
+      return false;
+    }
+    const drawKey = eventDrawKey(eventCardId);
+    const idx = this.discardPile.lastIndexOf(drawKey);
+    if (idx === -1) {
+      return false;
+    }
+    this.discardPile.splice(idx, 1);
+    this.drawPile.push(drawKey);
+    return true;
+  }
+
   /** Returns all demand cards (legacy accessor). */
   public getAllCards(): DemandCard[] {
     return [...this.demandCards];

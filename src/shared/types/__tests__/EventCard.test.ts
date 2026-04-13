@@ -73,7 +73,7 @@ describe('EventCard types', () => {
     it('should narrow to SnowEffect on Snow type', () => {
       const effect: EventEffectConfig = {
         type: EventCardType.Snow,
-        centerCity: 'München',
+        centerCity: 'Munchen',
         radius: 4,
         blockedTerrain: [TerrainType.Mountain],
       };
@@ -81,7 +81,7 @@ describe('EventCard types', () => {
       switch (effect.type) {
         case EventCardType.Snow: {
           const snow: SnowEffect = effect;
-          expect(snow.centerCity).toBe('München');
+          expect(snow.centerCity).toBe('Munchen');
           expect(snow.radius).toBe(4);
           expect(snow.blockedTerrain).toContain(TerrainType.Mountain);
           break;
@@ -175,7 +175,7 @@ describe('EventCard types', () => {
         description: 'Test',
         effectConfig: {
           type: EventCardType.Snow,
-          centerCity: 'München',
+          centerCity: 'Munchen',
           radius: 4,
           blockedTerrain: [TerrainType.Mountain],
         },
@@ -258,7 +258,7 @@ describe('event_cards.json configuration', () => {
     });
     expect(card131.effectConfig).toMatchObject({
       type: EventCardType.Snow,
-      centerCity: 'München',
+      centerCity: 'Munchen',
       radius: 4,
       blockedTerrain: [TerrainType.Mountain],
     });

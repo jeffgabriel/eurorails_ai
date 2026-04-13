@@ -122,7 +122,7 @@
     "description": "All trains within 4 mileposts of München (Munich) move at half rate. No movement or railbuilding allowed in mountain mileposts of the affected area.",
     "effectConfig": {
       "type": "Snow",
-      "centerCity": "München",
+      "centerCity": "Munchen",
       "radius": 4,
       "blockedTerrain": [2]
     }

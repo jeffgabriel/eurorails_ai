@@ -814,6 +814,7 @@ export class PlayerService {
     const client = await db.connect();
     let drewCardId: number | null = null;
     let discardedCardId: number | null = null;
+    const discardedEventCardIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -900,6 +901,7 @@ export class PlayerService {
       while (newDrawResult !== null && newDrawResult.type === 'event') {
         console.warn(`[deliverLoad] Drew event card ${newDrawResult.card.id} during hand replacement — discarding`);
         demandDeckService.discardEventCard(newDrawResult.card.id);
+        discardedEventCardIds.push(newDrawResult.card.id);
         newDrawResult = demandDeckService.drawCard();
       }
       if (!newDrawResult) {
@@ -965,6 +967,14 @@ export class PlayerService {
       if (typeof discardedCardId === "number") {
         try {
           demandDeckService.returnDiscardedCardToDealt(discardedCardId);
+        } catch {
+          // ignore
+        }
+      }
+      // Return any event cards that were discarded during the draw loop back to the draw pile.
+      for (const eventId of discardedEventCardIds) {
+        try {
+          demandDeckService.returnDiscardedEventCardToDrawPile(eventId);
         } catch {
           // ignore
         }
@@ -1634,7 +1644,8 @@ export class PlayerService {
     handIds: number[],
     client: import("pg").PoolClient,
     discardedIds: number[],
-    drawnIds: number[]
+    drawnIds: number[],
+    discardedEventIds: number[] = []
   ): Promise<{ newHandIds: number[] }> {
     // Discard old hand (must be currently dealt).
     for (const id of handIds) {
@@ -1654,6 +1665,7 @@ export class PlayerService {
         // Event cards drawn during hand replacement are discarded immediately
         console.warn(`[discardHandCore] Drew event card ${result.card.id} during hand replacement — discarding`);
         demandDeckService.discardEventCard(result.card.id);
+        discardedEventIds.push(result.card.id);
         continue;
       }
       newCards.push(result.card);
@@ -1683,6 +1695,7 @@ export class PlayerService {
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
+    const discardedEventIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1704,7 +1717,7 @@ export class PlayerService {
         ? currentHand.map((v) => Number(v)).filter((v) => Number.isFinite(v))
         : [];
 
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds);
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
 
       await client.query("COMMIT");
       return { newHandIds: coreResult.newHandIds };
@@ -1720,6 +1733,9 @@ export class PlayerService {
       }
       for (const id of discardedIds) {
         try { demandDeckService.returnDiscardedCardToDealt(id); } catch { /* best-effort */ }
+      }
+      for (const id of discardedEventIds) {
+        try { demandDeckService.returnDiscardedEventCardToDrawPile(id); } catch { /* best-effort */ }
       }
       throw err;
     } finally {
@@ -1754,6 +1770,7 @@ export class PlayerService {
     const client = await db.connect();
     const discardedIds: number[] = [];
     const drawnIds: number[] = [];
+    const discardedEventIds: number[] = [];
     try {
       await client.query("BEGIN");
 
@@ -1839,7 +1856,7 @@ export class PlayerService {
       // - no server-tracked turn_actions this turn
 
       // Core card logic: discard old hand, draw 3 new cards, persist.
-      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds);
+      const coreResult = await PlayerService.discardHandCore(gameId, playerId, handIds, client, discardedIds, drawnIds, discardedEventIds);
 
       // Increment per-player turn count at END of the active player's turn.
       await client.query(
@@ -1904,6 +1921,13 @@ export class PlayerService {
       for (const id of discardedIds) {
         try {
           demandDeckService.returnDiscardedCardToDealt(id);
+        } catch {
+          // ignore
+        }
+      }
+      for (const id of discardedEventIds) {
+        try {
+          demandDeckService.returnDiscardedEventCardToDrawPile(id);
         } catch {
           // ignore
         }
