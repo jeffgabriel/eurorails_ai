@@ -27,6 +27,7 @@ jest.mock('../db/index', () => {
 jest.mock('../services/demandDeckService', () => ({
   demandDeckService: {
     discardCard: jest.fn(),
+    discardEventCard: jest.fn(),
     drawCard: jest.fn(),
     returnDealtCardToTop: jest.fn(),
     returnDiscardedCardToDealt: jest.fn(),
@@ -226,6 +227,95 @@ describe('PlayerService.discardHandForPlayer', () => {
       await expect(
         PlayerService.discardHandForPlayer(gameId, playerId),
       ).rejects.toThrow('Failed to draw new demand card');
+    });
+  });
+
+  describe('event card stub behavior', () => {
+    function eventResult(id: number) {
+      return {
+        type: 'event' as const,
+        card: {
+          id,
+          type: 1, // EventCardType.Strike (numeric)
+          title: 'Strike!',
+          description: 'Test event',
+          effectConfig: { effectType: 'strike', variant: 'coastal', coastalRadius: 3 },
+        },
+      };
+    }
+
+    beforeEach(() => {
+      mockClient.query.mockImplementation((sql: string) => {
+        if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
+        if (sql.includes('SELECT hand')) {
+          return Promise.resolve({ rows: [{ hand: [1, 2, 3] }] });
+        }
+        if (sql.includes('UPDATE players')) {
+          return Promise.resolve({ rows: [] });
+        }
+        return Promise.resolve({ rows: [] });
+      });
+    });
+
+    it('should discard event cards and draw again until 3 demand cards are collected', async () => {
+      // First draw: event card, then 3 demand cards
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(eventResult(121))
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
+
+      const result = await PlayerService.discardHandForPlayer(gameId, playerId);
+
+      expect(result.newHandIds).toEqual([10, 20, 30]);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledTimes(1);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
+      // drawCard is called 4 times: 1 event + 3 demand
+      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(4);
+    });
+
+    it('should discard multiple consecutive event cards and keep drawing', async () => {
+      // Two event cards before 3 demand cards
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(eventResult(121))
+        .mockReturnValueOnce(eventResult(122))
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
+
+      const result = await PlayerService.discardHandForPlayer(gameId, playerId);
+
+      expect(result.newHandIds).toEqual([10, 20, 30]);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledTimes(2);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(122);
+    });
+
+    it('should log a warning when an event card is drawn', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(eventResult(125))
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
+
+      await PlayerService.discardHandForPlayer(gameId, playerId);
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const warnMessage = warnSpy.mock.calls[0][0] as string;
+      expect(warnMessage).toContain('125');
+    });
+
+    it('should not call discardEventCard when only demand cards are drawn', async () => {
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
+
+      await PlayerService.discardHandForPlayer(gameId, playerId);
+
+      expect(demandDeckService.discardEventCard).not.toHaveBeenCalled();
     });
   });
 
