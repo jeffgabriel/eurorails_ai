@@ -37,6 +37,11 @@ const { __mockClient: mockClient } = jest.requireMock('../db/index') as {
   __mockClient: { query: jest.Mock; release: jest.Mock };
 };
 
+/** Helper to create a demand CardDrawResult mock value */
+function demandResult(id: number) {
+  return { type: 'demand' as const, card: { id, demands: [] } };
+}
+
 describe('PlayerService.discardHandForPlayer', () => {
   const gameId = 'game-123';
   const playerId = 'player-456';
@@ -59,9 +64,9 @@ describe('PlayerService.discardHandForPlayer', () => {
   describe('happy path', () => {
     it('should discard hand and draw 3 new cards', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10, city: 'Berlin', demands: [] })
-        .mockReturnValueOnce({ id: 20, city: 'Paris', demands: [] })
-        .mockReturnValueOnce({ id: 30, city: 'Roma', demands: [] });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
@@ -86,9 +91,9 @@ describe('PlayerService.discardHandForPlayer', () => {
 
     it('should discard each old card via demandDeckService', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
-        .mockReturnValueOnce({ id: 20 })
-        .mockReturnValueOnce({ id: 30 });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
@@ -111,9 +116,9 @@ describe('PlayerService.discardHandForPlayer', () => {
 
     it('should use FOR UPDATE row locking', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
-        .mockReturnValueOnce({ id: 20 })
-        .mockReturnValueOnce({ id: 30 });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
@@ -136,9 +141,9 @@ describe('PlayerService.discardHandForPlayer', () => {
 
     it('should NOT advance the game turn', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
-        .mockReturnValueOnce({ id: 20 })
-        .mockReturnValueOnce({ id: 30 });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
@@ -165,9 +170,9 @@ describe('PlayerService.discardHandForPlayer', () => {
 
     it('should handle null hand gracefully', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
-        .mockReturnValueOnce({ id: 20 })
-        .mockReturnValueOnce({ id: 30 });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();
@@ -207,7 +212,7 @@ describe('PlayerService.discardHandForPlayer', () => {
   describe('draw failure', () => {
     it('should throw when deck is empty', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
+        .mockReturnValueOnce(demandResult(10))
         .mockReturnValueOnce(null); // deck exhausted
 
       mockClient.query.mockImplementation((sql: string) => {
@@ -227,9 +232,9 @@ describe('PlayerService.discardHandForPlayer', () => {
   describe('transaction rollback on DB failure', () => {
     it('should rollback when hand UPDATE fails', async () => {
       (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce({ id: 10 })
-        .mockReturnValueOnce({ id: 20 })
-        .mockReturnValueOnce({ id: 30 });
+        .mockReturnValueOnce(demandResult(10))
+        .mockReturnValueOnce(demandResult(20))
+        .mockReturnValueOnce(demandResult(30));
 
       mockClient.query.mockImplementation((sql: string) => {
         if (sql === 'BEGIN' || sql === 'ROLLBACK') return Promise.resolve();
@@ -290,11 +295,10 @@ describe('PlayerService.discardHandForUser — regression', () => {
   });
 
   function setupHappyPath(): void {
-    let queryCount = 0;
     (demandDeckService.drawCard as jest.Mock)
-      .mockReturnValueOnce({ id: 10 })
-      .mockReturnValueOnce({ id: 20 })
-      .mockReturnValueOnce({ id: 30 });
+      .mockReturnValueOnce(demandResult(10))
+      .mockReturnValueOnce(demandResult(20))
+      .mockReturnValueOnce(demandResult(30));
 
     mockClient.query.mockImplementation((sql: string, params?: any[]) => {
       if (sql === 'BEGIN' || sql === 'COMMIT') return Promise.resolve();

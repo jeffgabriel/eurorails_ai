@@ -162,13 +162,19 @@ export class PlayerService {
 
     // ALWAYS draw 3 initial cards server-side (ignore any client-provided cards)
     // Cards must be drawn server-side to ensure proper deck management and prevent duplicates
+    // Event cards drawn during initial deal are discarded and replaced per game rules
     const handCardIds: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const card = demandDeckService.drawCard();
-      if (!card) {
-        throw new Error(`Failed to draw initial card ${i + 1} for player ${player.id}`);
+    while (handCardIds.length < 3) {
+      const drawResult = demandDeckService.drawCard();
+      if (!drawResult) {
+        throw new Error(`Failed to draw initial card ${handCardIds.length + 1} for player ${player.id}`);
       }
-      handCardIds.push(card.id);
+      if (drawResult.type === 'event') {
+        console.warn(`[addPlayer] Drew event card ${drawResult.card.id} during initial deal — discarding`);
+        demandDeckService.discardEventCard(drawResult.card.id);
+        continue;
+      }
+      handCardIds.push(drawResult.card.id);
     }
 
     const query = `
@@ -752,14 +758,22 @@ export class PlayerService {
 
       const player = playerResult.rows[0];
       
-      // Draw a new card from the deck first
-      const newCard = await demandDeckService.drawCard();
-      if (!newCard) {
+      // Draw a new demand card from the deck (discard any event cards drawn first)
+      let newCard: import('../../shared/types/DemandCard').DemandCard | null = null;
+      let drawResult = demandDeckService.drawCard();
+      while (drawResult !== null && drawResult.type === 'event') {
+        // Event cards drawn during hand-replacement are discarded immediately
+        console.warn(`[fulfillDemand] Drew event card ${drawResult.card.id} during hand replacement — discarding`);
+        demandDeckService.discardEventCard(drawResult.card.id);
+        drawResult = demandDeckService.drawCard();
+      }
+      if (drawResult === null) {
         throw new Error('Failed to draw new card');
       }
-      
+      newCard = drawResult.card;
+
       // Create the new hand by replacing the fulfilled card with the new card
-      const newHand = player.hand.map(id => id === cardId ? newCard.id : id);
+      const newHand = player.hand.map(id => id === cardId ? newCard!.id : id);
 
       // Update player's hand in database
       const updateQuery = `
@@ -881,10 +895,17 @@ export class PlayerService {
         throw new Error("Invalid payment");
       }
 
-      const newCard = demandDeckService.drawCard();
-      if (!newCard) {
+      // Draw a new demand card (discard any event cards encountered)
+      let newDrawResult = demandDeckService.drawCard();
+      while (newDrawResult !== null && newDrawResult.type === 'event') {
+        console.warn(`[deliverLoad] Drew event card ${newDrawResult.card.id} during hand replacement — discarding`);
+        demandDeckService.discardEventCard(newDrawResult.card.id);
+        newDrawResult = demandDeckService.drawCard();
+      }
+      if (!newDrawResult) {
         throw new Error("Failed to draw new card");
       }
+      const newCard = newDrawResult.card;
       drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
@@ -1622,14 +1643,21 @@ export class PlayerService {
     }
 
     // Draw replacement hand (future-proof loop structure).
+    // Event cards drawn during this process are discarded and replaced.
     const newCards: DemandCard[] = [];
     while (newCards.length < 3) {
-      const card = demandDeckService.drawCard();
-      if (!card) {
+      const result = demandDeckService.drawCard();
+      if (!result) {
         throw new Error("Failed to draw new demand card");
       }
-      newCards.push(card);
-      drawnIds.push(card.id);
+      if (result.type === 'event') {
+        // Event cards drawn during hand replacement are discarded immediately
+        console.warn(`[discardHandCore] Drew event card ${result.card.id} during hand replacement — discarding`);
+        demandDeckService.discardEventCard(result.card.id);
+        continue;
+      }
+      newCards.push(result.card);
+      drawnIds.push(result.card.id);
     }
     const newHandIds = newCards.map((c) => c.id);
 
@@ -1990,15 +2018,20 @@ export class PlayerService {
         discardedIds.push(id);
       }
 
-      // Draw replacement hand.
+      // Draw replacement hand (event cards discarded and replaced per game rules).
       const newCards: DemandCard[] = [];
       while (newCards.length < 3) {
-        const card = demandDeckService.drawCard();
-        if (!card) {
+        const result = demandDeckService.drawCard();
+        if (!result) {
           throw new Error("Failed to draw new demand card");
         }
-        newCards.push(card);
-        drawnIds.push(card.id);
+        if (result.type === 'event') {
+          console.warn(`[restartPlayer] Drew event card ${result.card.id} during restart hand — discarding`);
+          demandDeckService.discardEventCard(result.card.id);
+          continue;
+        }
+        newCards.push(result.card);
+        drawnIds.push(result.card.id);
       }
       const newHandIds = newCards.map((c) => c.id);
 
