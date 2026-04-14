@@ -314,11 +314,15 @@ export class TurnExecutorPlanner {
 
           // JIRA-165: Refresh demands from DB after delivery so the replan
           // uses fresh card data instead of the pre-delivery stale snapshot.
-          // The delivered card has already been replaced in the DB — rebuildDemands()
-          // reads the new cards so TripPlanner never chases a phantom demand.
+          // Note: The delivery plan has NOT been committed to the DB yet (it's
+          // still in the plans[] array), so freshSnapshot.bot.loads is stale.
+          // We patch it with the locally-updated loads to avoid rebuildDemands
+          // treating the just-delivered load as "on train" (supplyCity: null).
           if (gridPoints && gridPoints.length > 0) {
             try {
               const freshSnapshot = await capture(snapshot.gameId, snapshot.bot.playerId);
+              // Patch fresh snapshot with locally-updated loads (delivery not yet in DB)
+              freshSnapshot.bot.loads = [...snapshot.bot.loads];
               context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
               snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
               console.log(
