@@ -32,6 +32,7 @@ import {
   RouteStop,
   TrainType,
   TRAIN_PROPERTIES,
+  LlmAttempt,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
 import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
@@ -101,6 +102,12 @@ export interface TurnExecutorResult {
   routeAbandoned: boolean;
   /** True when at least one delivery was made this turn */
   hasDelivery: boolean;
+  /** Post-delivery replan LLM log (populated when TripPlanner is called after a delivery) */
+  replanLlmLog?: LlmAttempt[];
+  /** Post-delivery replan system prompt */
+  replanSystemPrompt?: string;
+  /** Post-delivery replan user prompt */
+  replanUserPrompt?: string;
 }
 
 // ── TurnExecutorPlanner ────────────────────────────────────────────────────
@@ -174,6 +181,10 @@ export class TurnExecutorPlanner {
     let remainingBudget = context.speed;
     // Track the last move target city for AC13(b) build direction check
     let lastMoveTargetCity: string | null = null;
+    // Post-delivery replan LLM data for debug overlay propagation
+    let replanLlmLog: LlmAttempt[] | undefined;
+    let replanSystemPrompt: string | undefined;
+    let replanUserPrompt: string | undefined;
 
     // ── Phase A: Movement loop ─────────────────────────────────────────────
     //
@@ -225,6 +236,9 @@ export class TurnExecutorPlanner {
             routeComplete: false,
             routeAbandoned: true,
             hasDelivery,
+            replanLlmLog,
+            replanSystemPrompt,
+            replanUserPrompt,
           };
         }
 
@@ -332,6 +346,17 @@ export class TurnExecutorPlanner {
               const memory = await getMemory(snapshot.gameId, snapshot.bot.playerId);
               const tripPlanner = new TripPlanner(brain);
               const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+
+              // Capture replan LLM data for debug overlay propagation
+              if ('llmLog' in replanResult && replanResult.llmLog) {
+                replanLlmLog = replanResult.llmLog;
+              }
+              if ('systemPrompt' in replanResult && replanResult.systemPrompt) {
+                replanSystemPrompt = replanResult.systemPrompt as string;
+              }
+              if ('userPrompt' in replanResult && replanResult.userPrompt) {
+                replanUserPrompt = replanResult.userPrompt as string;
+              }
 
               if (replanResult.route) {
                 const enrichedRoute = await RouteEnrichmentAdvisor.enrich(replanResult.route, snapshot, context, brain, gridPoints);
@@ -525,6 +550,9 @@ export class TurnExecutorPlanner {
           routeComplete: true,
           routeAbandoned: false,
           hasDelivery,
+          replanLlmLog,
+          replanSystemPrompt,
+          replanUserPrompt,
         };
       }
       return TurnExecutorPlanner.routeComplete(activeRoute, trace);
@@ -590,6 +618,9 @@ export class TurnExecutorPlanner {
       routeComplete: false,
       routeAbandoned: false,
       hasDelivery,
+      replanLlmLog,
+      replanSystemPrompt,
+      replanUserPrompt,
     };
   }
 

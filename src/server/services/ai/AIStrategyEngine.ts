@@ -354,6 +354,10 @@ export class AIStrategyEngine {
           latencyMs: 0,
           retried: false,
           userPrompt: `[Route] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}. ${routeSummary}`,
+          // Propagate post-delivery replan LLM data for debug overlay
+          ...(execResult.replanLlmLog && { llmLog: execResult.replanLlmLog }),
+          ...(execResult.replanSystemPrompt && { systemPrompt: execResult.replanSystemPrompt }),
+          ...(execResult.replanUserPrompt && { userPrompt: execResult.replanUserPrompt }),
         };
 
         execCompositionTrace = execResult.compositionTrace;
