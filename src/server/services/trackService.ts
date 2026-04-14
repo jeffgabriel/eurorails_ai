@@ -1,6 +1,52 @@
 import { db } from '../db/index';
-import { PlayerTrackState } from '../../shared/types/GameTypes';
-import { QueryResult } from 'pg';
+import { PlayerTrackState, TrackSegment } from '../../shared/types/GameTypes';
+import { PoolClient } from 'pg';
+import riversData from '../../../configuration/rivers.json';
+
+/**
+ * Shape of an entry in configuration/rivers.json
+ */
+interface RiverEdgeData {
+  Start: { Row: number; Col: number };
+  End: { Row: number; Col: number };
+}
+
+interface RiverData {
+  Name: string;
+  Edges: RiverEdgeData[];
+}
+
+/**
+ * Build a set of canonical edge keys ("r1,c1|r2,c2" where the smaller coord
+ * comes first) for all edges belonging to the named river.
+ * Returns null if the river is not found.
+ */
+export function getRiverEdgeKeys(riverName: string): Set<string> | null {
+  const rivers = riversData as RiverData[];
+  const river = rivers.find(r => r.Name === riverName);
+  if (!river) return null;
+
+  const keys = new Set<string>();
+  for (const edge of river.Edges) {
+    const a = `${edge.Start.Row},${edge.Start.Col}`;
+    const b = `${edge.End.Row},${edge.End.Col}`;
+    const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+    keys.add(key);
+  }
+  return keys;
+}
+
+/**
+ * Return true if the given track segment crosses the named river.
+ * A segment crosses a river when its from→to edge matches one of the
+ * river's canonical edges (order-independent).
+ */
+export function segmentCrossesRiver(segment: TrackSegment, riverEdgeKeys: Set<string>): boolean {
+  const a = `${segment.from.row},${segment.from.col}`;
+  const b = `${segment.to.row},${segment.to.col}`;
+  const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+  return riverEdgeKeys.has(key);
+}
 
 export class TrackService {
     static async saveTrackState(gameId: string, playerId: string, trackState: PlayerTrackState): Promise<void> {
@@ -27,7 +73,7 @@ export class TrackService {
             if (existingResult.rows.length > 0) {
                 // Update existing track state
                 await client.query(
-                    `UPDATE player_tracks 
+                    `UPDATE player_tracks
                      SET segments = $1, total_cost = $2, turn_build_cost = $3, last_build_timestamp = $4
                      WHERE game_id = $5 AND player_id = $6`,
                     [
@@ -42,7 +88,7 @@ export class TrackService {
             } else {
                 // Insert new track state
                 await client.query(
-                    `INSERT INTO player_tracks 
+                    `INSERT INTO player_tracks
                      (game_id, player_id, segments, total_cost, turn_build_cost, last_build_timestamp)
                      VALUES ($1, $2, $3, $4, $5, $6)`,
                     [
@@ -113,10 +159,10 @@ export class TrackService {
             };
         });
     }
-    
+
     static async clearTurnBuildCost(gameId: string, playerId: string): Promise<void> {
         await db.query(
-            `UPDATE player_tracks 
+            `UPDATE player_tracks
              SET turn_build_cost = 0
              WHERE game_id = $1 AND player_id = $2`,
             [gameId, playerId]
@@ -147,4 +193,74 @@ export class TrackService {
             [gameId, playerId, emptySegmentsJson]
         );
     }
-} 
+
+    /**
+     * Remove all track segments crossing the named river from every player's
+     * `player_tracks` row in the game. Operates within a provided transaction
+     * client using `SELECT ... FOR UPDATE` to prevent concurrent modification.
+     *
+     * For each player whose row exists:
+     * - Locks the row with SELECT FOR UPDATE
+     * - Filters out segments whose from→to edge matches a river edge
+     * - Recomputes total_cost as the sum of remaining segments' costs
+     * - Updates the row if any segments were removed
+     *
+     * Players with no segments crossing the river are not modified.
+     *
+     * @param client  A pg PoolClient in an active transaction (BEGIN already called)
+     * @param gameId  The game to operate on
+     * @param riverName  River name matching an entry in configuration/rivers.json
+     * @returns Per-player removal summary (only players who had segments removed)
+     */
+    static async removeSegmentsCrossingRiver(
+        client: PoolClient,
+        gameId: string,
+        riverName: string
+    ): Promise<Array<{ playerId: string; removedCount: number; newTotalCost: number }>> {
+        // Resolve river edge keys; throw if unknown
+        const riverEdgeKeys = getRiverEdgeKeys(riverName);
+        if (!riverEdgeKeys) {
+            throw new Error(`Unknown river: ${riverName}`);
+        }
+
+        // Lock all player_tracks rows for this game to prevent concurrent modification
+        const lockedRows = await client.query(
+            `SELECT player_id, segments, total_cost
+             FROM player_tracks
+             WHERE game_id = $1
+             FOR UPDATE`,
+            [gameId]
+        );
+
+        const results: Array<{ playerId: string; removedCount: number; newTotalCost: number }> = [];
+
+        for (const row of lockedRows.rows) {
+            const playerId: string = row.player_id;
+            const rawSegments = typeof row.segments === 'string'
+                ? JSON.parse(row.segments || '[]')
+                : (row.segments || []) as TrackSegment[];
+
+            const segments = rawSegments as TrackSegment[];
+            const remaining = segments.filter(seg => !segmentCrossesRiver(seg, riverEdgeKeys));
+            const removedCount = segments.length - remaining.length;
+
+            if (removedCount === 0) {
+                // No segments to remove — skip update
+                continue;
+            }
+
+            const newTotalCost = remaining.reduce((sum, seg) => sum + seg.cost, 0);
+
+            await client.query(
+                `UPDATE player_tracks
+                 SET segments = $1, total_cost = $2
+                 WHERE game_id = $3 AND player_id = $4`,
+                [JSON.stringify(remaining), newTotalCost, gameId, playerId]
+            );
+
+            results.push({ playerId, removedCount, newTotalCost });
+        }
+
+        return results;
+    }
+}
