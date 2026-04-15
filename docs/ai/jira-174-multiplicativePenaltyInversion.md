@@ -1,42 +1,60 @@
-# JIRA-174: Multiplicative Penalty Inversion for Negative Scores
+# JIRA-174: Scoring Formula Simplification — Remove Corridor Multiplier
 
-**Status:** Done
+**Status:** In Progress
 
-## Bug: ALL multiplicative penalties invert for negative scores
+## Background
 
-**File:** `src/server/services/ai/ContextBuilder.ts:2290-2305`
+JIRA-173 fixed the corridor multiplier inversion (Bug #4) by dividing instead of multiplying when baseROI < 0. This revealed Bug #5: the build cost ceiling and affordability penalties also invert for negative scores (same root cause — multiplicative penalties on negative values).
 
-**Problem:** The build cost ceiling penalty and affordability penalty both multiply the score by a factor < 1. When the score is negative (which it almost always is), multiplying by a small factor makes the score LESS negative — pushing it closer to zero and ranking it HIGHER. This means more expensive, more unaffordable routes get BETTER scores.
+Commit `73972d0` fixed Bug #5 with sign-aware division. However, further analysis shows the corridor multiplier adds no ranking value — with or without it, the demand rankings are identical because cost and turn estimates already capture geographic advantage.
 
-**Example — Oranges Sevilla→Manchester (127M build, 16 turns, ferry):**
+## Problem: Corridor multiplier adds complexity without value
+
+**Verified by simulation:** Running the same demand set with and without the corridor multiplier produces identical rankings. The corridor was the root cause of Bugs #2 and #4, and its removal eliminates all sign-handling complexity from the formula.
+
+With corridor:
 ```
-baseROI = (40 - 127) / 16 = -5.44
-rawScore ≈ -4.2 (after corridor dampening)
-costPenalty = exp(-(127-50)/30) = 0.077
-penalizedScore = -4.2 × 0.077 = -0.32  ← penalty HELPS the route!
-affordabilityPenalty ≈ 0.03
-finalScore = -0.32 × 0.03 = -0.01      ← nearly zero = ranks #2!
-```
-
-**Compare Ham Warszawa→Praha (18M build, 4 turns, no ferry):**
-```
-baseROI = (13 - 18) / 4 = -1.25
-rawScore ≈ -0.96
-costPenalty = 1.0 (18M < 50M threshold)
-affordabilityPenalty ≈ 0.29
-finalScore = -0.96 × 0.29 = -0.28      ← ranks #8, worse than 127M route!
+#1   4.80  Wine Frankfurt→Szczecin
+#2  -0.74  Iron Kaliningrad→Munchen
+#3  -2.71  Ham Warszawa→Praha
+#4  -3.20  Flowers Holland→Wien
 ```
 
-**Root cause:** Multiplicative penalties cannot be applied to scores that can be negative. Every `score * penalty_factor` where `penalty_factor < 1` and `score < 0` makes the result LESS negative (= better ranking). This affects:
-1. Build cost ceiling penalty: `rawScore * costPenalty`
-2. Affordability penalty: `penalizedScore * penalty`
+Without corridor (same order, simpler math):
+```
+#1   4.00  Wine Frankfurt→Szczecin
+#2  -0.97  Iron Kaliningrad→Munchen
+#3  -3.52  Ham Warszawa→Praha
+#4  -4.48  Flowers Holland→Wien
+```
 
-Both the original affordability penalty AND the newly added build cost ceiling had this inversion.
+Supply city selection also works correctly without corridor:
+- Beer→Antwerpen: Frankfurt (-4.40) beats Dublin (-9.39) — correct
+- Cattle→Berlin: Bern (-1.33) beats Nantes (-6.67) — correct
 
-## Fix Applied
+## Change: Remove corridor multiplier from scoreDemand
 
-Commit `73972d0`: When score is negative, divide by penalty factor instead of multiplying. This makes penalties always push scores further from zero (= worse ranking).
+**File:** `src/server/services/ai/ContextBuilder.ts`
 
-Files changed:
-- `src/server/services/ai/ContextBuilder.ts` — scoreDemand penalty application
-- `src/server/__tests__/ai/integration/integrationTestSetup.ts` — test replica synced
+Remove the `corridorMultiplier` computation and sign-aware branching from `scoreDemand()`. The formula simplifies to:
+
+```
+rawScore = (payout - totalTrackCost) / estimatedTurns
+```
+
+With cost ceiling and affordability penalties still applied (using sign-aware division from Bug #5 fix).
+
+Also remove:
+- `networkCities` parameter from `scoreDemand()` (no longer consumed)
+- `computeCorridorValue()` call in `computeSingleSupplyDemandContext()` can be simplified (still needed for `networkCitiesUnlocked` and `victoryMajorCitiesEnRoute` on the DemandContext interface, but no longer feeds into scoring)
+
+**Test changes:**
+- Update test replica `scoreDemand()` in `integrationTestSetup.ts` to remove corridor
+- Update `test_multi_supply.test.ts` — remove corridor-specific tests, keep supply city selection tests
+- Update `test_corridor_rebalance.test.ts` — remove or rewrite corridor multiplier tests
+
+## Benefits
+- Eliminates root cause of Bugs #2 and #4 entirely (no corridor = no inversion possible)
+- Removes sign-handling branching from formula (simpler, fewer bug surfaces)
+- Reduces Wien convergence bias (corridor density no longer inflates scores)
+- Formula is auditable: `(payout - cost) / turns` with clear penalty layers
