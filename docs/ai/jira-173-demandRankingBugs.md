@@ -96,41 +96,6 @@ Bern passes through more major cities (Zurich, Frankfurt, München, Stuttgart) �
 
 **Fix:** When `baseROI < 0`, divide by `(1 + corridorMultiplier)` instead of multiplying, so corridor value dampens the penalty rather than amplifying it. Or restructure the formula to apply corridor value as an additive bonus rather than a multiplicative one.
 
----
 
-## Bug 5: ALL multiplicative penalties invert for negative scores
 
-**File:** `src/server/services/ai/ContextBuilder.ts:2290-2305`
-
-**Problem:** The build cost ceiling penalty (line 2295) and affordability penalty (line 2301) both multiply the score by a factor < 1. When the score is negative (which it almost always is), multiplying by a small factor makes the score LESS negative — pushing it closer to zero and ranking it HIGHER. This means more expensive, more unaffordable routes get BETTER scores.
-
-**Example — Oranges Sevilla→Manchester (127M build, 16 turns, ferry):**
-```
-baseROI = (40 - 127) / 16 = -5.44
-rawScore ≈ -4.2 (after corridor dampening)
-costPenalty = exp(-(127-50)/30) = 0.077
-penalizedScore = -4.2 × 0.077 = -0.32  ← penalty HELPS the route!
-affordabilityPenalty ≈ 0.03
-finalScore = -0.32 × 0.03 = -0.01      ← nearly zero = ranks #2!
-```
-
-**Compare Ham Warszawa→Praha (18M build, 4 turns, no ferry):**
-```
-baseROI = (13 - 18) / 4 = -1.25
-rawScore ≈ -0.96
-costPenalty = 1.0 (18M < 50M threshold)
-affordabilityPenalty ≈ 0.29
-finalScore = -0.96 × 0.29 = -0.28      ← ranks #8, worse than 127M route!
-```
-
-**Root cause:** Multiplicative penalties cannot be applied to scores that can be negative. Every `score * penalty_factor` where `penalty_factor < 1` and `score < 0` makes the result LESS negative (= better ranking). This affects:
-1. Build cost ceiling penalty (line 2295): `rawScore * costPenalty`
-2. Affordability penalty (line 2301): `penalizedScore * penalty`
-
-Both the original affordability penalty AND the newly added build cost ceiling have this inversion.
-
-**Fix:** Convert all penalties to work correctly with negative scores. Options:
-1. Apply penalties to the absolute value, then restore sign: `sign(score) * abs(score) * penalty` → ensures penalties always make the score worse
-2. Divide negative scores by penalty instead of multiplying: `negScore / penalty` makes it MORE negative
-3. Convert to an additive penalty system: `score - penaltyAmount` always makes scores worse regardless of sign
-4. Restructure the score to be non-negative (e.g., score = max(0, payout - cost) / turns + corridor_bonus) and apply penalties only to the base positive component
+> **Note:** Bug #5 (multiplicative penalty inversion) was split out to JIRA-174.
