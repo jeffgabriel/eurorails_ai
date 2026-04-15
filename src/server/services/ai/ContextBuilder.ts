@@ -745,7 +745,6 @@ export class ContextBuilder {
     );
     const demandScore = ContextBuilder.scoreDemand(
       demand.payment, totalTrackCost,
-      corridorValue.networkCities,
       estimatedTurns,
       affordability.affordable, affordability.projectedFunds,
     );
@@ -2260,11 +2259,10 @@ export class ContextBuilder {
    * Higher scores mean better demand options for the bot to pursue.
    *
    * baseROI = (payout - totalTrackCost) / estimatedTurns
-   * corridorMultiplier = min(networkCities * 0.05, 0.5)
-   * score = baseROI * (1 + corridorMultiplier)
+   * score = baseROI (with cost ceiling and affordability penalties)
    *
-   * The corridor multiplier scales with baseROI so geographical advantages
-   * amplify good deliveries rather than overshadowing economic value.
+   * JIRA-174: Corridor multiplier removed — it produced identical rankings to
+   * the formula without it, and was the root cause of JIRA-173 scoring inversions.
    *
    * JIRA-51: When the bot can't afford the required track, the score is
    * penalized proportionally to the cash shortfall. Slightly unaffordable
@@ -2273,19 +2271,12 @@ export class ContextBuilder {
   private static scoreDemand(
     payout: number,
     totalTrackCost: number,
-    networkCities: number,
     estimatedTurns: number,
     isAffordable: boolean = true,
     projectedFunds: number = Infinity,
   ): number {
     const baseROI = (payout - totalTrackCost) / estimatedTurns;
-    const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-    // When baseROI is negative, dividing by (1 + corridorMultiplier) dampens the
-    // penalty (makes score less negative) — corridor value improves rankings in
-    // both positive and negative territory.
-    const rawScore = baseROI >= 0
-      ? baseROI * (1 + corridorMultiplier)
-      : baseROI / (1 + corridorMultiplier);
+    const rawScore = baseROI;
 
     // Build cost ceiling: exponentially penalize routes that cost more than 50M.
     // This prevents mega-routes from ranking above quick, affordable deliveries.

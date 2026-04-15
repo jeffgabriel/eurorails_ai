@@ -40,25 +40,18 @@ export function makeDemandContext(overrides: Partial<DemandContext> = {}): Deman
 
 // ── scoreDemand replica ─────────────────────────────────────────────────────
 // Replicates ContextBuilder.scoreDemand (private static) for test verification.
-// Synced with production formula: negative baseROI is dampened (not amplified)
-// by corridor multiplier, and routes with build cost > 50M are exponentially
-// penalized. victoryMajorCities param retained as a no-op for call-site compat.
+// Synced with production formula: routes with build cost > 50M are exponentially
+// penalized. JIRA-174: corridor multiplier removed.
 
 export function scoreDemand(
   payout: number,
   totalTrackCost: number,
-  networkCities: number,
-  victoryMajorCities: number,
   estimatedTurns: number,
   isAffordable: boolean = true,
   projectedFunds: number = Infinity,
 ): number {
   const baseROI = (payout - totalTrackCost) / estimatedTurns;
-  const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-  // Mirror production: divide when negative so corridor dampens (not amplifies) loss
-  const rawScore = baseROI >= 0
-    ? baseROI * (1 + corridorMultiplier)
-    : baseROI / (1 + corridorMultiplier);
+  const rawScore = baseROI;
 
   // Build cost ceiling: exponential penalty for routes > 50M
   // Bug #5 fix: divide negative scores by penalty (makes MORE negative = worse rank)

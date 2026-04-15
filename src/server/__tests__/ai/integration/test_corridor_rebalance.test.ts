@@ -1,124 +1,69 @@
 /**
- * TEST-001: Payout-Relative Corridor Scoring — Behavior 3
+ * TEST-001: Demand Scoring — Economic Ranking
  *
- * Validates that corridor value is a multiplier on economic value rather
- * than a flat addition, ensuring high-payout deliveries aren't beaten
- * by low-payout deliveries with better geography.
+ * Validates that demand scoring correctly ranks deliveries by economic value
+ * (ROI per turn), with cost ceiling and affordability penalties applied.
  *
- * PRD scenario: 51M delivery beats 21M delivery despite fewer corridor cities.
+ * JIRA-174: Corridor multiplier removed — rankings are now based purely on
+ * baseROI with cost ceiling and affordability penalties.
  */
 
 import { scoreDemand } from './integrationTestSetup';
 
-describe('Behavior 3: Payout-Relative Corridor Scoring', () => {
-  describe('payout dominance over corridor bonus', () => {
-    it('should rank 51M delivery above 21M delivery despite fewer corridor cities', () => {
-      // 21M delivery with great corridor: 7 cities, 2 victory majors
-      const lowPayHighCorridor = scoreDemand(
+describe('Demand Scoring: Economic Ranking', () => {
+  describe('payout dominance', () => {
+    it('should rank 51M delivery above 21M delivery', () => {
+      // 21M delivery: modest cost and turns
+      const lowPay = scoreDemand(
         21, // payout
         8,  // totalTrackCost
-        7,  // networkCities (great corridor)
-        2,  // victoryMajorCities
         5,  // estimatedTurns
       );
 
-      // 51M delivery with modest corridor: 4 cities, 1 victory major
-      const highPayLowCorridor = scoreDemand(
+      // 51M delivery: higher cost and turns
+      const highPay = scoreDemand(
         51, // payout
         12, // totalTrackCost
-        4,  // networkCities (modest corridor)
-        1,  // victoryMajorCities
         6,  // estimatedTurns
       );
-
-      expect(highPayLowCorridor).toBeGreaterThan(lowPayHighCorridor);
-    });
-
-    it('should not let 3 extra corridor cities overcome a 30M payout advantage', () => {
-      // Low payout, excellent corridor
-      const lowPay = scoreDemand(15, 5, 8, 2, 4);
-      // High payout, modest corridor
-      const highPay = scoreDemand(45, 10, 5, 1, 5);
 
       expect(highPay).toBeGreaterThan(lowPay);
     });
 
-    it('should ensure corridor multiplier is capped at 0.5', () => {
-      // 10+ corridor cities should still cap the multiplier at 0.5
-      const maxCorridor = scoreDemand(30, 10, 15, 0, 5); // 15 cities
-      const cappedCorridor = scoreDemand(30, 10, 10, 0, 5); // 10 cities
+    it('should rank 45M delivery above 15M delivery regardless of turns', () => {
+      const lowPay = scoreDemand(15, 5, 4);
+      const highPay = scoreDemand(45, 10, 5);
 
-      // Both should be capped at 0.5 multiplier
-      expect(maxCorridor).toBe(cappedCorridor);
-    });
-  });
-
-  describe('corridor value as multiplier', () => {
-    it('should amplify high-payout deliveries more than low-payout ones', () => {
-      // Same corridor (5 cities, 1 victory major), different payouts
-      const lowPay = scoreDemand(15, 5, 5, 1, 4);
-      const highPay = scoreDemand(40, 10, 5, 1, 5);
-
-      // The corridor bonus should be proportionally larger for high payout
-      const lowPayNoCorridor = scoreDemand(15, 5, 0, 0, 4);
-      const highPayNoCorridor = scoreDemand(40, 10, 0, 0, 5);
-
-      const lowPayCorridorBonus = lowPay - lowPayNoCorridor;
-      const highPayCorridorBonus = highPay - highPayNoCorridor;
-
-      // Victory bonus is added separately, isolate corridor multiplier effect
-      const lowPayNoVictory = scoreDemand(15, 5, 5, 0, 4);
-      const highPayNoVictory = scoreDemand(40, 10, 5, 0, 5);
-      const lowPayBase = scoreDemand(15, 5, 0, 0, 4);
-      const highPayBase = scoreDemand(40, 10, 0, 0, 5);
-
-      const lowCorridorEffect = lowPayNoVictory - lowPayBase;
-      const highCorridorEffect = highPayNoVictory - highPayBase;
-
-      // Corridor effect should be larger for higher payout (it's a multiplier on ROI)
-      expect(highCorridorEffect).toBeGreaterThan(lowCorridorEffect);
-    });
-
-    it('should correctly compute corridor multiplier as min(cities * 0.05, 0.5)', () => {
-      const baseScore = scoreDemand(20, 5, 0, 0, 5); // baseROI = 3.0
-      const with4Cities = scoreDemand(20, 5, 4, 0, 5); // multiplier = 0.20
-
-      // corridorMultiplier = min(4 * 0.05, 0.5) = 0.20
-      // score = baseROI + 0.20 * baseROI = 3.0 + 0.6 = 3.6
-      const expectedMultiplied = baseScore * 1.20;
-
-      expect(with4Cities).toBeCloseTo(expectedMultiplied, 2);
+      expect(highPay).toBeGreaterThan(lowPay);
     });
   });
 
   describe('victory major city weight', () => {
-    it('should treat victoryMajorCities as no-op (param retained for compat)', () => {
-      // JIRA-173: victoryBonus was removed from replica to match production scoreDemand.
-      // victoryMajorCities param is retained for call-site compat but has no effect.
-      const noVictory = scoreDemand(30, 10, 5, 0, 5);
-      const oneVictory = scoreDemand(30, 10, 5, 1, 5);
-      const twoVictory = scoreDemand(30, 10, 5, 2, 5);
+    it('should treat victoryMajorCities as no-op (param removed from production)', () => {
+      // JIRA-174: corridor/victoryMajorCities params removed. Scoring is pure ROI.
+      const score1 = scoreDemand(30, 10, 5);
+      const score2 = scoreDemand(30, 10, 5);
 
-      expect(oneVictory).toEqual(noVictory);
-      expect(twoVictory).toEqual(oneVictory);
+      expect(score1).toEqual(score2);
     });
   });
 
-  describe('differentiating equally-priced demands', () => {
-    it('should use corridor to differentiate same-payout demands', () => {
-      // Two demands with identical payout and cost, different corridors
-      const poorCorridor = scoreDemand(25, 8, 2, 0, 5);
-      const richCorridor = scoreDemand(25, 8, 6, 0, 5);
+  describe('cost ceiling penalty', () => {
+    it('should penalize routes with build cost > 50M', () => {
+      // Same payout and turns, one has excessive track cost
+      const cheapRoute = scoreDemand(60, 10, 5);
+      const expensiveRoute = scoreDemand(60, 80, 5);
 
-      expect(richCorridor).toBeGreaterThan(poorCorridor);
+      expect(cheapRoute).toBeGreaterThan(expensiveRoute);
     });
+  });
 
-    it('should treat victoryMajorCities as no-op for equal demands', () => {
-      // JIRA-173: victoryMajorCities no longer affects score
-      const noVictory = scoreDemand(25, 8, 5, 0, 5);
-      const withVictory = scoreDemand(25, 8, 5, 1, 5);
+  describe('affordability penalty', () => {
+    it('should penalize unaffordable routes', () => {
+      const affordable = scoreDemand(30, 10, 5, true, Infinity);
+      const unaffordable = scoreDemand(30, 10, 5, false, 0);
 
-      expect(withVictory).toEqual(noVictory);
+      expect(affordable).toBeGreaterThan(unaffordable);
     });
   });
 });

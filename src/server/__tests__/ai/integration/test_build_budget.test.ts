@@ -68,26 +68,26 @@ describe('Behavior 1: Build Budget Verification', () => {
 
   describe('demand scoring with build cost awareness', () => {
     it('should rank cheaper builds higher when payout is similar', () => {
-      // Demand A: 20M payout, 15M track cost, 5 turns
-      const scoreA = scoreDemand(20, 15, 3, 0, 5);
-      // Demand B: 20M payout, 5M track cost, 5 turns
-      const scoreB = scoreDemand(20, 5, 3, 0, 5);
+      // Demand A: 20M payout, 15M track cost, 5 turns → ROI = (20-15)/5 = 1.0
+      const scoreA = scoreDemand(20, 15, 5);
+      // Demand B: 20M payout, 5M track cost, 5 turns → ROI = (20-5)/5 = 3.0
+      const scoreB = scoreDemand(20, 5, 5);
 
       expect(scoreB).toBeGreaterThan(scoreA);
     });
 
     it('should score zero-cost builds (on-network) highest for same payout', () => {
-      const onNetwork = scoreDemand(20, 0, 3, 0, 3);
-      const offNetwork = scoreDemand(20, 10, 3, 0, 5);
+      const onNetwork = scoreDemand(20, 0, 3);
+      const offNetwork = scoreDemand(20, 10, 5);
 
       expect(onNetwork).toBeGreaterThan(offNetwork);
     });
 
     it('should penalize demands where build cost consumes most of the payout', () => {
       // 15M payout with 14M build cost → only 1M profit
-      const lowProfit = scoreDemand(15, 14, 2, 0, 4);
+      const lowProfit = scoreDemand(15, 14, 4);
       // 15M payout with 3M build cost → 12M profit
-      const highProfit = scoreDemand(15, 3, 2, 0, 4);
+      const highProfit = scoreDemand(15, 3, 4);
 
       expect(highProfit).toBeGreaterThan(lowProfit);
       // The low-profit route should have near-zero or negative ROI
@@ -125,13 +125,13 @@ describe('Behavior 1: Build Budget Verification', () => {
       const affordable = makeDemandContext({
         cardIndex: 0,
         payout: 20,
-        demandScore: scoreDemand(20, 5, 3, 0, 4),
+        demandScore: scoreDemand(20, 5, 4),
         isAffordable: true,
       });
       const unaffordable = makeDemandContext({
         cardIndex: 1,
         payout: 30,
-        demandScore: scoreDemand(30, 35, 5, 1, 6), // higher payout but negative ROI
+        demandScore: scoreDemand(30, 35, 6), // higher payout but negative ROI
         isAffordable: false,
       });
 
