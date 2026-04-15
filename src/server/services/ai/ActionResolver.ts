@@ -413,27 +413,50 @@ export class ActionResolver {
    * maximum distance the bot can travel this turn (partial move toward destination).
    */
   static async resolveMove(
-    details: Record<string, string>,
+    details: Record<string, string | number>,
     snapshot: WorldSnapshot,
     remainingSpeed?: number,
   ): Promise<ResolvedAction> {
-    const targetCity = details.to ?? details.toward ?? details.city;
-    if (!targetCity) {
-      return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
-    }
+    const toRow = details.toRow;
+    const toCol = details.toCol;
+
+    let targetPositions: { row: number; col: number }[];
 
     if (!snapshot.bot.position) {
       return { success: false, error: 'Bot has no position on the map. Cannot move.' };
     }
 
-    const targetPositions = ActionResolver.findCityMilepost(targetCity, snapshot);
-    if (targetPositions.length === 0) {
-      return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
-    }
+    let targetDescription: string;
 
-    // Check if already at the target city
-    if (ActionResolver.isBotAtCity(snapshot, targetCity)) {
-      return { success: false, error: `Bot is already at "${targetCity}".` };
+    if (toRow !== undefined && toCol !== undefined) {
+      // Coordinate-based path: target is a specific milepost by row/col
+      const row = Number(toRow);
+      const col = Number(toCol);
+      targetPositions = [{ row, col }];
+      targetDescription = `(${row},${col})`;
+
+      // Check if already at the target coordinate
+      const botPos = snapshot.bot.position;
+      if (botPos.row === row && botPos.col === col) {
+        return { success: false, error: `Bot is already at position (${row},${col}).` };
+      }
+    } else {
+      // City-name path (existing behavior)
+      const targetCity = details.to ?? details.toward ?? details.city;
+      if (!targetCity) {
+        return { success: false, error: 'MOVE requires details.to specifying the destination city name.' };
+      }
+
+      targetPositions = ActionResolver.findCityMilepost(String(targetCity), snapshot);
+      if (targetPositions.length === 0) {
+        return { success: false, error: `Destination city "${targetCity}" not found on the map.` };
+      }
+
+      // Check if already at the target city
+      if (ActionResolver.isBotAtCity(snapshot, String(targetCity))) {
+        return { success: false, error: `Bot is already at "${targetCity}".` };
+      }
+      targetDescription = String(targetCity);
     }
 
     // Ferry crossing: if bot is at a ferry port, teleport to paired port
@@ -463,7 +486,7 @@ export class ActionResolver {
           && ferryGrid.get(`${tp.row},${tp.col}`)?.terrain !== TerrainType.FerryPort,
       );
       if (atTargetAfterFerry) {
-        console.log(`[Ferry] Bot arrived at ${targetCity} via ferry crossing — zero movement`);
+        console.log(`[Ferry] Bot arrived at ${targetDescription} via ferry crossing — zero movement`);
         const plan: TurnPlanMoveTrain = {
           type: AIActionType.MoveTrain,
           path: [fromPosition],
@@ -577,7 +600,7 @@ export class ActionResolver {
     if (!bestResult) {
       return {
         success: false,
-        error: `No valid path to "${targetCity}" on existing track network.`,
+        error: `No valid path to "${targetDescription}" on existing track network.`,
       };
     }
 

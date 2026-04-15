@@ -488,10 +488,10 @@ export class TurnExecutorPlanner {
       if (remainingBudget > 0) {
         // Get frontier nodes sorted by distance to the build target (targetCity)
         const frontierNodes = getNetworkFrontier(snapshot, undefined, targetCity);
-        // Filter out the bot's current city (no need to "move" to where we already are)
-        const currentCity = context.position?.city;
+        // Filter out the bot's current position (no need to "move" to where we already are)
+        const currentPos = context.position;
         const reachableFrontier = frontierNodes.filter(
-          n => n.cityName && n.cityName !== currentCity,
+          n => !(currentPos && n.row === currentPos.row && n.col === currentPos.col),
         );
 
         // Directional guard: only move to a frontier node if it is closer to the
@@ -514,14 +514,9 @@ export class TurnExecutorPlanner {
               Math.abs(context.position.row - targetRow) +
               Math.abs(context.position.col - targetCol);
             directionalFrontier = reachableFrontier.filter(n => {
-              for (const [, gp] of grid) {
-                if (gp.name && gp.name === n.cityName) {
-                  const nodeDist =
-                    Math.abs(gp.row - targetRow) + Math.abs(gp.col - targetCol);
-                  return nodeDist < botDist;
-                }
-              }
-              return false;
+              const nodeDist =
+                Math.abs(n.row - targetRow) + Math.abs(n.col - targetCol);
+              return nodeDist < botDist;
             });
             if (directionalFrontier.length === 0) {
               console.log(
@@ -534,10 +529,14 @@ export class TurnExecutorPlanner {
 
         let a3MoveSucceeded = false;
         for (const frontierNode of directionalFrontier) {
-          if (!frontierNode.cityName) continue;
+          // Use coordinate-based move for unnamed nodes, city-name for named nodes
+          const a3MoveDetails: Record<string, string | number> = frontierNode.cityName
+            ? { to: frontierNode.cityName }
+            : { toRow: frontierNode.row, toCol: frontierNode.col };
+          const a3MoveLabel = frontierNode.cityName ?? `(${frontierNode.row},${frontierNode.col})`;
 
           const a3MoveResult = await ActionResolver.resolveMove(
-            { to: frontierNode.cityName },
+            a3MoveDetails,
             snapshot,
             remainingBudget,
           );
@@ -548,12 +547,12 @@ export class TurnExecutorPlanner {
             const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookup);
 
             plans.push(a3MoveResult.plan);
-            lastMoveTargetCity = frontierNode.cityName;
+            lastMoveTargetCity = frontierNode.cityName ?? null;
             remainingBudget = Math.max(0, remainingBudget - a3Miles);
             trace.moveBudget.used = context.speed - remainingBudget;
             trace.a3.movePreprended = true;
             console.log(
-              `${tag} A3 frontier move: toward "${frontierNode.cityName}" ` +
+              `${tag} A3 frontier move: toward "${a3MoveLabel}" ` +
               `(${a3Miles}mp consumed, remaining=${remainingBudget})`,
             );
             a3MoveSucceeded = true;
