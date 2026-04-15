@@ -2280,16 +2280,28 @@ export class ContextBuilder {
   ): number {
     const baseROI = (payout - totalTrackCost) / estimatedTurns;
     const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-    const rawScore = baseROI * (1 + corridorMultiplier);
+    // When baseROI is negative, dividing by (1 + corridorMultiplier) dampens the
+    // penalty (makes score less negative) — corridor value improves rankings in
+    // both positive and negative territory.
+    const rawScore = baseROI >= 0
+      ? baseROI * (1 + corridorMultiplier)
+      : baseROI / (1 + corridorMultiplier);
+
+    // Build cost ceiling: exponentially penalize routes that cost more than 50M.
+    // This prevents mega-routes from ranking above quick, affordable deliveries.
+    const costPenalty = totalTrackCost > 50
+      ? Math.exp(-(totalTrackCost - 50) / 30)
+      : 1;
+    const penalizedScore = rawScore * costPenalty;
 
     if (!isAffordable && totalTrackCost > 0) {
       const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
       const shortfallRatio = Math.min(shortfall / totalTrackCost, 1);
       const penalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
-      return rawScore * penalty;
+      return penalizedScore * penalty;
     }
 
-    return rawScore;
+    return penalizedScore;
   }
 
   // ── Demand context helpers (BE-005) ─────────────────────────────────────
@@ -2662,13 +2674,19 @@ export class ContextBuilder {
   private static readonly IRELAND_CITIES = new Set([
     'Belfast', 'Cork', 'Dublin',
   ]);
+  private static readonly SCANDINAVIA_CITIES = new Set([
+    'Oslo', 'Stockholm', 'Goteborg', 'Kobenhavn', 'Arhus',
+  ]);
 
   /**
-   * Classify a city's geographic region: 'britain', 'ireland', or 'continent'.
+   * Classify a city's geographic region: 'britain', 'ireland', 'scandinavia', or 'continent'.
+   * Scandinavian cities (incl. Danish cities) require a Kattegat/Skagerrak ferry crossing
+   * to reach from mainland Europe, so they are classified separately.
    */
-  private static getCityRegion(cityName: string): 'britain' | 'ireland' | 'continent' {
+  private static getCityRegion(cityName: string): 'britain' | 'ireland' | 'scandinavia' | 'continent' {
     if (ContextBuilder.BRITAIN_CITIES.has(cityName)) return 'britain';
     if (ContextBuilder.IRELAND_CITIES.has(cityName)) return 'ireland';
+    if (ContextBuilder.SCANDINAVIA_CITIES.has(cityName)) return 'scandinavia';
     return 'continent';
   }
 
