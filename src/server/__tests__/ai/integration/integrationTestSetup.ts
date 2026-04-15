@@ -40,6 +40,9 @@ export function makeDemandContext(overrides: Partial<DemandContext> = {}): Deman
 
 // ── scoreDemand replica ─────────────────────────────────────────────────────
 // Replicates ContextBuilder.scoreDemand (private static) for test verification.
+// Synced with production formula: negative baseROI is dampened (not amplified)
+// by corridor multiplier, and routes with build cost > 50M are exponentially
+// penalized. victoryMajorCities param retained as a no-op for call-site compat.
 
 export function scoreDemand(
   payout: number,
@@ -47,11 +50,30 @@ export function scoreDemand(
   networkCities: number,
   victoryMajorCities: number,
   estimatedTurns: number,
+  isAffordable: boolean = true,
+  projectedFunds: number = Infinity,
 ): number {
   const baseROI = (payout - totalTrackCost) / estimatedTurns;
   const corridorMultiplier = Math.min(networkCities * 0.05, 0.5);
-  const victoryBonus = victoryMajorCities * Math.max(payout * 0.15, 5);
-  return baseROI + (corridorMultiplier * baseROI) + victoryBonus;
+  // Mirror production: divide when negative so corridor dampens (not amplifies) loss
+  const rawScore = baseROI >= 0
+    ? baseROI * (1 + corridorMultiplier)
+    : baseROI / (1 + corridorMultiplier);
+
+  // Build cost ceiling: exponential penalty for routes > 50M
+  const costPenalty = totalTrackCost > 50
+    ? Math.exp(-(totalTrackCost - 50) / 30)
+    : 1;
+  const penalizedScore = rawScore * costPenalty;
+
+  if (!isAffordable && totalTrackCost > 0) {
+    const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
+    const shortfallRatio = Math.min(shortfall / totalTrackCost, 1);
+    const penalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
+    return penalizedScore * penalty;
+  }
+
+  return penalizedScore;
 }
 
 // ── computeHandQuality replica ──────────────────────────────────────────────

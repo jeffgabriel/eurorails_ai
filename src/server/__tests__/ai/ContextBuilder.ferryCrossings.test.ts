@@ -74,8 +74,16 @@ const london = makeCityPoint(6, 12, 'London', TerrainType.MajorCity);
 const dublin = makeCityPoint(3, 5, 'Dublin', TerrainType.MajorCity);
 const belfast = makeCityPoint(2, 4, 'Belfast', TerrainType.MajorCity);
 
+// Scandinavia cities
+const oslo = makeCityPoint(5, 50, 'Oslo', TerrainType.MajorCity);
+const stockholm = makeCityPoint(8, 58, 'Stockholm', TerrainType.MajorCity);
+const goteborg = makeCityPoint(9, 52, 'Goteborg', TerrainType.MajorCity);
+const kobenhavn = makeCityPoint(12, 48, 'Kobenhavn', TerrainType.MajorCity);
+const holland = makeCityPoint(18, 30, 'Holland', TerrainType.MajorCity);
+
 const defaultGridPoints: GridPoint[] = [
   paris, berlin, beograd, hamburg, stuttgart, porto, london, dublin, belfast,
+  oslo, stockholm, goteborg, kobenhavn, holland,
 ];
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -180,6 +188,43 @@ describe('ContextBuilder.isFerryOnRoute', () => {
 
   it('returns true for Belfast → Paris (crosses both barriers)', () => {
     const result = isFerryOnRoute('Belfast', 'Paris', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  // ── Scandinavian ferry detection ──────────────────────────────────────────
+
+  it('returns true for Oslo → Holland (scandinavia↔continent)', () => {
+    const result = isFerryOnRoute('Oslo', 'Holland', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns true for Stockholm → Paris (scandinavia↔continent)', () => {
+    const result = isFerryOnRoute('Stockholm', 'Paris', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns true for Goteborg → Hamburg (scandinavia↔continent)', () => {
+    const result = isFerryOnRoute('Goteborg', 'Hamburg', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns true for Kobenhavn → Berlin (scandinavia↔continent)', () => {
+    const result = isFerryOnRoute('Kobenhavn', 'Berlin', defaultGridPoints);
+    expect(result).toBe(true);
+  });
+
+  it('returns false for Oslo → Stockholm (same scandinavia region)', () => {
+    const result = isFerryOnRoute('Oslo', 'Stockholm', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns false for Kobenhavn → Goteborg (both scandinavia)', () => {
+    const result = isFerryOnRoute('Kobenhavn', 'Goteborg', defaultGridPoints);
+    expect(result).toBe(false);
+  });
+
+  it('returns true for London → Oslo (britain↔scandinavia)', () => {
+    const result = isFerryOnRoute('London', 'Oslo', defaultGridPoints);
     expect(result).toBe(true);
   });
 });
