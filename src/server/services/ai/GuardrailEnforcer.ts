@@ -4,6 +4,8 @@
  * `checkPlan()` enforces hard rules on TurnPlan (checked in priority order):
  *   G1. Force DELIVER when canDeliver has opportunities (highest priority)
  *   Stuck. Force DiscardHand when noProgressTurns >= 3 AND no loads carried
+ *   Broke-and-stuck. Force DiscardHand when bot is broke, has active route, and
+ *       no demand is achievable on existing network (JIRA-177)
  *   G3. Block UPGRADE during initialBuild phase
  *   G8. Movement budget enforcement (silent truncation)
  *
@@ -30,6 +32,8 @@ export class GuardrailEnforcer {
    * Guardrails (checked in priority order):
    *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
    *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried AND no active route (JIRA-68)
+   *   Broke-and-stuck: Force DiscardHand when broke, active route exists, and no demand is
+   *       achievable on existing network (JIRA-177)
    *   G3: Block UPGRADE during initialBuild phase
    *   G8: Movement budget enforcement (silent truncation)
    */
@@ -39,6 +43,7 @@ export class GuardrailEnforcer {
     snapshot: WorldSnapshot,
     noProgressTurns: number = 0,
     hasActiveRoute: boolean = false,
+    consecutiveDiscards: number = 0,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
@@ -70,6 +75,35 @@ export class GuardrailEnforcer {
         plan: { type: AIActionType.DiscardHand },
         overridden: true,
         reason: `Progress-based stuck detection: ${noProgressTurns} turns with no deliveries, cash increase, or new cities — forcing DiscardHand`,
+      };
+    }
+
+    // Broke-and-stuck guardrail: force DiscardHand when bot is broke, has a stale active route
+    // blocking the stuck detector, and no demand is achievable on the existing track network.
+    // JIRA-177: The stuck detector above is bypassed when hasActiveRoute=true, but a bot with $0
+    // and no achievable demands on its network will PassTurn indefinitely. Force a discard so the
+    // bot can draw cards matching its existing network and plan a fresh route.
+    // Cap at 3 consecutive discards to prevent infinite discard loops.
+    const botIsBroke = snapshot.bot.money < 5;
+    const hasAchievableDemand = context.demands.some(
+      d => (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
+    );
+    if (
+      botIsBroke &&
+      hasActiveRoute &&
+      noProgressTurns >= 2 &&
+      !hasAchievableDemand &&
+      planType !== AIActionType.DiscardHand &&
+      consecutiveDiscards < 3
+    ) {
+      console.warn(
+        `[Guardrail Broke-Stuck] Broke ($${snapshot.bot.money}M) with active route and no achievable demand on network` +
+        ` — forcing DiscardHand (consecutiveDiscards=${consecutiveDiscards}, noProgressTurns=${noProgressTurns})`,
+      );
+      return {
+        plan: { type: AIActionType.DiscardHand },
+        overridden: true,
+        reason: `Broke-and-stuck: no achievable demand on existing network after ${noProgressTurns} no-progress turns — forcing DiscardHand to draw playable cards`,
       };
     }
 

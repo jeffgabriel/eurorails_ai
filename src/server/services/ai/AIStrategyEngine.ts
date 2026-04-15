@@ -829,7 +829,7 @@ export class AIStrategyEngine {
       // ── Stage 4: Apply guardrails ──
       // JIRA-143: Snapshot plan before guardrail check for originalPlan capture
       const preGuardrailPlan = { action: decision.plan.type, reasoning: decision.reasoning ?? '' };
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns, activeRoute != null);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns, activeRoute != null, memory.consecutiveDiscards);
       let finalPlan: TurnPlan = guardrailResult.plan;
       let originalPlan: { action: string; reasoning: string } | undefined;
 
@@ -837,6 +837,17 @@ export class AIStrategyEngine {
         console.log(`${tag} Guardrail override: ${guardrailResult.reason}`);
         decision.guardrailOverride = true;
         originalPlan = preGuardrailPlan;
+
+        // JIRA-177: When the broke-and-stuck guardrail forces a DiscardHand and the bot had
+        // an active route, clear the route immediately. JIRA-61 logic (below) only clears routes
+        // when cards change — but we must guarantee a fresh TripPlanner call on the next turn
+        // regardless of whether the new hand references the same load types.
+        if (finalPlan.type === AIActionType.DiscardHand && activeRoute != null && guardrailResult.reason?.includes('Broke-and-stuck')) {
+          console.log(
+            `${tag} JIRA-177: Clearing stale active route after broke-and-stuck guardrail forced discard`,
+          );
+          activeRoute = null;
+        }
       }
 
       // Log LLM decision phase
