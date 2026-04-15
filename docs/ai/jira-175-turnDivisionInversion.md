@@ -67,6 +67,29 @@ A human player would immediately filter out any route taking >10 turns in the ea
 
 This is separate from the formula fix but would reinforce correct early-game behavior.
 
+## Test Results Across All Conversation Scenarios
+
+### Scenario 1: Haiku's original hand
+Wine #1 (free delivery), Ham→Praha #3, Flowers→Wien #4 — both near top as expected. Sheep Cork→Sarajevo (94M build) dead last. **PASS**
+
+### Scenario 2: Steel→Warszawa supply selection
+Ruhr #1 (0.67), Luxembourg #2 (-0.29), Birmingham #3 (-2.90). Ruhr correctly beats Birmingham. **PASS**
+
+### Scenario 3: Beer→Antwerpen supply selection
+Frankfurt #1 (0.30), München #2, Dublin/Praha tied last. Frankfurt correctly beats Dublin. **PASS**
+
+### Scenario 4: Latest hand (current bug report)
+Potatoes #1 (free), Oil→Bremen #2 (0.03), Ham→Praha #3 (-0.30), Copper→London #4 (-0.32). Ham is near top. Oil edges it out — defensible since Oil pays 24M/7turns (3.43M/turn income) vs Ham's 13M/5turns (2.6M/turn). Both are fast, affordable routes. **ACCEPTABLE** — user wanted Ham at #2 but #3 behind a similar-quality route is reasonable.
+
+### Scenario 5: Profitable routes (no build cost)
+40M/4t and 20M/2t tie at 10.0M/turn — correct per capital velocity. 50M/8t at 6.25M/turn correctly ranks below. **PASS**
+
+### Scenario 6: Cheap fast vs expensive high-payout
+10M/5M/2t wins (#1, score 4.50), expensive 55M/80M/12t dead last (#3, score -3.42). **PASS**
+
+### Known limitation
+The `costWeight` of 0.1 is a tuning parameter. At 0.1, a 30M build cost equals ~3.0 penalty — roughly equivalent to losing 3M/turn of income velocity. This may need adjustment as more game data is observed.
+
 ## Implementation Plan
 
 ### Files to Change
