@@ -3045,13 +3045,25 @@ describe('ContextBuilder.isBuildAffordable', () => {
     expect(result.projectedFunds).toBe(30);
   });
 
-  it('should return unaffordable for negative ROI (track cost > payout)', () => {
+  it('should return affordable for negative ROI (track cost > payout) when cash covers the build', () => {
+    const result = ContextBuilder.isBuildAffordable(
+      50, // estimated track cost
+      60, // bot money (enough to pay — more than track cost)
+      [],
+      [],
+      40, // payout is less than track cost, but cash covers it
+    );
+    expect(result.affordable).toBe(true);
+    expect(result.projectedFunds).toBe(60);
+  });
+
+  it('should return unaffordable when funds are insufficient regardless of payout', () => {
     const result = ContextBuilder.isBuildAffordable(
       60, // estimated track cost
-      50, // bot money (enough to pay)
+      50, // bot money (not enough)
       [],
       [],
-      55, // payout is less than track cost
+      55, // payout is less than track cost — irrelevant; affordability is cash-only
     );
     expect(result.affordable).toBe(false);
     expect(result.projectedFunds).toBe(50);

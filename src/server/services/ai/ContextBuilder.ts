@@ -411,8 +411,7 @@ export class ContextBuilder {
 
   /**
    * Check if a build target is achievable with current cash plus projected
-   * delivery income from carried loads. Also flags negative ROI builds
-   * where track cost exceeds payout.
+   * delivery income from carried loads.
    */
   static isBuildAffordable(
     estimatedTrackCost: number,
@@ -435,11 +434,6 @@ export class ContextBuilder {
       }
     }
     const projectedFunds = botMoney + projectedIncome;
-
-    // Negative ROI check: track cost exceeds payout
-    if (estimatedTrackCost > payout) {
-      return { affordable: false, projectedFunds };
-    }
 
     // Affordability check: can bot afford the build with projected funds?
     const affordable = estimatedTrackCost <= projectedFunds;
@@ -748,7 +742,7 @@ export class ContextBuilder {
       estimatedTurns,
       affordability.affordable, affordability.projectedFunds,
     );
-    const efficiencyPerTurn = (demand.payment / estimatedTurns) - (totalTrackCost * 0.1);
+    const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
 
     return {
       cardIndex,

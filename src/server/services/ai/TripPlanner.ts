@@ -132,6 +132,7 @@ export class TripPlanner {
           systemPrompt,
           userPrompt: promptWithError,
           outputSchema: TRIP_PLAN_SCHEMA,
+          timeoutMs: 60000,
           ...(skillLevel !== BotSkillLevel.Easy && {
             thinking: { type: 'adaptive' },
             effort: TRIP_EFFORT[skillLevel],
