@@ -805,6 +805,11 @@ export interface TurnPlanDeliverLoad {
     city: string;
     cardId: number;
     payout: number;
+    /** Set to true when the delivery has already been executed against the DB
+     *  (pre-executed during TurnExecutorPlanner's post-delivery replan path).
+     *  TurnExecutor.executeMultiAction() will skip steps with this flag set
+     *  to prevent double-execution. */
+    preExecuted?: boolean;
 }
 
 export interface TurnPlanPickupLoad {

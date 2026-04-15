@@ -58,6 +58,21 @@ jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
 
 // shouldDeferBuild is now on TurnExecutorPlanner — spied on in beforeEach
 
+jest.mock('../../services/ai/TurnExecutor', () => ({
+  TurnExecutor: {
+    executePlan: jest.fn().mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 108,
+      durationMs: 1,
+      payment: 8,
+      newCardId: 5,
+    }),
+  },
+}));
+
 jest.mock('../../services/ai/BuildAdvisor', () => ({
   BuildAdvisor: {
     advise: jest.fn().mockResolvedValue(null),
@@ -140,6 +155,7 @@ import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
 import { computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
+import { TurnExecutor } from '../../services/ai/TurnExecutor';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
@@ -154,6 +170,7 @@ const mockEnrich = RouteEnrichmentAdvisor.enrich as jest.Mock;
 let mockShouldDeferBuild: jest.SpyInstance;
 const mockBuildAdvisorAdvise = BuildAdvisor.advise as jest.Mock;
 const mockBuildAdvisorRetry = BuildAdvisor.retryWithSolvencyFeedback as jest.Mock;
+const mockTurnExecutorExecutePlan = TurnExecutor.executePlan as jest.Mock;
 
 // ── Factory helpers ────────────────────────────────────────────────────────
 
@@ -2409,5 +2426,239 @@ describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery demand refresh'
 
     // rebuildDemands should NOT have been called since capture() failed
     expect(mockRebuildDemands).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-173: Early delivery execution before LLM replan ─────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-173 early delivery execution', () => {
+  const mockCapture = capture as jest.Mock;
+  const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    // Default: TurnExecutor.executePlan succeeds
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 108,
+      durationMs: 1,
+      payment: 8,
+      newCardId: 5,
+    });
+
+    // Reset TripPlanner mock
+    const mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('calls TurnExecutor.executePlan() with delivery plan before JIRA-165 snapshot refresh', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // TurnExecutor.executePlan should be called with the delivery plan
+    expect(mockTurnExecutorExecutePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ type: AIActionType.DeliverLoad, load: 'Coal', city: 'Berlin' }),
+      expect.any(Object),
+    );
+    // capture() should also be called (JIRA-165) — AFTER early execution
+    expect(mockCapture).toHaveBeenCalled();
+  });
+
+  it('marks delivery plan as preExecuted=true when early execution succeeds', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // The delivery plan in the returned plans array should have preExecuted=true
+    const deliveryPlanInResult = result.plans.find(p => p.type === AIActionType.DeliverLoad);
+    expect(deliveryPlanInResult).toBeDefined();
+    expect((deliveryPlanInResult as any).preExecuted).toBe(true);
+  });
+
+  it('updates snapshot.bot.money from early execution result', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 150,  // Updated money after delivery
+      durationMs: 1,
+      payment: 50,
+      newCardId: 7,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    snapshot.bot.money = 100;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // snapshot.bot.money should be updated to the remainingMoney from the execution result
+    expect(snapshot.bot.money).toBe(150);
+  });
+
+  it('falls back to deferred execution when TurnExecutor.executePlan() fails', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // Simulate early execution failure
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: false,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 100,
+      durationMs: 1,
+      error: 'Demand does not match delivery',
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // Plan should NOT have preExecuted=true when early execution fails
+    const deliveryPlanInResult = result.plans.find(p => p.type === AIActionType.DeliverLoad);
+    expect(deliveryPlanInResult).toBeDefined();
+    expect((deliveryPlanInResult as any).preExecuted).toBeUndefined();
+  });
+
+  it('falls back to deferred execution when TurnExecutor.executePlan() throws', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // Simulate early execution throwing an error
+    mockTurnExecutorExecutePlan.mockRejectedValue(new Error('DB connection failed'));
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    // Should NOT throw
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // Plan should NOT have preExecuted=true when early execution throws
+    const deliveryPlanInResult = result.plans.find(p => p.type === AIActionType.DeliverLoad);
+    expect(deliveryPlanInResult).toBeDefined();
+    expect((deliveryPlanInResult as any).preExecuted).toBeUndefined();
+  });
+
+  it('calls TurnExecutor.executePlan() even when gridPoints is empty (early execution does not require gridPoints)', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+
+    // Empty gridPoints — early execution still runs (it doesn't depend on gridPoints)
+    // but JIRA-165 refresh does not
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, []);
+
+    // TurnExecutor.executePlan should still be called (early execution doesn't depend on gridPoints)
+    expect(mockTurnExecutorExecutePlan).toHaveBeenCalled();
+    // But capture() should NOT be called (JIRA-165 gate)
+    expect(mockCapture).not.toHaveBeenCalled();
   });
 });

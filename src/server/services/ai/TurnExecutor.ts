@@ -89,6 +89,20 @@ export class TurnExecutor {
       return TurnExecutor.executeMultiAction(plan.steps, snapshot);
     }
 
+    // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
+    // early delivery path (preExecuted=true prevents double-execution).
+    if ((plan as { preExecuted?: boolean }).preExecuted) {
+      console.log(`[TurnExecutor] JIRA-173: Skipping preExecuted ${plan.type} plan (already committed to DB)`);
+      return {
+        success: true,
+        action: plan.type as AIActionType,
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: snapshot.bot.money,
+        durationMs: 0,
+      };
+    }
+
     const option = TurnExecutor.planToOption(plan);
     return TurnExecutor.execute(option, snapshot);
   }
@@ -190,6 +204,14 @@ export class TurnExecutor {
     const concatenatedPath: { row: number; col: number }[] = [];
 
     for (const step of steps) {
+      // JIRA-173: Skip plans that were already executed during TurnExecutorPlanner's
+      // early delivery path. The delivery has already been committed to DB and the
+      // plan carries preExecuted=true to prevent double-execution here.
+      if ((step as { preExecuted?: boolean }).preExecuted) {
+        console.log(`[TurnExecutor] JIRA-173: Skipping preExecuted ${step.type} plan (already committed to DB)`);
+        continue;
+      }
+
       // JIRA-83: Skip DELIVER/DROP steps when bot is not at a named city.
       // Earlier steps (MOVE) already committed to DB, so failing the entire turn
       // would misrepresent what happened. Warn and continue instead.

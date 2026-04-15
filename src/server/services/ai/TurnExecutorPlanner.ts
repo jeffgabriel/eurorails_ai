@@ -46,6 +46,7 @@ import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
+import { TurnExecutor } from './TurnExecutor';
 
 // ── CompositionTrace ────────────────────────────────────────────────────────
 
@@ -312,16 +313,49 @@ export class TurnExecutorPlanner {
             });
           }
 
+          // JIRA-173: Early delivery execution — commit delivery to DB before
+          // the JIRA-165 snapshot refresh so the LLM replan sees the freshly
+          // drawn demand card instead of the stale pre-delivery hand.
+          // If early execution fails, fall back to deferred execution (current
+          // behaviour) — the plan in plans[] remains without preExecuted=true.
+          const deliveryPlan = plans[plans.length - 1];
+          if (deliveryPlan && deliveryPlan.type === AIActionType.DeliverLoad) {
+            try {
+              const earlyExecResult = await TurnExecutor.executePlan(deliveryPlan, snapshot);
+              if (earlyExecResult.success) {
+                // Mark the plan as already executed so TurnExecutor.executeMultiAction()
+                // skips it later and does not double-execute the delivery.
+                (deliveryPlan as { preExecuted?: boolean }).preExecuted = true;
+                // Update snapshot money so subsequent actions see correct balance
+                snapshot.bot.money = earlyExecResult.remainingMoney;
+                console.log(
+                  `${tag} JIRA-173: Early delivery execution succeeded ` +
+                  `(${deliveryPlan.load}→${deliveryPlan.city}, payment=${earlyExecResult.payment ?? 0}M). ` +
+                  `Snapshot.money updated to ${snapshot.bot.money}M.`,
+                );
+              } else {
+                console.warn(
+                  `${tag} JIRA-173: Early delivery execution failed (${earlyExecResult.error ?? 'unknown error'}). ` +
+                  `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot.`,
+                );
+              }
+            } catch (earlyExecErr) {
+              console.warn(
+                `${tag} JIRA-173: Early delivery execution threw (${(earlyExecErr as Error).message}). ` +
+                `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot.`,
+              );
+            }
+          }
+
           // JIRA-165: Refresh demands from DB after delivery so the replan
           // uses fresh card data instead of the pre-delivery stale snapshot.
-          // Note: The delivery plan has NOT been committed to the DB yet (it's
-          // still in the plans[] array), so freshSnapshot.bot.loads is stale.
-          // We patch it with the locally-updated loads to avoid rebuildDemands
-          // treating the just-delivered load as "on train" (supplyCity: null).
+          // With JIRA-173, the delivery is now committed to DB before this
+          // refresh, so freshSnapshot will contain the newly drawn demand card.
           if (gridPoints && gridPoints.length > 0) {
             try {
               const freshSnapshot = await capture(snapshot.gameId, snapshot.bot.playerId);
-              // Patch fresh snapshot with locally-updated loads (delivery not yet in DB)
+              // Patch fresh snapshot with locally-updated loads so rebuildDemands
+              // does not treat them as "on train" (supplyCity: null).
               freshSnapshot.bot.loads = [...snapshot.bot.loads];
               context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
               snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
