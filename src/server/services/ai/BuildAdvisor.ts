@@ -5,6 +5,7 @@ import {
   GridPoint,
   BuildAdvisorResult,
   TerrainType,
+  FerryConnection,
 } from '../../../shared/types/GameTypes';
 import { MapRenderer } from './MapRenderer';
 import { getBuildAdvisorPrompt, getBuildAdvisorExtractionPrompt } from './prompts/systemPrompts';
@@ -66,12 +67,23 @@ export class BuildAdvisor {
         targetCity,
       );
 
-      // 3. Build prompt
-      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap, targetCity.cityName);
+      // 3. Extract unique ferry connections from gridPoints
+      const ferryConnections = BuildAdvisor.extractFerryConnections(gridPoints);
+
+      // 4. Build prompt
+      const { system, user } = getBuildAdvisorPrompt(
+        context,
+        activeRoute,
+        corridorMap,
+        targetCity.cityName,
+        ferryConnections,
+        snapshot.bot.existingSegments,
+        gridPoints,
+      );
       BuildAdvisor.lastDiagnostics.systemPrompt = system;
       BuildAdvisor.lastDiagnostics.userPrompt = user;
 
-      // 4. Call LLM with structured output
+      // 5. Call LLM with structured output
       brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuild' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
@@ -157,8 +169,17 @@ export class BuildAdvisor {
         targetCity,
       );
 
-      // 2. Build prompt with solvency feedback
-      const { system, user } = getBuildAdvisorPrompt(context, activeRoute, corridorMap, targetCity.cityName);
+      // 2. Extract ferry connections and build prompt with solvency feedback
+      const ferryConnections = BuildAdvisor.extractFerryConnections(gridPoints);
+      const { system, user } = getBuildAdvisorPrompt(
+        context,
+        activeRoute,
+        corridorMap,
+        targetCity.cityName,
+        ferryConnections,
+        snapshot.bot.existingSegments,
+        gridPoints,
+      );
       const solvencyFeedback = `\n\nSOLVENCY FEEDBACK:
 Your previous recommendation (${previousResult.action} toward ${previousResult.target}) costs ${actualCost}M ECU to build, but you only have ${availableCash}M available.
 Please suggest a cheaper route with fewer/different waypoints, use opponent track, or propose an alternative target.`;
@@ -361,6 +382,20 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
     // Find grid coordinate for the city
     const cityPoint = gridPoints.find(gp => gp.city?.name === targetCityName);
     return cityPoint ? { row: cityPoint.row, col: cityPoint.col, cityName: targetCityName } : null;
+  }
+
+  /**
+   * Extract unique FerryConnection objects from all grid points.
+   * Uses ferry Name as deduplication key since each ferry appears on two points.
+   */
+  private static extractFerryConnections(gridPoints: GridPoint[]): FerryConnection[] {
+    const seen = new Map<string, FerryConnection>();
+    for (const gp of gridPoints) {
+      if (gp.ferryConnection) {
+        seen.set(gp.ferryConnection.Name, gp.ferryConnection);
+      }
+    }
+    return Array.from(seen.values());
   }
 
   /**

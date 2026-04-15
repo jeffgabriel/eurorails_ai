@@ -11,7 +11,7 @@
  * - Don't instruct on movement budget — GuardrailEnforcer truncates paths.
  */
 
-import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap } from '../../../../shared/types/GameTypes';
+import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap, FerryConnection, TrackSegment, GridPoint } from '../../../../shared/types/GameTypes';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
@@ -395,6 +395,113 @@ export function getUpgradeBeforeDropPrompt(): string {
 // ── Build Advisor Prompt (JIRA-129) ────────────────────────────────────
 
 /**
+ * Build a FERRY CONNECTIONS section listing ferries fully within the corridor bounds.
+ * Returns empty string if no ferry connections exist within corridor.
+ */
+function buildFerryConnectionsSection(
+  ferryConnections: FerryConnection[],
+  corridorMap: CorridorMap,
+): string {
+  const { minRow, maxRow, minCol, maxCol } = corridorMap;
+  const inCorridor = ferryConnections.filter(fc => {
+    const [a, b] = fc.connections;
+    return (
+      a.row >= minRow && a.row <= maxRow && a.col >= minCol && a.col <= maxCol &&
+      b.row >= minRow && b.row <= maxRow && b.col >= minCol && b.col <= maxCol
+    );
+  });
+
+  if (inCorridor.length === 0) return '';
+
+  const lines = inCorridor.map(fc => {
+    const [a, b] = fc.connections;
+    return `  ${fc.Name}: (${a.row},${a.col}) ↔ (${b.row},${b.col}) — cost ${fc.cost}M`;
+  });
+  return `FERRY CONNECTIONS (within corridor):\n${lines.join('\n')}`;
+}
+
+/**
+ * Build a YOUR TRACK NETWORK section showing connected chains of bot segments.
+ * Returns empty string if no segments exist.
+ */
+function buildTrackNetworkSection(
+  existingSegments: TrackSegment[],
+  gridPoints: GridPoint[],
+): string {
+  if (existingSegments.length === 0) return '';
+
+  // Build a city name lookup by row,col key
+  const cityNameMap = new Map<string, string>();
+  for (const gp of gridPoints) {
+    if (gp.city?.name) {
+      cityNameMap.set(`${gp.row},${gp.col}`, gp.city.name);
+    }
+  }
+
+  // Walk segments adjacently to form connected chains
+  // Each segment is from→to; chains share endpoints
+  const remaining = [...existingSegments];
+  const chains: Array<Array<{ row: number; col: number }>> = [];
+
+  while (remaining.length > 0) {
+    // Start a new chain from the first remaining segment
+    const first = remaining.splice(0, 1)[0];
+    const chain: Array<{ row: number; col: number }> = [
+      { row: first.from.row, col: first.from.col },
+      { row: first.to.row, col: first.to.col },
+    ];
+
+    // Try to extend chain at either end
+    let extended = true;
+    while (extended) {
+      extended = false;
+      const head = chain[0];
+      const tail = chain[chain.length - 1];
+
+      for (let i = remaining.length - 1; i >= 0; i--) {
+        const seg = remaining[i];
+        const fromKey = `${seg.from.row},${seg.from.col}`;
+        const toKey = `${seg.to.row},${seg.to.col}`;
+        const headKey = `${head.row},${head.col}`;
+        const tailKey = `${tail.row},${tail.col}`;
+
+        if (fromKey === tailKey) {
+          chain.push({ row: seg.to.row, col: seg.to.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (toKey === tailKey) {
+          chain.push({ row: seg.from.row, col: seg.from.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (toKey === headKey) {
+          chain.unshift({ row: seg.from.row, col: seg.from.col });
+          remaining.splice(i, 1);
+          extended = true;
+        } else if (fromKey === headKey) {
+          chain.unshift({ row: seg.to.row, col: seg.to.col });
+          remaining.splice(i, 1);
+          extended = true;
+        }
+      }
+    }
+
+    chains.push(chain);
+  }
+
+  // Format each chain with city annotations
+  const chainLines = chains.map(chain => {
+    const nodes = chain.map(pt => {
+      const key = `${pt.row},${pt.col}`;
+      const cityName = cityNameMap.get(key);
+      return cityName ? `${cityName}(${pt.row},${pt.col})` : `(${pt.row},${pt.col})`;
+    });
+    return `  Chain: ${nodes.join(' → ')}`;
+  });
+
+  return `YOUR TRACK NETWORK:\n${chainLines.join('\n')}`;
+}
+
+/**
  * Generate system and user prompts for the Build Advisor LLM call.
  */
 export function getBuildAdvisorPrompt(
@@ -402,6 +509,9 @@ export function getBuildAdvisorPrompt(
   activeRoute: StrategicRoute | null,
   corridorMap: CorridorMap,
   buildTarget?: string,
+  ferryConnections: FerryConnection[] = [],
+  existingSegments: TrackSegment[] = [],
+  gridPoints: GridPoint[] = [],
 ): { system: string; user: string } {
   const targetDirective = buildTarget
     ? `Build track to connect your network to ${buildTarget}. Provide waypoints for the cheapest path.`
@@ -412,6 +522,7 @@ export function getBuildAdvisorPrompt(
 TRACK BUILDING RULES:
 - Spend up to 20M ECU per turn. Terrain: Clear 1M, Mountain 2M, Alpine 5M, Small/Medium City 3M, Major City 5M.
 - Water crossings: River +2M, Lake +3M, Ocean Inlet +3M.
+- Water (~) is impassable — you CANNOT build across open water. Use ferry ports (F) to cross water.
 - Track must connect to your existing network or start from a major city.
 
 OPPONENT TRACK: You may use an opponent's track for 4M ECU per opponent per turn.
@@ -440,6 +551,18 @@ Actions: "build", "useOpponentTrack"`;
   sections.push(`CASH: ${context.money}M ECU`);
   sections.push(`CARRIED LOADS: ${context.loads.length > 0 ? context.loads.join(', ') : 'None'}`);
   sections.push(`GAME PHASE: ${context.phase} | Turn ${context.turnNumber}`);
+
+  // Ferry connections section (omitted when empty)
+  const ferrySection = buildFerryConnectionsSection(ferryConnections, corridorMap);
+  if (ferrySection) {
+    sections.push(ferrySection);
+  }
+
+  // Track network section (omitted when no segments)
+  const trackSection = buildTrackNetworkSection(existingSegments, gridPoints);
+  if (trackSection) {
+    sections.push(trackSection);
+  }
 
   // JIRA-148: Demand cards intentionally omitted — BuildAdvisor is a tactical
   // pathfinding tool, not a strategic planner. Including demand cards caused

@@ -13,7 +13,7 @@ export class MapRenderer {
     [TerrainType.SmallCity]: 's',
     [TerrainType.MediumCity]: 'M',
     [TerrainType.MajorCity]: '*',
-    [TerrainType.FerryPort]: '.',
+    [TerrainType.FerryPort]: 'F',
     [TerrainType.Water]: '~',
   };
 
@@ -121,6 +121,7 @@ export class MapRenderer {
     const legend = [
       '',
       'Legend: .=clear(1) m=mountain(2) A=alpine(5) s=small(3) M=medium(3) *=major(5)',
+      'F=ferry port ~=water(impassable)',
       'B=bot track O=opponent track T=build target',
     ];
 
@@ -301,6 +302,7 @@ export class MapRenderer {
     const legend = [
       '',
       'Legend: .=clear(1) m=mountain(2) A=alpine(5) s=small(3) M=medium(3) *=major(5)',
+      'F=ferry port ~=water(impassable)',
       'B=bot track O=opponent track T=route stop D=delivery city P=pickup city',
     ];
 
