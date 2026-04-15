@@ -79,7 +79,7 @@ export class RouteEnrichmentAdvisor {
     const { system, user } = RouteEnrichmentAdvisor.buildPrompt(route, corridorMap.rendered, context.demands);
 
     // 3. Call LLM with bounded retry
-    brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'route-enrichment-advisor', method: 'enrich' });
+    brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'route-enrichment-advisor', method: 'enrich' });
     let parsed: RouteEnrichmentSchema | null = null;
     let lastError = '';
 

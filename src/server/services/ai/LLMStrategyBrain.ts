@@ -158,7 +158,7 @@ export class LLMStrategyBrain {
 
       try {
         const useThinking = this.config.skillLevel !== BotSkillLevel.Easy;
-        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'planRoute' });
+        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'planRoute' });
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: ROUTE_MAX_TOKENS[this.config.skillLevel],
@@ -308,7 +308,7 @@ export class LLMStrategyBrain {
         : userPrompt;
 
       try {
-        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'evaluateCargoConflict' });
+        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'evaluateCargoConflict' });
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: 1024,
@@ -378,7 +378,7 @@ export class LLMStrategyBrain {
         : userPrompt;
 
       try {
-        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'evaluateUpgradeBeforeDrop' });
+        this.adapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'strategy-brain', method: 'evaluateUpgradeBeforeDrop' });
         const response = await this.adapter.chat({
           model: this.model,
           maxTokens: 1024,

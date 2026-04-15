@@ -20,6 +20,7 @@ export interface LLMTranscriptEntry {
   callId: string;
   gameId: string;
   playerId: string;
+  playerName?: string;
   turn: number;
   timestamp: string;
   caller: string;

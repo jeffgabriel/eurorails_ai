@@ -72,7 +72,7 @@ export class BuildAdvisor {
       BuildAdvisor.lastDiagnostics.userPrompt = user;
 
       // 4. Call LLM with structured output
-      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuild' });
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuild' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 2048,
@@ -166,7 +166,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
       BuildAdvisor.lastDiagnostics.systemPrompt = system;
       BuildAdvisor.lastDiagnostics.userPrompt = fullUserPrompt;
 
-      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildInitial' });
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildInitial' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 2048,
@@ -225,7 +225,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
 
       // Omit `thinking` to disable thinkingConfig — this allows structured output
       // (responseSchema) on thinking-capable models like Gemini 3
-      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildVictory' });
+      brain.providerAdapter.setContext({ gameId: snapshot.gameId, playerId: snapshot.bot.playerId, playerName: snapshot.bot.botConfig?.name, turn: snapshot.turnNumber, caller: 'build-advisor', method: 'adviseBuildVictory' });
       const response = await brain.providerAdapter.chat({
         model: brain.modelName,
         maxTokens: 512,

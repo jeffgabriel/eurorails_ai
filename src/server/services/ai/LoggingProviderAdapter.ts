@@ -13,6 +13,7 @@ import { appendLLMCall, LLMTranscriptEntry } from './LLMTranscriptLogger';
 interface LoggingContext {
   gameId: string;
   playerId: string;
+  playerName?: string;
   turn: number;
   caller: string;
   method: string;
@@ -93,6 +94,7 @@ export class LoggingProviderAdapter implements ProviderAdapter {
           callId,
           gameId: this.context.gameId,
           playerId: this.context.playerId,
+          playerName: this.context.playerName,
           turn: this.context.turn,
           timestamp: new Date().toISOString(),
           caller: this.context.caller,

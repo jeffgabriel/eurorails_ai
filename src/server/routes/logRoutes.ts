@@ -293,7 +293,7 @@ const handleLLMViewer: express.RequestHandler = (req, res) => {
   }
 
   try {
-    const players = Array.from(new Set(entries.map(e => e.playerId)));
+    const players = Array.from(new Set(entries.map(e => e.playerName || e.playerId)));
     const turns = Array.from(new Set(entries.map(e => e.turn))).sort((a, b) => a - b);
     const callers = Array.from(new Set(entries.map(e => e.caller)));
     const statuses = Array.from(new Set(entries.map(e => e.status)));
@@ -724,9 +724,10 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
 
     const tokens = entry.tokenUsage ? `${fmt(entry.tokenUsage.input)} in / ${fmt(entry.tokenUsage.output)} out` : '';
 
-    cards.push(`<div class="call-card ${cardClass}" data-turn="${entry.turn}" data-player="${escapeHtml(entry.playerId)}" data-caller="${escapeHtml(entry.caller)}" data-status="${escapeHtml(entry.status)}" data-model="${escapeHtml(entry.model)}">
+    const displayName = entry.playerName || entry.playerId;
+    cards.push(`<div class="call-card ${cardClass}" data-turn="${entry.turn}" data-player="${escapeHtml(displayName)}" data-caller="${escapeHtml(entry.caller)}" data-status="${escapeHtml(entry.status)}" data-model="${escapeHtml(entry.model)}">
   <div class="call-header" onclick="this.parentElement.querySelector('.call-body').classList.toggle('hidden')">
-    <h3>Turn ${entry.turn} | ${escapeHtml(entry.caller)} | #${entry.attemptNumber}/${entry.totalAttempts}
+    <h3>Turn ${entry.turn} | ${escapeHtml(displayName)} | ${escapeHtml(entry.caller)} | #${entry.attemptNumber}/${entry.totalAttempts}
       <a href="/logs/${gameId}?turns=${entry.turn}" style="font-size:12px;color:#0f9ef7;margin-left:8px;">→ game turn</a>
     </h3>
     <div class="meta">
@@ -735,7 +736,7 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
     </div>
   </div>
   <div class="call-body hidden">
-    <div style="font-size:12px;color:#888;margin-bottom:4px;">${escapeHtml(entry.playerId)} | ${entry.timestamp} | ${escapeHtml(entry.method)}</div>
+    <div style="font-size:12px;color:#888;margin-bottom:4px;">${escapeHtml(displayName)}${entry.playerName ? ` (${escapeHtml(entry.playerId)})` : ''} | ${entry.timestamp} | ${escapeHtml(entry.method)}</div>
     ${sections}
   </div>
 </div>`);
