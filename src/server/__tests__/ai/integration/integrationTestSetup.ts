@@ -41,7 +41,8 @@ export function makeDemandContext(overrides: Partial<DemandContext> = {}): Deman
 // ── scoreDemand replica ─────────────────────────────────────────────────────
 // Replicates ContextBuilder.scoreDemand (private static) for test verification.
 // Synced with production formula: routes with build cost > 50M are exponentially
-// penalized. JIRA-174: corridor multiplier removed.
+// penalized. JIRA-174: corridor multiplier removed. JIRA-175: income velocity
+// separated from cost burden so short affordable routes rank above expensive ones.
 
 export function scoreDemand(
   payout: number,
@@ -50,8 +51,10 @@ export function scoreDemand(
   isAffordable: boolean = true,
   projectedFunds: number = Infinity,
 ): number {
-  const baseROI = (payout - totalTrackCost) / estimatedTurns;
-  const rawScore = baseROI;
+  const COST_WEIGHT = 0.1;
+  const incomeVelocity = payout / estimatedTurns;
+  const costBurden = totalTrackCost * COST_WEIGHT;
+  const rawScore = incomeVelocity - costBurden;
 
   // Build cost ceiling: exponential penalty for routes > 50M
   // Bug #5 fix: divide negative scores by penalty (makes MORE negative = worse rank)

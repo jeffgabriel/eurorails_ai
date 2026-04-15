@@ -84,14 +84,16 @@ describe('Behavior 1: Build Budget Verification', () => {
     });
 
     it('should penalize demands where build cost consumes most of the payout', () => {
-      // 15M payout with 14M build cost → only 1M profit
+      // JIRA-175: (payout/turns) - (cost*0.1)
+      // 15M payout with 14M build cost: (15/4) - (14*0.1) = 3.75 - 1.4 = 2.35
       const lowProfit = scoreDemand(15, 14, 4);
-      // 15M payout with 3M build cost → 12M profit
+      // 15M payout with 3M build cost: (15/4) - (3*0.1) = 3.75 - 0.3 = 3.45
       const highProfit = scoreDemand(15, 3, 4);
 
+      // High-profit route scores better
       expect(highProfit).toBeGreaterThan(lowProfit);
-      // The low-profit route should have near-zero or negative ROI
-      expect(lowProfit).toBeLessThan(1);
+      // The low-profit route still scores worse (cost burden penalty applies)
+      expect(highProfit - lowProfit).toBeGreaterThan(0.5);
     });
   });
 

@@ -5,42 +5,43 @@
  * the one producing the highest demand score is selected — not the
  * one closest to existing track.
  *
- * PRD scenario: The supply city with better ROI (lower cost, higher payout,
- * fewer turns) wins. JIRA-174: Corridor multiplier removed — scoring is
- * pure baseROI with cost ceiling and affordability penalties.
+ * PRD scenario: The supply city with better score wins.
+ * JIRA-174: Corridor multiplier removed.
+ * JIRA-175: Formula changed to (payout/turns) - (cost*0.1) to fix turn-division
+ * inversion — short affordable routes rank above long expensive ones.
  */
 
 import { makeDemandContext, scoreDemand } from './integrationTestSetup';
 
 describe('Behavior 2: Multi-Supply-City Evaluation', () => {
   describe('supply city selection by demand score', () => {
-    it('should prefer a supply city with better ROI', () => {
-      // Manchester: closer, lower cost → better ROI
-      // ROI = (25-4)/4 = 5.25
+    it('should prefer a supply city with better score', () => {
+      // Manchester: closer, lower cost → better score
+      // score = (25/4) - (4*0.1) = 6.25 - 0.4 = 5.85
       const manchesterScore = scoreDemand(
         25, // payout
         4,  // totalTrackCost (cheap — close to network)
         4,  // estimatedTurns
       );
 
-      // Stuttgart: higher cost, same turns → lower ROI
-      // ROI = (25-10)/4 = 3.75
+      // Stuttgart: higher cost, same turns → lower score
+      // score = (25/4) - (10*0.1) = 6.25 - 1.0 = 5.25
       const stuttgartScore = scoreDemand(
         25, // same payout
         10, // totalTrackCost (more expensive)
         4,  // estimatedTurns
       );
 
-      // Manchester wins due to lower build cost (higher ROI)
+      // Manchester wins due to lower build cost (higher score)
       expect(manchesterScore).toBeGreaterThan(stuttgartScore);
     });
 
     it('should select the supply city that maximizes demand score from multiple options', () => {
       // Simulate computeBestDemandContext: evaluate each supply city.
-      // Winner is the city with highest ROI = (payout - cost) / turns
-      // Manchester: ROI=(25-4)/4 = 5.25  <- wins (lowest cost, good turns)
-      // Stuttgart: ROI=(25-5)/4 = 5.0
-      // Milano: ROI=(25-8)/5 = 3.4
+      // Winner is the city with highest score = (payout/turns) - (cost*0.1)
+      // Manchester: (25/4) - (4*0.1) = 6.25 - 0.4 = 5.85  <- wins (lowest cost)
+      // Stuttgart: (25/4) - (5*0.1) = 6.25 - 0.5 = 5.75
+      // Milano: (25/5) - (8*0.1) = 5.0 - 0.8 = 4.2
       const supplyCities = [
         { city: 'Manchester', cost: 4, turns: 4 },
         { city: 'Stuttgart', cost: 5, turns: 4 },
@@ -68,15 +69,15 @@ describe('Behavior 2: Multi-Supply-City Evaluation', () => {
       expect(closeCity).toBeGreaterThan(farCity);
     });
 
-    it('should rank by ROI when costs differ significantly', () => {
+    it('should rank by income velocity when turn count differs significantly', () => {
       // Expensive but fast vs cheap but slow
-      // Expensive: ROI = (30-15)/6 = 2.5
+      // Expensive fast: (30/6) - (15*0.1) = 5.0 - 1.5 = 3.5
       const expensiveButFast = scoreDemand(30, 15, 6);
-      // Cheap slow: ROI = (30-3)/8 = 3.375 — better ROI
+      // Cheap slow: (30/8) - (3*0.1) = 3.75 - 0.3 = 3.45
       const cheapSlow = scoreDemand(30, 3, 8);
 
-      // Cheap slow wins due to better ROI
-      expect(cheapSlow).toBeGreaterThan(expensiveButFast);
+      // JIRA-175: income velocity (payout/turns) drives ranking — fast delivery wins
+      expect(expensiveButFast).toBeGreaterThan(cheapSlow);
     });
   });
 
@@ -131,31 +132,30 @@ describe('Behavior 2: Multi-Supply-City Evaluation', () => {
     });
   });
 
-  describe('negative-ROI scoring', () => {
-    it('negative ROI scores are negative', () => {
-      // Negative baseROI: build cost > payout
-      const score = scoreDemand(10, 20, 5);
-      const baseROI = (10 - 20) / 5; // -2.0
-      expect(score).toBeCloseTo(baseROI, 5);
+  describe('negative score scenarios', () => {
+    it('negative score when cost burden exceeds income velocity', () => {
+      // JIRA-175 formula: (10/5) - (20*0.1) = 2.0 - 2.0 = 0.0
+      // Use higher cost to get negative: (10/5) - (30*0.1) = 2.0 - 3.0 = -1.0
+      const score = scoreDemand(10, 30, 5);
       expect(score).toBeLessThan(0);
     });
 
-    it('lower build cost wins when both routes have negative ROI', () => {
+    it('lower build cost wins when both routes score poorly', () => {
       // Both negative, but less-negative (less costly) wins
-      // route1: ROI = (12-30)/8 = -2.25
+      // route1: (12/8) - (30*0.1) = 1.5 - 3.0 = -1.5
       const route1Score = scoreDemand(12, 30, 8);
-      // route2: ROI = (12-20)/8 = -1.0 (less negative)
+      // route2: (12/8) - (20*0.1) = 1.5 - 2.0 = -0.5 (less negative)
       const route2Score = scoreDemand(12, 20, 8);
 
       // route2 wins (less negative score)
       expect(route2Score).toBeGreaterThan(route1Score);
     });
 
-    it('negative ROI with zero build cost returns payout/turns', () => {
-      // zero build cost: ROI = payout/turns (always positive if payout > 0)
+    it('zero build cost returns payout/turns', () => {
+      // zero build cost: score = payout/turns (always positive if payout > 0)
       const score = scoreDemand(5, 0, 3);
-      const baseROI = 5 / 3;
-      expect(score).toBeCloseTo(baseROI, 5);
+      const expected = 5 / 3;
+      expect(score).toBeCloseTo(expected, 5);
     });
 
     it('build cost ceiling exponentially penalizes routes over 50M', () => {
@@ -170,11 +170,11 @@ describe('Behavior 2: Multi-Supply-City Evaluation', () => {
 
     it('build cost ceiling only applies above 50M threshold', () => {
       // Routes at 30M and 49M should have no cost ceiling penalty (costPenalty=1)
-      // Score should differ only due to different build costs in baseROI
+      // JIRA-175 formula: (60/5) - (cost*0.1), no ceiling penalty for cost ≤ 50M
       const routeAt30M = scoreDemand(60, 30, 5);
       const routeAt49M = scoreDemand(60, 49, 5);
-      const expectedAt30M = (60 - 30) / 5; // 6.0 — no penalty
-      const expectedAt49M = (60 - 49) / 5; // 2.2 — no penalty
+      const expectedAt30M = (60 / 5) - (30 * 0.1); // 12 - 3 = 9.0 — no penalty
+      const expectedAt49M = (60 / 5) - (49 * 0.1); // 12 - 4.9 = 7.1 — no penalty
 
       expect(routeAt30M).toBeCloseTo(expectedAt30M, 5);
       expect(routeAt49M).toBeCloseTo(expectedAt49M, 5);

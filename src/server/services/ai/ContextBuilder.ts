@@ -748,7 +748,7 @@ export class ContextBuilder {
       estimatedTurns,
       affordability.affordable, affordability.projectedFunds,
     );
-    const efficiencyPerTurn = (demand.payment - totalTrackCost) / estimatedTurns;
+    const efficiencyPerTurn = (demand.payment / estimatedTurns) - (totalTrackCost * 0.1);
 
     return {
       cardIndex,
@@ -2258,8 +2258,9 @@ export class ContextBuilder {
    * Compute a demand score using payout-relative corridor bonus.
    * Higher scores mean better demand options for the bot to pursue.
    *
-   * baseROI = (payout - totalTrackCost) / estimatedTurns
-   * score = baseROI (with cost ceiling and affordability penalties)
+   * score = (payout / estimatedTurns) - (totalTrackCost * 0.1)
+   * JIRA-175: Separates income velocity from build cost burden so short affordable
+   * routes rank above long expensive ferry routes.
    *
    * JIRA-174: Corridor multiplier removed — it produced identical rankings to
    * the formula without it, and was the root cause of JIRA-173 scoring inversions.
@@ -2275,8 +2276,10 @@ export class ContextBuilder {
     isAffordable: boolean = true,
     projectedFunds: number = Infinity,
   ): number {
-    const baseROI = (payout - totalTrackCost) / estimatedTurns;
-    const rawScore = baseROI;
+    const COST_WEIGHT = 0.1;
+    const incomeVelocity = payout / estimatedTurns;
+    const costBurden = totalTrackCost * COST_WEIGHT;
+    const rawScore = incomeVelocity - costBurden;
 
     // Build cost ceiling: exponentially penalize routes that cost more than 50M.
     // This prevents mega-routes from ranking above quick, affordable deliveries.
