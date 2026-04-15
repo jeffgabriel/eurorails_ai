@@ -61,16 +61,21 @@ export function scoreDemand(
     : baseROI / (1 + corridorMultiplier);
 
   // Build cost ceiling: exponential penalty for routes > 50M
-  const costPenalty = totalTrackCost > 50
+  // Bug #5 fix: divide negative scores by penalty (makes MORE negative = worse rank)
+  const costPenaltyFactor = totalTrackCost > 50
     ? Math.exp(-(totalTrackCost - 50) / 30)
     : 1;
-  const penalizedScore = rawScore * costPenalty;
+  const penalizedScore = rawScore >= 0
+    ? rawScore * costPenaltyFactor
+    : rawScore / Math.max(costPenaltyFactor, 0.01);
 
   if (!isAffordable && totalTrackCost > 0) {
     const shortfall = totalTrackCost - Math.max(projectedFunds, 0);
     const shortfallRatio = Math.min(shortfall / totalTrackCost, 1);
-    const penalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
-    return penalizedScore * penalty;
+    const affordPenalty = Math.max(0.05, 0.3 * (1 - shortfallRatio));
+    return penalizedScore >= 0
+      ? penalizedScore * affordPenalty
+      : penalizedScore / Math.max(affordPenalty, 0.01);
   }
 
   return penalizedScore;
