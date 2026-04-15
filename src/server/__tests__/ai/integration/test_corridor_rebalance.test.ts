@@ -92,42 +92,15 @@ describe('Behavior 3: Payout-Relative Corridor Scoring', () => {
   });
 
   describe('victory major city weight', () => {
-    it('should give victory major cities significant weight', () => {
+    it('should treat victoryMajorCities as no-op (param retained for compat)', () => {
+      // JIRA-173: victoryBonus was removed from replica to match production scoreDemand.
+      // victoryMajorCities param is retained for call-site compat but has no effect.
       const noVictory = scoreDemand(30, 10, 5, 0, 5);
       const oneVictory = scoreDemand(30, 10, 5, 1, 5);
       const twoVictory = scoreDemand(30, 10, 5, 2, 5);
 
-      expect(oneVictory).toBeGreaterThan(noVictory);
-      expect(twoVictory).toBeGreaterThan(oneVictory);
-
-      // Victory bonus = victoryMajorCities * max(payout * 0.15, 5)
-      // For 30M payout: bonus per city = max(30 * 0.15, 5) = max(4.5, 5) = 5
-      const victoryBonusPerCity = 5;
-      expect(oneVictory - noVictory).toBeCloseTo(victoryBonusPerCity, 1);
-    });
-
-    it('should scale victory bonus with payout for high-value deliveries', () => {
-      // For 50M payout: bonus = max(50 * 0.15, 5) = 7.5
-      const noVictoryHigh = scoreDemand(50, 10, 3, 0, 5);
-      const oneVictoryHigh = scoreDemand(50, 10, 3, 1, 5);
-
-      // For 20M payout: bonus = max(20 * 0.15, 5) = max(3, 5) = 5
-      const noVictoryLow = scoreDemand(20, 5, 3, 0, 4);
-      const oneVictoryLow = scoreDemand(20, 5, 3, 1, 4);
-
-      const highPayVictoryBonus = oneVictoryHigh - noVictoryHigh;
-      const lowPayVictoryBonus = oneVictoryLow - noVictoryLow;
-
-      // High-payout victory bonus should be larger (7.5 vs 5)
-      expect(highPayVictoryBonus).toBeGreaterThan(lowPayVictoryBonus);
-    });
-
-    it('should use minimum victory bonus of 5 for low-payout demands', () => {
-      // For 10M payout: bonus = max(10 * 0.15, 5) = max(1.5, 5) = 5
-      const noVictory = scoreDemand(10, 3, 2, 0, 3);
-      const oneVictory = scoreDemand(10, 3, 2, 1, 3);
-
-      expect(oneVictory - noVictory).toBeCloseTo(5, 1);
+      expect(oneVictory).toEqual(noVictory);
+      expect(twoVictory).toEqual(oneVictory);
     });
   });
 
@@ -140,11 +113,12 @@ describe('Behavior 3: Payout-Relative Corridor Scoring', () => {
       expect(richCorridor).toBeGreaterThan(poorCorridor);
     });
 
-    it('should prefer routes with victory progress when all else is equal', () => {
+    it('should treat victoryMajorCities as no-op for equal demands', () => {
+      // JIRA-173: victoryMajorCities no longer affects score
       const noVictory = scoreDemand(25, 8, 5, 0, 5);
       const withVictory = scoreDemand(25, 8, 5, 1, 5);
 
-      expect(withVictory).toBeGreaterThan(noVictory);
+      expect(withVictory).toEqual(noVictory);
     });
   });
 });
