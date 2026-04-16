@@ -248,6 +248,14 @@ export class InitialBuildPlanner {
               efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
             }
 
+            // JIRA-178: Apply peripheral penalty to single-delivery efficiency
+            // so Milano/London don't dominate starting city selection.
+            // Double-delivery scoring applies -30 additive on a ~(-100,+200) scale;
+            // single-delivery efficiency is ~(-5,+5), so use 0.7 multiplicative discount.
+            if (PERIPHERAL_CITIES.has(group.cityName)) {
+              efficiency *= 0.7;
+            }
+
             const option: DemandOption = {
               cardId: rd.cardId,
               demandIndex: demandIdx,
