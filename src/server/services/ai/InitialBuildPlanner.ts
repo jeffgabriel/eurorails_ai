@@ -110,7 +110,8 @@ export class InitialBuildPlanner {
 
       const route: RouteStop[] = isSharedPickup
         ? [
-          // Single pickup, two sequential deliveries
+          // Two pickups (shared supply city and load type), two sequential deliveries
+          { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
           { action: 'pickup', loadType: bestDouble.first.loadType, city: bestDouble.first.supplyCity },
           { action: 'deliver', loadType: bestDouble.first.loadType, city: bestDouble.first.deliveryCity, demandCardId: bestDouble.first.cardId, payment: bestDouble.first.payout },
           { action: 'deliver', loadType: bestDouble.second.loadType, city: bestDouble.second.deliveryCity, demandCardId: bestDouble.second.cardId, payment: bestDouble.second.payout },

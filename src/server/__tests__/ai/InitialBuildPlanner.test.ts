@@ -1458,7 +1458,7 @@ describe('InitialBuildPlanner', () => {
     });
 
     describe('planInitialBuild — shared-pickup route shape', () => {
-      it('should generate 3-stop route [pickup, deliver, deliver] for shared-pickup winner', () => {
+      it('should generate 4-stop route [pickup, pickup, deliver, deliver] for shared-pickup winner', () => {
         mockGetSourceCitiesForLoad.mockReturnValue(['Wroclaw']);
         // Use cheap costs to ensure within budget
         mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
@@ -1476,21 +1476,22 @@ describe('InitialBuildPlanner', () => {
 
         const plan = InitialBuildPlanner.planInitialBuild(snapshot, grid);
 
-        // If shared-pickup wins, expect 3-stop route: pickup + 2 delivers
-        if (plan.route.length === 3) {
-          expect(plan.route[0].action).toBe('pickup');
-          expect(plan.route[1].action).toBe('deliver');
-          expect(plan.route[2].action).toBe('deliver');
-          // Both delivers use the same load type
-          expect(plan.route[1].loadType).toBe('Potatoes');
-          expect(plan.route[2].loadType).toBe('Potatoes');
-          // Only one pickup stop (shared supply city)
-          const pickupStops = plan.route.filter(s => s.action === 'pickup');
-          expect(pickupStops.length).toBe(1);
-          expect(pickupStops[0].city).toBe('Wroclaw');
-          // Total payout should be sum of both deliveries
-          expect(plan.totalPayout).toBe(42); // 21 + 21
-        }
+        // If shared-pickup wins, expect 4-stop route: 2 pickups + 2 delivers
+        expect(plan.route.length).toBe(4);
+        expect(plan.route[0].action).toBe('pickup');
+        expect(plan.route[1].action).toBe('pickup');
+        expect(plan.route[2].action).toBe('deliver');
+        expect(plan.route[3].action).toBe('deliver');
+        // Both delivers use the same load type
+        expect(plan.route[2].loadType).toBe('Potatoes');
+        expect(plan.route[3].loadType).toBe('Potatoes');
+        // Two pickup stops at the shared supply city
+        const pickupStops = plan.route.filter(s => s.action === 'pickup');
+        expect(pickupStops.length).toBe(2);
+        expect(pickupStops[0].city).toBe('Wroclaw');
+        expect(pickupStops[1].city).toBe('Wroclaw');
+        // Total payout should be sum of both deliveries
+        expect(plan.totalPayout).toBe(42); // 21 + 21
       });
 
       it('should still produce 4-stop serial route for non-shared pairings', () => {
