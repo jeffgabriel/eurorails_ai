@@ -848,6 +848,26 @@ export interface ResolvedAction {
     success: boolean;
     plan?: TurnPlan;
     error?: string;
+    /** JIRA-179: BuildRouteResolver structured log payload — only populated when ENABLE_BUILD_RESOLVER=true */
+    buildResolverLog?: {
+      enabled: true;
+      targetCity: string;
+      budget: number;
+      candidates: Array<{
+        id: string;
+        cost: number;
+        segmentCount: number;
+        reachesTarget: boolean;
+        endpointDistance: number;
+        anchorsHit: string[];
+        segmentCompact: Array<[number, number, number, number]>;
+      }>;
+      selected: string;
+      ruleBranch: string;
+      reasonText: string;
+      costDelta: number;
+      anchorClassification: Array<{ coord: [number, number]; namedCity: string | null; kept: boolean }>;
+    };
 }
 
 /** Result from LLMStrategyBrain.decideAction() — includes resolved plan and LLM metadata */

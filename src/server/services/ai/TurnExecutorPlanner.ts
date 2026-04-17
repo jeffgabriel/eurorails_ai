@@ -81,6 +81,26 @@ export interface CompositionTrace {
   victoryBuild?: { target: string | null; cost: number; triggered: boolean; overrodeRoute: boolean };
   /** JIRA-129: Build Advisor decision */
   advisor?: { action: string | null; reasoning: string | null; waypoints: [number, number][]; solvencyRetries: number; latencyMs: number; fallback: boolean; rawResponse?: string; rawWaypoints?: [number, number][]; systemPrompt?: string; userPrompt?: string; error?: string };
+  /** JIRA-179: Build Route Resolver candidate comparison — only present when ENABLE_BUILD_RESOLVER=true */
+  buildResolver?: {
+    enabled: true;
+    targetCity: string;
+    budget: number;
+    candidates: Array<{
+      id: string;
+      cost: number;
+      segmentCount: number;
+      reachesTarget: boolean;
+      endpointDistance: number;
+      anchorsHit: string[];
+      segmentCompact: Array<[number, number, number, number]>;
+    }>;
+    selected: string;
+    ruleBranch: string;
+    reasonText: string;
+    costDelta: number;
+    anchorClassification: Array<{ coord: [number, number]; namedCity: string | null; kept: boolean }>;
+  };
 }
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
@@ -747,6 +767,8 @@ export class TurnExecutorPlanner {
             trace.build.cost = buildResult.plan.type === AIActionType.BuildTrack
               ? buildResult.plan.segments.reduce((s, seg) => s + seg.cost, 0)
               : 0;
+            // JIRA-179: propagate BuildRouteResolver log to composition trace
+            if (buildResult.buildResolverLog) trace.buildResolver = buildResult.buildResolverLog;
             return buildResult.plan;
           }
 
@@ -777,6 +799,8 @@ export class TurnExecutorPlanner {
             );
             if (retryBuildResult.success && retryBuildResult.plan) {
               console.log(`${tag} BuildAdvisor solvency retry succeeded: building toward "${retryCity}"`);
+              // JIRA-179: propagate BuildRouteResolver log to composition trace
+              if (retryBuildResult.buildResolverLog) trace.buildResolver = retryBuildResult.buildResolverLog;
               return retryBuildResult.plan;
             }
           }
@@ -803,6 +827,8 @@ export class TurnExecutorPlanner {
       );
 
       if (heuristicResult.success && heuristicResult.plan) {
+        // JIRA-179: propagate BuildRouteResolver log to composition trace
+        if (heuristicResult.buildResolverLog) trace.buildResolver = heuristicResult.buildResolverLog;
         return heuristicResult.plan;
       }
 

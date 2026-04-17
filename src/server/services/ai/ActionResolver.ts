@@ -35,6 +35,7 @@ import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
+import { BuildRouteResolver, isBuildResolverEnabled, type ResolverOutcome } from './BuildRouteResolver';
 
 export class ActionResolver {
   /**
@@ -259,9 +260,25 @@ export class ActionResolver {
       : snapshot.bot.existingSegments;
 
     // JIRA-129: Waypoint-chained building — iterate through each waypoint in sequence
-    const waypoints = details.waypoints;
+    const waypoints = details.waypoints ?? [];
     let segments: TrackSegment[];
-    if (waypoints && waypoints.length > 0) {
+    let resolverOutcome: ResolverOutcome | undefined;
+
+    if (isBuildResolverEnabled()) {
+      // JIRA-179: BuildRouteResolver — produce three candidates and pick the best one.
+      // The flag-off path below is byte-for-byte identical to the pre-change implementation.
+      resolverOutcome = BuildRouteResolver.resolve({
+        waypoints,
+        startPositions,
+        targetPositions,
+        budget,
+        connectedSegments,
+        occupiedEdges,
+        networkNodeKeys,
+      });
+      segments = resolverOutcome.selected.segments;
+      console.log(`[ActionResolver] BuildRouteResolver selected=${resolverOutcome.selected.id} ruleBranch=${resolverOutcome.ruleBranch} cost=${resolverOutcome.selected.totalCost}`);
+    } else if (waypoints.length > 0) {
       segments = [];
       let remainingBudget = budget;
       let currentStartPositions = startPositions;
@@ -398,6 +415,33 @@ export class ActionResolver {
       segments,
       targetCity,
     };
+
+    // JIRA-179: Attach resolver log payload when flag is on, for composition.buildResolver
+    if (resolverOutcome) {
+      const buildResolverLog: ResolvedAction['buildResolverLog'] = {
+        enabled: true,
+        targetCity: String(targetCity),
+        budget,
+        candidates: (['llmGuided', 'dijkstraDirect', 'merged'] as const).map(id => {
+          const c = resolverOutcome!.candidates[id];
+          return {
+            id: c.id,
+            cost: c.totalCost,
+            segmentCount: c.segments.length,
+            reachesTarget: c.reachesTarget,
+            endpointDistance: c.endpointDistanceToTarget,
+            anchorsHit: c.namedCityAnchorsHit,
+            segmentCompact: c.segments.map(s => [s.from.row, s.from.col, s.to.row, s.to.col] as [number, number, number, number]),
+          };
+        }),
+        selected: resolverOutcome.selected.id,
+        ruleBranch: resolverOutcome.ruleBranch,
+        reasonText: resolverOutcome.reasonText,
+        costDelta: resolverOutcome.costDelta,
+        anchorClassification: resolverOutcome.anchorClassification,
+      };
+      return { success: true, plan, buildResolverLog };
+    }
 
     return { success: true, plan };
   }
