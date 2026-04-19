@@ -51,13 +51,14 @@ jest.mock('../../../shared/services/majorCityGroups', () => {
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { loadGridPoints, hexDistance } from '../../services/ai/MapTopology';
-import { getMajorCityGroups, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getMajorCityLookup, getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 const mockComputeBuildSegments = computeBuildSegments as jest.MockedFunction<typeof computeBuildSegments>;
 const mockComputeTrackUsageForMove = computeTrackUsageForMove as jest.MockedFunction<typeof computeTrackUsageForMove>;
 const mockLoadGridPoints = loadGridPoints as jest.MockedFunction<typeof loadGridPoints>;
 const mockGetMajorCityGroups = getMajorCityGroups as jest.MockedFunction<typeof getMajorCityGroups>;
 const mockGetMajorCityLookup = getMajorCityLookup as jest.MockedFunction<typeof getMajorCityLookup>;
+const mockGetFerryEdges = getFerryEdges as jest.MockedFunction<typeof getFerryEdges>;
 const mockHexDistance = hexDistance as jest.MockedFunction<typeof hexDistance>;
 
 // ─── Factory helpers ─────────────────────────────────────────────────────────
@@ -4235,6 +4236,223 @@ describe('ActionResolver', () => {
 
       const result = ActionResolver.filterConnectedSegments(segments, { row: 20, col: 21 });
       expect(result).toHaveLength(2);
+    });
+
+    // ─── JIRA-182: Ferry-aware adjacency ────────────────────────────────────
+
+    it('AC1: connects UK and mainland clusters when bot has track on both sides of a ferry', () => {
+      // English Channel ferry: pointA=(17,29) UK side, pointB=(21,29) France side
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster: bot at Cardiff (17,26), track reaching UK ferry port (17,29)
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 28),
+        makeSegment(17, 28, 17, 29),
+      ];
+      // Mainland cluster: track from France ferry port (21,29) heading south
+      const mainlandCluster = [
+        makeSegment(21, 29, 22, 29),
+        makeSegment(22, 29, 23, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Both clusters should be reachable via the ferry edge
+      expect(result).toHaveLength(ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC2: does NOT connect mainland when bot only has track on UK side of ferry', () => {
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster only — no mainland track at ferry pointB
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 29),
+      ];
+      // Mainland cluster disconnected (no track touching ferry pointB)
+      const mainlandCluster = [
+        makeSegment(23, 30, 24, 31),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Only UK cluster returned — mainland not reachable
+      expect(result).toHaveLength(ukCluster.length);
+    });
+
+    it('AC3: reverse symmetry — mainland bot with both-side track sees UK cluster', () => {
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([channelFerry]);
+
+      // UK cluster: track from UK ferry port (17,29)
+      const ukCluster = [
+        makeSegment(17, 29, 17, 28),
+        makeSegment(17, 28, 16, 27),
+      ];
+      // Mainland cluster: bot at Paris (28,32), track reaching France ferry port (21,29)
+      const mainlandCluster = [
+        makeSegment(28, 32, 25, 31),
+        makeSegment(25, 31, 21, 29),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 28, col: 32 },
+      );
+      // Both clusters should be connected via the ferry (reverse direction works too)
+      expect(result).toHaveLength(ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC4: multi-hop ferry chain — Ireland→UK→mainland all connected', () => {
+      const irishSeaFerry = {
+        name: 'Irish Sea',
+        pointA: { row: 14, col: 22 },  // Dublin side
+        pointB: { row: 14, col: 26 },  // Wales side
+        cost: 4,
+      };
+      const channelFerry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([irishSeaFerry, channelFerry]);
+
+      // Ireland cluster: bot in Ireland, track reaching Dublin ferry port
+      const irelandCluster = [
+        makeSegment(12, 20, 13, 21),
+        makeSegment(13, 21, 14, 22),
+      ];
+      // UK cluster: track connecting Irish Sea ferry (Wales side) to Channel ferry (UK side)
+      const ukCluster = [
+        makeSegment(14, 26, 15, 27),
+        makeSegment(15, 27, 17, 29),
+      ];
+      // Mainland cluster: track from France ferry port heading south
+      const mainlandCluster = [
+        makeSegment(21, 29, 23, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...irelandCluster, ...ukCluster, ...mainlandCluster],
+        { row: 12, col: 20 },
+      );
+      // All three clusters connected via two ferries
+      expect(result).toHaveLength(irelandCluster.length + ukCluster.length + mainlandCluster.length);
+    });
+
+    it('AC5: Scandinavian ferry — Kobenhavn↔Malmo connects Danish and Swedish clusters', () => {
+      const scandFerry = {
+        name: 'Kobenhavn-Malmo',
+        pointA: { row: 7, col: 44 },  // Kobenhavn side
+        pointB: { row: 8, col: 45 },  // Malmo side
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([scandFerry]);
+
+      // Danish cluster: bot at Kobenhavn, track reaching ferry port
+      const danishCluster = [
+        makeSegment(6, 43, 7, 44),
+      ];
+      // Swedish cluster: track from Malmo ferry port heading north
+      const swedishCluster = [
+        makeSegment(8, 45, 9, 46),
+        makeSegment(9, 46, 10, 47),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...danishCluster, ...swedishCluster],
+        { row: 6, col: 43 },
+      );
+      // Both clusters connected via Scandinavian ferry
+      expect(result).toHaveLength(danishCluster.length + swedishCluster.length);
+    });
+
+    it('AC6: regression guard — no ferry edges stubbed → same result as pre-change BFS', () => {
+      // Empty ferry list = pre-change behavior
+      mockGetFerryEdges.mockReturnValue([]);
+
+      const ukCluster = [
+        makeSegment(17, 26, 17, 27),
+        makeSegment(17, 27, 17, 29),
+      ];
+      const mainlandCluster = [
+        makeSegment(21, 29, 22, 30),
+      ];
+
+      const result = ActionResolver.filterConnectedSegments(
+        [...ukCluster, ...mainlandCluster],
+        { row: 17, col: 26 },
+      );
+      // Without ferry edges, only UK cluster returned — same as old behavior
+      expect(result).toHaveLength(ukCluster.length);
+    });
+
+    it('returns ferryCrossingsIncluded count via filterConnectedSegmentsWithStats', () => {
+      const ferry1 = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      const ferry2 = {
+        name: 'Irish Sea',
+        pointA: { row: 14, col: 22 },
+        pointB: { row: 14, col: 26 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([ferry1, ferry2]);
+
+      // Track touching both sides of English Channel only
+      const segments = [
+        makeSegment(17, 26, 17, 29),   // UK side (touches ferry1.pointA)
+        makeSegment(21, 29, 22, 30),   // France side (touches ferry1.pointB)
+        // No track at ferry2 ports
+      ];
+
+      const result = ActionResolver.filterConnectedSegmentsWithStats(segments, { row: 17, col: 26 });
+      expect(result.ferryCrossingsIncluded).toBe(1);
+      expect(result.segments).toHaveLength(segments.length);
+    });
+
+    it('ferryCrossingsIncluded is zero when no ferry has both-side track', () => {
+      const ferry = {
+        name: 'English Channel',
+        pointA: { row: 17, col: 29 },
+        pointB: { row: 21, col: 29 },
+        cost: 4,
+      };
+      mockGetFerryEdges.mockReturnValue([ferry]);
+
+      // Only UK side track — no mainland track
+      const segments = [
+        makeSegment(17, 26, 17, 29),
+      ];
+
+      const result = ActionResolver.filterConnectedSegmentsWithStats(segments, { row: 17, col: 26 });
+      expect(result.ferryCrossingsIncluded).toBe(0);
     });
   });
 

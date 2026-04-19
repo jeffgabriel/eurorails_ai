@@ -445,7 +445,7 @@ export interface DeliveryPlan {
 
 /** A single stop in a multi-stop delivery route */
 export interface RouteStop {
-  action: 'pickup' | 'deliver';
+  action: 'pickup' | 'deliver' | 'drop';
   loadType: string;
   city: string;
   demandCardId?: number;   // for delivers — which demand card this fulfills
@@ -867,6 +867,10 @@ export interface ResolvedAction {
       reasonText: string;
       costDelta: number;
       anchorClassification: Array<{ coord: [number, number]; namedCity: string | null; kept: boolean }>;
+      /** JIRA-182: Segment count before and after filterConnectedSegments runs */
+      connectedSegmentCount?: { preFilter: number; postFilter: number };
+      /** JIRA-182: Number of ferry-port pairs whose A↔B edge was added during BFS */
+      ferryCrossingsIncluded?: number;
     };
 }
 

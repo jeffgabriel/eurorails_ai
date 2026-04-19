@@ -30,7 +30,7 @@ import {
   PlayerTrackState,
 } from '../../../shared/types/GameTypes';
 import { loadGridPoints, GridCoord, GridPointData, hexDistance, makeKey } from './MapTopology';
-import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength } from '../../../shared/services/majorCityGroups';
+import { getMajorCityGroups, getMajorCityLookup, computeEffectivePathLength, getFerryEdges } from '../../../shared/services/majorCityGroups';
 import { computeBuildSegments } from './computeBuildSegments';
 import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFees';
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
@@ -255,9 +255,20 @@ export class ActionResolver {
     // Filter existingSegments to only the connected component reachable from bot position.
     // This prevents Dijkstra from starting at disconnected cluster endpoints (e.g., remote major cities).
     // Skip filtering when position is null (initialBuild — bot has track but no pawn placement yet).
-    const connectedSegments = hasTrack && snapshot.bot.position
-      ? ActionResolver.filterConnectedSegments(snapshot.bot.existingSegments, snapshot.bot.position)
-      : snapshot.bot.existingSegments;
+    const preFilterCount = snapshot.bot.existingSegments.length;
+    let ferryCrossingsIncluded = 0;
+    let connectedSegments: TrackSegment[];
+    if (hasTrack && snapshot.bot.position) {
+      const filterResult = ActionResolver.filterConnectedSegmentsWithStats(
+        snapshot.bot.existingSegments,
+        snapshot.bot.position,
+      );
+      connectedSegments = filterResult.segments;
+      ferryCrossingsIncluded = filterResult.ferryCrossingsIncluded;
+    } else {
+      connectedSegments = snapshot.bot.existingSegments;
+    }
+    const postFilterCount = connectedSegments.length;
 
     // JIRA-129: Waypoint-chained building — iterate through each waypoint in sequence
     const waypoints = details.waypoints ?? [];
@@ -439,6 +450,8 @@ export class ActionResolver {
         reasonText: resolverOutcome.reasonText,
         costDelta: resolverOutcome.costDelta,
         anchorClassification: resolverOutcome.anchorClassification,
+        connectedSegmentCount: { preFilter: preFilterCount, postFilter: postFilterCount },
+        ferryCrossingsIncluded,
       };
       return { success: true, plan, buildResolverLog };
     }
@@ -1409,12 +1422,26 @@ export class ActionResolver {
    * Filter segments to only those in the connected component containing `position`.
    * Uses BFS on segment adjacency. Major city red areas act as implicit edges:
    * two segment endpoints touching the same major city's outposts are connected.
+   * Ferry-port pairs act as a third adjacency class: when the bot has track touching
+   * both landings of a ferry, those landings are treated as connected.
    */
   static filterConnectedSegments(
     segments: TrackSegment[],
     position: { row: number; col: number },
   ): TrackSegment[] {
-    if (segments.length === 0) return [];
+    return ActionResolver.filterConnectedSegmentsWithStats(segments, position).segments;
+  }
+
+  /**
+   * Internal variant of filterConnectedSegments that also returns diagnostic metadata.
+   * Returns both the filtered segments and the number of ferry-port pairs whose A↔B
+   * edge was added to the BFS adjacency graph (zero if no cross-ferry track exists).
+   */
+  static filterConnectedSegmentsWithStats(
+    segments: TrackSegment[],
+    position: { row: number; col: number },
+  ): { segments: TrackSegment[]; ferryCrossingsIncluded: number } {
+    if (segments.length === 0) return { segments: [], ferryCrossingsIncluded: 0 };
 
     // Build adjacency: position key → set of connected position keys
     const adjacency = new Map<string, Set<string>>();
@@ -1468,6 +1495,19 @@ export class ActionResolver {
       }
     }
 
+    // Add ferry-port adjacency edges: when the bot has track touching both landings
+    // of a ferry crossing, treat those landings as connected (same as major-city red area).
+    // This allows the BFS to see the bot's mainland network from an island position.
+    let ferryCrossingsIncluded = 0;
+    for (const ferry of getFerryEdges()) {
+      const keyA = `${ferry.pointA.row},${ferry.pointA.col}`;
+      const keyB = `${ferry.pointB.row},${ferry.pointB.col}`;
+      if (endpointKeys.has(keyA) && endpointKeys.has(keyB)) {
+        addEdge(keyA, keyB);
+        ferryCrossingsIncluded++;
+      }
+    }
+
     // Also check if bot position is at a major city — add its outposts to adjacency
     const posKey = `${position.row},${position.col}`;
     const botCityName = majorCityLookup.get(posKey);
@@ -1504,11 +1544,13 @@ export class ActionResolver {
     }
 
     // Filter segments: keep only those where both endpoints are in the visited set
-    return segments.filter(seg => {
+    const filtered = segments.filter(seg => {
       const fromKey = `${seg.from.row},${seg.from.col}`;
       const toKey = `${seg.to.row},${seg.to.col}`;
       return visited.has(fromKey) && visited.has(toKey);
     });
+
+    return { segments: filtered, ferryCrossingsIncluded };
   }
 
   /**
