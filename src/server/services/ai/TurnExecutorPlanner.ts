@@ -31,6 +31,7 @@ import {
   GridPoint,
   RouteStop,
   TrainType,
+  TerrainType,
   TRAIN_PROPERTIES,
   LlmAttempt,
 } from '../../../shared/types/GameTypes';
@@ -487,6 +488,21 @@ export class TurnExecutorPlanner {
           context.position = { row: dest.row, col: dest.col, city: cityName };
           snapshot.bot.position = { row: dest.row, col: dest.col };
           console.log(`${tag} Context updated: position=${dest.row},${dest.col} (${cityName ?? 'no city'})`);
+        }
+
+        // Ferry arrival guard: if the bot just moved onto a ferry port, the game
+        // rules require it to stop for the entire turn. The crossing itself and
+        // onward travel happen on the NEXT turn at half speed. Break the loop now
+        // so resolveMove is not called again with the bot sitting at a ferry port
+        // (which would trigger resolveFerryCrossing and illegally cross the ferry).
+        if (dest) {
+          const gridPointMap = loadGridPoints();
+          const destTerrain = gridPointMap.get(`${dest.row},${dest.col}`)?.terrain;
+          if (destTerrain === TerrainType.FerryPort) {
+            trace.a2.terminationReason = 'ferry_arrival';
+            console.log(`${tag} [Ferry] Turn ends at ferry port (${dest.row},${dest.col}) — bot must wait until next turn to cross`);
+            break;
+          }
         }
 
         // Continue loop — bot may deliver/pickup at the destination with remaining budget

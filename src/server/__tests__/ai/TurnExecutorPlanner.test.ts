@@ -9,7 +9,7 @@
  */
 
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
-import { AIActionType } from '../../../shared/types/GameTypes';
+import { AIActionType, TerrainType } from '../../../shared/types/GameTypes';
 import type {
   StrategicRoute,
   RouteStop,
@@ -2660,5 +2660,70 @@ describe('TurnExecutorPlanner.execute — JIRA-173 early delivery execution', ()
     expect(mockTurnExecutorExecutePlan).toHaveBeenCalled();
     // But capture() should NOT be called (JIRA-165 gate)
     expect(mockCapture).not.toHaveBeenCalled();
+  });
+});
+
+// ── execute() — ferry arrival guard ───────────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — ferry arrival guard', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+  });
+
+  /**
+   * R4: When a MOVE iteration ends at a FerryPort terrain node and there is
+   * remaining budget, the composition loop must break immediately and record
+   * terminationReason = 'ferry_arrival'. resolveMove must NOT be called a
+   * second time (which would trigger resolveFerryCrossing and illegally cross
+   * the ferry in the same turn).
+   *
+   * Game rule: a train arriving at a ferry port must stop for the entire turn.
+   * The ferry crossing and onward movement happen on the NEXT turn at half speed.
+   */
+  it('terminates loop with ferry_arrival and emits one MOVE plan when path ends at a FerryPort', async () => {
+    // Ferry port destination: Harwich (19,34)
+    const HARWICH = { row: 19, col: 34 };
+
+    // resolveMove returns a plan whose path ends at a FerryPort.
+    // remainingBudget after this move is still > 0 (3 mileposts consumed out of 9).
+    const ferrymovePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 15, col: 30 }, { row: 17, col: 32 }, { row: HARWICH.row, col: HARWICH.col }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+    mockResolveMove.mockResolvedValue({ success: true, plan: ferrymovePlan });
+    mockComputeEffectivePathLength.mockReturnValue(3); // 3 out of 9 consumed → 6 remaining
+
+    // loadGridPoints returns a map with the destination marked as FerryPort terrain.
+    const ferryGridMap = new Map<string, { terrain: TerrainType }>();
+    ferryGridMap.set(`${HARWICH.row},${HARWICH.col}`, { terrain: TerrainType.FerryPort });
+    mockLoadGridPoints.mockReturnValue(ferryGridMap);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Holland', 'Cheese')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'London', row: 15, col: 30 },
+      citiesOnNetwork: ['Holland'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+    // Provide gridPoints array so context.position update block runs
+    const gridPoints = [{ row: HARWICH.row, col: HARWICH.col }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
+
+    // (a) Exactly one MOVE plan — the loop must not have continued to a second resolveMove call
+    expect(result.plans.filter(p => p.type === AIActionType.MoveTrain)).toHaveLength(1);
+    expect(mockResolveMove).toHaveBeenCalledTimes(1);
+
+    // (b) terminationReason is 'ferry_arrival'
+    expect(result.compositionTrace.a2.terminationReason).toBe('ferry_arrival');
   });
 });
