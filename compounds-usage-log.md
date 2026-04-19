@@ -3,6 +3,7 @@
 Tracks when the compounds skill was used and what benefit it provided.
 
 | Date | Task/Context | Benefit |
+| 2026-04-17 | Ferry transit bug reproduction test (JIRA-ferryTruncation) | Ran compounds agent-prompt cli-usage to get CLI reference. Used compounds search to explore TurnExecutorPlanner ferry handling but index was stale (returned UI components). Re-ran compounds index to update 6,424 entities. Key architectural insight came from reading ActionResolver.ts resolveMove (lines 413-667) and TurnExecutorPlanner.ts movement loop (lines 225-588) directly — compounds search wasn't effective for this specific query after re-index. Root cause discovered through code reading: TurnExecutorPlanner calls resolveMove twice in the same turn when bot arrives at a ferry port mid-turn with remaining budget, allowing an illegal same-turn ferry crossing. |
 | 2026-03-12 | JIRA-103: Post-delivery route retry loop complexity assessment | Compounds status confirmed 5781 entities indexed; incremental index added 1 file, updated 4. Summary gave project overview (5809 entities, 3905 in tests). 5 semantic searches ("planRoute post-delivery retry", "AIStrategyEngine Stage 3d route planning", "RouteValidator validate route", "LLMStrategyBrain planRoute", "heuristic fallback no route") surfaced full architecture: AIStrategyEngine Stage 3d post-delivery planRoute call (line 514), LLMStrategyBrain.planRoute retry loop with MAX_LLM_RETRIES=2 and error feedback, RouteValidator.validate returning RouteValidationResult {valid, prunedRoute, errors[]}, heuristicFallback as fallback. Impact analysis for AIStrategyEngine returned no results (entity name mismatch). Flows trace from takeTurn entry point showed 14 flows through build/compose paths. Identified that planRoute already has internal retry (up to 3 attempts) with validation error feedback, but the issue is about cost estimation accuracy in RouteValidator vs actual pathfinding costs. |
 | 2026-03-11 | JIRA-89: findDeadLoads bug investigation — dead loads detected but never dropped | Compounds search x3 ("findDeadLoads dead load detection", "TurnPlanDropLoad drop load action creation", "secondary delivery dead loads effective capacity") mapped the full architecture: PlanExecutor.findDeadLoads (line 546), AIStrategyEngine dead-load logging (line 216-226), TurnComposer DropLoad composition (line 148-199), ActionResolver.resolveDropLoad (line 531), TurnExecutor.handleDropLoad (line 744). Impact analysis: findDeadLoads has 4 affected entities (takeTurn -> onTurnChange -> emitTurnChange/onHumanReconnect). Flows trace: takeTurn -> heuristicFallback -> resolveDropLoad path exists but findDeadLoads never feeds into it. Identified exact gap: AIStrategyEngine logs dead loads and adjusts effectiveLoads math but never creates TurnPlanDropLoad actions to prepend to the turn plan. |
 | 2026-03-09 | JIRA-73: Initial build budget underuse — why bot only spends 5M of 20M | Compounds search: "how build target is selected during initial build turns" surfaced PlanExecutor.executeInitialBuild, findInitialBuildTarget, computeBuildSegments architecture. Second search: "computeBuildSegments budget spending and when it stops" revealed tiebreaker logic (closest→cheapest→most segments at line 492-503) and ferry waypoint handling. Structural query: "computeBuildSegments -r calls" traced callers (ActionResolver.resolveBuild, tests). Compounds mapped the full flow: PlanExecutor picks ONE target → ActionResolver.resolveBuild calls computeBuildSegments ONCE → returns cheapest path → TurnComposer skips Phase B for initialBuild. Identified 4 compounding issues across 3 files. |
@@ -345,3 +346,31 @@ Compounds search revealed that `computeBuildSegments.ts` already had a complete 
 | 2026-03-13 | Fix stale debug overlay route info | Compounds query identified DebugOverlay rendering and bot:turn-complete payload path. Added activeRoute to BotTurnResult and socket payload, and clear entry.activeRoute when payload explicitly provides null to avoid stale display. |
 
 | 2026-03-13 | Investigate haiku LLM failure at t44 | Compounds query encountered local DB connection errors; proceeded with log inspection and code review. Traced Fish@Unknown to ContextBuilder supplyCity "Unknown" when load on train and RouteValidator accepting Unknown as a matching supply city. |
+
+## 2026-03-26 — Remove victoryBonus from scoreDemand()
+
+**Workflow ID**: 009d779f-fa84-4758-9d76-49264210d9bd
+**Project ID**: 1ba35091-5f7c-46c0-8464-b4040dc886f7
+
+**Tools used**:
+- `compounds init-hooks claude` — installed workflow hooks
+- `compounds status` — detected drift; confirmed auth OK
+- `compounds index .` — reindexed (incremental, 6772 entities)
+- `compounds summary` — confirmed codebase is TypeScript monorepo
+- `compounds search "scoreDemand victoryBonus corridorValue"` — did not surface ContextBuilder.ts directly (semantic scores too low); fell back to targeted Grep/Read after Compounds confirmed search direction
+- `compounds search "computeCorridorValue victoryMajorCities"` — similar result
+
+**Benefit provided**:
+- Provided codebase summary (language split, directory structure, entity counts) confirming server-centric TypeScript architecture
+- Confirmed no monorepo workspace isolation issues
+- Status check caught index drift before planning began
+- Semantic search confirmed the scoring logic was not widely distributed across files (no hits in non-script files), supporting the single-file scope assessment
+
+**Limitation noted**: Semantic search did not rank ContextBuilder.ts in top 20 for either query; game-analysis.ts dominated results. Direct file reads via Grep were needed for code-level investigation.
+
+| 2026-04-10 | JIRA-171: A3 frontier move directional guard bug fix | Compounds tracked planning/implementation workflow. Semantic search was weak for this domain — multiple queries failed to surface TurnExecutorPlanner.ts or AIStrategyEngine.ts. Structural query for BotTurnTrigger returned no results despite the class existing. Direct file reads and Grep were needed to trace the bug. Pattern detection correctly identified this as an isolated bug fix. |
+
+| 2026-04-15 | JIRA-177: Build Advisor LLM Context Improvements | Compounds managed full plan→spec→task→implement workflow. Semantic search surfaced computeBuildSegments.ts and getWaterCrossingCost correctly. Pattern detection identified gaming-game-state-perception as the direct pattern — accurate. Reference architecture gaming-llm-game-agent matched perfectly. Implementation subagent completed both tasks in one commit with 17 passing tests. |
+
+## 2026-04-19 — Build advisor investigation (game 189a6327)
+Used `compounds search` + `compounds query` to locate BuildAdvisor / BuildRouteResolver fast. Cross-referenced with game NDJSON log to pinpoint exact turn/branch for 3 abandonment failures. Compounds found `closest-to-target-fallback` rule branch as the common root cause across all 3 spurs.
