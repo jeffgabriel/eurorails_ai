@@ -34,20 +34,103 @@
  * R6: No DB, server, or browser required; relies only on configuration/ JSON files.
  */
 
-// NO mocks for: computeTrackUsageForMove, loadGridPoints, getFerryEdges
-// We only mock computeBuildSegments (unused in resolveMove) to avoid side effects.
+// NO mocks for: computeTrackUsageForMove, loadGridPoints, getFerryEdges, ActionResolver
+// Mocked: computeBuildSegments (unused in resolveMove) + TurnExecutorPlanner heavy deps
 jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(() => []),
 }));
 
+// ─── Mocks for TurnExecutorPlanner dependencies (R3 only) ────────────────────
+// These ensure TurnExecutorPlanner.execute() can run without DB/network access.
+// ActionResolver and MapTopology (loadGridPoints) are intentionally NOT mocked so
+// the real ferry truncation + arrival guard logic exercises live.
+jest.mock('../../services/ai/routeHelpers', () => ({
+  isStopComplete: jest.fn(() => false),
+  resolveBuildTarget: jest.fn(() => null),
+  getNetworkFrontier: jest.fn(() => []),
+}));
+
+jest.mock('../../services/ai/BotMemory', () => ({
+  getMemory: jest.fn(() => ({
+    currentBuildTarget: null,
+    turnsOnTarget: 0,
+    lastAction: null,
+    noProgressTurns: 0,
+    consecutiveDiscards: 0,
+    deliveryCount: 0,
+    totalEarnings: 0,
+    turnNumber: 0,
+    activeRoute: null,
+    turnsOnRoute: 0,
+    routeHistory: [],
+    lastReasoning: null,
+    lastPlanHorizon: null,
+    previousRouteStops: null,
+    consecutiveLlmFailures: 0,
+  })),
+}));
+
+jest.mock('../../services/ai/TripPlanner', () => ({
+  TripPlanner: jest.fn().mockImplementation(() => ({
+    planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
+  })),
+}));
+
+jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
+  RouteEnrichmentAdvisor: {
+    enrich: jest.fn(async (route: unknown) => route),
+  },
+}));
+
+jest.mock('../../services/ai/BuildAdvisor', () => ({
+  BuildAdvisor: {
+    advise: jest.fn().mockResolvedValue(null),
+    retryWithSolvencyFeedback: jest.fn().mockResolvedValue(null),
+    lastDiagnostics: {},
+  },
+}));
+
+jest.mock('../../services/ai/TurnExecutor', () => ({
+  TurnExecutor: {
+    executePlan: jest.fn().mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 200,
+      durationMs: 1,
+      payment: 0,
+      newCardId: null,
+    }),
+  },
+}));
+
+jest.mock('../../services/ai/WorldSnapshotService', () => ({
+  capture: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../../services/ai/ContextBuilder', () => ({
+  ContextBuilder: {
+    rebuildDemands: jest.fn(() => []),
+  },
+}));
+
+jest.mock('../../../shared/constants/gameRules', () => ({
+  TURN_BUILD_BUDGET: 20,
+}));
+// ─── End TurnExecutorPlanner mocks ───────────────────────────────────────────
+
 import { ActionResolver } from '../../services/ai/ActionResolver';
+import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import {
   WorldSnapshot,
   TrainType,
   TerrainType,
   TrackSegment,
   TurnPlanMoveTrain,
+  AIActionType,
 } from '../../../shared/types/GameTypes';
+import type { StrategicRoute, GameContext } from '../../../shared/types/GameTypes';
 import { getFerryEdges } from '../../../shared/services/majorCityGroups';
 
 // ─── Geometry constants ───────────────────────────────────────────────────────
@@ -133,101 +216,116 @@ function makeSnapshot(position: { row: number; col: number }, opts: {
   };
 }
 
-// ─── R3 Main failing test ─────────────────────────────────────────────────────
+// ─── R3 Main test — drives through TurnExecutorPlanner ───────────────────────
 
-describe('ActionResolver.resolveMove — ferry truncation (R3)', () => {
+describe('TurnExecutorPlanner.execute — ferry arrival guard (R3)', () => {
   /**
-   * R3: Reproduce the multi-move composition bug from the game log.
+   * R3: Verify that TurnExecutorPlanner.execute() correctly invokes the ferry
+   * arrival guard introduced in commit 5ad754e.
    *
-   * Step 1: Bot starts at (15,30), resolveMove → path stops at Harwich (correct).
-   *         Ferry truncation guard fires, path ends at (19,34).
+   * Scenario (mirrors game log turn 34):
+   *   Bot starts at (15,30), route stop = pickup at Holland.
+   *   Holland IS on the network (citiesOnNetwork includes 'Holland'), so the
+   *   MOVE branch fires. ActionResolver.resolveMove (REAL) returns a path that
+   *   stops at Harwich (19,34) due to the ferry truncation guard in ActionResolver.
    *
-   * Step 2: Context updates bot.position to Harwich. remainingBudget > 0.
-   *         resolveMove called AGAIN from Harwich (bot "arrived this turn").
-   *         resolveFerryCrossing fires → bot crosses to Ijmuiden.
+   *   TurnExecutorPlanner then checks the terminal milepost via loadGridPoints()
+   *   (REAL). It finds TerrainType.FerryPort at (19,34) and breaks the loop with
+   *   terminationReason = 'ferry_arrival' — preventing a second resolveMove call
+   *   that would illegally cross the ferry in the same turn.
    *
-   * This second call is the bug: the bot arrived at Harwich mid-turn (not at the
-   * start of a new turn), so crossing the ferry violates the game rule.
-   *
-   * The test asserts that the SECOND resolveMove call should return success:false
-   * (ferry crossing not permitted mid-turn arrival). Currently it returns success:true
-   * and crosses the ferry — that is the failing assertion (AC1).
+   * Assertions:
+   *   AC1: Exactly one MoveTrain plan is emitted (loop did not continue).
+   *   AC2: The final step of that plan is Harwich (19,34).
+   *   AC3: No step in the plan equals Ijmuiden (19,38) — ferry not crossed.
+   *   AC4: compositionTrace.a2.terminationReason === 'ferry_arrival'.
    */
-  it('second resolveMove from ferry-port mid-turn arrival must not cross the ferry (expected FAIL on current branch)', async () => {
-    // R5: capture console.warn to record ferry truncation and crossing logs
-    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
+  let mockShouldDeferBuild: jest.SpyInstance;
+  let mockRevalidate: jest.SpyInstance;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Spy on TurnExecutorPlanner instance methods that are not mocked at module level
+    mockShouldDeferBuild = jest.spyOn(TurnExecutorPlanner, 'shouldDeferBuild').mockReturnValue({
+      deferred: false,
+      reason: 'build_needed',
+      trackRunway: 0,
+      intermediateStopTurns: 0,
+      effectiveRunway: 0,
+    });
+    mockRevalidate = jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((route: StrategicRoute) => route);
+  });
+
+  afterEach(() => {
+    mockShouldDeferBuild.mockRestore();
+    mockRevalidate.mockRestore();
+  });
+
+  it('emits exactly one MoveTrain plan ending at Harwich, no Ijmuiden step, terminationReason ferry_arrival', async () => {
     const snapshot = makeSnapshot(BOT_START);
 
-    // ── Step 1: First move from (15,30) — should stop at Harwich ─────────────
-    const firstMoveResult = await ActionResolver.resolveMove(
-      { to: 'Holland' },
-      snapshot,
-      9,  // full speed budget
+    // Route: one pickup stop at Holland — on the network so MOVE branch executes
+    const route: StrategicRoute = {
+      stops: [{ action: 'pickup', city: 'Holland', loadType: 'Cheese' }],
+      currentStopIndex: 0,
+      phase: 'travel',
+      startingCity: 'London',
+      createdAtTurn: 34,
+      reasoning: 'ferry R3 test',
+    };
+
+    // Context: bot is at (15,30), Holland is on the network, speed = 9 (Freight)
+    const context: GameContext = {
+      position: { row: BOT_START.row, col: BOT_START.col },
+      money: 200,
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      demands: [],
+      citiesOnNetwork: ['Holland'],
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      totalMajorCities: 12,
+      trackSummary: '',
+      turnBuildCost: 0,
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: [],
+      canUpgrade: false,
+      canBuild: false,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'travel',
+      turnNumber: 34,
+      trainType: 'Freight',
+    };
+
+    // gridPoints: provide Harwich so context.position update block can run.
+    // TerrainType is not required here — TurnExecutorPlanner calls loadGridPoints()
+    // internally (real) to detect FerryPort.
+    const gridPoints = [{ row: HARWICH.row, col: HARWICH.col }] as any;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
+
+    // AC1: Exactly one MoveTrain plan — loop terminated after first move
+    const movePlans = result.plans.filter(p => p.type === AIActionType.MoveTrain);
+    expect(movePlans).toHaveLength(1);
+
+    // AC2: The final step of the MoveTrain plan is Harwich (19,34)
+    const movePlan = movePlans[0] as TurnPlanMoveTrain;
+    const finalStep = movePlan.path[movePlan.path.length - 1];
+    expect(finalStep).toEqual(HARWICH);
+
+    // AC3: No step in the path equals Ijmuiden (19,38) — ferry was not crossed
+    const pathIncludesIjmuiden = movePlan.path.some(
+      p => p.row === IJMUIDEN.row && p.col === IJMUIDEN.col,
     );
+    expect(pathIncludesIjmuiden).toBe(false);
 
-    // Step 1 must succeed and stop at Harwich
-    expect(firstMoveResult.success).toBe(true);
-    const firstPlan = firstMoveResult.plan as TurnPlanMoveTrain;
-    expect(firstPlan).toBeDefined();
-
-    const firstFinalStep = firstPlan.path[firstPlan.path.length - 1];
-    // First move should stop at Harwich — the ferry truncation guard fires
-    expect(firstFinalStep).toEqual(HARWICH);
-
-    // R5: record whether ferry truncation warning fired in step 1
-    const step1WarnFired = warnSpy.mock.calls.some(
-      call => typeof call[0] === 'string' && call[0].includes('[Ferry] Path truncated at ferry port'),
-    );
-    expect(typeof step1WarnFired).toBe('boolean');  // R5 probe: always passes
-    warnSpy.mockClear();
-
-    // ── Step 2: Simulate composition — update position, consume budget ────────
-    // TurnExecutorPlanner computes milesConsumed and subtracts from remainingBudget.
-    // Path (15,30)→(16,31)→(16,32)→(17,32)→(17,33)→(18,34)→(19,34) = 6 edges.
-    // No intra-city hops on this path → effective = 6 mileposts consumed.
-    const milesConsumedStep1 = firstPlan.path.length - 1;  // 6 edges
-    const remainingBudget = Math.max(0, 9 - milesConsumedStep1);  // 9 - 6 = 3
-
-    // Composition updates bot position to where first move ended (Harwich)
-    snapshot.bot.position = { ...firstFinalStep };
-
-    // ── Step 3: Second resolveMove — bot is now AT Harwich with budget > 0 ────
-    // Per game rules, the bot arrived at the ferry port THIS turn.
-    // It must wait until next turn to cross. This call should NOT cross the ferry.
-    //
-    // EXPECTED TO FAIL (AC1): Currently resolveFerryCrossing fires when bot.position
-    // is a ferry port, regardless of whether it just arrived or started there.
-    const secondMoveResult = await ActionResolver.resolveMove(
-      { to: 'Holland' },
-      snapshot,
-      remainingBudget,
-    );
-
-    warnSpy.mockRestore();
-
-    // AC2: The failure message should name the offending milepost.
-    // The second move result should NOT cross the ferry:
-    //   - Either success:false (ferry crossing not permitted mid-turn arrival), or
-    //   - success:true but path stays on England side (no Ijmuiden or beyond)
-    //
-    // Currently this FAILS because the second call returns success:true with
-    // path starting at Ijmuiden (19,38) — proving the ferry was crossed.
-    if (secondMoveResult.success) {
-      const secondPlan = secondMoveResult.plan as TurnPlanMoveTrain;
-      const pathIncludesIjmuiden = secondPlan.path.some(
-        p => p.row === IJMUIDEN.row && p.col === IJMUIDEN.col,
-      );
-      const pathFirstStep = secondPlan.path[0];
-
-      // The second move must NOT start at Ijmuiden (that means the ferry was crossed).
-      // This assertion is expected to FAIL on current branch.
-      expect(pathFirstStep).not.toEqual(IJMUIDEN);
-
-      // And must NOT include Ijmuiden anywhere in the path.
-      expect(pathIncludesIjmuiden).toBe(false);
-    }
-    // If success:false, that's acceptable — ferry mid-turn crossing was correctly rejected.
+    // AC4: terminationReason is 'ferry_arrival'
+    expect(result.compositionTrace.a2.terminationReason).toBe('ferry_arrival');
   });
 });
 
