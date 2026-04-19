@@ -2727,3 +2727,66 @@ describe('TurnExecutorPlanner.execute — ferry arrival guard', () => {
     expect(result.compositionTrace.a2.terminationReason).toBe('ferry_arrival');
   });
 });
+
+// ── JIRA-181: DROP stop execution ─────────────────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-181 DROP stop', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+  });
+
+  it('active route with stop.action === "drop" emits a DropLoad TurnPlan via ActionResolver.resolve', async () => {
+    const dropPlan = {
+      type: AIActionType.DropLoad,
+      load: 'Sheep',
+      city: 'Berlin',
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: dropPlan });
+
+    // Also need a delivery stop so the route is not "pickup-only" after drop
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Paris',
+      cardId: 1,
+      payout: 15,
+    };
+    // Second call to resolve is for the deliver (but the loop terminates after the drop in this test)
+    mockResolve.mockResolvedValueOnce({ success: true, plan: dropPlan });
+
+    const route = makeRoute({
+      stops: [
+        { action: 'drop', loadType: 'Sheep', city: 'Berlin' },
+        makeStop('pickup', 'Essen', 'Coal'),
+        makeStop('deliver', 'Paris', 'Coal'),
+      ],
+      currentStopIndex: 0,
+    });
+
+    const context = makeContext({
+      position: { city: 'Berlin', row: 5, col: 5 },
+      loads: ['Sheep', 'Coal'],
+    });
+    const snapshot = {
+      ...makeSnapshot(),
+      bot: { ...makeSnapshot().bot, loads: ['Sheep', 'Coal'] },
+    } as unknown as WorldSnapshot;
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // Should have called ActionResolver.resolve with DROP action
+    const resolveCall = (mockResolve as jest.Mock).mock.calls[0];
+    expect(resolveCall[0]).toMatchObject({
+      action: 'DROP',
+      details: { load: 'Sheep', city: 'Berlin' },
+    });
+
+    // Should have emitted a DropLoad plan
+    const dropEmitted = result.plans.find(p => p.type === AIActionType.DropLoad);
+    expect(dropEmitted).toBeDefined();
+    expect((dropEmitted as any).load).toBe('Sheep');
+  });
+});

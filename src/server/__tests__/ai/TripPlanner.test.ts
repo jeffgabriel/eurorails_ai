@@ -362,7 +362,7 @@ describe('TripPlanner', () => {
     it('should subtract build costs from netValue when scoring', async () => {
       // Coal: payout 15, build cost 5, turns 3 → netValue 10, score ≈ 3.3
       // Wine: payout 12, build cost 0, turns 3 → netValue 12, score = 4
-      // Wine should win due to lower build cost
+      // Wine should win due to lower build cost — LLM chooses Wine (index 1)
       const response = buildLlmResponse([
         {
           stops: [
@@ -378,7 +378,7 @@ describe('TripPlanner', () => {
           ],
           reasoning: 'Wine no build cost',
         },
-      ]);
+      ], 1 /* chosenIndex = Wine (index 1), the higher-scoring candidate */);
 
       const context = makeContext({
         demands: [
@@ -395,10 +395,10 @@ describe('TripPlanner', () => {
 
       expect(result).not.toBeNull();
       // Candidates are sorted by score desc: Wine (score=4) first, Coal (score≈3.3) second
-      // chosen = 0 because best is first after sorting
-      expect(result!.chosen).toBe(0);
       expect(result!.candidates[0].netValue).toBe(12); // Wine sorted first (higher score)
       expect(result!.candidates[1].netValue).toBe(10); // Coal sorted second
+      // LLM chose Wine (index 1 = sorted position 0), so Wine wins
+      expect(result!.route.stops[0].loadType).toBe('Wine');
     });
 
     it('should prevent division by zero on estimatedTurns=0', async () => {
@@ -1355,6 +1355,149 @@ describe('TripPlanner', () => {
           method: 'planTrip',
         });
       }
+    });
+  });
+
+  // ── JIRA-181: chosenIndex selector ───────────────────────────────────────────
+
+  describe('JIRA-181: chosenIndex selector', () => {
+    it('chosenIndex: 0 with Candidate 0 validating and Candidate 2 scoring higher internally → Candidate 0 wins', async () => {
+      // Candidate 0: low-payout route (lower internal score) — but LLM chose it
+      // Candidate 2: high-payout route (higher internal score)
+      // The LLM's chosenIndex=0 should be honored.
+      (RouteValidator.validate as jest.Mock).mockImplementation((route: StrategicRoute) => {
+        // Both candidates validate, returning their stops as-is
+        return { valid: true, errors: [] };
+      });
+
+      const response = buildLlmResponse(
+        [
+          {
+            stops: [
+              { action: 'pickup', load: 'Coal', city: 'Essen' },
+              { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 8 },
+            ],
+            reasoning: 'Candidate 0 — low payout',
+          },
+          {
+            stops: [
+              { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+              { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 30 },
+            ],
+            reasoning: 'Candidate 1 — medium',
+          },
+          {
+            stops: [
+              { action: 'pickup', load: 'Steel', city: 'Ruhr' },
+              { action: 'deliver', load: 'Steel', city: 'Wien', demandCardId: 3, payment: 60 },
+            ],
+            reasoning: 'Candidate 2 — high payout (would win on score alone)',
+          },
+        ],
+        0, // chosenIndex = 0
+      );
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 8, estimatedTurns: 2 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 30, estimatedTurns: 4 }),
+          makeDemand({ cardIndex: 3, loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Wien', payout: 60, estimatedTurns: 5 }),
+        ],
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 300, output: 150 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+
+      // The route should reflect LLM's choice (Candidate 0), not the highest-scoring one (Candidate 2)
+      expect(result.route.reasoning).toBe('Candidate 0 — low payout');
+    });
+
+    it('chosenIndex: 2 with Candidate 2 having zero feasible stops after validation → falls back to highest-scoring valid candidate', async () => {
+      // Candidate 0 validates fine. Candidate 2 gets fully pruned (returns prunedRoute with no stops).
+      (RouteValidator.validate as jest.Mock).mockImplementation((route: StrategicRoute) => {
+        // Candidate 2 is identified by its reasoning text
+        if (route.reasoning === 'Candidate 2 — invalid') {
+          return { valid: false, errors: ['All stops infeasible'] };
+        }
+        return { valid: true, errors: [] };
+      });
+
+      const response = buildLlmResponse(
+        [
+          {
+            stops: [
+              { action: 'pickup', load: 'Coal', city: 'Essen' },
+              { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            ],
+            reasoning: 'Candidate 0 — valid',
+          },
+          {
+            stops: [
+              { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+              { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+            ],
+            reasoning: 'Candidate 1 — valid',
+          },
+          {
+            stops: [
+              { action: 'pickup', load: 'Junk', city: 'Nowhere' },
+            ],
+            reasoning: 'Candidate 2 — invalid',
+          },
+        ],
+        2, // chosenIndex = 2 (but Candidate 2 is fully invalid)
+      );
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2 }),
+          makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, estimatedTurns: 3 }),
+        ],
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 300, output: 150 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+
+      // Candidate 2 failed validation, so should fall back to best valid candidate (0 or 1)
+      expect(result.chosen).not.toBe(2);
+      expect(result.route.reasoning).not.toBe('Candidate 2 — invalid');
+    });
+
+    it('chosenIndex out of range → falls back to internal score', async () => {
+      (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+
+      const response = buildLlmResponse(
+        [
+          {
+            stops: [
+              { action: 'pickup', load: 'Coal', city: 'Essen' },
+              { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+            ],
+            reasoning: 'Candidate 0',
+          },
+        ],
+        99, // chosenIndex out of range
+      );
+
+      const context = makeContext({
+        demands: [makeDemand()],
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+
+      // Should fall back to valid candidate 0
+      expect(result.chosen).toBe(0);
+      expect(result.route.reasoning).toBe('Candidate 0');
     });
   });
 });

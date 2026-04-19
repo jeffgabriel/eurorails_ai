@@ -34,6 +34,8 @@ export interface TripCandidate {
   buildCostEstimate: number;
   usageFeeEstimate: number;
   reasoning: string;
+  /** Original 0-based index in the LLM's candidates array (before sorting by score) */
+  llmIndex: number;
 }
 
 export interface TripPlanResult {
@@ -171,10 +173,28 @@ export class TripPlanner {
           continue;
         }
 
-        // Pick the best candidate (highest score)
+        // Pick the best candidate — honor LLM's chosenIndex when chosen candidate validates;
+        // fall back to internal score when chosenIndex is out of range or has no feasible stops.
+        // Note: candidates[] is sorted by score; llmIndex tracks each entry's original LLM position.
         const bestIdx = candidates.reduce((best, c, i) =>
           c.score > candidates[best].score ? i : best, 0);
-        const chosen = candidates[bestIdx];
+
+        let selectedIdx: number;
+        const ci = parsed.chosenIndex;
+        // Find the sorted position of the LLM's chosen candidate by its original llmIndex
+        const chosenCandidateIdx = candidates.findIndex(c => c.llmIndex === ci);
+        if (chosenCandidateIdx >= 0 && candidates[chosenCandidateIdx].stops.length > 0) {
+          selectedIdx = chosenCandidateIdx;
+          console.log(`[TripPlanner] chosenIndex honored: LLM picked candidate ${ci} (sorted pos ${chosenCandidateIdx}, ${candidates[chosenCandidateIdx].stops.length} feasible stops)`);
+        } else {
+          selectedIdx = bestIdx;
+          const reason = chosenCandidateIdx < 0
+            ? `chosenIndex ${ci} not found in validated candidates (LLM's pick was fully invalid)`
+            : `chosenIndex ${ci} has 0 feasible stops after validation`;
+          console.log(`[TripPlanner] Falling back to internal score: candidate at sorted pos ${bestIdx} (${reason})`);
+        }
+
+        const chosen = candidates[selectedIdx];
 
         // Convert to StrategicRoute
         const route: StrategicRoute = {
@@ -195,7 +215,7 @@ export class TripPlanner {
 
         return {
           candidates,
-          chosen: bestIdx,
+          chosen: selectedIdx,
           route,
           llmLatencyMs: latencyMs,
           llmTokens: response.usage,
@@ -260,13 +280,14 @@ export class TripPlanner {
     const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
     const validCandidates: TripCandidate[] = [];
 
-    for (const rawCandidate of parsed.candidates) {
+    for (let llmIdx = 0; llmIdx < parsed.candidates.length; llmIdx++) {
+      const rawCandidate = parsed.candidates[llmIdx];
       // Convert LLM stops to RouteStop format
       // JIRA-164: Filter out sentinel city names that LLMs may hallucinate from context serialization
       const stops: RouteStop[] = rawCandidate.stops
         .filter(s => s.city !== 'OnTrain' && s.city !== '(already carried)')
         .map(s => ({
-          action: s.action.toLowerCase() as 'pickup' | 'deliver',
+          action: s.action.toLowerCase() as 'pickup' | 'deliver' | 'drop',
           loadType: s.load,
           city: s.city,
           demandCardId: s.demandCardId,
@@ -378,6 +399,7 @@ export class TripPlanner {
         buildCostEstimate: totalBuildCost,
         usageFeeEstimate: 0, // no opponent track awareness per spec
         reasoning: rawCandidate.reasoning,
+        llmIndex: llmIdx,
       });
     }
 

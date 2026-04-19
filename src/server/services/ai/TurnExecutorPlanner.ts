@@ -286,6 +286,16 @@ export class TurnExecutorPlanner {
             `pickup(${currentStop.loadType}@${targetCity})`,
             tag,
           );
+        } else if (currentStop.action === 'drop') {
+          // DROP: advance stop index (same pattern as pickup, no replan needed)
+          console.log(`${tag} Dropped ${currentStop.loadType} at ${targetCity}. Advancing stop index.`);
+          // Remove dropped load from local context/snapshot so downstream sees correct state
+          const dropCtxIdx = context.loads.indexOf(currentStop.loadType);
+          if (dropCtxIdx !== -1) context.loads.splice(dropCtxIdx, 1);
+          const dropSnapIdx = snapshot.bot.loads.indexOf(currentStop.loadType);
+          if (dropSnapIdx !== -1) snapshot.bot.loads.splice(dropSnapIdx, 1);
+          activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+          activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
         } else {
           // Delivery
           hasDelivery = true;
@@ -963,6 +973,15 @@ export class TurnExecutorPlanner {
     if (stop.action === 'deliver') {
       const result = await ActionResolver.resolve(
         { action: 'DELIVER', details: { load: stop.loadType, at: stop.city }, reasoning: '', planHorizon: '' },
+        snapshot,
+        context,
+      );
+      return result;
+    }
+
+    if (stop.action === 'drop') {
+      const result = await ActionResolver.resolve(
+        { action: 'DROP', details: { load: stop.loadType, city: stop.city }, reasoning: '', planHorizon: '' },
         snapshot,
         context,
       );

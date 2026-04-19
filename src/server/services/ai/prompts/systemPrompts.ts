@@ -186,12 +186,13 @@ SCORING: trip_score = (total payout - build costs - usage fees) / estimated turn
 A 30M trip in 4 turns (7.5M/turn) beats a 60M trip in 12 turns (5M/turn).
 
 TRIP RULES:
-1. PICKUP before DELIVER for each load. You must physically carry the load.
+1. CARRIED LOADS ARE IMPLICIT: Loads already on the train are already in your possession — do NOT emit a PICKUP stop for them. Start the plan directly with a DELIVER stop for any carried load whose matching demand card you hold. Use a DROP stop instead if you need to free capacity.
 2. COMBINE CORRIDORS: Two deliveries on one route beat two separate routes.
 3. EXISTING TRACK FIRST: On-network stops are essentially free.
 4. VICTORY ROUTING: Prefer trips through unconnected major cities when payout differences are within 30%.
-5. CARRIED CARGO: If you already carry loads, deliver them first if a matching demand exists.
-6. Keep trips to 2-6 stops.
+5. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
+6. DROP SEMANTICS: Use DROP to dump a load you cannot use (no demand card, or route impossible). DROP has no payment and no demandCardId. The load is abandoned at the city.
+7. Keep trips to 2-6 stops.
 
 GEOGRAPHIC STRATEGY:
 CORE (cheap, high reuse): Paris — Ruhr — Holland — Berlin — Wien. Build here first.
@@ -212,8 +213,10 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   "candidates": [
     {
       "stops": [
+        { "action": "DELIVER", "load": "<carried load>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> },
         { "action": "PICKUP", "load": "<load type>", "city": "<city name>" },
-        { "action": "DELIVER", "load": "<load type>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> }
+        { "action": "DELIVER", "load": "<load type>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> },
+        { "action": "DROP", "load": "<load type>", "city": "<city name>" }
       ],
       "reasoning": "<why this trip is good>"
     }
@@ -223,28 +226,28 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>"
 }
 
-EXAMPLE:
+EXAMPLE (bot is already carrying Steel):
 {
   "candidates": [
     {
       "stops": [
-        { "action": "PICKUP", "load": "Steel", "city": "Ruhr" },
-        { "action": "DELIVER", "load": "Steel", "city": "Paris", "demandCardId": 31, "payment": 15 },
+        { "action": "DELIVER", "load": "Steel", "city": "Wroclaw", "demandCardId": 18, "payment": 14 },
         { "action": "PICKUP", "load": "Wine", "city": "Paris" },
         { "action": "DELIVER", "load": "Wine", "city": "Wien", "demandCardId": 42, "payment": 22 }
       ],
-      "reasoning": "Core double-delivery. Steel on-network, delivers to Paris, picks up Wine for Wien."
+      "reasoning": "Deliver carried Steel immediately (no pickup needed), then pick up Wine on the way to Wien. 36M in ~5 turns."
     },
     {
       "stops": [
+        { "action": "DROP", "load": "Steel", "city": "Berlin" },
         { "action": "PICKUP", "load": "Coal", "city": "Ruhr" },
-        { "action": "DELIVER", "load": "Coal", "city": "Berlin", "demandCardId": 55, "payment": 9 }
+        { "action": "DELIVER", "load": "Coal", "city": "Paris", "demandCardId": 55, "payment": 12 }
       ],
-      "reasoning": "Quick single delivery, all on-network. 2 turns."
+      "reasoning": "Drop Steel (no viable demand), pick up Coal for a quick Paris delivery. 12M in 3 turns."
     }
   ],
   "chosenIndex": 0,
-  "reasoning": "37M in ~5 turns (7.4M/turn) beats 9M in 2 turns (4.5M/turn).",
+  "reasoning": "36M in ~5 turns (7.2M/turn) beats 12M in 3 turns (4M/turn). Steel is already on the train.",
   "upgradeOnRoute": "FastFreight"
 }`;
 

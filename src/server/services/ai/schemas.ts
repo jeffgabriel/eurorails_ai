@@ -14,7 +14,7 @@ export const ROUTE_SCHEMA = {
         type: 'object' as const,
         additionalProperties: false as const,
         properties: {
-          action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+          action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER', 'DROP'] },
           load: { type: 'string' as const },
           city: { type: 'string' as const },
           demandCardId: { type: 'number' as const },
@@ -227,7 +227,7 @@ export const TRIP_PLAN_SCHEMA = {
               type: 'object' as const,
               additionalProperties: false as const,
               properties: {
-                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER', 'DROP'] },
                 load: { type: 'string' as const },
                 city: { type: 'string' as const },
                 demandCardId: { type: 'number' as const },

@@ -5,6 +5,7 @@
  */
 
 import { RouteValidator } from '../../services/ai/RouteValidator';
+import { TRIP_PLAN_SCHEMA, ROUTE_SCHEMA } from '../../services/ai/schemas';
 import {
   StrategicRoute,
   GameContext,
@@ -780,5 +781,214 @@ describe('RouteValidator', () => {
       expect(result[0]).toEqual(expect.objectContaining({ action: 'deliver', loadType: 'Fish', city: 'Venezia' }));
       expect(result[1]).toEqual(expect.objectContaining({ action: 'pickup', loadType: 'Steel', city: 'Berlin' }));
     });
+  });
+
+  // ── JIRA-181: Carried-load fix ───────────────────────────────────────────────
+
+  describe('JIRA-181: carried-load DELIVER feasibility', () => {
+    it('DELIVER Steel is feasible when bot carries Steel and no PICKUP Steel is in the candidate', () => {
+      // Bot is carrying Steel — deliver without any PICKUP stop in the route
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Steel']; // bot carries Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Should be valid — Steel is carried, so DELIVER is feasible
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'deliver' && s.loadType === 'Steel')).toBe(true);
+    });
+
+    it('DELIVER Ham is infeasible when bot does not carry Ham and no PICKUP Ham is in the candidate (orphan deliver)', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'deliver', loadType: 'Ham', city: 'Stuttgart', demandCardId: 2, payment: 10 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Ham', supplyCity: 'Frankfurt', deliveryCity: 'Stuttgart', payout: 10 })],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = []; // bot does NOT carry Ham
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // All stops infeasible — DELIVER Ham is orphaned
+      expect(result.valid).toBe(false);
+    });
+
+    it('DELIVER Steel is infeasible when demandCardId is 0', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 0, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER with demandCardId=0 is rejected (use DROP instead)
+      expect(result.valid).toBe(false);
+    });
+
+    it('DELIVER Steel is infeasible when demandCardId is unmatched in resolvedDemands', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Ruhr' },
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 999, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+      // resolvedDemands is non-empty, but card 999 is not in it
+      snapshot.bot.resolvedDemands = [
+        { cardId: 1, demands: [{ city: 'Berlin', loadType: 'Coal', payment: 10 }] },
+      ];
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER with unmatched demandCardId is rejected
+      expect(result.valid).toBe(false);
+    });
+
+    it('DROP Sheep @ Holland is feasible at any reachable city regardless of demand cards', () => {
+      const route = makeRoute({
+        stops: [
+          { action: 'drop', loadType: 'Sheep', city: 'Holland' },
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DROP stop should survive — it's always feasible
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'drop' && s.loadType === 'Sheep')).toBe(true);
+    });
+
+    it('turn-54 Candidate 2 fixture: PICKUP Steel@null, DELIVER Steel@Wroclaw, DELIVER Ham@Stuttgart with carrying [Sheep, Steel] → survives as [DELIVER Steel@Wroclaw]', () => {
+      // This is the exact scenario from the JIRA-181 bug report.
+      // PICKUP Steel @ null is infeasible (no known supply city).
+      // DELIVER Steel @ Wroclaw: Steel IS carried — feasible.
+      // DELIVER Ham @ Stuttgart: Ham NOT carried, no PICKUP Ham — infeasible (orphan).
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'null' }, // sentinel city name
+          { action: 'deliver', loadType: 'Steel', city: 'Wroclaw', demandCardId: 1, payment: 14 },
+          { action: 'deliver', loadType: 'Ham', city: 'Stuttgart', demandCardId: 2, payment: 12 },
+        ],
+      });
+      const context = makeContext({
+        demands: [
+          makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Wroclaw', payout: 14 }),
+          makeDemand({ cardIndex: 2, loadType: 'Ham', supplyCity: 'Frankfurt', deliveryCity: 'Stuttgart', payout: 12 }),
+        ],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Sheep', 'Steel']; // bot carries Sheep and Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Route should be valid but pruned — only DELIVER Steel@Wroclaw survives
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops).toHaveLength(1);
+      expect(finalStops[0]).toMatchObject({ action: 'deliver', loadType: 'Steel', city: 'Wroclaw' });
+    });
+
+    it('removed pickup→deliver pair-prune: DELIVER Steel kept when PICKUP Steel pruned but bot carries Steel', () => {
+      // Old behavior: PICKUP Steel @ bad-city pruned → DELIVER Steel pruned (bug).
+      // New behavior: PICKUP Steel @ bad-city pruned → DELIVER Steel KEPT (bot carries Steel).
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'NonExistentCity' }, // infeasible
+          { action: 'deliver', loadType: 'Steel', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Ruhr', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+      snapshot.bot.loads = ['Steel']; // bot carries Steel
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // PICKUP is infeasible (wrong city), but DELIVER should survive because bot carries Steel
+      expect(result.valid).toBe(true);
+      const finalStops = result.prunedRoute?.stops ?? route.stops;
+      expect(finalStops.some(s => s.action === 'deliver' && s.loadType === 'Steel')).toBe(true);
+    });
+
+    it('retained deliver→pickup pair-prune: PICKUP Steel pruned when DELIVER Steel is infeasible (no card)', () => {
+      // When the DELIVER is infeasible (wrong delivery city, no demand match),
+      // the paired PICKUP should also be pruned.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Steel', city: 'Essen' }, // valid supply city
+          { action: 'deliver', loadType: 'Steel', city: 'NonExistentCity', demandCardId: 1, payment: 15 }, // no demand
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot();
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // DELIVER is infeasible (no demand for NonExistentCity) → PICKUP is also pruned
+      expect(result.valid).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('regression: single-component trip (no carried loads, standard PICKUP + DELIVER) produces identical validator output to pre-change golden snapshot', () => {
+      // Golden snapshot: standard PICKUP Coal @ Essen, DELIVER Coal @ Berlin
+      // Validator should accept both stops and return valid=true, no errors, no pruning.
+      const route = makeRoute({
+        stops: [
+          { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+          { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+      });
+      const context = makeContext({
+        demands: [makeDemand({ loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+      });
+      const snapshot = makeSnapshot(); // no carried loads, no resolvedDemands
+
+      const result = RouteValidator.validate(route, context, snapshot);
+      // Identical to pre-change: valid, no errors, no pruning
+      expect(result.valid).toBe(true);
+      expect(result.errors).toHaveLength(0);
+      expect(result.prunedRoute).toBeUndefined();
+    });
+  });
+});
+
+// ── JIRA-181: Schema enum tests (standalone) ────────────────────────────────
+
+describe('JIRA-181: Schema enum includes DROP', () => {
+  it('TRIP_PLAN_SCHEMA stop action enum includes PICKUP, DELIVER, and DROP', () => {
+    const stopSchema = TRIP_PLAN_SCHEMA.properties.candidates.items.properties.stops.items.properties.action;
+    expect(stopSchema.enum).toContain('PICKUP');
+    expect(stopSchema.enum).toContain('DELIVER');
+    expect(stopSchema.enum).toContain('DROP');
+  });
+
+  it('ROUTE_SCHEMA stop action enum includes PICKUP, DELIVER, and DROP', () => {
+    const stopSchema = ROUTE_SCHEMA.properties.route.items.properties.action;
+    expect(stopSchema.enum).toContain('PICKUP');
+    expect(stopSchema.enum).toContain('DELIVER');
+    expect(stopSchema.enum).toContain('DROP');
   });
 });
