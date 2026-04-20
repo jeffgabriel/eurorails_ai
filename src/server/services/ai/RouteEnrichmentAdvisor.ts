@@ -122,7 +122,6 @@ export class RouteEnrichmentAdvisor {
         { ...enrichedRoute, currentStopIndex: 0 },
         context,
         snapshot,
-        { reorderByProximity: false },
       );
       if (!validation.valid && !validation.prunedRoute) {
         console.warn('[RouteEnrichmentAdvisor] Enriched route rejected by validation, returning original route');

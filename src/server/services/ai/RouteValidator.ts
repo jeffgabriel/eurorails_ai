@@ -49,7 +49,6 @@ export class RouteValidator {
     route: StrategicRoute,
     context: GameContext,
     snapshot: WorldSnapshot,
-    options: { reorderByProximity?: boolean } = {},
   ): RouteValidationResult {
     const tag = '[RouteValidator]';
 
@@ -69,10 +68,7 @@ export class RouteValidator {
     // Greedy nearest-neighbor with pickup-before-delivery constraints.
     // Must run before cumulative budget check so budget is validated against
     // the actual execution order.
-    // Skip reorder when caller has already established the intended stop order
-    // (e.g. RouteEnrichmentAdvisor after applyDecision).
-    const reorderByProximity = options.reorderByProximity ?? true;
-    if (reorderByProximity && validations.length > 1) {
+    if (validations.length > 1) {
       const botPos = snapshot.bot.position;
       if (botPos) {
         const gridPoints = loadGridPoints();
