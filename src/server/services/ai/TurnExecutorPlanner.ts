@@ -34,6 +34,7 @@ import {
   TerrainType,
   TRAIN_PROPERTIES,
   LlmAttempt,
+  BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
 import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
@@ -207,6 +208,10 @@ export class TurnExecutorPlanner {
     let replanLlmLog: LlmAttempt[] | undefined;
     let replanSystemPrompt: string | undefined;
     let replanUserPrompt: string | undefined;
+    // JIRA-185: Count deliveries already executed this turn so the post-delivery
+    // replan receives a patched deliveryCount instead of the stale pre-turn value.
+    // Reset here (A2 loop entry) so it never persists across turns (R5).
+    let deliveriesThisTurn = 0;
 
     // ── Phase A: Movement loop ─────────────────────────────────────────────
     //
@@ -299,6 +304,9 @@ export class TurnExecutorPlanner {
         } else {
           // Delivery
           hasDelivery = true;
+          // JIRA-185: Increment per-turn counter so post-delivery replan receives
+          // a patched deliveryCount that includes this delivery (R5).
+          deliveriesThisTurn++;
           trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
 
           // Remove delivered load from context so that skipCompletedStops / isStopComplete
@@ -359,6 +367,9 @@ export class TurnExecutorPlanner {
                 (deliveryPlan as { preExecuted?: boolean }).preExecuted = true;
                 // Update snapshot money so subsequent actions see correct balance
                 snapshot.bot.money = earlyExecResult.remainingMoney;
+                // JIRA-185: Sync context.money to match the post-delivery snapshot so the
+                // TripPlanner replan prompt reflects the actual cash balance (R1).
+                context.money = snapshot.bot.money;
                 console.log(
                   `${tag} JIRA-173: Early delivery execution succeeded ` +
                   `(${deliveryPlan.load}→${deliveryPlan.city}, payment=${earlyExecResult.payment ?? 0}M). ` +
@@ -367,13 +378,15 @@ export class TurnExecutorPlanner {
               } else {
                 console.warn(
                   `${tag} JIRA-173: Early delivery execution failed (${earlyExecResult.error ?? 'unknown error'}). ` +
-                  `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot.`,
+                  `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot. ` +
+                  `JIRA-185: context.money remains stale (pre-delivery value).`,
                 );
               }
             } catch (earlyExecErr) {
               console.warn(
                 `${tag} JIRA-173: Early delivery execution threw (${(earlyExecErr as Error).message}). ` +
-                `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot.`,
+                `Falling back to deferred execution — JIRA-165 refresh will use stale snapshot. ` +
+                `JIRA-185: context.money remains stale (pre-delivery value).`,
               );
             }
           }
@@ -414,7 +427,12 @@ export class TurnExecutorPlanner {
             try {
               const memory = await getMemory(snapshot.gameId, snapshot.bot.playerId);
               const tripPlanner = new TripPlanner(brain);
-              const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+              // JIRA-185: Build a patched memory copy with deliveryCount reflecting
+              // deliveries already executed this turn so the LLM prompt's CURRENT STATE
+              // block shows the correct count. Do NOT call updateMemory() here — the
+              // authoritative write remains in AIStrategyEngine.ts:889 at turn-end (R4).
+              const replanMemory: BotMemoryState = { ...memory, deliveryCount: (memory.deliveryCount ?? 0) + deliveriesThisTurn };
+              const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, replanMemory);
 
               // Capture replan LLM data for debug overlay propagation
               if ('llmLog' in replanResult && replanResult.llmLog) {

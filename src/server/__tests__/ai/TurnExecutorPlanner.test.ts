@@ -2790,3 +2790,432 @@ describe('TurnExecutorPlanner.execute — JIRA-181 DROP stop', () => {
     expect((dropEmitted as any).load).toBe('Sheep');
   });
 });
+
+// ── JIRA-185: Post-delivery replan stale snapshot fix ─────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-185 post-delivery context sync', () => {
+  // Get a typed handle on the getMemory mock so we can customise it per test
+  let mockGetMemory: jest.Mock;
+  let mockPlanTrip: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    // Fresh TripPlanner mock that captures call arguments
+    mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+
+    // Get a reference to the mocked getMemory function
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const botMemoryModule = require('../../services/ai/BotMemory');
+    mockGetMemory = botMemoryModule.getMemory;
+  });
+
+  // AC1: Haiku turn-5 replay — bot at Szczecin, 2 Beer loaded, cash 19M,
+  //      activeRoute idx=2 on D-Szczecin (Beer@Szczecin payout 9M).
+  //      After deliver, TripPlanner should see context.money===28,
+  //      context.loads===['Beer'], memory.deliveryCount===prevCount+1.
+  it('AC1: syncs context.money and deliveryCount after single delivery (Haiku turn-5 scenario)', async () => {
+    const prevDeliveryCount = 3;
+    mockGetMemory.mockResolvedValue({
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: prevDeliveryCount,
+      totalEarnings: 0,
+      turnNumber: 5,
+      activeRoute: null,
+      turnsOnRoute: 2,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    });
+
+    // JIRA-173 early execution returns payout of 9M → cash goes from 19 to 28
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 28,   // 19 + 9
+      durationMs: 1,
+      payment: 9,
+      newCardId: 7,
+    });
+
+    // Capture what planTrip was called with
+    let capturedContext: GameContext | undefined;
+    let capturedMemory: any;
+    mockPlanTrip.mockImplementation(async (_snap: unknown, ctx: GameContext, _gp: unknown, mem: unknown) => {
+      capturedContext = { ...ctx, loads: [...ctx.loads] };
+      capturedMemory = { ...mem as object };
+      return { route: null, llmLog: [] };
+    });
+
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Beer',
+      city: 'Szczecin',
+      cardId: 2,
+      payout: 9,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [
+        // idx 0 and 1 already done (currentStopIndex=2)
+        makeStop('pickup', 'Hamburg', 'Beer'),
+        makeStop('pickup', 'Hamburg', 'Beer'),
+        makeStop('deliver', 'Szczecin', 'Beer'),
+      ],
+      currentStopIndex: 2,
+    });
+    const context = makeContext({
+      position: { city: 'Szczecin', row: 3, col: 4 },
+      money: 19,
+      loads: ['Beer', 'Beer'],  // 2 Beer on train
+    });
+    const snapshot = makeSnapshot();
+    snapshot.bot.money = 19;
+    snapshot.bot.loads = ['Beer', 'Beer'];
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // AC1 core assertions
+    expect(mockPlanTrip).toHaveBeenCalled();
+    expect(capturedContext).toBeDefined();
+    // context.money must reflect the post-delivery cash (19 + 9 = 28)
+    expect(capturedContext!.money).toBe(28);
+    // context.loads must have removed the delivered Beer (1 remaining)
+    expect(capturedContext!.loads).toEqual(['Beer']);
+    // memory.deliveryCount must be prevCount + 1
+    expect(capturedMemory.deliveryCount).toBe(prevDeliveryCount + 1);
+  });
+
+  // AC2: Multi-delivery turn — 2nd replan sees deliveryCount += 2.
+  // Setup: bot at Hamburg with 2 loads (Beer + Wine). First replan returns a
+  // deliver(Wine@Hamburg) route so the loop encounters the 2nd delivery at the
+  // same city in the same turn.
+  it('AC2: second replan receives deliveryCount+2 after two consecutive deliveries', async () => {
+    const prevDeliveryCount = 5;
+    mockGetMemory.mockResolvedValue({
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: prevDeliveryCount,
+      totalEarnings: 0,
+      turnNumber: 8,
+      activeRoute: null,
+      turnsOnRoute: 3,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    });
+
+    // Both deliveries succeed — money goes 50 → 62 → 75
+    mockTurnExecutorExecutePlan
+      .mockResolvedValueOnce({
+        success: true,
+        action: 'DeliverLoad',
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: 62,
+        durationMs: 1,
+        payment: 12,
+        newCardId: 10,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        action: 'DeliverLoad',
+        cost: 0,
+        segmentsBuilt: 0,
+        remainingMoney: 75,
+        durationMs: 1,
+        payment: 13,
+        newCardId: 11,
+      });
+
+    const capturedMemories: any[] = [];
+    // After the first delivery the replan returns a route whose FIRST stop is
+    // deliver(Wine@Hamburg) — same city as the bot. That way the loop can execute
+    // the 2nd delivery immediately (no movement needed).
+    mockPlanTrip.mockImplementation(async (_snap: unknown, _ctx: GameContext, _gp: unknown, mem: unknown) => {
+      capturedMemories.push({ ...mem as object });
+      return {
+        route: makeRoute({
+          stops: [makeStop('deliver', 'Hamburg', 'Wine')],
+          currentStopIndex: 0,
+          startingCity: 'Hamburg',
+        }),
+        llmLog: [],
+      };
+    });
+    // enrich just passes the route through
+    mockEnrich.mockImplementation(async (r: StrategicRoute) => r);
+    // skipCompletedStops should NOT skip the Wine deliver on the replanned route
+    mockIsStopComplete.mockReturnValue(false);
+
+    // deliverPlan1 for Beer@Hamburg, deliverPlan2 for Wine@Hamburg
+    const deliverPlan1 = {
+      type: AIActionType.DeliverLoad,
+      load: 'Beer',
+      city: 'Hamburg',
+      cardId: 3,
+      payout: 12,
+    };
+    const deliverPlan2 = {
+      type: AIActionType.DeliverLoad,
+      load: 'Wine',
+      city: 'Hamburg',
+      cardId: 4,
+      payout: 13,
+    };
+    // First call: deliver Beer. Second call: deliver Wine.
+    mockResolve
+      .mockResolvedValueOnce({ success: true, plan: deliverPlan1 })
+      .mockResolvedValueOnce({ success: true, plan: deliverPlan2 });
+
+    // Starting route: deliver Beer@Hamburg (single stop, bot is already there)
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Hamburg', 'Beer')],
+      currentStopIndex: 0,
+      startingCity: 'Hamburg',
+    });
+    const context = makeContext({
+      position: { city: 'Hamburg', row: 2, col: 3 },
+      money: 50,
+      loads: ['Beer', 'Wine'],
+      speed: 12,
+    });
+    const snapshot = makeSnapshot();
+    snapshot.bot.money = 50;
+    snapshot.bot.loads = ['Beer', 'Wine'];
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // planTrip should have been called at least twice (once per delivery)
+    expect(mockPlanTrip.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // The SECOND replan should have deliveryCount = prevCount + 2
+    const secondMemory = capturedMemories[1];
+    expect(secondMemory).toBeDefined();
+    expect(secondMemory.deliveryCount).toBe(prevDeliveryCount + 2);
+  });
+
+  // AC3: JIRA-173 failure fallback — context.money NOT resynced, warning fires, no crash.
+  it('AC3: when JIRA-173 early execution fails, context.money stays stale and warning is emitted', async () => {
+    mockGetMemory.mockResolvedValue({
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: 2,
+      totalEarnings: 0,
+      turnNumber: 3,
+      activeRoute: null,
+      turnsOnRoute: 1,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    });
+
+    // JIRA-173 early execution fails
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: false,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 0,
+      durationMs: 1,
+      error: 'Demand card not found',
+    });
+
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    let capturedContext: GameContext | undefined;
+    mockPlanTrip.mockImplementation(async (_snap: unknown, ctx: GameContext) => {
+      capturedContext = { ...ctx };
+      return { route: null, llmLog: [] };
+    });
+
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 15,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      money: 45,
+      loads: ['Coal'],
+    });
+    const snapshot = makeSnapshot();
+    snapshot.bot.money = 45;
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    // Should NOT throw
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints),
+    ).resolves.not.toThrow();
+
+    // context.money must remain at the pre-delivery value (not updated)
+    // because JIRA-173 failed and we didn't do the sync
+    expect(capturedContext!.money).toBe(45);
+
+    // Warning must be emitted noting context.money is stale
+    const warnCalls = warnSpy.mock.calls.map((args: unknown[]) => args.join(' '));
+    const hasStaleMoneyWarning = warnCalls.some(
+      (msg: string) => msg.includes('JIRA-185') && msg.includes('stale'),
+    );
+    expect(hasStaleMoneyWarning).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  // AC5: BotMemory cache unchanged after the mid-turn replan.
+  it('AC5: BotMemory cache object is not mutated by the replan', async () => {
+    const originalMemory = {
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: 7,
+      totalEarnings: 200,
+      turnNumber: 10,
+      activeRoute: null,
+      turnsOnRoute: 4,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    };
+    // getMemory returns the same object reference each time (simulating cache)
+    mockGetMemory.mockResolvedValue(originalMemory);
+
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 109,
+      durationMs: 1,
+      payment: 9,
+      newCardId: 8,
+    });
+
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 9,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 }, money: 100 });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // The original memory object must NOT be mutated — deliveryCount stays at 7
+    expect(originalMemory.deliveryCount).toBe(7);
+  });
+
+  // AC6: No double-increment — existing AIStrategyEngine end-of-turn update
+  //      still works correctly. We verify by checking that the planTrip call
+  //      receives exactly prevCount+1 (not prevCount+2 or more) for one delivery.
+  it('AC6: no double-increment — single delivery produces deliveryCount+1, not +2', async () => {
+    const prevDeliveryCount = 10;
+    mockGetMemory.mockResolvedValue({
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      noProgressTurns: 0,
+      consecutiveDiscards: 0,
+      deliveryCount: prevDeliveryCount,
+      totalEarnings: 300,
+      turnNumber: 15,
+      activeRoute: null,
+      turnsOnRoute: 2,
+      routeHistory: [],
+      lastReasoning: null,
+      lastPlanHorizon: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    });
+
+    mockTurnExecutorExecutePlan.mockResolvedValue({
+      success: true,
+      action: 'DeliverLoad',
+      cost: 0,
+      segmentsBuilt: 0,
+      remainingMoney: 115,
+      durationMs: 1,
+      payment: 15,
+      newCardId: 9,
+    });
+
+    let capturedMemory: any;
+    mockPlanTrip.mockImplementation(async (_snap: unknown, _ctx: GameContext, _gp: unknown, mem: unknown) => {
+      capturedMemory = { ...mem as object };
+      return { route: null, llmLog: [] };
+    });
+
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Wine',
+      city: 'Paris',
+      cardId: 5,
+      payout: 15,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Paris', row: 1, col: 1 }, money: 100 });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints);
+
+    // Exactly prevCount + 1 — no double-increment
+    expect(capturedMemory.deliveryCount).toBe(prevDeliveryCount + 1);
+  });
+});
