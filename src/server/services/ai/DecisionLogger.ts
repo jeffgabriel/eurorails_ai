@@ -65,6 +65,9 @@ export interface LLMPhaseFields {
     hardGates: Array<{ gate: string; passed: boolean; detail?: string }>;
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
+    firstViolation?: string;
+    firstHardGates?: Array<{ gate: string; passed: boolean; detail?: string }>;
+    phaseBStripped?: boolean;
   };
 }
 

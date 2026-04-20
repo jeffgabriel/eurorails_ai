@@ -236,6 +236,7 @@ import { emitToGame } from '../../services/socketService';
 import { getMemory, updateMemory } from '../../services/ai/BotMemory';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { PlayerService } from '../../services/playerService';
+import { logPhase } from '../../services/ai/DecisionLogger';
 import {
   AIActionType,
   WorldSnapshot,
@@ -4067,6 +4068,150 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(result.loadsDelivered).toHaveLength(2);
       expect(result.loadsDelivered).toContainEqual({ loadType: 'Coal', city: 'Berlin', payment: 25, cardId: 42 });
       expect(result.loadsDelivered).toContainEqual({ loadType: 'Steel', city: 'Berlin', payment: 25, cardId: 43 });
+    });
+  });
+
+  describe('TurnValidator pre-strip violation visibility (JIRA observability)', () => {
+    it('should log firstViolation, firstHardGates, and phaseBStripped=true when Phase B is stripped', async () => {
+      // Arrange: a BuildTrack plan whose Phase B budget exceeds 20M (PHASE_B_BUDGET_CAP).
+      // After stripping, only a PassTurn remains — which passes all gates.
+      // Use an active route in memory so the code takes the route-executor path directly.
+      const expensiveSegments = [
+        makeSegment(10, 10, 10, 11, 8),
+        makeSegment(10, 11, 10, 12, 8),
+        makeSegment(10, 12, 10, 13, 8), // total: 24M > 20M cap
+      ];
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Build toward Berlin',
+        createdAtTurn: 1,
+      };
+
+      mockGetMemory.mockResolvedValue({
+        turnNumber: 5,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        money: 100,
+      } as any);
+      const context = makeContext({ money: 100 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      // TurnExecutorPlanner returns an over-budget BuildTrack plan
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: expensiveSegments },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      // Find the logPhase call for 'Turn Validation'
+      const mockLogPhase = logPhase as jest.MockedFunction<typeof logPhase>;
+      const turnValidationCall = mockLogPhase.mock.calls.find(
+        (args: any[]) => args[0] === 'Turn Validation',
+      );
+      expect(turnValidationCall).toBeDefined();
+
+      const payload = (turnValidationCall![4] as any).turnValidation;
+
+      // AC1: firstViolation is populated with the original gate detail
+      expect(payload.firstViolation).toBeDefined();
+      expect(typeof payload.firstViolation).toBe('string');
+      expect(payload.firstViolation).toContain('24');       // budget exceeded
+
+      // AC2: firstHardGates contains the failing gate with passed: false
+      expect(Array.isArray(payload.firstHardGates)).toBe(true);
+      const failingGate = payload.firstHardGates.find((g: any) => !g.passed);
+      expect(failingGate).toBeDefined();
+      expect(failingGate.gate).toBe('PHASE_B_BUDGET_CAP');
+      expect(failingGate.passed).toBe(false);
+
+      // AC3: phaseBStripped is true because the strip block ran
+      expect(payload.phaseBStripped).toBe(true);
+
+      // AC5: post-strip hardGates (the final validation) all pass
+      for (const gate of payload.hardGates) {
+        expect(gate.passed).toBe(true);
+      }
+
+      // AC5: outcome reflects the final (post-strip) state
+      expect(payload.outcome).toBe('passed');
+    });
+
+    it('should not set firstViolation or phaseBStripped when original plan passes validation', async () => {
+      // Arrange: a cheap BuildTrack plan that passes all gates (cost 3M < 20M cap).
+      // Use an active route in memory so the code takes the route-executor path directly.
+      const cheapSegment = makeSegment(10, 10, 10, 11, 3);
+
+      const route: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Berlin' }],
+        currentStopIndex: 0,
+        phase: 'build' as const,
+        reasoning: 'Build toward Berlin',
+        createdAtTurn: 1,
+      };
+
+      mockGetMemory.mockResolvedValue({
+        turnNumber: 5,
+        consecutiveDiscards: 0,
+        lastAction: null,
+        activeRoute: route,
+        turnsOnRoute: 1,
+        routeHistory: [],
+        currentBuildTarget: null,
+        turnsOnTarget: 0,
+        deliveryCount: 0,
+        totalEarnings: 0,
+        consecutiveLlmFailures: 0,
+      });
+
+      const snapshot = makeSnapshot({
+        botConfig: { skillLevel: 'medium' },
+        money: 50,
+      } as any);
+      const context = makeContext({ money: 50 });
+      mockCapture.mockResolvedValue(snapshot);
+      mockContextBuild.mockResolvedValue(context);
+
+      mockTurnExecutorPlannerExecute.mockResolvedValue(mockTurnExecResult({
+        plan: { type: AIActionType.BuildTrack, segments: [cheapSegment] },
+        routeComplete: false,
+        routeAbandoned: false,
+        updatedRoute: route,
+      }));
+
+      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+
+      const mockLogPhase = logPhase as jest.MockedFunction<typeof logPhase>;
+      const turnValidationCall = mockLogPhase.mock.calls.find(
+        (args: any[]) => args[0] === 'Turn Validation',
+      );
+      expect(turnValidationCall).toBeDefined();
+
+      const payload = (turnValidationCall![4] as any).turnValidation;
+
+      // AC4: happy path — firstViolation is undefined, phaseBStripped is false
+      expect(payload.firstViolation).toBeUndefined();
+      expect(payload.phaseBStripped).toBe(false);
+      expect(payload.firstHardGates).toBeUndefined();
+      expect(payload.outcome).toBe('passed');
     });
   });
 

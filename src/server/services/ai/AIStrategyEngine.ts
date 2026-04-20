@@ -745,6 +745,10 @@ export class AIStrategyEngine {
       const firstCompositionTrace: CompositionTrace | undefined = undefined;
       let validationResult = TurnValidator.validate(decision.plan, context, snapshot);
       const firstValidationViolation = validationResult.valid ? undefined : validationResult.violation;
+      const firstValidationHardGates = validationResult.valid
+        ? undefined
+        : validationResult.hardGates.map(g => ({ ...g }));
+      const phaseBWasStripped = !validationResult.valid;
 
       if (!validationResult.valid) {
         console.warn(`${tag} [TurnValidator] Hard gate violation: ${validationResult.violation} — stripping Phase B. Pre-strip plan: ${JSON.stringify(decision.plan.type === 'MultiAction' ? decision.plan.steps.map((s: any) => ({ type: s.type, segs: s.segments?.length ?? 0 })) : { type: decision.plan.type, segs: (decision.plan as any).segments?.length ?? 0 })}`);
@@ -769,7 +773,9 @@ export class AIStrategyEngine {
           hardGates: validationResult.hardGates,
           outcome: validationResult.valid ? 'passed' : 'hard_reject',
           recomposeCount,
-          firstViolation: recomposeCount > 0 ? firstValidationViolation : undefined,
+          firstViolation: firstValidationViolation,
+          firstHardGates: firstValidationHardGates,
+          phaseBStripped: phaseBWasStripped,
         },
       });
 
