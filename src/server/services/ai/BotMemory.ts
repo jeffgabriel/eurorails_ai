@@ -20,7 +20,6 @@ function defaultState(): BotMemoryState {
     currentBuildTarget: null,
     turnsOnTarget: 0,
     lastAction: null,
-    noProgressTurns: 0,
     consecutiveDiscards: 0,
     deliveryCount: 0,
     totalEarnings: 0,

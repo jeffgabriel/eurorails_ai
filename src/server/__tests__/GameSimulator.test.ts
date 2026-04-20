@@ -114,7 +114,6 @@ describe('GameSimulator', () => {
       expect(metrics.turnCount).toBe(0);
       expect(metrics.deliveryCount).toBe(0);
       expect(metrics.totalEarnings).toBe(0);
-      expect(metrics.noProgressTurns).toBe(0);
       expect(metrics.actionHistory).toEqual([]);
     });
 
@@ -325,26 +324,6 @@ describe('GameSimulator', () => {
       const m = sim.getMetrics();
       expect(m.deliveryCount).toBe(2);
       expect(m.totalEarnings).toBe(30);
-    });
-
-    it('should track consecutive pass turns and reset on other actions', async () => {
-      let callCount = 0;
-      const takeTurn: TakeTurnFn = jest.fn().mockImplementation(() => {
-        callCount++;
-        if (callCount <= 3) return Promise.resolve(makePassResult());
-        return Promise.resolve(makeBuildResult());
-      });
-      const sim = new GameSimulator(takeTurn);
-      sim.initialize(createMockSnapshot());
-
-      await sim.runTurn(); // pass
-      expect(sim.getMetrics().noProgressTurns).toBe(1);
-      await sim.runTurn(); // pass
-      expect(sim.getMetrics().noProgressTurns).toBe(2);
-      await sim.runTurn(); // pass
-      expect(sim.getMetrics().noProgressTurns).toBe(3);
-      await sim.runTurn(); // build
-      expect(sim.getMetrics().noProgressTurns).toBe(0);
     });
 
     it('should track action history', async () => {

@@ -829,7 +829,7 @@ export class AIStrategyEngine {
       // ── Stage 4: Apply guardrails ──
       // JIRA-143: Snapshot plan before guardrail check for originalPlan capture
       const preGuardrailPlan = { action: decision.plan.type, reasoning: decision.reasoning ?? '' };
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, memory.noProgressTurns, activeRoute != null, memory.consecutiveDiscards);
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, activeRoute != null);
       let finalPlan: TurnPlan = guardrailResult.plan;
       let originalPlan: { action: string; reasoning: string } | undefined;
 
@@ -879,40 +879,14 @@ export class AIStrategyEngine {
       console.log(`${tag} Turn complete: ${finalPlan.type}${finalPlan.type === AIActionType.BuildTrack ? ` (${result.segmentsBuilt}seg/$${result.cost}M)` : ''} | success=${result.success} | money=${result.remainingMoney} | ${durationMs}ms`);
 
       // Update bot memory (including reasoning for next-turn context continuity)
-      // Progress-based stuck detection: increment noProgressTurns when turn had
-      // zero deliveries AND zero net cash increase AND no new cities connected
-      // AND bot is NOT actively traveling on an active route (JIRA-45, JIRA-68).
-      const hadDelivery = (result.payment ?? 0) > 0 || hasDelivery; // JIRA-84: also check pre-execution composed steps
-      const hadCashIncrease = result.remainingMoney > snapshot.bot.money;
-      const hadNewTrack = result.segmentsBuilt > 0;
-      // JIRA-166: Narrow isActivelyTraveling — don't count as progress when bot is broke
-      // and the next route stop is off-network (requires building track the bot can't afford).
-      // This allows noProgressTurns to increment so the oscillation guard at line 272 can fire.
-      const nextRouteStop = activeRoute
-        ? activeRoute.stops[activeRoute.currentStopIndex] ?? null
-        : null;
-      const nextStopIsOffNetwork = nextRouteStop != null
-        && !context.citiesOnNetwork.includes(nextRouteStop.city);
-      const botIsBroke = result.remainingMoney < 5;
-      const isActivelyTraveling = activeRoute != null
-        && !(botIsBroke && nextStopIsOffNetwork);
-      if (activeRoute != null && botIsBroke && nextStopIsOffNetwork) {
-        console.log(
-          `${tag} JIRA-166: isActivelyTraveling=false — broke ($${result.remainingMoney}M) with off-network next stop (${nextRouteStop?.city})`,
-        );
-      }
-      const hadDiscard = executedAction === AIActionType.DiscardHand; // JIRA-59: discard = fresh cards = progress
-      const madeProgress = hadDelivery || hadCashIncrease || hadNewTrack || isActivelyTraveling || hadDiscard;
-
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
-        noProgressTurns: madeProgress ? 0 : (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
           ? memory.consecutiveDiscards + 1 : 0,
         consecutiveLlmFailures: decision.model === 'heuristic-fallback' || decision.model === 'llm-failed'
             || (decision.model === 'route-executor' && decision.llmLog?.length && decision.llmLog.every(e => e.status !== 'success'))
           ? (memory.consecutiveLlmFailures ?? 0) + 1 : 0,
-        deliveryCount: (memory.deliveryCount ?? 0) + (hadDelivery ? 1 : 0), // JIRA-60
+        deliveryCount: (memory.deliveryCount ?? 0) + (hasDelivery ? 1 : 0), // JIRA-60
         totalEarnings: (memory.totalEarnings ?? 0) + (result.payment ?? 0), // JIRA-60
         turnNumber: snapshot.turnNumber,
         lastReasoning: decision.reasoning ?? null,
@@ -993,7 +967,7 @@ export class AIStrategyEngine {
       }
 
       // JIRA-64: After delivery, refresh context.demands from newly drawn card
-      if (hadDelivery) {
+      if (hasDelivery) {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
 
@@ -1223,7 +1197,6 @@ export class AIStrategyEngine {
       // Update bot memory even on pipeline error
       await updateMemory(gameId, botPlayerId, {
         lastAction: AIActionType.PassTurn,
-        noProgressTurns: (memory.noProgressTurns ?? 0) + 1,
         consecutiveDiscards: 0,
         turnNumber: memory.turnNumber + 1,
       });

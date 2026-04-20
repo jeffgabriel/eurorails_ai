@@ -257,7 +257,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       currentBuildTarget: null,
       turnsOnTarget: 0,
       lastAction: null,
-      noProgressTurns: 0,
+      
       consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
@@ -397,7 +397,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → no LLM key → PassTurn
       mockGetMemory.mockResolvedValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
@@ -446,7 +446,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // so InitialBuildPlanner runs and creates one.
       mockGetMemory.mockResolvedValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
@@ -467,7 +467,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // JIRA-167: Simulate the FIRST initial-build turn — no activeRoute yet.
       mockGetMemory.mockResolvedValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
@@ -513,7 +513,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → PassTurn
       mockGetMemory.mockResolvedValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });
@@ -553,7 +553,7 @@ describe('Bot Build Track Flow (Integration)', () => {
       // No active route → PassTurn (simplest path for timing test)
       mockGetMemory.mockResolvedValue({
         currentBuildTarget: null, turnsOnTarget: 0, lastAction: null,
-        noProgressTurns: 0, consecutiveDiscards: 0, deliveryCount: 0,
+        consecutiveDiscards: 0, deliveryCount: 0,
         totalEarnings: 0, turnNumber: 2, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], lastReasoning: null, lastPlanHorizon: null, consecutiveLlmFailures: 0,
       });

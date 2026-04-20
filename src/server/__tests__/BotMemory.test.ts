@@ -34,7 +34,6 @@ describe('BotMemory', () => {
         currentBuildTarget: null,
         turnsOnTarget: 0,
         lastAction: null,
-        noProgressTurns: 0,
         consecutiveDiscards: 0,
         deliveryCount: 0,
         totalEarnings: 0,
@@ -54,7 +53,6 @@ describe('BotMemory', () => {
         currentBuildTarget: 'Berlin',
         turnsOnTarget: 3,
         lastAction: AIActionType.BuildTrack,
-        noProgressTurns: 0,
         consecutiveDiscards: 0,
         deliveryCount: 2,
         totalEarnings: 50,
@@ -100,7 +98,6 @@ describe('BotMemory', () => {
         currentBuildTarget: null,
         turnsOnTarget: 0,
         lastAction: null,
-        noProgressTurns: 0,
         consecutiveDiscards: 0,
         deliveryCount: 0,
         totalEarnings: 0,
@@ -137,9 +134,9 @@ describe('BotMemory', () => {
   describe('updateMemory', () => {
     it('merges partial state with defaults', async () => {
       mockDbQuery.mockResolvedValue({ rows: [] });
-      await updateMemory(gameId, playerId, { noProgressTurns: 2 });
+      await updateMemory(gameId, playerId, { consecutiveDiscards: 2 });
       const state = await getMemory(gameId, playerId);
-      expect(state.noProgressTurns).toBe(2);
+      expect(state.consecutiveDiscards).toBe(2);
       expect(state.currentBuildTarget).toBeNull();
       expect(state.deliveryCount).toBe(0);
     });
@@ -147,12 +144,12 @@ describe('BotMemory', () => {
     it('overwrites specific fields without affecting others', async () => {
       mockDbQuery.mockResolvedValue({ rows: [] });
       await updateMemory(gameId, playerId, { deliveryCount: 1, totalEarnings: 43 });
-      await updateMemory(gameId, playerId, { noProgressTurns: 1 });
+      await updateMemory(gameId, playerId, { consecutiveDiscards: 1 });
 
       const state = await getMemory(gameId, playerId);
       expect(state.deliveryCount).toBe(1);
       expect(state.totalEarnings).toBe(43);
-      expect(state.noProgressTurns).toBe(1);
+      expect(state.consecutiveDiscards).toBe(1);
     });
 
     it('calls db.query with UPDATE statement', async () => {

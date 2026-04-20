@@ -92,7 +92,6 @@ export class ActionResolver {
       case 'DISCARD_HAND':
         return ActionResolver.resolveDiscard(snapshot);
       case AIActionType.PassTurn:
-      case 'PASS':
         return ActionResolver.resolvePass();
       default:
         return { success: false, error: `Unknown action type: "${action}". Valid actions: BUILD, MOVE, DELIVER, PICKUP, DROP, UPGRADE, DISCARD_HAND, PASS.` };

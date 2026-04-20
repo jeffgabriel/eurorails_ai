@@ -33,7 +33,6 @@ describe('BotMemory and DecisionLogger module imports', () => {
       activeRoute: null,
       routeHistory: [],
       lastAction: null,
-      noProgressTurns: 0,
       consecutiveDiscards: 0,
       deliveryCount: 0,
       totalEarnings: 0,
@@ -46,9 +45,9 @@ describe('BotMemory and DecisionLogger module imports', () => {
   });
 
   it('updateMemory merges partial state', async () => {
-    await updateMemory('test-game', 'test-bot', { noProgressTurns: 3 });
+    await updateMemory('test-game', 'test-bot', { consecutiveDiscards: 3 });
     const state = await getMemory('test-game', 'test-bot');
-    expect(state.noProgressTurns).toBe(3);
+    expect(state.consecutiveDiscards).toBe(3);
     expect(state.currentBuildTarget).toBeNull();
 
     // Clean up

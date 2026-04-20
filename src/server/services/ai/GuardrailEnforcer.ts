@@ -3,7 +3,7 @@
  *
  * `checkPlan()` enforces hard rules on TurnPlan (checked in priority order):
  *   G1. Force DELIVER when canDeliver has opportunities (highest priority)
- *   Stuck. Force DiscardHand when noProgressTurns >= 3 AND no loads carried
+ *   Stuck. Force DiscardHand when no active route AND no deliverable load
  *   Broke-and-stuck. Force DiscardHand when bot is broke, has active route, and
  *       no demand is achievable on existing network (JIRA-177)
  *   G3. Block UPGRADE during initialBuild phase
@@ -31,9 +31,9 @@ export class GuardrailEnforcer {
    *
    * Guardrails (checked in priority order):
    *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
-   *   Stuck: Force DiscardHand when noProgressTurns >= 3 AND no loads carried AND no active route (JIRA-68)
+   *   Stuck: Force DiscardHand when no active route AND no deliverable load (JIRA-68, JIRA-183)
    *   Broke-and-stuck: Force DiscardHand when broke, active route exists, and no demand is
-   *       achievable on existing network (JIRA-177)
+   *       achievable on existing network (JIRA-177, JIRA-183)
    *   G3: Block UPGRADE during initialBuild phase
    *   G8: Movement budget enforcement (silent truncation)
    */
@@ -41,9 +41,7 @@ export class GuardrailEnforcer {
     plan: TurnPlan,
     context: GameContext,
     snapshot: WorldSnapshot,
-    noProgressTurns: number = 0,
     hasActiveRoute: boolean = false,
-    consecutiveDiscards: number = 0,
   ): Promise<GuardrailPlanResult> {
     const planType = plan.type === 'MultiAction' ? GuardrailEnforcer.primaryActionType(plan) : plan.type;
 
@@ -65,25 +63,23 @@ export class GuardrailEnforcer {
       };
     }
 
-    // Progress-based stuck detection: force DiscardHand after 3+ turns with zero progress
-    // JIRA-68: Skip when bot has an active route — traveling toward a pickup is progress
-    // JIRA-164: Skip when bot is carrying loads deliverable on-network — discarding destroys value
+    // Stuck (no route, no loads): force DiscardHand immediately when the bot has no active route
+    // and no load on-train that can be delivered on-network. Nothing productive can happen — discard
+    // for fresh cards. JIRA-68, JIRA-183: no noProgressTurns gate needed; state is deterministic.
     const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
-    if (noProgressTurns >= 3 && planType !== AIActionType.DiscardHand && !hasActiveRoute && !hasDeliverableLoad) {
-      console.warn(`[Guardrail Stuck] ${noProgressTurns} no-progress turns — forcing DiscardHand`);
+    if (!hasActiveRoute && !hasDeliverableLoad && planType !== AIActionType.DiscardHand) {
+      console.warn(`[Guardrail Stuck] No active route and no deliverable load — forcing DiscardHand`);
       return {
         plan: { type: AIActionType.DiscardHand },
         overridden: true,
-        reason: `Progress-based stuck detection: ${noProgressTurns} turns with no deliveries, cash increase, or new cities — forcing DiscardHand`,
+        reason: `Stuck: no active route and no deliverable load on network — forcing DiscardHand`,
       };
     }
 
     // Broke-and-stuck guardrail: force DiscardHand when bot is broke, has a stale active route
     // blocking the stuck detector, and no demand is achievable on the existing track network.
-    // JIRA-177: The stuck detector above is bypassed when hasActiveRoute=true, but a bot with $0
-    // and no achievable demands on its network will PassTurn indefinitely. Force a discard so the
-    // bot can draw cards matching its existing network and plan a fresh route.
-    // Cap at 3 consecutive discards to prevent infinite discard loops.
+    // JIRA-177, JIRA-183: fires immediately on raw state — no noProgressTurns gate, no cap on
+    // consecutive discards. A broke bot with unachievable demands gains nothing from waiting.
     const botIsBroke = snapshot.bot.money < 5;
     const hasAchievableDemand = context.demands.some(
       d => (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
@@ -91,19 +87,17 @@ export class GuardrailEnforcer {
     if (
       botIsBroke &&
       hasActiveRoute &&
-      noProgressTurns >= 2 &&
       !hasAchievableDemand &&
-      planType !== AIActionType.DiscardHand &&
-      consecutiveDiscards < 3
+      planType !== AIActionType.DiscardHand
     ) {
       console.warn(
         `[Guardrail Broke-Stuck] Broke ($${snapshot.bot.money}M) with active route and no achievable demand on network` +
-        ` — forcing DiscardHand (consecutiveDiscards=${consecutiveDiscards}, noProgressTurns=${noProgressTurns})`,
+        ` — forcing DiscardHand`,
       );
       return {
         plan: { type: AIActionType.DiscardHand },
         overridden: true,
-        reason: `Broke-and-stuck: no achievable demand on existing network after ${noProgressTurns} no-progress turns — forcing DiscardHand to draw playable cards`,
+        reason: `Broke-and-stuck: no achievable demand on existing network — forcing DiscardHand to draw playable cards`,
       };
     }
 

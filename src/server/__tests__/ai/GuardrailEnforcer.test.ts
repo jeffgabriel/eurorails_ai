@@ -178,7 +178,8 @@ describe('GuardrailEnforcer', () => {
           payout: 25,
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true: bot is delivering as part of a route, not stuck
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan); // Same reference
@@ -200,7 +201,8 @@ describe('GuardrailEnforcer', () => {
           ],
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true: bot is delivering as part of a route, not stuck
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -216,7 +218,8 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true to skip stuck guardrail and reach G3
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.PassTurn);
@@ -232,7 +235,8 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true to skip stuck guardrail and reach G3 check
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -248,7 +252,8 @@ describe('GuardrailEnforcer', () => {
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true: bot is building track as part of an active route
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -259,7 +264,8 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true: bot passes while on an active route (e.g. waiting at ferry)
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
       });
@@ -268,6 +274,7 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
+        // DiscardHand is always passed through (no guardrail fires on it)
         const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
@@ -282,82 +289,73 @@ describe('GuardrailEnforcer', () => {
           city: 'Berlin',
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        // hasActiveRoute=true: bot is picking up as part of active route
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
       });
     });
 
-    describe('Progress-based stuck detection (noProgressTurns)', () => {
-      it('should force DiscardHand when noProgressTurns >= 3 and plan is not DiscardHand', async () => {
+    describe('Stuck guardrail (no active route, no deliverable load)', () => {
+      it('should force DiscardHand immediately when no active route and no deliverable load', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+        // hasActiveRoute=false (default), no loads on train → fires immediately
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
-        expect(result.reason).toContain('stuck detection');
-        expect(result.reason).toContain('3');
+        expect(result.reason).toContain('Stuck');
       });
 
-      it('should force DiscardHand when noProgressTurns is 5 (well above threshold)', async () => {
+      it('should force DiscardHand for BUILD plan when no active route and no deliverable load', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = {
           type: AIActionType.BuildTrack,
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
-      });
-
-      it('should NOT override when noProgressTurns < 3', async () => {
-        const ctx = makeContext({ canDeliver: [] });
-        const plan: TurnPlan = { type: AIActionType.PassTurn };
-
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 2);
-
-        expect(result.overridden).toBe(false);
-        expect(result.plan).toBe(plan);
-      });
-
-      it('should NOT override when noProgressTurns is 0', async () => {
-        const ctx = makeContext({ canDeliver: [] });
-        const plan: TurnPlan = { type: AIActionType.PassTurn };
-
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 0);
-
-        expect(result.overridden).toBe(false);
       });
 
       it('should NOT override when plan is already DiscardHand', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const plan: TurnPlan = { type: AIActionType.DiscardHand };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should allow PassTurn without loads (G4 removed)', async () => {
-        const ctx = makeContext({ canDeliver: [], loads: [] });
-        const plan: TurnPlan = { type: AIActionType.PassTurn };
+      it('should NOT override when bot has an active route (hasActiveRoute=true)', async () => {
+        const ctx = makeContext({ canDeliver: [] });
+        const snap = makeSnapshot();
+        snap.bot.loads = [];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 0);
+        // hasActiveRoute=true → stuck guardrail skips
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
       });
 
-      it('should allow PassTurn with loads (G4 + post-guardrail safety removed)', async () => {
-        const ctx = makeContext({ canDeliver: [], loads: ['Coal', 'Wine'] });
-        const plan: TurnPlan = { type: AIActionType.PassTurn };
+      it('should NOT override when bot has a deliverable load on-train', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ loadType: 'Coal', isLoadOnTrain: true, isDeliveryOnNetwork: true })],
+        });
+        const snap = makeSnapshot();
+        snap.bot.loads = ['Coal'];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 0);
+        // hasDeliverableLoad=true → stuck guardrail skips
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -374,7 +372,8 @@ describe('GuardrailEnforcer', () => {
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 0);
+        // hasActiveRoute=true (bot is mid-route) → stuck guardrail skips
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
@@ -391,10 +390,83 @@ describe('GuardrailEnforcer', () => {
           segments: [makeSegment(10, 10, 10, 11)],
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(5), 0);
+        // hasActiveRoute=true → stuck guardrail skips; load is on train but not deliverable on network
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(5), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
+      });
+    });
+
+    describe('Broke-and-stuck guardrail (JIRA-177, JIRA-183)', () => {
+      it('should force DiscardHand immediately when broke, has active route, no achievable demand', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ isSupplyOnNetwork: false, isDeliveryOnNetwork: false, isLoadOnTrain: false })],
+        });
+        const snap = makeSnapshot(0); // broke
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toContain('Broke-and-stuck');
+      });
+
+      it('should NOT fire when bot is not broke', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ isSupplyOnNetwork: false, isDeliveryOnNetwork: false })],
+        });
+        const snap = makeSnapshot(50); // not broke
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT fire when bot has an achievable demand (supply on network)', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ isSupplyOnNetwork: true, isDeliveryOnNetwork: true })],
+        });
+        const snap = makeSnapshot(0); // broke
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should NOT fire when plan is already DiscardHand', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ isSupplyOnNetwork: false, isDeliveryOnNetwork: false })],
+        });
+        const snap = makeSnapshot(0); // broke
+        const plan: TurnPlan = { type: AIActionType.DiscardHand };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(false);
+      });
+
+      it('should fire on every turn with no cap (consecutiveDiscards removed)', async () => {
+        // Simulate multiple consecutive broke-and-stuck triggers — all should fire
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [makeDemand({ isSupplyOnNetwork: false, isDeliveryOnNetwork: false })],
+        });
+        const snap = makeSnapshot(0); // broke
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        for (let i = 0; i < 5; i++) {
+          const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+          expect(result.overridden).toBe(true);
+          expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        }
       });
     });
 
@@ -420,7 +492,7 @@ describe('GuardrailEnforcer', () => {
         expect(result.reason).toContain('Forced DELIVER');
       });
 
-      it('Stuck detection takes priority over G3 (block UPGRADE) when no loads carried', async () => {
+      it('Stuck detection takes priority over G3 (block UPGRADE) when no active route', async () => {
         const ctx = makeContext({ isInitialBuild: true, canDeliver: [] });
         const plan: TurnPlan = {
           type: AIActionType.UpgradeTrain,
@@ -428,14 +500,15 @@ describe('GuardrailEnforcer', () => {
           cost: 20,
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 3);
+        // hasActiveRoute=false → stuck guardrail fires before G3
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
-        expect(result.reason).toContain('stuck detection');
+        expect(result.reason).toContain('Stuck');
       });
 
-      it('JIRA-47: G1 fires BEFORE stuck detection — bot delivers even when noProgressTurns >= 3', async () => {
+      it('JIRA-47: G1 fires BEFORE stuck detection — bot delivers even when stuck', async () => {
         const delivery: DeliveryOpportunity = {
           loadType: 'Coal',
           deliveryCity: 'Berlin',
@@ -445,7 +518,7 @@ describe('GuardrailEnforcer', () => {
         const ctx = makeContext({ canDeliver: [delivery] });
         const plan: TurnPlan = { type: AIActionType.PassTurn };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), 5);
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DeliverLoad);
@@ -454,29 +527,32 @@ describe('GuardrailEnforcer', () => {
         expect(result.plan.type).not.toBe(AIActionType.DiscardHand);
       });
 
-      it('JIRA-120: Stuck detection fires even when bot is carrying loads', async () => {
-        // JIRA-120: Removed loads gate — carrying loads is not a reason to keep a bad hand
+      it('JIRA-120: Stuck detection fires when carrying loads with no deliverable route', async () => {
+        // Loads on train but no demand with isLoadOnTrain+isDeliveryOnNetwork → hasDeliverableLoad=false
         const ctx = makeContext({ canDeliver: [] });
         const snap = makeSnapshot();
         snap.bot.loads = ['Coal', 'Wine'];
         const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 4);
+        // hasActiveRoute=false, loads on train but no deliverable demand → stuck fires
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
       });
 
-      it('Stuck detection fires for loadless bot after 3 no-progress turns', async () => {
+      it('JIRA-68, JIRA-183: Stuck detection fires immediately for bot with no active route', async () => {
         const ctx = makeContext({ canDeliver: [] });
         const snap = makeSnapshot();
         snap.bot.loads = [];
-        const plan: TurnPlan = { type: AIActionType.BuildTrack, segments: [makeSegment(10, 10, 10, 11)] };
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 3);
+        // hasActiveRoute=false → fires immediately (no counter needed)
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
 
         expect(result.overridden).toBe(true);
         expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toContain('Stuck');
       });
 
       it('JIRA-68: Stuck detection skips when bot has an active route (empty-handed travel)', async () => {
@@ -485,25 +561,11 @@ describe('GuardrailEnforcer', () => {
         snap.bot.loads = [];
         const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
 
-        // noProgressTurns=4, hasActiveRoute=true → should NOT fire stuck detection
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 4, true);
+        // hasActiveRoute=true → stuck guardrail skips
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan);
-      });
-
-      it('JIRA-68: Stuck detection fires when no active route, no loads, noProgressTurns >= 3', async () => {
-        const ctx = makeContext({ canDeliver: [] });
-        const snap = makeSnapshot();
-        snap.bot.loads = [];
-        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
-
-        // noProgressTurns=3, hasActiveRoute=false → SHOULD fire stuck detection
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, 3, false);
-
-        expect(result.overridden).toBe(true);
-        expect(result.plan.type).toBe(AIActionType.DiscardHand);
-        expect(result.reason).toContain('stuck detection');
       });
     });
 
@@ -525,7 +587,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 5 + 7 = 12mp, speed = 9, excess = 3 → last MOVE truncated from 7 to 4
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan.type).toBe('MultiAction');
@@ -556,7 +618,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 4 + 5 = 9mp = speed limit, no truncation
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan).toBe(plan); // Same reference — no changes
@@ -574,7 +636,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 9 + 3 = 12mp, excess = 3, last MOVE has 3mp → removed entirely
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(result.overridden).toBe(false);
         expect(result.plan.type).toBe('MultiAction');
@@ -597,7 +659,7 @@ describe('GuardrailEnforcer', () => {
         };
         // Total: 6 + 6 = 12mp > 9
 
-        await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         expect(warnSpy).toHaveBeenCalledWith(
           expect.stringContaining('[Guardrail 8]'),
@@ -617,7 +679,7 @@ describe('GuardrailEnforcer', () => {
           totalFee: 0,
         };
 
-        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot());
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, makeSnapshot(), true);
 
         // Guardrail 8 only handles MultiAction; single MOVE passes through
         expect(result.overridden).toBe(false);

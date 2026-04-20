@@ -102,7 +102,7 @@ jest.mock('../../services/playerService', () => ({
 jest.mock('../../services/ai/BotMemory', () => ({
   getMemory: jest.fn(() => Promise.resolve({
     turnNumber: 0,
-    noProgressTurns: 0,
+    
     consecutiveDiscards: 0,
     lastAction: null,
     activeRoute: null,
@@ -704,7 +704,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -804,7 +804,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Set memory with active route
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -850,7 +850,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -911,7 +911,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset memory to default (no active route)
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -953,7 +953,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('JIRA-63: should propagate llmLog into heuristic fallback decision', async () => {
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1073,7 +1073,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1114,7 +1114,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1155,7 +1155,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1214,7 +1214,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 7,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1278,7 +1278,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 6,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1336,7 +1336,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1394,7 +1394,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1445,7 +1445,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1504,7 +1504,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 8,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: oldRoute,
@@ -1584,7 +1584,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1641,7 +1641,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 6,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: oldRoute,
@@ -1725,7 +1725,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 6,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: oldRoute,
@@ -1779,7 +1779,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1828,7 +1828,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1893,7 +1893,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -1935,7 +1935,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -1966,7 +1966,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2019,7 +2019,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Reset getMemory to default since other tests may set mockReturnValue
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2101,7 +2101,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     beforeEach(() => {
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2134,7 +2134,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 7,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -2193,7 +2193,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 8,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null, // No active route — will consult LLM
@@ -2276,7 +2276,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 6,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -2324,7 +2324,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 10,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2372,7 +2372,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2443,7 +2443,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: route,
@@ -2485,7 +2485,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2525,7 +2525,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 31,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: route,
@@ -2603,7 +2603,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: route,
@@ -2696,7 +2696,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 8,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: route,
@@ -2776,7 +2776,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
     it('should NOT call rebuildDemands when no delivery occurred', async () => {
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -2853,7 +2853,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 8,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: route,
@@ -2969,7 +2969,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 5,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain,
         activeRoute: route,
@@ -3136,7 +3136,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // Ensure no activeRoute from previous tests — forces the LLM/planRoute branch
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -3299,7 +3299,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       };
 
       mockGetMemory.mockResolvedValue({
-        turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
+        turnNumber: 5,  consecutiveDiscards: 0,
         lastAction: AIActionType.MoveTrain, activeRoute: route,
         turnsOnRoute: 2, routeHistory: [], deliveryCount: 1, totalEarnings: 15,
         currentBuildTarget: null, turnsOnTarget: 0, consecutiveLlmFailures: 0,
@@ -3380,7 +3380,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       delete process.env.ANTHROPIC_API_KEY;
 
       mockGetMemory.mockResolvedValue({
-        turnNumber: 5, noProgressTurns: 0, consecutiveDiscards: 0,
+        turnNumber: 5,  consecutiveDiscards: 0,
         lastAction: null, activeRoute: null, turnsOnRoute: 0,
         routeHistory: [], deliveryCount: 0, totalEarnings: 0,
         currentBuildTarget: null, turnsOnTarget: 0, consecutiveLlmFailures: 0,
@@ -3451,7 +3451,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 4,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: oldRoute,
@@ -3568,7 +3568,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       // No active route — TripPlanner path is taken
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -3630,7 +3630,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -3679,7 +3679,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       mockGetMemory.mockResolvedValue({
         turnNumber: 0,
-        noProgressTurns: 0,
+        
         consecutiveDiscards: 0,
         lastAction: null,
         activeRoute: null,
@@ -3736,7 +3736,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
   describe('JIRA-170: Auto-deliver before LLM consultation', () => {
     const defaultMemory = {
       turnNumber: 0,
-      noProgressTurns: 0,
+      
       consecutiveDiscards: 0,
       lastAction: null,
       activeRoute: null,

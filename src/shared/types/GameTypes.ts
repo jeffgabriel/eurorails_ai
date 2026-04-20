@@ -471,8 +471,6 @@ export interface BotMemoryState {
     turnsOnTarget: number;
     /** What the bot did last turn (Phase 2 action) */
     lastAction: AIActionType | null;
-    /** Consecutive turns with zero progress — used for stuck detection */
-    noProgressTurns: number;
     /** Consecutive DiscardHand actions — used to prevent discard death spirals */
     consecutiveDiscards: number;
     /** Total deliveries completed this game */
