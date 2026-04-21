@@ -45,6 +45,8 @@ import { TripPlanner } from './TripPlanner';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
+import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsageFees';
+import { buildUnionTrackGraph } from '../../../shared/services/trackUsageFees';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
@@ -103,6 +105,17 @@ export interface CompositionTrace {
     costDelta: number;
     anchorClassification: Array<{ coord: [number, number]; namedCity: string | null; kept: boolean }>;
   };
+}
+
+// ── CappedCityError ────────────────────────────────────────────────────────
+
+/**
+ * JIRA-187: Error enum for the 2a/2b/2c capped-city decision tree.
+ */
+export enum CappedCityError {
+  NoViablePath = 'NO_VIABLE_PATH',
+  FeesTooHigh = 'FEES_TOO_HIGH',
+  NoOpponentStub = 'NO_OPPONENT_STUB',
 }
 
 // ── TurnExecutorResult ─────────────────────────────────────────────────────
@@ -662,6 +675,57 @@ export class TurnExecutorPlanner {
         };
       }
       return TurnExecutorPlanner.routeComplete(activeRoute, trace);
+    }
+
+    // ── JIRA-187: Capped-city pre-check ────────────────────────────────────
+    //
+    // Before attempting to build, check whether the active delivery city is
+    // capacity-capped by opponents. If so, skip executeBuildPhase entirely and
+    // run the 2a/2b/2c selector tree instead.
+    {
+      const pendingStop = activeRoute.stops[activeRoute.currentStopIndex];
+      if (pendingStop && pendingStop.action === 'deliver') {
+        const cappedCheck = TurnExecutorPlanner.isCappedCityBlocked(snapshot, pendingStop.city);
+        if (cappedCheck) {
+          const cappedResult = TurnExecutorPlanner.resolveCappedCityDelivery(
+            snapshot,
+            activeRoute,
+            context,
+            pendingStop,
+            tag,
+          );
+          if (cappedResult.handled) {
+            trace.outputPlan = cappedResult.plans.map(p => p.type);
+            return {
+              plans: cappedResult.plans,
+              updatedRoute: activeRoute,
+              compositionTrace: trace,
+              routeComplete: false,
+              routeAbandoned: cappedResult.routeAbandoned ?? false,
+              hasDelivery,
+              replanLlmLog,
+              replanSystemPrompt,
+              replanUserPrompt,
+            };
+          } else {
+            // 2c: abandon route
+            console.warn(`${tag} Capped city — route abandoned: ${cappedResult.error}`);
+            trace.a2.terminationReason = 'capped_city_abandoned';
+            trace.outputPlan = [AIActionType.PassTurn];
+            return {
+              plans: [{ type: AIActionType.PassTurn }],
+              updatedRoute: activeRoute,
+              compositionTrace: trace,
+              routeComplete: false,
+              routeAbandoned: true,
+              hasDelivery,
+              replanLlmLog,
+              replanSystemPrompt,
+              replanUserPrompt,
+            };
+          }
+        }
+      }
     }
 
     // ── Phase B: Build ─────────────────────────────────────────────────────
@@ -1493,6 +1557,345 @@ export class TurnExecutorPlanner {
     return maxDepthOnNetwork / trainSpeed;
   }
 
+  // ── JIRA-187: Capped-city helpers ─────────────────────────────────────
+
+  /**
+   * JIRA-187: Check whether a delivery city is capacity-capped by opponents
+   * and the bot has no track into that city.
+   *
+   * Stateless — re-evaluated fresh each turn. No logging on false evaluations
+   * (anti-patterns-logging-noise compliance).
+   *
+   * @param snapshot  Current world snapshot.
+   * @param deliveryCity  Name of the delivery city to check.
+   * @returns true when the city is capacity-capped and bot cannot build in.
+   */
+  static isCappedCityBlocked(snapshot: WorldSnapshot, deliveryCity: string): boolean {
+    try {
+      const SMALL_CITY_CAP = 2;
+      const MEDIUM_CITY_CAP = 3;
+
+      const grid = loadGridPoints();
+      const cityGridPoints: Array<{ row: number; col: number; terrain: TerrainType; name?: string }> = [];
+      for (const [, gp] of grid) {
+        if (gp.name === deliveryCity) {
+          cityGridPoints.push(gp);
+        }
+      }
+
+      if (cityGridPoints.length === 0) return false;
+
+      const cityTerrain = cityGridPoints[0].terrain;
+      const cap =
+        cityTerrain === TerrainType.SmallCity
+          ? SMALL_CITY_CAP
+          : cityTerrain === TerrainType.MediumCity
+            ? MEDIUM_CITY_CAP
+            : 0;
+
+      if (cap === 0) return false;
+
+      const cityCoordSet = new Set<string>(
+        cityGridPoints.map(gp => makeKey(gp.row, gp.col)),
+      );
+
+      const botPlayerId = snapshot.bot.playerId;
+      const opponentIdsWithTrack = new Set<string>();
+      let botHasTrack = false;
+
+      for (const playerTrack of snapshot.allPlayerTracks) {
+        const pid = playerTrack.playerId;
+        for (const seg of playerTrack.segments || []) {
+          const fromKey = makeKey(seg.from.row, seg.from.col);
+          const toKey = makeKey(seg.to.row, seg.to.col);
+          if (cityCoordSet.has(fromKey) || cityCoordSet.has(toKey)) {
+            if (pid === botPlayerId) {
+              botHasTrack = true;
+            } else {
+              opponentIdsWithTrack.add(pid);
+            }
+          }
+        }
+      }
+
+      if (botHasTrack) return false;
+      if (opponentIdsWithTrack.size < cap) return false;
+
+      // City is capped — log info
+      console.info(JSON.stringify({
+        event: 'capped_city_detected',
+        deliveryCity,
+        botPlayerId,
+        opponentCount: opponentIdsWithTrack.size,
+      }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * JIRA-187: 2a/2b/2c Selector decision tree for a capped-city delivery.
+   *
+   * 2a: If opponent stub exists and incomeVelocity = (payout - fees) / T >= 3,
+   *     generate MoveTrain plan along opponent's stub, then Deliver.
+   * 2b: If 2a not viable, find nearest own-network city in direction of capped city,
+   *     generate DropLoad + DiscardHand (demand discard via PassTurn fallback).
+   * 2c: Neither option viable — return { handled: false, error: CappedCityError }.
+   *
+   * @returns { handled: true; plans: TurnPlan[]; routeAbandoned?: boolean } on 2a/2b
+   *          { handled: false; error: CappedCityError } on 2c
+   */
+  private static resolveCappedCityDelivery(
+    snapshot: WorldSnapshot,
+    activeRoute: StrategicRoute,
+    context: GameContext,
+    pendingStop: RouteStop,
+    tag: string,
+  ): { handled: true; plans: TurnPlan[]; routeAbandoned?: boolean } | { handled: false; error: CappedCityError } {
+    const deliveryCity = pendingStop.city;
+    const payout = pendingStop.payment ?? 0;
+    const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
+
+    // ── 2a: Check track-usage fee path ───────────────────────────────────
+    try {
+      // Build union graph to find opponent stub
+      const allTracks = snapshot.allPlayerTracks.map(pt => ({
+        playerId: pt.playerId,
+        gameId: '',
+        segments: pt.segments,
+        totalCost: 0,
+        turnBuildCost: 0,
+        lastBuildTimestamp: new Date(0),
+      }));
+
+      const { adjacency, edgeOwners } = buildUnionTrackGraph({ allTracks });
+
+      // Bot's network frontier nodes
+      const botPlayerId = snapshot.bot.playerId;
+      const botNetworkNodes = new Set<string>();
+      const botTrackEntry = snapshot.allPlayerTracks.find(pt => pt.playerId === botPlayerId);
+      if (botTrackEntry) {
+        for (const seg of botTrackEntry.segments || []) {
+          botNetworkNodes.add(makeKey(seg.from.row, seg.from.col));
+          botNetworkNodes.add(makeKey(seg.to.row, seg.to.col));
+        }
+      }
+      if (snapshot.bot.position) {
+        botNetworkNodes.add(makeKey(snapshot.bot.position.row, snapshot.bot.position.col));
+      }
+
+      // Find delivery city coordinates
+      const grid = loadGridPoints();
+      const cityCoordSet = new Set<string>();
+      for (const [, gp] of grid) {
+        if (gp.name === deliveryCity) {
+          cityCoordSet.add(makeKey(gp.row, gp.col));
+        }
+      }
+
+      // BFS from bot network to delivery city
+      let bestPath: string[] | null = null;
+      let bestLen = Infinity;
+
+      for (const startKey of botNetworkNodes) {
+        if (!adjacency.has(startKey)) continue;
+        if (cityCoordSet.has(startKey)) {
+          bestPath = [startKey];
+          bestLen = 1;
+          break;
+        }
+        const path = cappedCityBfs(adjacency, startKey, cityCoordSet);
+        if (path && path.length < bestLen) {
+          bestPath = path;
+          bestLen = path.length;
+        }
+      }
+
+      if (bestPath && bestPath.length > 1) {
+        // Count opponent-owned edges in path
+        let opponentEdges = 0;
+        for (let i = 0; i < bestPath.length - 1; i++) {
+          const aKey = bestPath[i];
+          const bKey = bestPath[i + 1];
+          const [aRow, aCol] = aKey.split(',').map(Number);
+          const [bRow, bCol] = bKey.split(',').map(Number);
+          const eKey = cappedCityEdgeKey(aRow, aCol, bRow, bCol);
+          const owners = edgeOwners.get(eKey);
+          if (owners && owners.size > 0 && !owners.has(botPlayerId)) {
+            opponentEdges++;
+          }
+        }
+
+        const turnsOnOpponent = Math.ceil(opponentEdges / trainSpeed);
+        const fees = turnsOnOpponent * 4;
+
+        // Check if round-trip fits in movement budget
+        const totalPathEdges = bestPath.length - 1;
+        const roundTripEdges = totalPathEdges * 2;
+        const canRoundTrip = roundTripEdges <= trainSpeed;
+
+        // Compute income velocity
+        const netProfit = payout - fees;
+        const estimatedTurns = Math.max(turnsOnOpponent, 1);
+        const incomeVelocity = netProfit / estimatedTurns;
+
+        if (incomeVelocity >= 3 && fees <= payout) {
+          // 2a: Build MoveTrain plan using opponent stub path
+          const pathCoords: Array<{ row: number; col: number }> = bestPath.map(key => {
+            const [row, col] = key.split(',').map(Number);
+            return { row, col };
+          });
+
+          const movePlan: TurnPlan = {
+            type: AIActionType.MoveTrain,
+            path: pathCoords,
+          } as TurnPlan;
+
+          // Optionally append Deliver if path ends at delivery city
+          const plans: TurnPlan[] = [movePlan];
+
+          // If round-trip fits, add a return move (no-op if already at network)
+          if (canRoundTrip && bestPath.length > 1) {
+            const returnPath = [...bestPath].reverse().map(key => {
+              const [row, col] = key.split(',').map(Number);
+              return { row, col };
+            });
+            plans.push({
+              type: AIActionType.MoveTrain,
+              path: returnPath,
+            } as TurnPlan);
+          }
+
+          console.info(JSON.stringify({
+            event: 'capped_city_resolution',
+            branch: '2a',
+            deliveryCity,
+            fees,
+            incomeVelocity,
+          }));
+
+          return { handled: true, plans };
+        } else if (fees > 0) {
+          // Would have to pay fees but they're too high
+          // Fall through to 2b
+          console.info(JSON.stringify({
+            event: 'capped_city_fees_too_high',
+            deliveryCity,
+            fees,
+            payout,
+            incomeVelocity,
+          }));
+        }
+      } else {
+        // No opponent stub found — fall through to 2b
+        console.info(JSON.stringify({
+          event: 'capped_city_no_stub',
+          deliveryCity,
+        }));
+      }
+    } catch (err) {
+      console.warn(`${tag} [JIRA-187] 2a check failed:`, err);
+    }
+
+    // ── 2b: Drop at nearest own-network city ─────────────────────────────
+    try {
+      const nearestNetworkCity = TurnExecutorPlanner.findNearestOwnNetworkCity(
+        snapshot,
+        deliveryCity,
+        context,
+      );
+
+      if (nearestNetworkCity) {
+        const dropPlan: TurnPlan = {
+          type: AIActionType.DropLoad,
+          city: nearestNetworkCity,
+          loadType: pendingStop.loadType,
+        } as TurnPlan;
+
+        console.info(JSON.stringify({
+          event: 'capped_city_resolution',
+          branch: '2b',
+          deliveryCity,
+          dropCity: nearestNetworkCity,
+          fees: 0,
+          incomeVelocity: 0,
+        }));
+
+        return {
+          handled: true,
+          plans: [dropPlan, { type: AIActionType.PassTurn }],
+          routeAbandoned: true,
+        };
+      }
+    } catch (err) {
+      console.warn(`${tag} [JIRA-187] 2b check failed:`, err);
+    }
+
+    // ── 2c: Abandon route ────────────────────────────────────────────────
+    console.warn(JSON.stringify({
+      event: 'route_abandoned_capped_city',
+      deliveryCity,
+      reason: CappedCityError.NoViablePath,
+    }));
+
+    console.info(JSON.stringify({
+      event: 'capped_city_resolution',
+      branch: '2c',
+      deliveryCity,
+      fees: 0,
+      incomeVelocity: 0,
+    }));
+
+    return { handled: false, error: CappedCityError.NoViablePath };
+  }
+
+  /**
+   * JIRA-187: Find the nearest city on the bot's own network that lies
+   * in the direction of the capped delivery city.
+   */
+  private static findNearestOwnNetworkCity(
+    snapshot: WorldSnapshot,
+    deliveryCity: string,
+    context: GameContext,
+  ): string | null {
+    const grid = loadGridPoints();
+
+    // Find delivery city coordinates
+    let deliveryCityPos: { row: number; col: number } | null = null;
+    for (const [, gp] of grid) {
+      if (gp.name === deliveryCity) {
+        deliveryCityPos = { row: gp.row, col: gp.col };
+        break;
+      }
+    }
+
+    if (!deliveryCityPos) return null;
+
+    // Among cities on the bot's own network, find the closest to delivery city
+    let bestCity: string | null = null;
+    let bestDist = Infinity;
+
+    for (const cityName of context.citiesOnNetwork) {
+      let cityPos: { row: number; col: number } | null = null;
+      for (const [, gp] of grid) {
+        if (gp.name === cityName) {
+          cityPos = { row: gp.row, col: gp.col };
+          break;
+        }
+      }
+      if (!cityPos) continue;
+
+      const dist = hexDistance(cityPos.row, cityPos.col, deliveryCityPos.row, deliveryCityPos.col);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestCity = cityName;
+      }
+    }
+
+    return bestCity;
+  }
+
   // ── Return helpers ────────────────────────────────────────────────────
 
   private static routeComplete(
@@ -1509,4 +1912,51 @@ export class TurnExecutorPlanner {
       hasDelivery: false,
     };
   }
+}
+
+// ── Module-level helpers for JIRA-187 capped-city path-finding ──────────────
+
+/**
+ * BFS from startKey to any node in goalKeys over the union track graph.
+ * Returns the path (inclusive of start and first goal hit), or null.
+ */
+function cappedCityBfs(
+  adjacency: Map<string, Set<string>>,
+  startKey: string,
+  goalKeys: Set<string>,
+): string[] | null {
+  const visited = new Set<string>();
+  const parent = new Map<string, string>();
+  const queue: string[] = [startKey];
+  visited.add(startKey);
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (goalKeys.has(cur)) {
+      const path: string[] = [cur];
+      let step = cur;
+      while (parent.has(step)) {
+        step = parent.get(step)!;
+        path.unshift(step);
+      }
+      return path;
+    }
+    const neighbors = adjacency.get(cur);
+    if (!neighbors) continue;
+    for (const next of neighbors) {
+      if (!visited.has(next)) {
+        visited.add(next);
+        parent.set(next, cur);
+        queue.push(next);
+      }
+    }
+  }
+  return null;
+}
+
+/** Normalize edge key to match trackUsageFees.ts format. */
+function cappedCityEdgeKey(aRow: number, aCol: number, bRow: number, bCol: number): string {
+  const aKey = `${aRow},${aCol}`;
+  const bKey = `${bRow},${bCol}`;
+  return aKey < bKey ? `${aKey}|${bKey}` : `${bKey}|${aKey}`;
 }

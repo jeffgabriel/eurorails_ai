@@ -42,6 +42,11 @@ jest.mock('../../services/ai/MapTopology', () => ({
   loadGridPoints: jest.fn(() => new Map()),
 }));
 
+// JIRA-187: mock computeTrackUsageFees — returns 0 by default (no fees)
+jest.mock('../../../shared/services/computeTrackUsageFees', () => ({
+  computeTrackUsageFees: jest.fn(() => 0),
+}));
+
 // ── Fixtures ────────────────────────────────────────────────────────────
 
 function makeDemand(overrides: Partial<DemandContext> = {}): DemandContext {
@@ -1506,5 +1511,120 @@ describe('TripPlanner', () => {
       expect(result.chosen).toBe(0);
       expect(result.route.reasoning).toBe('Candidate 0');
     });
+  });
+});
+
+// ── JIRA-187: effectivePayout in scoreCandidates ───────────────────────────
+
+describe('TripPlanner — JIRA-187 effectivePayout scoring (AC4, AC5)', () => {
+  let mockComputeTrackUsageFees: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Import the mocked module
+    const { computeTrackUsageFees } = require('../../../shared/services/computeTrackUsageFees');
+    mockComputeTrackUsageFees = computeTrackUsageFees as jest.Mock;
+
+    // Default: no fees
+    mockComputeTrackUsageFees.mockReturnValue(0);
+  });
+
+  it('AC4: demand B (uncapped, payout=30, fees=0) scores higher than demand A (capped, payout=30, fees=40)', async () => {
+    // Candidate A delivers to capped city — fees = 40 → effectivePayout = -10 → negative score
+    // Candidate B delivers to open city — fees = 0 → effectivePayout = 30 → positive score
+    // LLM chosenIndex=1 (Berlin) — honoring it validates the scorer result
+    mockComputeTrackUsageFees.mockImplementation((demand: { deliveryCity: string }) => {
+      return demand.deliveryCity === 'Cardiff' ? 40 : 0;
+    });
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Cardiff', payout: 30, estimatedTurns: 3 }),
+        makeDemand({ cardIndex: 2, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 30, estimatedTurns: 3 }),
+      ],
+    });
+
+    const response = JSON.stringify({
+      chosenIndex: 1, // LLM explicitly picks Berlin (index 1 in candidates array)
+      candidates: [
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Cardiff', demandCardId: 1, payment: 30 },
+          ],
+          reasoning: 'Candidate A (Cardiff, capped)',
+        },
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 2, payment: 30 },
+          ],
+          reasoning: 'Candidate B (Berlin, open)',
+        },
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    if (!result || !('candidates' in result)) throw new Error('Expected TripPlanResult');
+    const r = result as TripPlanResult;
+
+    // Both candidates should have been scored
+    expect(r.candidates.length).toBe(2);
+
+    // Cardiff candidate should have usageFeeEstimate=40 and lower (negative) score
+    const cardiffCandidate = r.candidates.find(c => c.stops.some(s => s.city === 'Cardiff'));
+    const berlinCandidate = r.candidates.find(c => c.stops.some(s => s.city === 'Berlin'));
+    expect(cardiffCandidate).toBeDefined();
+    expect(berlinCandidate).toBeDefined();
+    expect(cardiffCandidate!.usageFeeEstimate).toBe(40);
+    // effectivePayout for Cardiff = 30 - 40 = -10 → netValue = -10 - 0 = -10 → negative score
+    expect(cardiffCandidate!.score).toBeLessThan(0);
+    // Berlin is open — score should be positive
+    expect(berlinCandidate!.score).toBeGreaterThan(0);
+    // Berlin outscores Cardiff
+    expect(berlinCandidate!.score).toBeGreaterThan(cardiffCandidate!.score);
+  });
+
+  it('AC5: uncapped-city demand scores the same as pre-fix (no fee applied)', async () => {
+    // No capped city — computeTrackUsageFees returns 0 for all → effectivePayout == payout
+    mockComputeTrackUsageFees.mockReturnValue(0);
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20, estimatedTurns: 3 }),
+      ],
+    });
+
+    const response = JSON.stringify({
+      chosenIndex: 0,
+      candidates: [
+        {
+          stops: [
+            { action: 'pickup', load: 'Coal', city: 'Essen' },
+            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 20 },
+          ],
+          reasoning: 'Standard route',
+        },
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    if (!result || !('candidates' in result)) throw new Error('Expected TripPlanResult');
+    const r = result as TripPlanResult;
+
+    // usageFeeEstimate should be 0 (no fees for uncapped city)
+    expect(r.candidates[0].usageFeeEstimate).toBe(0);
+    // Score should be positive (netValue=20/turns=3 > 0)
+    expect(r.candidates[0].score).toBeGreaterThan(0);
   });
 });

@@ -9,6 +9,7 @@
 import {
   BotSkillLevel,
   BotMemoryState,
+  DemandOption,
   GameContext,
   GridPoint,
   LlmAttempt,
@@ -20,6 +21,7 @@ import {
 } from '../../../shared/types/GameTypes';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { estimateHopDistance, loadGridPoints } from './MapTopology';
+import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsageFees';
 import { RouteValidator } from './RouteValidator';
 import { RouteOptimizer } from './RouteOptimizer';
 import { TRIP_PLAN_SCHEMA } from './schemas';
@@ -376,9 +378,39 @@ export class TripPlanner {
         }
       }
 
+      // JIRA-187: Compute track-usage fees for capped delivery cities and fold into
+      // payout so capped-city demands naturally rank lower without a special branch.
+      let totalUsageFees = 0;
+      for (const stop of finalStops) {
+        if (stop.action === 'deliver' && stop.payment) {
+          const matchingDemandForFee = context.demands.find(
+            d => d.loadType === stop.loadType && d.deliveryCity === stop.city,
+          );
+          if (matchingDemandForFee) {
+            const syntheticDemand: DemandOption = {
+              cardId: matchingDemandForFee.cardIndex,
+              demandIndex: 0,
+              loadType: stop.loadType,
+              supplyCity: matchingDemandForFee.supplyCity ?? '',
+              deliveryCity: stop.city,
+              payout: stop.payment,
+              startingCity: '',
+              buildCostToSupply: matchingDemandForFee.estimatedTrackCostToSupply,
+              buildCostSupplyToDelivery: matchingDemandForFee.estimatedTrackCostToDelivery,
+              totalBuildCost: matchingDemandForFee.estimatedTrackCostToSupply + matchingDemandForFee.estimatedTrackCostToDelivery,
+              ferryRequired: matchingDemandForFee.ferryRequired,
+              estimatedTurns: matchingDemandForFee.estimatedTurns,
+              efficiency: 0,
+            };
+            totalUsageFees += computeTrackUsageFees(syntheticDemand, snapshot);
+          }
+        }
+      }
+      const effectivePayout = totalPayout - totalUsageFees;
+
       // Prevent division by zero
       const estimatedTurns = Math.max(totalEstimatedTurns, 1);
-      const netValue = totalPayout - totalBuildCost;
+      const netValue = effectivePayout - totalBuildCost;
       const baseScore = netValue / estimatedTurns;
 
       // JIRA-166: Geographic distance penalty — penalize routes with high total travel
@@ -412,7 +444,7 @@ export class TripPlanner {
         netValue,
         estimatedTurns,
         buildCostEstimate: totalBuildCost,
-        usageFeeEstimate: 0, // no opponent track awareness per spec
+        usageFeeEstimate: totalUsageFees, // JIRA-187: opponent track-usage fees
         reasoning: rawCandidate.reasoning,
         llmIndex: llmIdx,
       });
