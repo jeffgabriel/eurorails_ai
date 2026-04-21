@@ -190,9 +190,10 @@ export class AIStrategyEngine {
     // Initialize decision logging for this turn
     initTurnLog(gameId, botPlayerId, memory.turnNumber + 1);
 
+    let snapshot: WorldSnapshot | undefined;
     try {
       // ── Stage 1: Capture world snapshot ──
-      let snapshot = await capture(gameId, botPlayerId);
+      snapshot = await capture(gameId, botPlayerId);
       console.log(`${tag} Snapshot: status=${snapshot.gameStatus}, money=${snapshot.bot.money}, segments=${snapshot.bot.existingSegments.length}, position=${snapshot.bot.position ? `${snapshot.bot.position.row},${snapshot.bot.position.col}` : 'none'}, loads=[${snapshot.bot.loads.join(',')}]`);
 
       // Auto-place bot if no position and has track (skip during initialBuild — no train placement yet)
@@ -211,7 +212,7 @@ export class AIStrategyEngine {
         ? {
           row: snapshot.bot.position.row,
           col: snapshot.bot.position.col,
-          cityName: gridPoints.find(gp => gp.row === snapshot.bot.position!.row && gp.col === snapshot.bot.position!.col)?.city?.name,
+          cityName: gridPoints.find(gp => gp.row === snapshot!.bot.position!.row && gp.col === snapshot!.bot.position!.col)?.city?.name,
         }
         : null;
 
@@ -1212,6 +1213,22 @@ export class AIStrategyEngine {
       };
     } catch (error) {
       const durationMs = Date.now() - startTime;
+      // JIRA-188: Diagnostic snapshot state at time of pipeline error
+      console.error(
+        `[AIStrategyEngine.takeTurn] JIRA-188 pipeline-error snapshot state:`,
+        JSON.stringify({
+          position: snapshot?.bot?.position ?? null,
+          loads: snapshot?.bot?.loads ?? null,
+          resolvedDemands: snapshot?.bot?.resolvedDemands?.map(r => ({
+            cardId: r.cardId,
+            demands: r.demands?.map((d: { city: string; loadType: string; payment: number }) => ({
+              city: d.city,
+              loadType: d.loadType,
+              payment: d.payment,
+            })),
+          })) ?? null,
+        }),
+      );
       console.error(`${tag} PIPELINE ERROR (${durationMs}ms):`, error instanceof Error ? error.stack : error);
 
       // Update bot memory even on pipeline error

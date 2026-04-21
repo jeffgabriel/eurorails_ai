@@ -668,14 +668,52 @@ export class TurnExecutor {
       };
     }
 
-    // Delegate to PlayerService — handles validation, payment, debt, card draw, DB update
-    const deliverResult = await PlayerService.deliverLoadForUser(
-      snapshot.gameId,
-      snapshot.bot.userId,
-      cityName,
-      loadType as LoadType,
-      cardId,
+    // JIRA-188: Diagnostic logging before delivery attempt
+    const demandDeck = DemandDeckService.getInstance();
+    const cardForLog = demandDeck.getCard(cardId);
+    console.log(
+      `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery attempt:`,
+      JSON.stringify({
+        loadType: plan.loadType,
+        cardId: plan.cardId,
+        targetCity: plan.targetCity,
+        derivedCityName: cityName,
+        posKey,
+        position: snapshot.bot.position,
+        loads: snapshot.bot.loads,
+        cardDemands: cardForLog ?? null,
+        resolvedDemandCardIds: snapshot.bot.resolvedDemands.map(r => r.cardId),
+      }),
     );
+
+    // Delegate to PlayerService — handles validation, payment, debt, card draw, DB update
+    let deliverResult: Awaited<ReturnType<typeof PlayerService.deliverLoadForUser>>;
+    try {
+      deliverResult = await PlayerService.deliverLoadForUser(
+        snapshot.gameId,
+        snapshot.bot.userId,
+        cityName,
+        loadType as LoadType,
+        cardId,
+      );
+    } catch (deliverError) {
+      console.error(
+        `[TurnExecutor.handleDeliverLoad] JIRA-188 delivery error:`,
+        JSON.stringify({
+          loadType: plan.loadType,
+          cardId: plan.cardId,
+          targetCity: plan.targetCity,
+          derivedCityName: cityName,
+          posKey,
+          position: snapshot.bot.position,
+          loads: snapshot.bot.loads,
+          cardDemands: cardForLog ?? null,
+          resolvedDemandCardIds: snapshot.bot.resolvedDemands.map(r => r.cardId),
+          errorMessage: deliverError instanceof Error ? deliverError.message : String(deliverError),
+        }),
+      );
+      throw deliverError;
+    }
 
     const payment = deliverResult.payment;
     const newCardId = deliverResult.newCard.id;
