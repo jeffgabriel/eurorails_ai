@@ -3779,4 +3779,199 @@ describe('TurnExecutorPlanner.execute — JIRA-187 capped-city decision tree', (
     expect(incomeVelocity).toBe(34);
     expect(incomeVelocity).toBeGreaterThanOrEqual(3);
   });
+
+  it('JIRA-187: 2a plan shape is [MoveTrain, DeliverLoad, MoveTrain] when round-trip fits', () => {
+    // Cardiff is a SmallCity, fully capped by 2 opponents.
+    // Path: bot(18,10) → (19,10) → (20,10) = 2 edges. Round-trip = 4 edges <= 9 (Freight).
+    // incomeVelocity = (38 - 4) / 1 = 34 >= 3 → 2a path.
+    (loadGridPoints as jest.Mock).mockReturnValue(
+      makeGridWithCity('Cardiff', 20, 10, TerrainType.SmallCity),
+    );
+
+    const mockAdjacency = new Map<string, Set<string>>([
+      ['18,10', new Set(['19,10'])],
+      ['19,10', new Set(['18,10', '20,10'])],
+      ['20,10', new Set(['19,10'])],
+    ]);
+    const mockEdgeOwners = new Map<string, Set<string>>([
+      ['18,10|19,10', new Set(['opp-1'])],
+      ['19,10|20,10', new Set(['opp-1'])],
+    ]);
+    mockBuildUnionTrackGraph.mockReturnValue({
+      adjacency: mockAdjacency,
+      edgeOwners: mockEdgeOwners,
+    });
+
+    const snapshot = makeSnapshotWithTracks(
+      'bot-1',
+      { row: 18, col: 10 },
+      [],
+      [
+        { playerId: 'opp-1', segments: [
+          { from: { row: 20, col: 10 }, to: { row: 19, col: 10 } },
+          { from: { row: 19, col: 10 }, to: { row: 18, col: 10 } },
+        ]},
+        { playerId: 'opp-2', segments: [
+          { from: { row: 20, col: 10 }, to: { row: 20, col: 9 } },
+        ]},
+      ],
+    );
+
+    const deliverStop: RouteStop = {
+      action: 'deliver',
+      city: 'Cardiff',
+      loadType: 'Labor',
+      payment: 38,
+      demandCardId: 42,
+    };
+    const route = makeRoute({
+      stops: [deliverStop],
+      currentStopIndex: 0,
+      phase: 'travel',
+    });
+
+    // Provide matching demand in context so cardId is resolved
+    const context = makeContext({
+      position: { city: 'Birmingham', row: 18, col: 10 },
+      money: 96,
+      loads: ['Labor'],
+      citiesOnNetwork: ['Birmingham'],
+      demands: [{
+        cardIndex: 42,
+        loadType: 'Labor',
+        deliveryCity: 'Cardiff',
+        payout: 38,
+        supplyCity: 'Birmingham',
+        isSupplyReachable: true,
+        isDeliveryReachable: true,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 0,
+        isLoadAvailable: true,
+        isLoadOnTrain: true,
+        ferryRequired: false,
+        loadChipTotal: 3,
+        loadChipCarried: 1,
+        estimatedTurns: 1,
+        demandScore: 34,
+        efficiencyPerTurn: 34,
+        networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0,
+        isAffordable: true,
+        projectedFundsAfterDelivery: 134,
+      }],
+    });
+
+    return TurnExecutorPlanner.execute(route, snapshot, context).then((result) => {
+      // 2a round-trip: [MoveTrain(out), DeliverLoad, MoveTrain(back)]
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.plans).toHaveLength(3);
+      expect(result.plans[0].type).toBe(AIActionType.MoveTrain);
+      expect(result.plans[1].type).toBe(AIActionType.DeliverLoad);
+      expect(result.plans[2].type).toBe(AIActionType.MoveTrain);
+      // Verify DeliverLoad fields
+      const deliverStep = result.plans[1] as import('../../../shared/types/GameTypes').TurnPlanDeliverLoad;
+      expect(deliverStep.load).toBe('Labor');
+      expect(deliverStep.city).toBe('Cardiff');
+      expect(deliverStep.cardId).toBe(42);
+      expect(deliverStep.payout).toBe(38);
+    });
+  });
+
+  it('JIRA-187: 2a plan shape is [MoveTrain, DeliverLoad] when round-trip does NOT fit movement budget', () => {
+    // Use a path long enough that round-trip exceeds Freight speed (9).
+    // Path: bot(0,0) → 5 hops → (0,5) = 5 edges. Round-trip = 10 > 9.
+    (loadGridPoints as jest.Mock).mockReturnValue(
+      makeGridWithCity('Cardiff', 0, 5, TerrainType.SmallCity),
+    );
+
+    // Build a 5-edge chain 0,0 → 0,1 → ... → 0,5 all owned by opp-1
+    const adjacency = new Map<string, Set<string>>();
+    const edgeOwners = new Map<string, Set<string>>();
+    for (let i = 0; i < 5; i++) {
+      const a = `0,${i}`;
+      const b = `0,${i + 1}`;
+      if (!adjacency.has(a)) adjacency.set(a, new Set());
+      if (!adjacency.has(b)) adjacency.set(b, new Set());
+      adjacency.get(a)!.add(b);
+      adjacency.get(b)!.add(a);
+      const eKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+      edgeOwners.set(eKey, new Set(['opp-1']));
+    }
+    mockBuildUnionTrackGraph.mockReturnValue({ adjacency, edgeOwners });
+
+    const snapshot = makeSnapshotWithTracks(
+      'bot-1',
+      { row: 0, col: 0 },
+      [],
+      [
+        { playerId: 'opp-1', segments: [
+          { from: { row: 0, col: 0 }, to: { row: 0, col: 5 } },
+        ]},
+        { playerId: 'opp-2', segments: [
+          { from: { row: 0, col: 5 }, to: { row: 0, col: 6 } },
+        ]},
+      ],
+    );
+
+    const deliverStop: RouteStop = {
+      action: 'deliver',
+      city: 'Cardiff',
+      loadType: 'Steel',
+      payment: 30,
+      demandCardId: 7,
+    };
+    const route = makeRoute({
+      stops: [deliverStop],
+      currentStopIndex: 0,
+      phase: 'travel',
+    });
+
+    // incomeVelocity = (30 - 4) / 1 = 26 >= 3 → 2a path; but round-trip (10) > speed (9)
+    const context = makeContext({
+      position: { city: 'Start', row: 0, col: 0 },
+      money: 100,
+      loads: ['Steel'],
+      citiesOnNetwork: ['Start'],
+      demands: [{
+        cardIndex: 7,
+        loadType: 'Steel',
+        deliveryCity: 'Cardiff',
+        payout: 30,
+        supplyCity: 'Start',
+        isSupplyReachable: true,
+        isDeliveryReachable: true,
+        isSupplyOnNetwork: true,
+        isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0,
+        estimatedTrackCostToDelivery: 0,
+        isLoadAvailable: true,
+        isLoadOnTrain: true,
+        ferryRequired: false,
+        loadChipTotal: 3,
+        loadChipCarried: 1,
+        estimatedTurns: 1,
+        demandScore: 26,
+        efficiencyPerTurn: 26,
+        networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0,
+        isAffordable: true,
+        projectedFundsAfterDelivery: 126,
+      }],
+    });
+
+    return TurnExecutorPlanner.execute(route, snapshot, context).then((result) => {
+      // 2a one-way: [MoveTrain(out), DeliverLoad] — no return move
+      expect(result.routeAbandoned).toBe(false);
+      expect(result.plans).toHaveLength(2);
+      expect(result.plans[0].type).toBe(AIActionType.MoveTrain);
+      expect(result.plans[1].type).toBe(AIActionType.DeliverLoad);
+      const deliverStep = result.plans[1] as import('../../../shared/types/GameTypes').TurnPlanDeliverLoad;
+      expect(deliverStep.load).toBe('Steel');
+      expect(deliverStep.city).toBe('Cardiff');
+      expect(deliverStep.cardId).toBe(7);
+      expect(deliverStep.payout).toBe(30);
+    });
+  });
 });

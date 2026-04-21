@@ -25,6 +25,7 @@ import {
   TurnPlan,
   TurnPlanDropLoad,
   TurnPlanMoveTrain,
+  TurnPlanDeliverLoad,
   WorldSnapshot,
   GameContext,
   StrategicRoute,
@@ -1753,10 +1754,34 @@ export class TurnExecutorPlanner {
             path: pathCoords,
           } as TurnPlan;
 
-          // Optionally append Deliver if path ends at delivery city
           const plans: TurnPlan[] = [movePlan];
 
-          // If round-trip fits, add a return move (no-op if already at network)
+          // Insert DeliverLoad step at the delivery city
+          // Look up cardId and payout from context.demands matching loadType + deliveryCity,
+          // then fall back to pendingStop fields if not found in context.
+          const matchingDemand = context.demands.find(
+            d => d.loadType === pendingStop.loadType && d.deliveryCity === deliveryCity,
+          );
+          const cardId = matchingDemand?.cardIndex ?? pendingStop.demandCardId;
+          const deliverPayout = matchingDemand?.payout ?? payout;
+
+          if (cardId != null) {
+            const deliverStep: TurnPlanDeliverLoad = {
+              type: AIActionType.DeliverLoad,
+              load: pendingStop.loadType,
+              city: deliveryCity,
+              cardId,
+              payout: deliverPayout,
+            };
+            plans.push(deliverStep);
+          } else {
+            console.warn(
+              `[TurnExecutorPlanner] JIRA-187 2a: no matching demand found for ` +
+              `${pendingStop.loadType}→${deliveryCity} — skipping DeliverLoad step`,
+            );
+          }
+
+          // If round-trip fits, add a return move back to own network
           if (canRoundTrip && bestPath.length > 1) {
             const returnPath = [...bestPath].reverse().map(key => {
               const [row, col] = key.split(',').map(Number);
