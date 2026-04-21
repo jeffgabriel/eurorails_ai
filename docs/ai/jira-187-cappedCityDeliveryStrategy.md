@@ -2,7 +2,44 @@
 
 ## Status
 
-Proposal for review. No implementation yet.
+**Implemented.** All three layers (shared function, TripPlanner scorer, TurnExecutorPlanner pre-check) shipped in the `compounds/guardrail-updates` branch.
+
+### Implementation surfaces
+
+| File | Change |
+|------|--------|
+| `src/shared/services/computeTrackUsageFees.ts` | NEW — pure shared fee computation function |
+| `src/server/services/ai/TripPlanner.ts` | MODIFIED — `scoreCandidates` now uses `effectivePayout = payout - computeTrackUsageFees(demand, snapshot)` |
+| `src/server/services/ai/TurnExecutorPlanner.ts` | MODIFIED — `execute` adds `isCappedCityBlocked` pre-check + `resolveCappedCityDelivery` (2a/2b/2c) + `CappedCityError` enum |
+| `src/server/__tests__/ai/computeTrackUsageFees.test.ts` | NEW — 12 unit tests covering all fast-path and fee-calculation scenarios |
+
+### New types
+
+```typescript
+// src/server/services/ai/TurnExecutorPlanner.ts
+export enum CappedCityError {
+  NoViablePath = 'NO_VIABLE_PATH',
+  FeesTooHigh = 'FEES_TOO_HIGH',
+  NoOpponentStub = 'NO_OPPONENT_STUB',
+}
+```
+
+### computeTrackUsageFees signature
+
+```typescript
+// src/shared/services/computeTrackUsageFees.ts
+export function computeTrackUsageFees(
+  demand: DemandOption,
+  snapshot: WorldSnapshot,
+): number
+```
+
+Returns 0 (fee not applicable) when:
+- Delivery city is not a small/medium city
+- Bot already has track into the delivery city
+- Fewer opponents have track than the cap (city is not yet full)
+- No path exists from bot's network frontier to the delivery city
+- Graph construction fails (safe fallback, logs `warn`)
 
 ## The problem
 
@@ -130,12 +167,24 @@ Still viable. The floor only triggers if payout is low (e.g. a $12M demand with 
 
 Cardiff is correctly classified as a small city in `gridPoints.json` (small-circle icon on the board; medium cities use square icons). The data is authoritative. The underlying problem persists regardless: any small city where 2 opponents arrive first, or any medium city where 3 opponents arrive first, creates the same trap. JIRA-187 targets that class of bug.
 
-## Implementation surfaces (for the fix ticket, not this one)
+## Logging
 
-- `TripPlanner.ts` / demand scorer — call `computeTrackUsageFees(demand, snapshot)` and subtract its return value from `payout` before running any downstream scoring formula. Do not branch on a capped/uncapped flag.
-- `TurnExecutorPlanner.ts` — add a capacity-cap pre-check when the next route stop is a delivery into a small/medium city. If capped, run the 2a/2b/2c decision tree before falling through to `executeBuildPhase`.
-- `ActionResolver.resolveMove` — already handles opponent-track fees; verify it correctly computes fee cost for a round-trip path across an opponent's stub.
-- Add a new turn-plan primitive for "pay fee and deliver" if the existing `MoveTrain + DeliverLoad` MultiAction doesn't cleanly cover the round-trip pattern.
+When a capped city is detected (Layer 2), the bot logs at `info` level:
+```
+{ event: 'capped_city_detected', deliveryCity, botPlayerId, opponentCount }
+```
+
+When a branch is chosen:
+```
+{ event: 'capped_city_resolution', branch: '2a'|'2b'|'2c', deliveryCity, fees, incomeVelocity }
+```
+
+When 2c fires (route abandoned):
+```
+{ event: 'route_abandoned_capped_city', deliveryCity, reason: CappedCityError }
+```
+
+The per-turn `isCappedCityBlocked` check does NOT log on false evaluations (anti-patterns-logging-noise compliance).
 
 ## Success measure
 
