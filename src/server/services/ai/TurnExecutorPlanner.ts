@@ -23,6 +23,7 @@
 
 import {
   TurnPlan,
+  TurnPlanDropLoad,
   TurnPlanMoveTrain,
   WorldSnapshot,
   GameContext,
@@ -1807,11 +1808,11 @@ export class TurnExecutorPlanner {
       );
 
       if (nearestNetworkCity) {
-        const dropPlan: TurnPlan = {
+        const dropPlan: TurnPlanDropLoad = {
           type: AIActionType.DropLoad,
           city: nearestNetworkCity,
-          loadType: pendingStop.loadType,
-        } as TurnPlan;
+          load: pendingStop.loadType,
+        };
 
         console.info(JSON.stringify({
           event: 'capped_city_resolution',
