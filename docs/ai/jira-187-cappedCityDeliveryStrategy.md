@@ -55,6 +55,68 @@ Once the bot has an active route whose next stop's delivery city is capacity-cap
 
 **2c. Abandon the route.** If neither 2a nor 2b produces a positive turn, abandon the route explicitly (`routeAbandoned = true`) so the TripPlanner re-plans on the next turn against a different demand. This is the fallback of last resort — never the default behavior, because it costs the LLM call budget.
 
+## Discovery: when and how the bot notices
+
+The capacity problem is detected during the **per-turn pre-flight check** inside `TurnExecutorPlanner`, before any build or move plan is generated. On every turn where the bot's active route has a pending delivery stop, the planner runs:
+
+1. Look up the delivery city's `cityType` from `gridPoints.json` (small = cap 2, medium = cap 3).
+2. Count how many distinct players (excluding this bot) already have at least one track segment touching any milepost of that city.
+3. If `opponentCount >= cap AND bot has no track into that city` → **capped-city flag set**.
+
+The check is cheap (one index lookup + a filter over the known track graph) and happens unconditionally each turn — not just when a build fails. This is intentional: a city that was open last turn may become capped this turn if an opponent finished building in, and the bot must adapt immediately rather than waiting to discover the block through a failed build attempt.
+
+When the flag is set, the planner skips `executeBuildPhase` entirely and falls through to the 2a/2b/2c decision tree described above. The flag is **not persisted** between turns; the check is stateless and re-evaluated fresh each cycle.
+
+## Profitability algorithm
+
+Before choosing between 2a (pay fees) and 2b (opportunistic drop), the bot computes an **income-velocity estimate** for the fee-paying path and rejects it unless the result clears a minimum floor.
+
+### Inputs
+
+| Symbol | Meaning |
+|--------|---------|
+| `P` | Delivery payout (ECU M) |
+| `F` | Total track-usage fee for the traversal path (ECU M) — flat $4M per opponent per turn of traversal, not per milepost |
+| `T` | Estimated turns to complete the delivery via the opponent's track, including any return travel to resume the bot's own network |
+
+### Formula
+
+```
+netProfit = P - F
+incomeVelocity = netProfit / T          # ECU M / turn
+```
+
+The bot proceeds with the fee-paying path (2a) only if:
+
+```
+incomeVelocity >= 3   # ECU M / turn floor
+```
+
+The **3 M/turn floor** is the minimum acceptable income rate. Below it, the capital tied up in the traversal turns is better redeployed via 2b or 2c.
+
+### Worked example — Cardiff (game `25d8059e`)
+
+- **Payout:** $38M (`Labor → Cardiff`)
+- **Opponent stub length:** 3 mileposts (Flash's track from the junction into Cardiff)
+- **Fee:** $4M × 1 opponent × 1 traversal turn = **$4M**
+- **Turns to complete:** 1 turn to reach Cardiff via Flash's track + 0 extra return turns (bot's own network is adjacent to the junction) = **T = 1**
+
+```
+netProfit       = 38 - 4  = 34 M
+incomeVelocity  = 34 / 1  = 34 M/turn   ✓  (>> 3 M/turn floor)
+```
+
+Result: proceed with 2a (pay fee, deliver). The floor is cleared by a factor of 11×. In this case 2b would have been strictly worse — the bot collects $34M instead of $0.
+
+If the stub were longer — say 10 mileposts requiring 2 traversal turns at $8M total fees:
+
+```
+netProfit       = 38 - 8  = 30 M
+incomeVelocity  = 30 / 2  = 15 M/turn   ✓  (still >> 3 M/turn floor)
+```
+
+Still viable. The floor only triggers if payout is low (e.g. a $12M demand with a 3-turn, $12M fee path: `netProfit = 0`, `incomeVelocity = 0 < 3` → reject 2a, fall to 2b).
+
 ## Why this is a class bug, not a data bug
 
 Cardiff is correctly classified as a small city in `gridPoints.json` (small-circle icon on the board; medium cities use square icons). The data is authoritative. The underlying problem persists regardless: any small city where 2 opponents arrive first, or any medium city where 3 opponents arrive first, creates the same trap. JIRA-187 targets that class of bug.
@@ -69,11 +131,9 @@ Cardiff is correctly classified as a small city in `gridPoints.json` (small-circ
 
 ## Open questions for review
 
-1. **Threshold for the 2a vs 2b decision.** What's the right expected-net-profit floor for paying fees? $5M? 20% of payout? Configurable per skill level?
-2. **How many turns should 2a span?** If the opponent's stub is 10 mileposts and the bot needs 2 turns of fee-paying ($8M) to reach the city, is that still preferred over 2b? Probably yes if payout > $20M. Needs a concrete decision rule.
-3. **Does 2b require a cost-benefit check vs. 2c?** A drop at a nearby city salvages the turn's movement but loses the payout. Abandonment costs an LLM re-plan. In some states 2c may be cheaper long-term. Worth modeling.
-4. **Interaction with JIRA-186 (`upgradeOnRoute` never consumed).** If the bot is movement-starved AND trapped outside a capped city, paying fees requires extra movement budget. Fast Freight (+3 mp) may be the enabling prerequisite. Fix JIRA-186 first.
-5. **Interaction with JIRA-180 (the "not-implementing" ticket).** JIRA-180 assumed the bot always maintains one connected network. A capacity-capped delivery city is a case where the bot is explicitly NOT connected (and cannot become connected). This is an argument for revisiting JIRA-180's close-as-not-implementing decision if capacity-aware deliveries are going to rely on routing over opponent track into a cluster the bot can't build into.
+1. **Does 2b require a cost-benefit check vs. 2c?** A drop at a nearby city salvages the turn's movement but loses the payout. Abandonment costs an LLM re-plan. In some states 2c may be cheaper long-term. Worth modeling.
+2. **Interaction with JIRA-186 (`upgradeOnRoute` never consumed).** If the bot is movement-starved AND trapped outside a capped city, paying fees requires extra movement budget. Fast Freight (+3 mp) may be the enabling prerequisite. Fix JIRA-186 first.
+3. **Interaction with JIRA-180 (the "not-implementing" ticket).** JIRA-180 assumed the bot always maintains one connected network. A capacity-capped delivery city is a case where the bot is explicitly NOT connected (and cannot become connected). This is an argument for revisiting JIRA-180's close-as-not-implementing decision if capacity-aware deliveries are going to rely on routing over opponent track into a cluster the bot can't build into.
 
 ## Success measure
 
