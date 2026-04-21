@@ -143,6 +143,8 @@ export interface BotTurnResult {
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
     firstViolation?: string;
+    firstHardGates?: Array<{ gate: string; passed: boolean; detail?: string }>;
+    phaseBStripped?: boolean;
   };
   // JIRA-129: Build Advisor fields
   advisorAction?: string;
@@ -1203,7 +1205,9 @@ export class AIStrategyEngine {
           hardGates: validationResult.hardGates,
           outcome: validationResult.valid ? 'passed' : 'hard_reject',
           recomposeCount,
-          firstViolation: recomposeCount > 0 ? firstValidationViolation : undefined,
+          firstViolation: firstValidationViolation,
+          firstHardGates: firstValidationHardGates,
+          phaseBStripped: phaseBWasStripped,
         },
       };
     } catch (error) {

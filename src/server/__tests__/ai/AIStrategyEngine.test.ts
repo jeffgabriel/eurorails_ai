@@ -4121,7 +4121,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         updatedRoute: route,
       }));
 
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       // Find the logPhase call for 'Turn Validation'
       const mockLogPhase = logPhase as jest.MockedFunction<typeof logPhase>;
@@ -4154,6 +4154,18 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
 
       // AC5: outcome reflects the final (post-strip) state
       expect(payload.outcome).toBe('passed');
+
+      // Return-value assertions: takeTurn must propagate the same fields
+      // so they reach BotTurnTrigger → GameLogger → NDJSON
+      const rv = result.turnValidation!;
+      expect(rv.firstViolation).toBeDefined();
+      expect(typeof rv.firstViolation).toBe('string');
+      expect(rv.firstViolation).toContain('24');
+      expect(Array.isArray(rv.firstHardGates)).toBe(true);
+      const rvFailingGate = rv.firstHardGates!.find((g) => !g.passed);
+      expect(rvFailingGate).toBeDefined();
+      expect(rvFailingGate!.gate).toBe('PHASE_B_BUDGET_CAP');
+      expect(rv.phaseBStripped).toBe(true);
     });
 
     it('should not set firstViolation or phaseBStripped when original plan passes validation', async () => {
@@ -4198,7 +4210,7 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
         updatedRoute: route,
       }));
 
-      await AIStrategyEngine.takeTurn('game-1', 'bot-1');
+      const result = await AIStrategyEngine.takeTurn('game-1', 'bot-1');
 
       const mockLogPhase = logPhase as jest.MockedFunction<typeof logPhase>;
       const turnValidationCall = mockLogPhase.mock.calls.find(
@@ -4213,6 +4225,13 @@ describe('AIStrategyEngine.takeTurn (Integration)', () => {
       expect(payload.phaseBStripped).toBe(false);
       expect(payload.firstHardGates).toBeUndefined();
       expect(payload.outcome).toBe('passed');
+
+      // Return-value assertions: pass-through case — no violation fields on returned object
+      const rv = result.turnValidation!;
+      expect(rv.firstViolation).toBeUndefined();
+      expect(rv.phaseBStripped).toBe(false);
+      expect(rv.firstHardGates).toBeUndefined();
+      expect(rv.outcome).toBe('passed');
     });
   });
 

@@ -135,6 +135,8 @@ export interface GameTurnLogEntry {
     outcome: 'passed' | 'hard_reject';
     recomposeCount: number;
     firstViolation?: string;
+    firstHardGates?: Array<{ gate: string; passed: boolean; detail?: string }>;
+    phaseBStripped?: boolean;
   };
 
   // Build Advisor (JIRA-129)
