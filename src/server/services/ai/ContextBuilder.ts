@@ -161,6 +161,18 @@ export class ContextBuilder {
   }
 
   /**
+   * Recompute immediate delivery opportunities from a fresh snapshot (JIRA-165).
+   * Used after a mid-turn delivery or DiscardHand to refresh canDeliver with
+   * the current snapshot state — delegating to the existing computeCanDeliver logic.
+   */
+  static rebuildCanDeliver(
+    snapshot: WorldSnapshot,
+    gridPoints: GridPoint[],
+  ): DeliveryOpportunity[] {
+    return ContextBuilder.computeCanDeliver(snapshot, gridPoints);
+  }
+
+  /**
    * Recompute demand contexts from a fresh snapshot (JIRA-56).
    * Used after DiscardHand to refresh demandRanking with new cards.
    */

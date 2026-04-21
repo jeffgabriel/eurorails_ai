@@ -402,10 +402,15 @@ export class TurnExecutorPlanner {
               // does not treat them as "on train" (supplyCity: null).
               freshSnapshot.bot.loads = [...snapshot.bot.loads];
               context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
+              context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
               snapshot.bot.resolvedDemands = freshSnapshot.bot.resolvedDemands;
               console.log(
                 `${tag} JIRA-165: Refreshed demands from DB after delivery — ` +
                 `${context.demands.length} demand(s) now in context`,
+              );
+              console.log(
+                `${tag} JIRA-165: Refreshed canDeliver after delivery — ` +
+                `${context.canDeliver.length} opportunit(ies) now in context`,
               );
             } catch (refreshErr) {
               console.warn(

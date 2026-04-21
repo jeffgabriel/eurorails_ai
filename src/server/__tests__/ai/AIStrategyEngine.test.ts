@@ -196,6 +196,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
     build: jest.fn(),
     serializePrompt: jest.fn(() => 'serialized-prompt'),
     rebuildDemands: jest.fn(() => []),
+    rebuildCanDeliver: jest.fn(() => []),
     computeEnRoutePickups: jest.fn(() => []),
     // JIRA-161: computeUpgradeAdvice is now public static and called from takeTurn
     computeUpgradeAdvice: jest.fn(() => undefined),

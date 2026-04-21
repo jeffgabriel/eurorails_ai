@@ -143,6 +143,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
         demandRanking: 1,
       },
     ]),
+    rebuildCanDeliver: jest.fn(() => []),
   },
 }));
 
@@ -171,6 +172,7 @@ let mockShouldDeferBuild: jest.SpyInstance;
 const mockBuildAdvisorAdvise = BuildAdvisor.advise as jest.Mock;
 const mockBuildAdvisorRetry = BuildAdvisor.retryWithSolvencyFeedback as jest.Mock;
 const mockTurnExecutorExecutePlan = TurnExecutor.executePlan as jest.Mock;
+const mockRebuildCanDeliver = ContextBuilder.rebuildCanDeliver as jest.Mock;
 
 // ── Factory helpers ────────────────────────────────────────────────────────
 
@@ -2426,6 +2428,133 @@ describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery demand refresh'
 
     // rebuildDemands should NOT have been called since capture() failed
     expect(mockRebuildDemands).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-165: Post-delivery canDeliver refresh (AC9) ──────────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-165 post-delivery canDeliver refresh', () => {
+  const mockCapture = capture as jest.Mock;
+  const mockRebuildDemands = ContextBuilder.rebuildDemands as jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+    // Reset capture to its default resolved snapshot so earlier tests that set
+    // mockRejectedValue do not bleed across (e.g., the "capture throws" test).
+    mockCapture.mockResolvedValue({
+      gameId: 'game-1',
+      gameStatus: 'active',
+      turnNumber: 1,
+      bot: {
+        playerId: 'bot-1',
+        userId: 'user-1',
+        money: 100,
+        position: { row: 5, col: 5 },
+        existingSegments: [],
+        demandCards: [2, 3, 4],
+        resolvedDemands: [],
+        trainType: 'Freight',
+        loads: [],
+        botConfig: null,
+        connectedMajorCityCount: 0,
+      },
+      allPlayerTracks: [],
+      loadAvailability: {},
+    });
+    // Reset rebuildCanDeliver to default implementation so earlier tests that set
+    // mockImplementation (e.g., "does not crash when throws") do not bleed across.
+    mockRebuildCanDeliver.mockImplementation(() => []);
+
+    const mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  it('AC9: context.canDeliver no longer contains the just-delivered (loadType, deliveryCity) pair after post-delivery refresh', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Tourists',
+      city: 'Berlin',
+      cardId: 7,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // Before refresh: canDeliver contains the tourists@Berlin entry
+    const touristsEntry = {
+      loadType: 'Tourists',
+      deliveryCity: 'Berlin',
+      payout: 8,
+      cardIndex: 7,
+    };
+
+    // rebuildDemands returns fresh demands (tourists card consumed)
+    mockRebuildDemands.mockReturnValue([]);
+    // rebuildCanDeliver returns empty — tourists already delivered
+    mockRebuildCanDeliver.mockReturnValue([]);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Tourists')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Tourists'],
+      canDeliver: [touristsEntry],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    await TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints);
+
+    // AC9: The just-delivered (Tourists, Berlin) pair must not appear in context.canDeliver
+    const stillPresent = context.canDeliver.some(
+      (opp) => opp.loadType === 'Tourists' && opp.deliveryCity === 'Berlin',
+    );
+    expect(stillPresent).toBe(false);
+
+    // rebuildCanDeliver must have been called with the fresh snapshot and gridPoints
+    expect(mockRebuildCanDeliver).toHaveBeenCalledWith(
+      expect.objectContaining({ gameId: 'game-1' }),
+      fakeGridPoints,
+    );
+  });
+
+  it('does not crash when rebuildCanDeliver throws — prior canDeliver value is retained', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 1,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    mockRebuildDemands.mockReturnValue([]);
+    mockRebuildCanDeliver.mockImplementation(() => { throw new Error('DB error'); });
+
+    const priorCanDeliver = [
+      { loadType: 'Coal', deliveryCity: 'Berlin', payout: 8, cardIndex: 1 },
+    ];
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { city: 'Berlin', row: 2, col: 2 },
+      loads: ['Coal'],
+      canDeliver: [...priorCanDeliver],
+    });
+    const snapshot = makeSnapshot();
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'TestCity' }] as any;
+
+    // Should not throw
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context, undefined, fakeGridPoints),
+    ).resolves.not.toThrow();
   });
 });
 

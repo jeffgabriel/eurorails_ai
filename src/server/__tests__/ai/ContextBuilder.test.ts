@@ -3857,3 +3857,113 @@ describe('JIRA-125: Endgame victory context shaping', () => {
     expect(phase).toBe('Victory Imminent');
   });
 });
+
+// ── rebuildCanDeliver ────────────────────────────────────────────────────────
+
+describe('ContextBuilder.rebuildCanDeliver', () => {
+  it('AC1: returns one DeliveryOpportunity when bot is at delivery city with matching load and demand', () => {
+    const gridPoints = [
+      makeCityPoint(2, 2, 'Berlin', TerrainType.SmallCity),
+    ];
+    const snapshot = makeWorldSnapshot({
+      botPosition: { row: 2, col: 2 },
+      botLoads: ['Tourists'],
+      resolvedDemands: [
+        {
+          cardId: 7,
+          demands: [
+            { city: 'Berlin', loadType: 'Tourists', payment: 8 },
+          ],
+        },
+      ],
+    });
+
+    const result = ContextBuilder.rebuildCanDeliver(snapshot, gridPoints);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      loadType: 'Tourists',
+      deliveryCity: 'Berlin',
+      payout: 8,
+      cardIndex: 7,
+    });
+  });
+
+  it('AC2: returns [] when bot is not at a city milepost', () => {
+    const gridPoints = [
+      makeCityPoint(2, 2, 'Berlin', TerrainType.SmallCity),
+      makeGridPoint(3, 3),
+    ];
+    const snapshot = makeWorldSnapshot({
+      botPosition: { row: 3, col: 3 }, // non-city milepost
+      botLoads: ['Tourists'],
+      resolvedDemands: [
+        {
+          cardId: 7,
+          demands: [{ city: 'Berlin', loadType: 'Tourists', payment: 8 }],
+        },
+      ],
+    });
+
+    const result = ContextBuilder.rebuildCanDeliver(snapshot, gridPoints);
+
+    expect(result).toEqual([]);
+  });
+
+  it('AC2: returns [] when bot is at a city but carries no matching load', () => {
+    const gridPoints = [
+      makeCityPoint(2, 2, 'Berlin', TerrainType.SmallCity),
+    ];
+    const snapshot = makeWorldSnapshot({
+      botPosition: { row: 2, col: 2 },
+      botLoads: ['Wine'], // wrong load
+      resolvedDemands: [
+        {
+          cardId: 7,
+          demands: [{ city: 'Berlin', loadType: 'Tourists', payment: 8 }],
+        },
+      ],
+    });
+
+    const result = ContextBuilder.rebuildCanDeliver(snapshot, gridPoints);
+
+    expect(result).toEqual([]);
+  });
+
+  it('returns [] when bot position is null', () => {
+    const gridPoints = [makeCityPoint(2, 2, 'Berlin', TerrainType.SmallCity)];
+    const snapshot = makeWorldSnapshot({
+      botPosition: null,
+      botLoads: ['Tourists'],
+      resolvedDemands: [
+        {
+          cardId: 7,
+          demands: [{ city: 'Berlin', loadType: 'Tourists', payment: 8 }],
+        },
+      ],
+    });
+
+    const result = ContextBuilder.rebuildCanDeliver(snapshot, gridPoints);
+
+    expect(result).toEqual([]);
+  });
+
+  it('post-delivery: does not contain delivered (loadType, deliveryCity) pair after load is removed', () => {
+    const gridPoints = [makeCityPoint(2, 2, 'Berlin', TerrainType.SmallCity)];
+
+    // After delivery: load removed from train, resolvedDemands updated (card gone)
+    const freshSnapshot = makeWorldSnapshot({
+      botPosition: { row: 2, col: 2 },
+      botLoads: [], // Tourists delivered — no longer on train
+      resolvedDemands: [], // demand card consumed
+    });
+
+    const result = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
+
+    const hasStaleEntry = result.some(
+      (opp) => opp.loadType === 'Tourists' && opp.deliveryCity === 'Berlin',
+    );
+    expect(hasStaleEntry).toBe(false);
+    expect(result).toEqual([]);
+  });
+});

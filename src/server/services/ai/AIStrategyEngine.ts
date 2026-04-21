@@ -953,6 +953,11 @@ export class AIStrategyEngine {
       if (executedAction === AIActionType.DiscardHand) {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
+        context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
+        console.log(
+          `${tag} JIRA-165: Refreshed canDeliver after DiscardHand — ` +
+          `${context.canDeliver.length} opportunit(ies) now in context`,
+        );
 
         // JIRA-61: Invalidate active route if it references demand cards no longer in hand
         if (activeRoute) {
@@ -976,6 +981,11 @@ export class AIStrategyEngine {
       if (hasDelivery) {
         const freshSnapshot = await capture(gameId, botPlayerId);
         context.demands = ContextBuilder.rebuildDemands(freshSnapshot, gridPoints);
+        context.canDeliver = ContextBuilder.rebuildCanDeliver(freshSnapshot, gridPoints);
+        console.log(
+          `${tag} JIRA-165: Refreshed canDeliver after delivery — ` +
+          `${context.canDeliver.length} opportunit(ies) now in context`,
+        );
 
         // JIRA-61: Invalidate active route if it references demand cards no longer in hand
         if (activeRoute) {
