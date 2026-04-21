@@ -25,6 +25,12 @@ import {
 // ── Mock modules ────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/RouteValidator');
+jest.mock('../../services/ai/RouteOptimizer', () => ({
+  RouteOptimizer: {
+    // Pass stops through unchanged by default — tests that care about reorder can override
+    orderStopsByProximity: jest.fn((stops: unknown[]) => stops),
+  },
+}));
 jest.mock('../../services/ai/schemas', () => ({
   TRIP_PLAN_SCHEMA: { type: 'object' },
 }));
@@ -33,6 +39,7 @@ jest.mock('../../services/ai/prompts/systemPrompts', () => ({
 }));
 jest.mock('../../services/ai/MapTopology', () => ({
   estimateHopDistance: jest.fn(() => 0),
+  loadGridPoints: jest.fn(() => new Map()),
 }));
 
 // ── Fixtures ────────────────────────────────────────────────────────────

@@ -19,8 +19,9 @@ import {
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
-import { estimateHopDistance } from './MapTopology';
+import { estimateHopDistance, loadGridPoints } from './MapTopology';
 import { RouteValidator } from './RouteValidator';
+import { RouteOptimizer } from './RouteOptimizer';
 import { TRIP_PLAN_SCHEMA } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
 
@@ -303,7 +304,21 @@ export class TripPlanner {
         reasoning: rawCandidate.reasoning,
       };
 
-      // Validate via RouteValidator
+      // Optimize stop order before validation (JIRA-184: explicit composition)
+      // RouteValidator is now a pure predicate — it no longer reorders stops.
+      const botPos = snapshot.bot.position;
+      if (botPos && stops.length > 1) {
+        const gridPoints = loadGridPoints();
+        const reorderedStops = RouteOptimizer.orderStopsByProximity(
+          stops,
+          botPos,
+          gridPoints,
+          context.loads,
+        );
+        tempRoute.stops = reorderedStops;
+      }
+
+      // Validate via RouteValidator (pure predicate — no reorder side-effect)
       const validation = RouteValidator.validate(tempRoute, context, snapshot);
       if (!validation.valid && !validation.prunedRoute) {
         continue; // completely invalid

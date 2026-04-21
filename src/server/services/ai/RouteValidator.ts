@@ -21,7 +21,7 @@ import {
   DemandContext,
   TerrainType,
 } from '../../../shared/types/GameTypes';
-import { loadGridPoints, estimateHopDistance, GridPointData } from './MapTopology';
+// MapTopology imports removed — reorderStopsByProximity moved to RouteOptimizer (JIRA-184)
 
 export interface RouteValidationResult {
   valid: boolean;
@@ -63,33 +63,6 @@ export class RouteValidator {
       // DROP stops: feasible as long as loadType is specified
       return RouteValidator.checkDropFeasibility(stop);
     });
-
-    // ── Reorder stops by geographic proximity ──
-    // Greedy nearest-neighbor with pickup-before-delivery constraints.
-    // Must run before cumulative budget check so budget is validated against
-    // the actual execution order.
-    if (validations.length > 1) {
-      const botPos = snapshot.bot.position;
-      if (botPos) {
-        const gridPoints = loadGridPoints();
-        const reordered = RouteValidator.reorderStopsByProximity(
-          validations.filter(v => v.feasible).map(v => v.stop),
-          botPos,
-          gridPoints,
-          context.loads,
-        );
-        // Rebuild validations array in reordered sequence
-        const reorderedValidations: StopValidation[] = reordered.map(stop => {
-          const orig = validations.find(v => v.stop === stop);
-          return orig!;
-        });
-        // Append infeasible stops at the end (order doesn't matter for them)
-        const infeasible = validations.filter(v => !v.feasible);
-        validations.length = 0;
-        validations.push(...reorderedValidations, ...infeasible);
-      }
-      // else: bot position null (initial build) — skip reorder, keep LLM's original stop order
-    }
 
     // ── Same-card conflict detection (JIRA-123) ──
     // If multiple DELIVER stops reference demands on the same card,
@@ -165,11 +138,7 @@ export class RouteValidator {
       if (totalEstCost > 0 && snapshot.bot.money - totalEstCost < 5) {
         console.warn(`${tag} Route feasible but marginal: estimated cost ${totalEstCost}M, cash ${snapshot.bot.money}M`);
       }
-      // Return reordered route if stop order changed
-      const stopsChanged = feasibleStops.some((s, i) => s !== route.stops[i]);
-      if (stopsChanged) {
-        return { valid: true, prunedRoute: { ...route, stops: feasibleStops }, errors: [] };
-      }
+      // All stops feasible — pure predicate, no reorder side-effect (JIRA-184)
       return { valid: true, errors: [] };
     }
 
@@ -418,137 +387,10 @@ export class RouteValidator {
     }
   }
 
-  // ── Stop reordering ─────────────────────────────────────────────────────
-
-  /**
-   * Reorder route stops by geographic proximity using greedy nearest-neighbor.
-   * Respects pickup-before-delivery constraints: a deliver(loadType) can only
-   * be selected after its corresponding pickup(loadType) has been placed.
-   */
-  static reorderStopsByProximity(
-    stops: RouteStop[],
-    botPosition: { row: number; col: number },
-    gridPoints: Map<string, GridPointData>,
-    carriedLoads?: string[],
-  ): RouteStop[] {
-    const tag = '[RouteValidator]';
-    if (stops.length <= 1) return stops;
-
-    // Build city coordinate lookup (first matching grid point per city name)
-    const cityCoords = new Map<string, { row: number; col: number }>();
-    for (const [, gp] of gridPoints) {
-      if (gp.name && !cityCoords.has(gp.name.toLowerCase())) {
-        cityCoords.set(gp.name.toLowerCase(), { row: gp.row, col: gp.col });
-      }
-    }
-
-    // Build dependency map: deliver(loadType) requires pickup(loadType) first
-    const pickupDone = new Set<string>();
-    // JIRA-121 Bug 3: Carried loads already on train don't need a pickup first
-    if (carriedLoads) {
-      for (const load of carriedLoads) {
-        pickupDone.add(load);
-      }
-    }
-    const remaining = [...stops];
-    const ordered: RouteStop[] = [];
-    let currentPos = { row: botPosition.row, col: botPosition.col };
-
-    while (remaining.length > 0) {
-      // Find eligible stops (pickups and drops are always eligible; delivers need their pickup done)
-      const eligible = remaining.filter(s =>
-        s.action === 'pickup' || s.action === 'drop' || pickupDone.has(s.loadType),
-      );
-
-      if (eligible.length === 0) {
-        // Safety: no eligible stops but remaining exist — append in original order
-        ordered.push(...remaining);
-        break;
-      }
-
-      // JIRA-121 Bug 3: Prioritize deliver stops for carried loads over pickup stops
-      // JIRA-123: Gate with detour-cost threshold — only promote deliveries when
-      // no eligible pickup is within NEARBY_PICKUP_THRESHOLD hops
-      const NEARBY_PICKUP_THRESHOLD = 4;
-      let carriedDelivers = carriedLoads
-        ? eligible.filter(s => s.action === 'deliver' && carriedLoads.includes(s.loadType))
-        : [];
-
-      if (carriedDelivers.length > 0) {
-        // Check if any eligible pickup is nearby — if so, grab it first
-        const eligiblePickups = eligible.filter(s => s.action === 'pickup');
-        const hasNearbyPickup = eligiblePickups.some(s => {
-          const coords = cityCoords.get(s.city.toLowerCase());
-          if (!coords) return false;
-          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
-          return dist >= 0 && dist <= NEARBY_PICKUP_THRESHOLD;
-        });
-        if (hasNearbyPickup) {
-          const nearbyPickup = eligiblePickups.find(s => {
-            const coords = cityCoords.get(s.city.toLowerCase());
-            if (!coords) return false;
-            return estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col) <= NEARBY_PICKUP_THRESHOLD;
-          });
-          console.log(`${tag} Detour-cost gate: nearby pickup ${nearbyPickup?.city} prevents carried-load delivery promotion`);
-          carriedDelivers = [];
-        }
-      }
-
-      let nearest: RouteStop;
-      let nearestDist = Infinity;
-
-      if (carriedDelivers.length > 0) {
-        // Pick the nearest carried-load delivery (immediate income, zero acquisition cost)
-        nearest = carriedDelivers[0];
-        for (const stop of carriedDelivers) {
-          const coords = cityCoords.get(stop.city.toLowerCase());
-          if (!coords) continue;
-          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
-          if (dist >= 0 && dist < nearestDist) {
-            nearestDist = dist;
-            nearest = stop;
-          }
-        }
-        console.log(`${tag} Carried-load priority: deliver(${nearest.loadType}@${nearest.city}) promoted ahead of pickup stops`);
-      } else {
-        // Pick the nearest eligible stop (original behavior)
-        nearest = eligible[0];
-        for (const stop of eligible) {
-          const coords = cityCoords.get(stop.city.toLowerCase());
-          if (!coords) continue;
-          const dist = estimateHopDistance(currentPos.row, currentPos.col, coords.row, coords.col);
-          if (dist >= 0 && dist < nearestDist) {
-            nearestDist = dist;
-            nearest = stop;
-          }
-        }
-      }
-
-      ordered.push(nearest);
-      const idx = remaining.indexOf(nearest);
-      remaining.splice(idx, 1);
-
-      // Update state
-      if (nearest.action === 'pickup') {
-        pickupDone.add(nearest.loadType);
-      }
-      const coords = cityCoords.get(nearest.city.toLowerCase());
-      if (coords) {
-        currentPos = { row: coords.row, col: coords.col };
-      }
-    }
-
-    // Log if order changed
-    const originalOrder = stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
-    const newOrder = ordered.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ');
-    if (originalOrder !== newOrder) {
-      console.log(`${tag} Reordered stops by proximity:\n  was: ${originalOrder}\n  now: ${newOrder}`);
-    }
-
-    return ordered;
-  }
-
   // ── Helpers ──────────────────────────────────────────────────────────────
+
+  // NOTE: reorderStopsByProximity moved to RouteOptimizer.orderStopsByProximity (JIRA-184).
+  // TripPlanner now calls RouteOptimizer.orderStopsByProximity explicitly before validate().
 
   /**
    * Find the DemandContext matching a route stop.

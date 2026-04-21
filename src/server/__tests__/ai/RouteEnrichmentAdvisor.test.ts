@@ -415,6 +415,59 @@ describe('RouteEnrichmentAdvisor.enrich', () => {
     expect(result.stops[1].city).toBe('Berlin');
   });
 
+  // ── JIRA-184: Haiku turn-5 regression ──────────────────────────────────────
+  // Before the JIRA-184 refactor, RouteValidator.validate() silently reordered stops
+  // by proximity. This caused the enrichment path to put Wroclaw (geographically closer)
+  // before Praha even though the LLM intentionally placed Praha first.
+  it('JIRA-184: enriched stop order is preserved — proximity reorder does NOT fire in attemptEnrich', async () => {
+    // Scenario: bot at row=10,col=5. Wroclaw (row=12,col=7) is geographically closer than
+    // Praha (row=40,col=25). The LLM enriched the route as [P-Praha, P-Holland, D-Bruxelles, P-Wroclaw].
+    // After the refactor, this order must be preserved through attemptEnrich.
+
+    const enrichedStops = [
+      { action: 'pickup' as const, loadType: 'Steel', city: 'Praha' },
+      { action: 'pickup' as const, loadType: 'Wine', city: 'Holland' },
+      { action: 'deliver' as const, loadType: 'Steel', city: 'Bruxelles', demandCardId: 1, payment: 20 },
+      { action: 'pickup' as const, loadType: 'Coal', city: 'Wroclaw' },
+    ];
+    const reorderResponse: RouteEnrichmentSchema = {
+      decision: 'reorder',
+      reorderedStops: enrichedStops,
+      reasoning: 'LLM-curated order: Praha first, Wroclaw last',
+    };
+
+    const brain = makeMockBrain(JSON.stringify(reorderResponse));
+
+    const originalRoute = makeRoute([
+      { action: 'pickup', loadType: 'Steel', city: 'Berlin' },
+      { action: 'deliver', loadType: 'Steel', city: 'Bruxelles' },
+    ]);
+
+    // Extended grid to include all cities in the enriched route
+    const extendedGrid: GridPoint[] = [
+      ...testGrid,
+      gp(10, 5, TerrainType.MajorCity, 'Praha'),      // farther from bot
+      gp(12, 7, TerrainType.MajorCity, 'Wroclaw'),    // closer to bot
+      gp(2, 2, TerrainType.MajorCity, 'Holland'),
+      gp(1, 3, TerrainType.MajorCity, 'Bruxelles'),
+    ];
+
+    // Snapshot: bot at row=10,col=5 (Wroclaw at row=12 is closer than Praha at row=40)
+    const snapshot = makeSnapshot();
+    snapshot.bot.position = { row: 10, col: 5 };
+
+    // Validator accepts the enriched route (no feasibility issues, no prunedRoute)
+    jest.mocked(RouteValidator.validate).mockReturnValue({ valid: true, errors: [] });
+
+    const result = await RouteEnrichmentAdvisor.enrich(originalRoute, snapshot, makeContext(), brain, extendedGrid);
+
+    // Assert: stop order matches the LLM's enriched order — Praha first, Wroclaw last
+    // (Before JIRA-184 refactor, proximity reorder would have put Wroclaw first)
+    expect(result.stops[0]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Praha' }));
+    expect(result.stops[3]).toEqual(expect.objectContaining({ action: 'pickup', city: 'Wroclaw' }));
+    expect(result.stops.length).toBe(4);
+  });
+
   it('applies pruned route when RouteValidator prunes some hallucinated stops', async () => {
     // LLM inserts one valid stop and one invalid stop
     const insertResponse: RouteEnrichmentSchema = {
