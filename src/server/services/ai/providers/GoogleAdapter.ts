@@ -2,6 +2,17 @@ import { ProviderResponse } from '../../../../shared/types/GameTypes';
 import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
 
+/**
+ * Extra token budget reserved for Gemini 3 reasoning tokens when thinking is active.
+ * Thinking tokens are drawn from maxOutputTokens, so without this reserve the model
+ * may exhaust the budget on internal reasoning before emitting the final response.
+ */
+const GEMINI3_THINKING_RESERVE: Record<string, number> = {
+  low: 2048,
+  medium: 4096,
+  high: 8192,
+};
+
 export class GoogleAdapter implements ProviderAdapter {
   private readonly apiKey: string;
   private readonly timeoutMs: number;
@@ -57,8 +68,17 @@ export class GoogleAdapter implements ProviderAdapter {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${request.model}:generateContent`;
 
     try {
+      // For Gemini 3 + thinking, inflate maxOutputTokens by the reasoning-token reserve
+      // so that internal thought tokens don't consume the caller's intended output budget.
+      let maxOutputTokens = request.maxTokens;
+      if (this.isGemini3Model(request.model) && request.thinking) {
+        const effort = request.effort ?? 'medium';
+        const reserve = GEMINI3_THINKING_RESERVE[effort] ?? GEMINI3_THINKING_RESERVE.medium;
+        maxOutputTokens += reserve;
+      }
+
       const generationConfig: Record<string, unknown> = {
-        maxOutputTokens: request.maxTokens,
+        maxOutputTokens,
         temperature: request.temperature,
       };
 
