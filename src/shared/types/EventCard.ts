@@ -113,3 +113,58 @@ export interface RawEventCard {
   description: string;
   effectConfig: EventEffectConfig;
 }
+
+// ─── Event processing result types ──────────────────────────────────────────
+
+/**
+ * Per-player effect descriptor. `effectType` is a closed union of literal
+ * types to prevent stringly-typed bugs.
+ */
+export interface PerPlayerEffect {
+  playerId: string;
+  effectType:
+    | 'load_lost'
+    | 'turn_lost'
+    | 'speed_halved'
+    | 'no_pickup_delivery'
+    | 'no_movement'
+    | 'tax_paid'
+    | 'track_erased';
+  details: string;
+  /** Numeric amount, e.g. tax deducted or loads lost count */
+  amount?: number;
+}
+
+/**
+ * Descriptor for an effect that persists across turns.
+ * Returned by `EventCardService.processEventCard` so that Project 3 can
+ * persist it to `games.active_event` — this project does NOT write to the DB
+ * column itself.
+ */
+export interface ActiveEffectDescriptor {
+  cardId: number;
+  drawingPlayerId: string;
+  drawingPlayerIndex: number;
+  /** Turn number after which this effect expires (drawing player's turn + 1) */
+  expiresAfterTurnNumber: number;
+  /** Serialized milepost keys; rehydrated to Set<string> on read */
+  affectedZone: string[];
+}
+
+/**
+ * Structured result returned by `EventCardService.processEventCard`.
+ * Describes every state change made (and every persistent descriptor to
+ * forward to Project 3).
+ */
+export interface EventCardResult {
+  cardId: number;
+  cardType: EventCardType;
+  drawingPlayerId: string;
+  /** Milepost keys included in the effect zone (serializable array) */
+  affectedZone: string[];
+  perPlayerEffects: PerPlayerEffect[];
+  /** Non-empty only for Flood events */
+  floodSegmentsRemoved: Array<{ playerId: string; removedCount: number }>;
+  /** Present for all event types that produce persistent effects */
+  persistentEffectDescriptor?: ActiveEffectDescriptor;
+}
