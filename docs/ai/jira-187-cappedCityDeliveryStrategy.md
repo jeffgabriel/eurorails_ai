@@ -37,13 +37,22 @@ Introduce a capacity check at two layers:
 
 ### Layer 1 — Pre-route scoring (`TripPlanner` / demand scorer)
 
-Before the LLM is asked to pick among demand cards, the demand-scoring pipeline should know for each candidate demand:
+Fold expected track-usage fees directly into the demand's effective payout during scoring. No separate penalty, no capped/uncapped flag.
 
-- Is the delivery city small or medium?
-- How many players (excluding this bot) already have track into the delivery milepost?
-- Is the cap already reached?
+For each demand the scorer is evaluating:
 
-If capacity is reached AND this bot does not already have track there, the demand's score should be penalized heavily — not zeroed, because options 2 and 3 may still be viable and profitable, but penalized enough that a comparable demand with an unrestricted destination is preferred.
+1. Call the shared `computeTrackUsageFees(demand, snapshot)` function — the same function Layer 2 uses for its profitability algorithm. It returns the expected fees the bot would pay in opponent track-usage to reach the supply city, deliver to the destination, and (if the route continues) return to the bot's own network.
+2. Compute `effectivePayout = payout - computedFees`.
+3. Use `effectivePayout` (not `payout`) in every downstream scoring component — efficiency-per-turn, ROI, rank. Existing formulas stay unchanged; only their input changes.
+
+`computeTrackUsageFees` returns zero transparently when:
+- The delivery city is NOT capped (bot would build its own track as normal, no fees).
+- The bot already has track touching the delivery milepost (self is counted; no opponent-track traversal needed).
+- No opponent path connects the bot's reachable network to the delivery city (no viable opponent-track route; demand naturally scores worse because other components — estimatedTurns, trackCost — already dominate).
+
+This means the scoring pipeline treats capped and uncapped deliveries with the same code path. A $38M payout that costs $4M in fees scores from `effectivePayout = $34M`. A $30M payout that would cost $40M in fees scores from `effectivePayout = -$10M` — naturally sinks to the bottom of the ranking without any special case. A $30M payout with no fees scores from `effectivePayout = $30M`, identical to today's behavior.
+
+Pre-commit detection still prevents the bot from pursuing an unbuildable route, but it falls out of the math rather than from a separate gate: a fee-laden demand either clears the existing `> 3M/turn` income-velocity floor on its own merits, or it doesn't.
 
 ### Layer 2 — Post-commit strategy (`TurnExecutorPlanner` / guardrail)
 
@@ -123,17 +132,10 @@ Cardiff is correctly classified as a small city in `gridPoints.json` (small-circ
 
 ## Implementation surfaces (for the fix ticket, not this one)
 
-- `ContextBuilder.ts` / demand scorer — add `cityEntryCapacityRemaining` to each demand's metadata.
-- `TripPlanner.ts` — factor capacity remaining into `scoreDemand`.
+- `TripPlanner.ts` / demand scorer — call `computeTrackUsageFees(demand, snapshot)` and subtract its return value from `payout` before running any downstream scoring formula. Do not branch on a capped/uncapped flag.
 - `TurnExecutorPlanner.ts` — add a capacity-cap pre-check when the next route stop is a delivery into a small/medium city. If capped, run the 2a/2b/2c decision tree before falling through to `executeBuildPhase`.
 - `ActionResolver.resolveMove` — already handles opponent-track fees; verify it correctly computes fee cost for a round-trip path across an opponent's stub.
 - Add a new turn-plan primitive for "pay fee and deliver" if the existing `MoveTrain + DeliverLoad` MultiAction doesn't cleanly cover the round-trip pattern.
-
-## Open questions for review
-
-1. **Does 2b require a cost-benefit check vs. 2c?** A drop at a nearby city salvages the turn's movement but loses the payout. Abandonment costs an LLM re-plan. In some states 2c may be cheaper long-term. Worth modeling.
-2. **Interaction with JIRA-186 (`upgradeOnRoute` never consumed).** If the bot is movement-starved AND trapped outside a capped city, paying fees requires extra movement budget. Fast Freight (+3 mp) may be the enabling prerequisite. Fix JIRA-186 first.
-3. **Interaction with JIRA-180 (the "not-implementing" ticket).** JIRA-180 assumed the bot always maintains one connected network. A capacity-capped delivery city is a case where the bot is explicitly NOT connected (and cannot become connected). This is an argument for revisiting JIRA-180's close-as-not-implementing decision if capacity-aware deliveries are going to rely on routing over opponent track into a cluster the bot can't build into.
 
 ## Success measure
 
