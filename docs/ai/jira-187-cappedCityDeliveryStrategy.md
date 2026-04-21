@@ -55,9 +55,9 @@ Once the bot has an active route whose next stop's delivery city is capacity-cap
 
 **2c. Abandon the route.** If neither 2a nor 2b produces a positive turn, abandon the route explicitly (`routeAbandoned = true`) so the TripPlanner re-plans on the next turn against a different demand. This is the fallback of last resort — never the default behavior, because it costs the LLM call budget.
 
-## Why not just audit the gridPoints.json data?
+## Why this is a class bug, not a data bug
 
-One hypothesis during debugging was that Cardiff was mis-classified as a small city (the game treats it with the 2-player cap, but in some editions Cardiff is a medium city). Fixing the data may or may not be correct depending on the canonical source — but even with correct data, the underlying problem persists. Any small city where 2 opponents arrive first, or any medium city where 3 opponents arrive first, creates the same trap. Data corrections reduce the frequency but do not solve the class of bug. JIRA-187 targets the class.
+Cardiff is correctly classified as a small city in `gridPoints.json` (small-circle icon on the board; medium cities use square icons). The data is authoritative. The underlying problem persists regardless: any small city where 2 opponents arrive first, or any medium city where 3 opponents arrive first, creates the same trap. JIRA-187 targets that class of bug.
 
 ## Implementation surfaces (for the fix ticket, not this one)
 
@@ -83,7 +83,5 @@ One hypothesis during debugging was that Cardiff was mis-classified as a small c
 
 ## Out of scope
 
-- Building auto-discovery of which cities are small vs medium (the data exists in `configuration/gridPoints.json`).
-- Data-level correctness of specific city classifications (that's a separate ticket).
 - Track-usage fee schema changes — the $4M/turn/opponent rule is already implemented for movement; this ticket just leans on it.
 - Trading or purchasing track between players (future ticket if the competitive dynamics warrant it).
