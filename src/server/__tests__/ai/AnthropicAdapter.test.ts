@@ -246,11 +246,13 @@ describe('AnthropicAdapter', () => {
   });
 
   describe('structured output and thinking params', () => {
-    it('should include output_config when outputSchema is provided', async () => {
+    const sonnetModel = 'claude-sonnet-4-6-20250929';
+
+    it('should include output_config when outputSchema is provided (non-Haiku)', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
 
-      await adapter.chat({ ...makeRequest(), outputSchema: schema });
+      await adapter.chat({ ...makeRequest(), model: sonnetModel, outputSchema: schema });
 
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
@@ -270,12 +272,13 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toBeUndefined();
     });
 
-    it('should include both output_config (with schema + effort) and thinking when all params provided', async () => {
+    it('should include both output_config (with schema + effort) and thinking when all params provided (non-Haiku)', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
 
       await adapter.chat({
         ...makeRequest(),
+        model: sonnetModel,
         outputSchema: schema,
         thinking: { type: 'adaptive' },
         effort: 'high',
@@ -290,11 +293,11 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toEqual({ type: 'adaptive' });
     });
 
-    it('should include output_config but not thinking when only outputSchema provided', async () => {
+    it('should include output_config but not thinking when only outputSchema provided (non-Haiku)', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
 
-      await adapter.chat({ ...makeRequest(), outputSchema: schema });
+      await adapter.chat({ ...makeRequest(), model: sonnetModel, outputSchema: schema });
 
       const [, options] = mockFetch.mock.calls[0];
       const body = JSON.parse(options.body);
@@ -304,11 +307,12 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toBeUndefined();
     });
 
-    it('should include thinking config when provided', async () => {
+    it('should include thinking config when provided (non-Haiku)', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat({
         ...makeRequest(),
+        model: sonnetModel,
         thinking: { type: 'adaptive' },
       });
 
@@ -317,11 +321,12 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toEqual({ type: 'adaptive' });
     });
 
-    it('should place effort inside output_config (not inside thinking)', async () => {
+    it('should place effort inside output_config (not inside thinking) for non-Haiku', async () => {
       mockFetch.mockResolvedValue(makeSuccessResponse());
 
       await adapter.chat({
         ...makeRequest(),
+        model: sonnetModel,
         thinking: { type: 'adaptive' },
         effort: 'medium',
       });
@@ -331,6 +336,47 @@ describe('AnthropicAdapter', () => {
       expect(body.thinking).toEqual({ type: 'adaptive' });
       expect(body.thinking.effort).toBeUndefined();
       expect(body.output_config).toEqual({ effort: 'medium' });
+    });
+
+    it('Haiku: omits output_config and thinking even when outputSchema, thinking, and effort are provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      await adapter.chat({
+        ...makeRequest(), // model: 'claude-haiku-4-5-20251001'
+        outputSchema: schema,
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+        temperature: 0.4,
+      });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toBeUndefined();
+      expect(body.thinking).toBeUndefined();
+      expect(body.temperature).toBe(0.4);
+    });
+
+    it('Sonnet: keeps output_config.format, output_config.effort, thinking, and sets temperature=1 when thinking is provided', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse());
+      const schema = { type: 'object', properties: { action: { type: 'string' } } };
+
+      await adapter.chat({
+        ...makeRequest(),
+        model: sonnetModel,
+        outputSchema: schema,
+        thinking: { type: 'adaptive' },
+        effort: 'medium',
+      });
+
+      const [, options] = mockFetch.mock.calls[0];
+      const body = JSON.parse(options.body);
+      expect(body.output_config).toEqual({
+        format: { type: 'json_schema', schema },
+        effort: 'medium',
+      });
+      expect(body.thinking).toEqual({ type: 'adaptive' });
+      expect(body.temperature).toBe(1);
     });
 
     it('should use per-request timeoutMs when provided', async () => {
@@ -395,7 +441,7 @@ describe('AnthropicAdapter', () => {
       warnSpy.mockRestore();
     });
 
-    it('should preserve effort in output_config when retrying without schema', async () => {
+    it('should preserve effort in output_config when retrying without schema (non-Haiku)', async () => {
       const schema = { type: 'object', properties: { action: { type: 'string' } } };
 
       // First call: 400 with schema error
@@ -409,6 +455,7 @@ describe('AnthropicAdapter', () => {
 
       const result = await adapter.chat({
         ...makeRequest(),
+        model: 'claude-sonnet-4-6-20250929',
         outputSchema: schema,
         effort: 'high',
       });

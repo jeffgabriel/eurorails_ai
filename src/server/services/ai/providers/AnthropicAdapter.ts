@@ -27,8 +27,11 @@ export class AnthropicAdapter implements ProviderAdapter {
     const timer = setTimeout(() => controller.abort(), effectiveTimeout);
 
     try {
+      const isHaiku = request.model.startsWith('claude-haiku-');
+
       // When adaptive thinking is enabled, Anthropic requires temperature=1
-      const effectiveTemperature = request.thinking ? 1 : request.temperature;
+      // (Haiku does not support thinking, so skip the override for Haiku)
+      const effectiveTemperature = !isHaiku && request.thinking ? 1 : request.temperature;
 
       // Build the base request body
       const body: Record<string, unknown> = {
@@ -43,24 +46,27 @@ export class AnthropicAdapter implements ProviderAdapter {
         messages: [{ role: 'user', content: request.userPrompt }],
       };
 
-      // Build output_config from schema and/or effort
-      const outputConfig: Record<string, unknown> = {};
-      if (request.outputSchema) {
-        outputConfig.format = {
-          type: 'json_schema',
-          schema: request.outputSchema,
-        };
-      }
-      if (request.effort) {
-        outputConfig.effort = request.effort;
-      }
-      if (Object.keys(outputConfig).length > 0) {
-        body.output_config = outputConfig;
-      }
+      // Haiku models do not support output_config or thinking — omit both
+      if (!isHaiku) {
+        // Build output_config from schema and/or effort
+        const outputConfig: Record<string, unknown> = {};
+        if (request.outputSchema) {
+          outputConfig.format = {
+            type: 'json_schema',
+            schema: request.outputSchema,
+          };
+        }
+        if (request.effort) {
+          outputConfig.effort = request.effort;
+        }
+        if (Object.keys(outputConfig).length > 0) {
+          body.output_config = outputConfig;
+        }
 
-      // Conditionally add thinking config
-      if (request.thinking) {
-        body.thinking = request.thinking;
+        // Conditionally add thinking config
+        if (request.thinking) {
+          body.thinking = request.thinking;
+        }
       }
 
       const result = await this.executeRequest(body, controller.signal);
