@@ -555,9 +555,6 @@ export class DebugOverlay {
       if (latest.reasoning) {
         latestDetail += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${latest.reasoning}</div>`;
       }
-      if (latest.planHorizon) {
-        latestDetail += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${latest.planHorizon}</div>`;
-      }
       if (latest.activeRoute) {
         const route = latest.activeRoute;
         const stopsHtml = route.stops.map((s, i) => {
@@ -745,9 +742,6 @@ export class DebugOverlay {
     }
     if (entry.reasoning) {
       html += `<div style="color:#c4b5fd;font-size:14px;margin-top:6px;padding:6px 10px;background:rgba(139,92,246,0.12);border-radius:4px;border-left:3px solid #8b5cf6;"><strong>Strategy:</strong> ${entry.reasoning}</div>`;
-    }
-    if (entry.planHorizon) {
-      html += `<div style="color:#93c5fd;font-size:14px;margin-top:4px;padding:4px 10px;"><strong>Plan:</strong> ${entry.planHorizon}</div>`;
     }
     if (entry.activeRoute) {
       const route = entry.activeRoute;
