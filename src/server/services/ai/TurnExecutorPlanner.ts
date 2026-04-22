@@ -39,6 +39,7 @@ import {
   BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
+import { computeBuildSegments } from './computeBuildSegments';
 import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
@@ -72,7 +73,7 @@ export interface CompositionTrace {
   /** A2: Continuation chaining iterations and termination reason */
   a2: { iterations: number; terminationReason: string };
   /** A3: Whether a MOVE was prepended before BUILD, or skipped with reason */
-  a3: { movePreprended: boolean; skipped?: boolean; reason?: string };
+  a3: { movePreprended: boolean; skipped?: boolean; reason?: string; terminationReason?: string };
   /** Phase B: Build/upgrade target and cost, or why skipped */
   build: { target: string | null; cost: number; skipped: boolean; upgradeConsidered: boolean };
   /** Pickups added during composition */
@@ -557,95 +558,108 @@ export class TurnExecutorPlanner {
         continue;
       }
 
-      // ── Stop city not on network → A3 frontier approach, then Phase B ───
+      // ── Stop city not on network → A3 build-origin preview, then Phase B ─
       //
-      // A3: When the next route stop is off-network (needs building), the bot
-      // should still use its remaining movement budget to advance toward the
-      // construction frontier — the dead-end node on the existing track network
-      // closest to the build target. This prevents wasting the movement budget
-      // while waiting for Phase B to extend the track.
+      // A3 (JIRA-191): When the next route stop is off-network (needs building),
+      // preview the exact build origin Phase B will select by running the same
+      // resolveBuildTarget + computeBuildSegments Dijkstra call Phase B uses.
+      // Move toward that origin to pre-position the bot without wasting any
+      // remaining movement budget.
       //
-      // If no frontier node can be found or the move fails, fall straight to Phase B.
-      console.log(`${tag} ${targetCity} not on network. Attempting A3 frontier move before Phase B.`);
+      // Replaces JIRA-171 directional guard + frontier-iteration loop. The new
+      // approach is deterministic (same result as Phase B) and removes the
+      // heuristic mismatch that caused six prior repeat-fixes.
+      console.log(`${tag} ${targetCity} not on network. Attempting A3 build-origin preview move before Phase B.`);
       trace.a2.terminationReason = 'stop_city_not_on_network';
 
       if (remainingBudget > 0) {
-        // Get frontier nodes sorted by distance to the build target (targetCity)
-        const frontierNodes = getNetworkFrontier(snapshot, undefined, targetCity);
-        // Filter out the bot's current position (no need to "move" to where we already are)
-        const currentPos = context.position;
-        const reachableFrontier = frontierNodes.filter(
-          n => !(currentPos && n.row === currentPos.row && n.col === currentPos.col),
-        );
-
-        // Directional guard: only move to a frontier node if it is closer to the
-        // build target than the bot's current position. Moving to a farther node
-        // wastes movement budget by sending the bot in the wrong direction.
-        // (Mirrors the logic in filterByDirection() used elsewhere in this class.)
-        let directionalFrontier = reachableFrontier;
-        if (context.position) {
+        // Step 1: resolve the same build target Phase B will select
+        const a3BuildTarget = resolveBuildTarget(activeRoute, context);
+        if (!a3BuildTarget) {
+          trace.a3.terminationReason = 'no_build_target';
+          console.log(`${tag} A3 skipped — reason=no_build_target`);
+        } else {
+          // Step 2: look up the grid coord for the build target city
           const grid = loadGridPoints();
-          let targetRow = -1, targetCol = -1;
+          let a3TargetCoord: { row: number; col: number } | null = null;
           for (const [, gp] of grid) {
-            if (gp.name && gp.name === targetCity) {
-              targetRow = gp.row;
-              targetCol = gp.col;
+            if (gp.name && gp.name === a3BuildTarget.targetCity) {
+              a3TargetCoord = { row: gp.row, col: gp.col };
               break;
             }
           }
-          if (targetRow >= 0) {
-            const botDist =
-              Math.abs(context.position.row - targetRow) +
-              Math.abs(context.position.col - targetCol);
-            directionalFrontier = reachableFrontier.filter(n => {
-              const nodeDist =
-                Math.abs(n.row - targetRow) + Math.abs(n.col - targetCol);
-              return nodeDist < botDist;
-            });
-            if (directionalFrontier.length === 0) {
-              console.log(
-                `${tag} A3 frontier move skipped — directional guard: bot is already ` +
-                `closer to "${targetCity}" (dist=${botDist}) than any frontier node`,
-              );
+
+          if (!a3TargetCoord) {
+            // Target city not in grid — treat as Dijkstra failure
+            trace.a3.terminationReason = 'build_dijkstra_failed';
+            console.log(`${tag} A3 skipped — reason=build_dijkstra_failed (target city "${a3BuildTarget.targetCity}" not in grid)`);
+          } else {
+            // Step 3: run the same Dijkstra computeBuildSegments would run in Phase B
+            // to determine which node on the existing network Phase B will extend from.
+            const a3OccupiedEdges = new Set<string>();
+            for (const pt of (snapshot.allPlayerTracks ?? [])) {
+              if (pt.playerId === snapshot.bot.playerId) continue;
+              for (const seg of pt.segments) {
+                const a = `${seg.from.row},${seg.from.col}`;
+                const b = `${seg.to.row},${seg.to.col}`;
+                a3OccupiedEdges.add(`${a}-${b}`);
+                a3OccupiedEdges.add(`${b}-${a}`);
+              }
+            }
+            const a3Budget = Math.min(TURN_BUILD_BUDGET - context.turnBuildCost, snapshot.bot.money);
+            const a3OriginResult = computeBuildSegments(
+              [],
+              snapshot.bot.existingSegments,
+              a3Budget > 0 ? a3Budget : TURN_BUILD_BUDGET,
+              undefined,
+              a3OccupiedEdges,
+              [a3TargetCoord],
+            );
+
+            if (a3OriginResult.length === 0) {
+              trace.a3.terminationReason = 'build_dijkstra_failed';
+              console.log(`${tag} A3 skipped — reason=build_dijkstra_failed (Dijkstra returned no segments toward "${a3BuildTarget.targetCity}")`);
+            } else {
+              // Step 4: the first segment's `from` is the build origin on existing track
+              const previewBuildOrigin = a3OriginResult[0].from;
+              const currentPos = context.position;
+
+              if (
+                currentPos &&
+                previewBuildOrigin.row === currentPos.row &&
+                previewBuildOrigin.col === currentPos.col
+              ) {
+                trace.a3.terminationReason = 'origin_is_current_position';
+                console.log(`${tag} A3 skipped — reason=origin_is_current_position (bot already at build origin (${previewBuildOrigin.row},${previewBuildOrigin.col}))`);
+              } else {
+                // Step 5: move toward the previewed build origin
+                const a3MoveResult = await ActionResolver.resolveMove(
+                  { toRow: previewBuildOrigin.row, toCol: previewBuildOrigin.col },
+                  snapshot,
+                  remainingBudget,
+                );
+
+                if (a3MoveResult.success && a3MoveResult.plan) {
+                  const a3MovePlan = a3MoveResult.plan as TurnPlanMoveTrain;
+                  const majorCityLookup = getMajorCityLookup();
+                  const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookup);
+
+                  plans.push(a3MoveResult.plan);
+                  remainingBudget = Math.max(0, remainingBudget - a3Miles);
+                  trace.moveBudget.used = context.speed - remainingBudget;
+                  trace.a3.movePreprended = true;
+                  trace.a3.terminationReason = 'a3_move_success';
+                  console.log(
+                    `${tag} A3 move toward build origin (${previewBuildOrigin.row},${previewBuildOrigin.col}) for "${a3BuildTarget.targetCity}" — reason=a3_move_success (${a3Miles}mp consumed, remaining=${remainingBudget})`,
+                  );
+                } else {
+                  const moveError = (a3MoveResult as { success: false; error?: string }).error ?? 'unknown';
+                  trace.a3.terminationReason = `a3_move_failed:${moveError}`;
+                  console.log(`${tag} A3 skipped — reason=a3_move_failed:${moveError}`);
+                }
+              }
             }
           }
-        }
-
-        let a3MoveSucceeded = false;
-        for (const frontierNode of directionalFrontier) {
-          // Use coordinate-based move for unnamed nodes, city-name for named nodes
-          const a3MoveDetails: Record<string, string | number> = frontierNode.cityName
-            ? { to: frontierNode.cityName }
-            : { toRow: frontierNode.row, toCol: frontierNode.col };
-          const a3MoveLabel = frontierNode.cityName ?? `(${frontierNode.row},${frontierNode.col})`;
-
-          const a3MoveResult = await ActionResolver.resolveMove(
-            a3MoveDetails,
-            snapshot,
-            remainingBudget,
-          );
-
-          if (a3MoveResult.success && a3MoveResult.plan) {
-            const a3MovePlan = a3MoveResult.plan as TurnPlanMoveTrain;
-            const majorCityLookup = getMajorCityLookup();
-            const a3Miles = computeEffectivePathLength(a3MovePlan.path, majorCityLookup);
-
-            plans.push(a3MoveResult.plan);
-            lastMoveTargetCity = frontierNode.cityName ?? null;
-            remainingBudget = Math.max(0, remainingBudget - a3Miles);
-            trace.moveBudget.used = context.speed - remainingBudget;
-            trace.a3.movePreprended = true;
-            console.log(
-              `${tag} A3 frontier move: toward "${a3MoveLabel}" ` +
-              `(${a3Miles}mp consumed, remaining=${remainingBudget})`,
-            );
-            a3MoveSucceeded = true;
-            break;
-          }
-        }
-
-        if (!a3MoveSucceeded) {
-          console.log(`${tag} A3 frontier move skipped — no reachable frontier node found`);
         }
       }
 

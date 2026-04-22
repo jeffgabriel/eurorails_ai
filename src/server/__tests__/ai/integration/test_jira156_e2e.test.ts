@@ -22,6 +22,21 @@ jest.mock('../../../services/ai/routeHelpers', () => ({
   getNetworkFrontier: jest.fn(() => []),
 }));
 
+jest.mock('../../../services/ai/computeBuildSegments', () => ({
+  computeBuildSegments: jest.fn(() => []),
+}));
+
+jest.mock('../../../../shared/services/trackUsageFees', () => ({
+  buildUnionTrackGraph: jest.fn(() => ({
+    adjacency: new Map(),
+    edgeOwners: new Map(),
+  })),
+}));
+
+jest.mock('../../../../shared/services/computeTrackUsageFees', () => ({
+  computeTrackUsageFees: jest.fn(() => 0),
+}));
+
 jest.mock('../../../services/ai/ActionResolver', () => ({
   ActionResolver: {
     resolve: jest.fn(),
@@ -89,13 +104,18 @@ import type {
   WorldSnapshot,
 } from '../../../../shared/types/GameTypes';
 
-import { isStopComplete, getNetworkFrontier } from '../../../services/ai/routeHelpers';
+import { isStopComplete, getNetworkFrontier, resolveBuildTarget } from '../../../services/ai/routeHelpers';
+import { computeBuildSegments } from '../../../services/ai/computeBuildSegments';
+import { loadGridPoints } from '../../../services/ai/MapTopology';
 import { ActionResolver } from '../../../services/ai/ActionResolver';
 import { TripPlanner } from '../../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../../services/ai/RouteEnrichmentAdvisor';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockGetNetworkFrontier = getNetworkFrontier as jest.Mock;
+const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
+const mockComputeBuildSegments = computeBuildSegments as jest.Mock;
+const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const MockTripPlanner = TripPlanner as jest.MockedClass<typeof TripPlanner>;
@@ -303,24 +323,35 @@ describe('JIRA-156 Bug A: Beer@Holland — pickup completion must not reorder ro
 
 // ── Bug B: Wrong-direction A3 move ──────────────────────────────────────
 
-describe('JIRA-156 Bug B: wrong-direction A3 move — getNetworkFrontier excludes unnamed mileposts', () => {
+describe('JIRA-156 Bug B / JIRA-191: A3 now uses build-origin preview instead of frontier heuristic', () => {
   /**
    * Scenario:
    *   Route: [pickup Coal @ München]
-   *   München is NOT on the bot's track network yet → triggers A3 frontier move.
+   *   München is NOT on the bot's track network yet → triggers A3.
    *
-   *   OLD BUG: getNetworkFrontier returned unnamed mileposts (no cityName),
+   *   JIRA-156 OLD BUG: getNetworkFrontier returned unnamed mileposts (no cityName),
    *   which were dead-end track stubs. Bot would move to these stubs — away
    *   from München — wasting movement budget.
    *
-   *   FIX: getNetworkFrontier now only returns nodes with a cityName. Unnamed
-   *   mileposts are excluded. Confirmed by the frontier mock only returning
-   *   named cities.
+   *   JIRA-191 FIX: A3 now previews Phase B's build origin via
+   *   resolveBuildTarget + computeBuildSegments (deterministic Dijkstra),
+   *   removing the heuristic mismatch entirely. getNetworkFrontier is no
+   *   longer called in the A3 path.
    */
-  it('should move toward a named frontier city (Ruhr) when München is off-network', async () => {
-    // Only named frontier node — unnamed mileposts excluded by getNetworkFrontier fix
-    mockGetNetworkFrontier.mockReturnValue([
-      { row: 3, col: 3, cityName: 'Ruhr' },
+  it('JIRA-191: should move toward previewed build origin when München is off-network', async () => {
+    // A3 now uses resolveBuildTarget + computeBuildSegments, NOT getNetworkFrontier.
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'München',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    // München at (8,8) in the grid
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['8,8', { row: 8, col: 8, name: 'München', terrain: 1 }]]),
+    );
+    // Build origin on existing track is at (3,3)
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 3, col: 3 }, to: { row: 4, col: 4 }, cost: 1 },
     ]);
 
     const a3MovePlan = {
@@ -336,7 +367,7 @@ describe('JIRA-156 Bug B: wrong-direction A3 move — getNetworkFrontier exclude
       currentStopIndex: 0,
     });
     const context = makeContext({
-      citiesOnNetwork: ['Paris', 'Ruhr'],  // München NOT on network → A3
+      citiesOnNetwork: ['Paris'],  // München NOT on network → A3
       position: { city: 'Paris', row: 5, col: 5 },
       speed: 9,
     });
@@ -344,21 +375,25 @@ describe('JIRA-156 Bug B: wrong-direction A3 move — getNetworkFrontier exclude
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    // A3 move plan toward Ruhr should be in output
+    // A3 move plan toward build origin (3,3) should be in output
     expect(result.plans).toContainEqual(a3MovePlan);
     expect(result.compositionTrace.a3.movePreprended).toBe(true);
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_move_success');
 
-    // resolveMove should have been called with { to: 'Ruhr' } — a named city target
+    // resolveMove should have been called with the build origin coord — NOT a frontier node
     expect(mockResolveMove).toHaveBeenCalledWith(
-      expect.objectContaining({ to: 'Ruhr' }),
+      { toRow: 3, toCol: 3 },
       snapshot,
       expect.any(Number),
     );
+
+    // getNetworkFrontier must NOT be called in the A3 path (JIRA-191 removes it)
+    expect(mockGetNetworkFrontier).not.toHaveBeenCalled();
   });
 
-  it('should NOT emit A3 move when getNetworkFrontier returns no named frontier nodes', async () => {
-    // Empty frontier — all nodes were unnamed or excluded (the Bug B scenario fixed)
-    mockGetNetworkFrontier.mockReturnValue([]);
+  it('JIRA-191: should NOT emit A3 move when resolveBuildTarget returns null', async () => {
+    // resolveBuildTarget returns null → A3 skipped with no_build_target
+    mockResolveBuildTarget.mockReturnValue(null);
 
     const route = makeRoute({
       stops: [makeStop('pickup', 'München', 'Coal')],
@@ -372,14 +407,17 @@ describe('JIRA-156 Bug B: wrong-direction A3 move — getNetworkFrontier exclude
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    // No A3 move — frontier was empty after unnamed milepost exclusion
+    // No A3 move — no build target
     expect(mockResolveMove).not.toHaveBeenCalled();
     expect(result.compositionTrace.a3.movePreprended).toBe(false);
+    expect(result.compositionTrace.a3.terminationReason).toBe('no_build_target');
     expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
   });
 
-  it('getNetworkFrontier is called with the correct off-network target city', async () => {
-    mockGetNetworkFrontier.mockReturnValue([]);
+  it('JIRA-191: getNetworkFrontier is NOT called from A3 (replaced by computeBuildSegments preview)', async () => {
+    // The new A3 never calls getNetworkFrontier — that was the old JIRA-156 fix.
+    // JIRA-191 replaces the frontier heuristic entirely with Dijkstra-based origin preview.
+    mockResolveBuildTarget.mockReturnValue(null); // null → A3 exits early
 
     const route = makeRoute({
       stops: [makeStop('pickup', 'München', 'Coal')],
@@ -393,14 +431,8 @@ describe('JIRA-156 Bug B: wrong-direction A3 move — getNetworkFrontier exclude
 
     await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    // getNetworkFrontier must be called with the off-network city name ('München')
-    // so it can compute frontier nodes in the direction of that target
-    // Note: second arg is gridPoints (undefined when not provided to execute())
-    expect(mockGetNetworkFrontier).toHaveBeenCalledWith(
-      snapshot,
-      undefined,
-      'München',
-    );
+    // getNetworkFrontier must NOT be called in the A3 path
+    expect(mockGetNetworkFrontier).not.toHaveBeenCalled();
   });
 });
 

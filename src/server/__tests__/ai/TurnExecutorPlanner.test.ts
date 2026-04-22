@@ -46,6 +46,10 @@ jest.mock('../../services/ai/routeHelpers', () => ({
   getNetworkFrontier: jest.fn(() => []),
 }));
 
+jest.mock('../../services/ai/computeBuildSegments', () => ({
+  computeBuildSegments: jest.fn(() => []),
+}));
+
 jest.mock('../../services/ai/ActionResolver', () => ({
   ActionResolver: {
     resolve: jest.fn(),
@@ -164,6 +168,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
 }));
 
 import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
+import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { TripPlanner } from '../../services/ai/TripPlanner';
@@ -178,6 +183,7 @@ import { buildUnionTrackGraph } from '../../../shared/services/trackUsageFees';
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
 const mockGetNetworkFrontier = getNetworkFrontier as jest.Mock;
+const mockComputeBuildSegments = computeBuildSegments as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
@@ -820,9 +826,10 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     expect(result.compositionTrace.a2.terminationReason).toBe('move_failed_fallthrough_build');
   });
 
-  it('breaks to Phase B when stop city is not on network (no frontier nodes)', async () => {
-    // Default: getNetworkFrontier returns [] → A3 skipped, no resolveMove called
-    mockGetNetworkFrontier.mockReturnValue([]);
+  it('breaks to Phase B when stop city is not on network (no build target)', async () => {
+    // JIRA-191: A3 now uses resolveBuildTarget + computeBuildSegments preview.
+    // Default: resolveBuildTarget returns undefined → A3 skipped with no_build_target
+    mockResolveBuildTarget.mockReturnValue(null);
 
     const route = makeRoute({
       stops: [makeStop('pickup', 'München', 'Coal')],
@@ -835,13 +842,26 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
     expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
+    expect(result.compositionTrace.a3.terminationReason).toBe('no_build_target');
     expect(mockResolveMove).not.toHaveBeenCalled();
   });
 
-  it('A3: emits a MoveTrain plan toward frontier node when stop city not on network', async () => {
-    // Frontier node exists and is reachable
-    mockGetNetworkFrontier.mockReturnValue([
-      { row: 3, col: 3, cityName: 'Ruhr' },
+  it('A3: emits a MoveTrain plan toward build origin when stop city not on network', async () => {
+    // JIRA-191: A3 now previews Phase B's build origin via resolveBuildTarget + computeBuildSegments.
+    // Set up resolveBuildTarget to return a target city, computeBuildSegments to return a segment
+    // whose `from` coord is the build origin (different from bot's current position).
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    // The grid lookup for 'Frankfurt' must succeed — loadGridPoints returns a map with Frankfurt
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    // computeBuildSegments returns a segment originating at (3,3) — the build origin on existing track
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 3, col: 3 }, to: { row: 4, col: 4 }, cost: 1 },
     ]);
     const a3MovePlan = {
       type: AIActionType.MoveTrain,
@@ -865,18 +885,33 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    // A3 should have emitted a MoveTrain plan toward the frontier node
+    // A3 should have emitted a MoveTrain plan toward the build origin
     expect(result.plans).toContainEqual(a3MovePlan);
     expect(result.compositionTrace.a3.movePreprended).toBe(true);
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_move_success');
     expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
-    // getNetworkFrontier called with snapshot and the off-network city as target
-    expect(mockGetNetworkFrontier).toHaveBeenCalledWith(snapshot, undefined, 'München');
+    // resolveMove called with build origin coord (not a city name)
+    expect(mockResolveMove).toHaveBeenCalledWith(
+      { toRow: 3, toCol: 3 },
+      snapshot,
+      9,
+    );
   });
 
-  it('A3: skips frontier move when frontier city matches current bot city', async () => {
-    // Frontier node is the bot's current city — should be excluded
-    mockGetNetworkFrontier.mockReturnValue([
-      { row: 5, col: 5, cityName: 'Paris' }, // same as bot position
+  it('A3: skips move when previewed build origin matches current bot position (origin_is_current_position)', async () => {
+    // JIRA-191: When the Dijkstra build origin equals the bot's current position,
+    // A3 no-ops with reason origin_is_current_position (ADR-1, option A).
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    // Build origin equals bot's current position (5,5)
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 5, col: 5 }, to: { row: 6, col: 6 }, cost: 1 },
     ]);
 
     const route = makeRoute({
@@ -891,14 +926,24 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    // A3 should NOT emit a move (frontier node is current city)
+    // A3 should NOT emit a move (origin equals current position)
     expect(mockResolveMove).not.toHaveBeenCalled();
     expect(result.compositionTrace.a3.movePreprended).toBe(false);
+    expect(result.compositionTrace.a3.terminationReason).toBe('origin_is_current_position');
   });
 
-  it('A3: skips frontier move when resolveMove fails for all frontier nodes', async () => {
-    mockGetNetworkFrontier.mockReturnValue([
-      { row: 3, col: 3, cityName: 'Ruhr' },
+  it('A3: skips move and records terminationReason when resolveMove fails', async () => {
+    // JIRA-191: When resolveMove returns a failure, A3 records a3_move_failed:<error>.
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 3, col: 3 }, to: { row: 4, col: 4 }, cost: 1 },
     ]);
     mockResolveMove.mockResolvedValue({ success: false, error: 'Pathfinding failed' });
 
@@ -914,6 +959,151 @@ describe('TurnExecutorPlanner.execute — move toward stop city', () => {
     // No move plan — A3 attempted but failed
     expect(result.plans.some(p => p.type === AIActionType.MoveTrain)).toBe(false);
     expect(result.compositionTrace.a3.movePreprended).toBe(false);
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_move_failed:Pathfinding failed');
+  });
+
+  // ── New A3 scenarios (JIRA-191) ──────────────────────────────────────────
+
+  it('A3: no_build_target — skips move when resolveBuildTarget returns null', async () => {
+    mockResolveBuildTarget.mockReturnValue(null);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [] });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.compositionTrace.a3.movePreprended).toBe(false);
+    expect(result.compositionTrace.a3.terminationReason).toBe('no_build_target');
+    expect(mockResolveMove).not.toHaveBeenCalled();
+  });
+
+  it('A3: build_dijkstra_failed — skips move when computeBuildSegments returns empty array', async () => {
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    // Dijkstra returns empty — no path to target
+    mockComputeBuildSegments.mockReturnValue([]);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ citiesOnNetwork: [], position: { city: 'Paris', row: 5, col: 5 } });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.compositionTrace.a3.movePreprended).toBe(false);
+    expect(result.compositionTrace.a3.terminationReason).toBe('build_dijkstra_failed');
+    expect(mockResolveMove).not.toHaveBeenCalled();
+  });
+
+  it('A3: partial-move truncation — resolveMove truncates path when origin is farther than remainingBudget', async () => {
+    // The previewed build origin is 5 hops away but remainingBudget=2.
+    // resolveMove truncates the path — bot lands 2 hops along the way.
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 0, col: 0 }, to: { row: 1, col: 0 }, cost: 1 },
+    ]);
+    // resolveMove returns a truncated path (only 2 hops covered)
+    const truncatedMovePlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 5, col: 5 }, { row: 4, col: 5 }, { row: 3, col: 5 }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+    mockResolveMove.mockResolvedValue({ success: true, plan: truncatedMovePlan });
+    mockComputeEffectivePathLength.mockReturnValue(2);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'München', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      citiesOnNetwork: [],
+      position: { city: 'Paris', row: 5, col: 5 },
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.plans).toContainEqual(truncatedMovePlan);
+    expect(result.compositionTrace.a3.movePreprended).toBe(true);
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_move_success');
+    expect(result.compositionTrace.moveBudget.used).toBe(2);
+  });
+
+  it('A3: game 1c2dadeb t5 — bot at delivery city pre-walks toward build origin (off-network next pickup)', async () => {
+    // Reproduces game 1c2dadeb-1177-4f32-8b8c-c042bff5ba6f turn 5:
+    // Bot has track A → B → Antwerpen, bot is at Antwerpen.
+    // Active route's next stop = Frankfurt (off-network).
+    // computeBuildSegments returns a segment originating at B (3,3).
+    // Expect resolveMove toward B, budget consumed, movePreprended === true.
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Frankfurt',
+      stopIndex: 0,
+      isVictoryBuild: false,
+    });
+    // Frankfurt is at (10,10) in the grid
+    mockLoadGridPoints.mockReturnValue(
+      new Map([['10,10', { row: 10, col: 10, name: 'Frankfurt', terrain: 1 }]]),
+    );
+    // Build path starts from node B (3,3) on existing track
+    mockComputeBuildSegments.mockReturnValue([
+      { from: { row: 3, col: 3 }, to: { row: 4, col: 4 }, cost: 1 },
+      { from: { row: 4, col: 4 }, to: { row: 5, col: 5 }, cost: 1 },
+    ]);
+    // Bot moves back from Antwerpen to B
+    const moveToOriginPlan = {
+      type: AIActionType.MoveTrain,
+      path: [{ row: 5, col: 5 }, { row: 4, col: 4 }, { row: 3, col: 3 }],
+      fees: new Set<string>(),
+      totalFee: 0,
+    };
+    mockResolveMove.mockResolvedValue({ success: true, plan: moveToOriginPlan });
+    mockComputeEffectivePathLength.mockReturnValue(2);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Frankfurt', 'Coal')],
+      currentStopIndex: 0,
+    });
+    // Bot is at Antwerpen (5,5); Frankfurt is off-network
+    const context = makeContext({
+      citiesOnNetwork: [], // Frankfurt not yet on network
+      position: { city: 'Antwerpen', row: 5, col: 5 },
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    expect(result.plans).toContainEqual(moveToOriginPlan);
+    expect(result.compositionTrace.a3.movePreprended).toBe(true);
+    expect(result.compositionTrace.a3.terminationReason).toBe('a3_move_success');
+    expect(result.compositionTrace.a2.terminationReason).toBe('stop_city_not_on_network');
+    // resolveMove was called with the build origin coord (3,3)
+    expect(mockResolveMove).toHaveBeenCalledWith(
+      { toRow: 3, toCol: 3 },
+      snapshot,
+      9,
+    );
   });
 
   it('records mileposts used in moveBudget trace', async () => {
