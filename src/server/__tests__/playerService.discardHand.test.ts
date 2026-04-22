@@ -1,6 +1,7 @@
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
 import { demandDeckService } from '../services/demandDeckService';
+import { EventCardService } from '../services/EventCardService';
 
 // Mock socketService to prevent real socket emissions
 jest.mock('../services/socketService', () => ({
@@ -31,6 +32,20 @@ jest.mock('../services/demandDeckService', () => ({
     drawCard: jest.fn(),
     returnDealtCardToTop: jest.fn(),
     returnDiscardedCardToDealt: jest.fn(),
+  },
+}));
+
+// Mock EventCardService — prevents real DB calls when event cards are drawn
+jest.mock('../services/EventCardService', () => ({
+  EventCardService: {
+    processEventCard: jest.fn().mockResolvedValue({
+      cardId: 0,
+      cardType: 'Strike',
+      drawingPlayerId: '',
+      affectedZone: [],
+      perPlayerEffects: [],
+      floodSegmentsRemoved: [],
+    }),
   },
 }));
 
@@ -291,8 +306,8 @@ describe('PlayerService.discardHandForPlayer', () => {
       expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(122);
     });
 
-    it('should log a warning when an event card is drawn', async () => {
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    it('should log an info message when an event card is drawn', async () => {
+      const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
 
       (demandDeckService.drawCard as jest.Mock)
         .mockReturnValueOnce(eventResult(125))
@@ -302,9 +317,9 @@ describe('PlayerService.discardHandForPlayer', () => {
 
       await PlayerService.discardHandForPlayer(gameId, playerId);
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const warnMessage = warnSpy.mock.calls[0][0] as string;
-      expect(warnMessage).toContain('125');
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const infoMessage = infoSpy.mock.calls[0][0] as string;
+      expect(infoMessage).toContain('125');
     });
 
     it('should not call discardEventCard when only demand cards are drawn', async () => {
