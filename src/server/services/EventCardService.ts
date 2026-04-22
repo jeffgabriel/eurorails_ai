@@ -175,7 +175,7 @@ export class EventCardService {
     if (effect.variant === 'coastal') {
       const radius = effect.coastalRadius ?? 3;
       const coastalZone = AreaOfEffectService.getCoastalMileposts(radius);
-      const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, coastalZone);
+      const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, coastalZone, client);
 
       // SELECT … FOR UPDATE on affected player rows (idempotent lock, no mutation in this project)
       if (affectedPlayers.length > 0) {
@@ -250,7 +250,7 @@ export class EventCardService {
       for (const key of cityZone) zone.add(key);
     }
 
-    const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, zone);
+    const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, zone, client);
 
     const perPlayerEffects: PerPlayerEffect[] = [];
 
@@ -331,7 +331,7 @@ export class EventCardService {
       effect.blockedTerrain,
     );
 
-    const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, halfRateZone);
+    const affectedPlayers = await AreaOfEffectService.getPlayersInZone(gameId, halfRateZone, client);
 
     if (affectedPlayers.length > 0) {
       const ids = affectedPlayers.map(p => p.playerId);

@@ -323,10 +323,10 @@ describe('AreaOfEffectService.findRiverCrossingSegments', () => {
   });
 
   it('returns crossing segments paired with owning playerId', async () => {
-    // Build a segment that crosses the Elbe (first key: "30,52|53,30")
+    // Build a segment that crosses the Elbe (first key: "30,52|30,53")
     const crossingSeg = {
       from: { row: 30, col: 52, x: 0, y: 0, terrain: TerrainType.Clear },
-      to: { row: 53, col: 30, x: 0, y: 0, terrain: TerrainType.Clear },
+      to: { row: 30, col: 53, x: 0, y: 0, terrain: TerrainType.Clear },
       cost: 3,
     };
     const safeSeg = {
@@ -360,13 +360,13 @@ describe('AreaOfEffectService.findRiverCrossingSegments', () => {
     expect(result).toHaveLength(1);
     expect(result[0].playerId).toBe(PLAYER_A);
     expect(result[0].segment.from.row).toBe(30);
-    expect(result[0].segment.to.row).toBe(53);
+    expect(result[0].segment.to.row).toBe(30);
   });
 
   it('returns crossing segments from multiple players', async () => {
     const crossingSeg = {
       from: { row: 30, col: 52, x: 0, y: 0, terrain: TerrainType.Clear },
-      to: { row: 53, col: 30, x: 0, y: 0, terrain: TerrainType.Clear },
+      to: { row: 30, col: 53, x: 0, y: 0, terrain: TerrainType.Clear },
       cost: 3,
     };
 

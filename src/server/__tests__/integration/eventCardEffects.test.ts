@@ -55,10 +55,10 @@ describe('Flood event: removeSegmentsCrossingRiver (integration)', () => {
   let playerId2: string;
 
   // A real Elbe river edge from rivers.json (first edge)
-  // Start: {Col:52, Row:30}, End: {Row:53, Col:30}
-  // key = "30,52|53,30" (canonical, "30,52" < "53,30")
-  // segment from (30,52) to (53,30)
-  const ELBE_CROSSING_SEG = makeSegment(30, 52, 53, 30, 3);
+  // Elbe first edge: Start(30,52) → End transposed to (30,53)
+  // canonical key = "30,52|30,53"
+  // segment from (30,52) to (30,53)
+  const ELBE_CROSSING_SEG = makeSegment(30, 52, 30, 53, 3);
   const SAFE_SEG = makeSegment(10, 10, 10, 11, 2);
 
   beforeEach(async () => {

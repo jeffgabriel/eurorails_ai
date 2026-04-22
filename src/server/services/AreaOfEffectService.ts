@@ -10,6 +10,7 @@ import {
   loadGridPoints,
   getHexNeighbors,
   hexDistance,
+  isWater,
   makeKey,
 } from './MapTopology';
 import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from './trackService';
@@ -159,8 +160,9 @@ export class AreaOfEffectService {
     const result = new Set<string>();
 
     for (const [, point] of grid) {
-      if (point.ocean) {
-        // This is a coastal milepost — compute its zone
+      // Seed from land mileposts adjacent to ocean — not water tiles themselves.
+      // This prevents the zone from expanding inland from water centers.
+      if (point.ocean && !isWater(point.terrain)) {
         const zone = AreaOfEffectService.computeAffectedZone(point.row, point.col, radius);
         for (const key of zone) {
           result.add(key);
@@ -183,10 +185,12 @@ export class AreaOfEffectService {
   static async getPlayersInZone(
     gameId: string,
     zone: Set<string>,
+    client?: import('pg').PoolClient,
   ): Promise<PlayerInZone[]> {
     if (zone.size === 0) return [];
 
-    const result = await db.query(
+    const queryFn = client ?? db;
+    const result = await queryFn.query(
       `SELECT id, name, money, loads, train_type, position_row, position_col, current_turn_number
        FROM players
        WHERE game_id = $1

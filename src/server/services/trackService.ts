@@ -17,9 +17,21 @@ interface RiverData {
 }
 
 /**
- * Build a set of canonical edge keys ("r1,c1|r2,c2" where the smaller coord
- * comes first) for all edges belonging to the named river.
+ * Build a canonical edge key "r1,c1|r2,c2" with the numerically smaller
+ * coordinate first (by row, then col). Using numeric comparison avoids
+ * lexicographic issues (e.g. "10,0" < "2,0" in string comparison).
+ */
+function canonicalEdgeKey(r1: number, c1: number, r2: number, c2: number): string {
+  const aFirst = r1 < r2 || (r1 === r2 && c1 <= c2);
+  return aFirst ? `${r1},${c1}|${r2},${c2}` : `${r2},${c2}|${r1},${c1}`;
+}
+
+/**
+ * Build a set of canonical edge keys for all edges belonging to the named river.
  * Returns null if the river is not found.
+ *
+ * Note: rivers.json stores End coordinates with Row/Col transposed relative to
+ * the hex grid coordinate system. We swap them here to get correct adjacency.
  */
 export function getRiverEdgeKeys(riverName: string): Set<string> | null {
   const rivers = riversData as RiverData[];
@@ -28,10 +40,10 @@ export function getRiverEdgeKeys(riverName: string): Set<string> | null {
 
   const keys = new Set<string>();
   for (const edge of river.Edges) {
-    const a = `${edge.Start.Row},${edge.Start.Col}`;
-    const b = `${edge.End.Row},${edge.End.Col}`;
-    const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
-    keys.add(key);
+    // End coords are transposed in rivers.json — swap Row/Col
+    const endRow = edge.End.Col;
+    const endCol = edge.End.Row;
+    keys.add(canonicalEdgeKey(edge.Start.Row, edge.Start.Col, endRow, endCol));
   }
   return keys;
 }
@@ -42,9 +54,7 @@ export function getRiverEdgeKeys(riverName: string): Set<string> | null {
  * river's canonical edges (order-independent).
  */
 export function segmentCrossesRiver(segment: TrackSegment, riverEdgeKeys: Set<string>): boolean {
-  const a = `${segment.from.row},${segment.from.col}`;
-  const b = `${segment.to.row},${segment.to.col}`;
-  const key = a <= b ? `${a}|${b}` : `${b}|${a}`;
+  const key = canonicalEdgeKey(segment.from.row, segment.from.col, segment.to.row, segment.to.col);
   return riverEdgeKeys.has(key);
 }
 
