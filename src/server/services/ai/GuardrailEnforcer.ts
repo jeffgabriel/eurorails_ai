@@ -21,6 +21,11 @@ import {
   GameContext,
   AIActionType,
 } from '../../../shared/types/GameTypes';
+import {
+  computeEffectivePathLength,
+  isIntraCityEdge,
+  getMajorCityLookup,
+} from '../../../shared/services/majorCityGroups';
 
 export class GuardrailEnforcer {
   /**
@@ -113,14 +118,19 @@ export class GuardrailEnforcer {
 
     // Guardrail 8: Movement budget enforcement (defense-in-depth)
     // For MultiAction plans, ensure total movement doesn't exceed speed limit.
+    // Uses effective mileposts — intra-city edges are free per game rules.
     // This is a silent truncation — returns overridden: false.
     if (plan.type === 'MultiAction') {
+      const majorCityLookup = getMajorCityLookup();
       const moveIndices: number[] = [];
       let totalMovement = 0;
       for (let i = 0; i < plan.steps.length; i++) {
         if (plan.steps[i].type === AIActionType.MoveTrain) {
           moveIndices.push(i);
-          totalMovement += (plan.steps[i] as TurnPlanMoveTrain).path.length - 1;
+          totalMovement += computeEffectivePathLength(
+            (plan.steps[i] as TurnPlanMoveTrain).path,
+            majorCityLookup,
+          );
         }
       }
 
@@ -130,19 +140,29 @@ export class GuardrailEnforcer {
           `[Guardrail 8] Movement budget exceeded: ${totalMovement}mp > ${context.speed}mp limit. Truncating.`,
         );
         const newSteps = [...plan.steps];
-        // Truncate from last MOVE backward
+        // Truncate from last MOVE backward, skipping intra-city edges (they are free)
         for (let i = moveIndices.length - 1; i >= 0 && excess > 0; i--) {
           const idx = moveIndices[i];
           const movePlan = newSteps[idx] as TurnPlanMoveTrain;
-          const currentMp = movePlan.path.length - 1;
-          const reduction = Math.min(excess, currentMp);
-          const newPathLength = movePlan.path.length - reduction;
+          const path = movePlan.path;
+          // Walk the path backwards to find how many raw edges to remove for `excess` effective mp
+          let rawRemove = 0;
+          let effectiveRemoved = 0;
+          for (let j = path.length - 1; j >= 1 && effectiveRemoved < excess; j--) {
+            const fromKey = `${path[j - 1].row},${path[j - 1].col}`;
+            const toKey = `${path[j].row},${path[j].col}`;
+            rawRemove++;
+            if (!isIntraCityEdge(fromKey, toKey, majorCityLookup)) {
+              effectiveRemoved++;
+            }
+          }
+          const newPathLength = path.length - rawRemove;
           if (newPathLength > 1) {
-            newSteps[idx] = { ...movePlan, path: movePlan.path.slice(0, newPathLength) };
+            newSteps[idx] = { ...movePlan, path: path.slice(0, newPathLength) };
           } else {
             newSteps.splice(idx, 1);
           }
-          excess -= reduction;
+          excess -= effectiveRemoved;
         }
         return {
           plan: { ...plan, steps: newSteps },
