@@ -1,14 +1,26 @@
 /**
- * Integration tests for Flood event card effects on player_tracks.
+ * Integration tests for event card effects on player_tracks and players.
  *
  * Uses a real PostgreSQL test database (TEST_DATABASE_URL or DATABASE_URL).
- * Seeds player_tracks rows, calls removeSegmentsCrossingRiver inside a real
- * transaction, and asserts correct DB state changes.
+ * Covers:
+ *   - Flood event: seeds player_tracks rows, calls removeSegmentsCrossingRiver
+ *     inside a real transaction, asserts correct JSONB manipulation and total_cost
+ *     recomputation.
+ *   - Derailment event: seeds players with loads and train positions inside the
+ *     derailment zone, calls EventCardService.processEventCard, asserts loads column
+ *     updated correctly.
+ *   - Concurrency: two concurrent EventCardService.processEventCard calls on the
+ *     same game serialize correctly via SELECT ... FOR UPDATE.
  */
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { db } from '../../db/index';
 import { TrackService, getRiverEdgeKeys } from '../../services/trackService';
+import { EventCardService } from '../../services/EventCardService';
 import { TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
+import {
+  EventCard,
+  EventCardType,
+} from '../../../shared/types/EventCard';
 import { v4 as uuidv4 } from 'uuid';
 
 // ── Test helpers ─────────────────────────────────────────────────────────────
@@ -269,5 +281,250 @@ describe('Flood event: removeSegmentsCrossingRiver (integration)', () => {
     );
     const segs = parseSegments(row.rows[0].segments);
     expect(segs).toHaveLength(1);
+  });
+});
+
+// ── Derailment event integration tests ───────────────────────────────────────
+
+/**
+ * Derailment integration tests.
+ *
+ * Seeds players with:
+ *   - One player positioned at Paris (row=29, col=32 — the Major City center),
+ *     which is within radius 3 of Paris derailment zone.
+ *   - One player positioned far from Paris (row=1, col=1), outside the zone.
+ *
+ * Calls EventCardService.processEventCard with a Derailment card targeting Paris.
+ * Asserts that only the player in the zone loses their first load.
+ */
+describe('Derailment event: EventCardService.processEventCard (integration)', () => {
+  let gameId: string;
+  let userId1: string;
+  let userId2: string;
+  let playerId1: string;  // inside Paris zone
+  let playerId2: string;  // outside zone
+
+  // Paris Major City center: row=29, col=32
+  const PARIS_ROW = 29;
+  const PARIS_COL = 32;
+
+  const DERAILMENT_CARD: EventCard = {
+    id: 125,
+    type: EventCardType.Derailment,
+    title: 'Derailment!',
+    description: 'Trains within 3 mileposts of Paris lose 1 turn and 1 load',
+    effectConfig: {
+      type: EventCardType.Derailment,
+      cities: ['Paris'],
+      radius: 3,
+    },
+  };
+
+  beforeEach(async () => {
+    gameId = uuidv4();
+    userId1 = uuidv4();
+    userId2 = uuidv4();
+    playerId1 = uuidv4();
+    playerId2 = uuidv4();
+
+    // Create users
+    await db.query(
+      'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+      [userId1, `du1_${userId1.slice(0, 6)}`, `du1_${userId1.slice(0, 6)}@test.local`, 'hash']
+    );
+    await db.query(
+      'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+      [userId2, `du2_${userId2.slice(0, 6)}`, `du2_${userId2.slice(0, 6)}@test.local`, 'hash']
+    );
+
+    // Create game
+    await db.query(
+      'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
+      [gameId, 'active', 0, 6]
+    );
+
+    // Player 1: inside Paris zone with 2 loads
+    await db.query(
+      `INSERT INTO players (
+        id, game_id, user_id, name, color, money, train_type,
+        position_x, position_y, position_row, position_col,
+        current_turn_number, hand, loads
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [playerId1, gameId, userId1, 'Player1', '#FF0000', 100, 'freight',
+       null, null, PARIS_ROW, PARIS_COL, 1, [], ['coal', 'steel']]
+    );
+
+    // Player 2: outside zone (row=1, col=1) with 1 load
+    await db.query(
+      `INSERT INTO players (
+        id, game_id, user_id, name, color, money, train_type,
+        position_x, position_y, position_row, position_col,
+        current_turn_number, hand, loads
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [playerId2, gameId, userId2, 'Player2', '#0000FF', 80, 'freight',
+       null, null, 1, 1, 1, [], ['wheat']]
+    );
+  });
+
+  afterEach(async () => {
+    await db.query('DELETE FROM player_tracks WHERE game_id = $1', [gameId]);
+    await db.query('DELETE FROM players WHERE game_id = $1', [gameId]);
+    await db.query('DELETE FROM games WHERE id = $1', [gameId]);
+    await db.query('DELETE FROM users WHERE id IN ($1, $2)', [userId1, userId2]);
+  });
+
+  it('removes first load from player in zone and leaves outside player unchanged', async () => {
+    const result = await EventCardService.processEventCard(
+      gameId,
+      DERAILMENT_CARD,
+      playerId1,
+    );
+
+    // Result should contain load_lost and turn_lost for playerId1
+    const p1Effects = result.perPlayerEffects.filter(e => e.playerId === playerId1);
+    expect(p1Effects.some(e => e.effectType === 'load_lost')).toBe(true);
+    expect(p1Effects.some(e => e.effectType === 'turn_lost')).toBe(true);
+
+    // Result should NOT contain effects for playerId2
+    const p2Effects = result.perPlayerEffects.filter(e => e.playerId === playerId2);
+    expect(p2Effects).toHaveLength(0);
+
+    // DB: player 1 should have lost the first load ('coal')
+    const p1Row = await db.query(
+      'SELECT loads FROM players WHERE id = $1 AND game_id = $2',
+      [playerId1, gameId]
+    );
+    const p1Loads = p1Row.rows[0].loads as string[];
+    expect(p1Loads).toEqual(['steel']);
+    expect(p1Loads).not.toContain('coal');
+
+    // DB: player 2 loads unchanged
+    const p2Row = await db.query(
+      'SELECT loads FROM players WHERE id = $1 AND game_id = $2',
+      [playerId2, gameId]
+    );
+    const p2Loads = p2Row.rows[0].loads as string[];
+    expect(p2Loads).toEqual(['wheat']);
+  });
+
+  it('produces only turn_lost (no load_lost) for player in zone with no loads', async () => {
+    // Update player 1 to have no loads
+    await db.query(
+      'UPDATE players SET loads = $1 WHERE id = $2 AND game_id = $3',
+      [[], playerId1, gameId]
+    );
+
+    const result = await EventCardService.processEventCard(
+      gameId,
+      DERAILMENT_CARD,
+      playerId1,
+    );
+
+    const p1Effects = result.perPlayerEffects.filter(e => e.playerId === playerId1);
+    expect(p1Effects.some(e => e.effectType === 'turn_lost')).toBe(true);
+    expect(p1Effects.some(e => e.effectType === 'load_lost')).toBe(false);
+
+    // DB: loads still empty
+    const row = await db.query(
+      'SELECT loads FROM players WHERE id = $1 AND game_id = $2',
+      [playerId1, gameId]
+    );
+    expect((row.rows[0].loads as string[])).toHaveLength(0);
+  });
+});
+
+// ── Concurrency integration tests ────────────────────────────────────────────
+
+/**
+ * Concurrency integration tests.
+ *
+ * Verifies that two concurrent EventCardService.processEventCard calls on the
+ * same game serialize correctly via SELECT ... FOR UPDATE, ensuring no lost
+ * updates or duplicate load removals.
+ *
+ * Strategy: run two Derailment card draws concurrently (Promise.all) on the
+ * same player who has 2 loads. Due to FOR UPDATE locking, the two transactions
+ * must serialize. The first draw removes 'coal'; the second sees only 'steel'
+ * and removes it. Final state: empty loads array.
+ */
+describe('Concurrency: concurrent event card draws serialize via SELECT FOR UPDATE', () => {
+  let gameId: string;
+  let userId1: string;
+  let playerId1: string;
+
+  // Paris Major City center: row=29, col=32
+  const PARIS_ROW = 29;
+  const PARIS_COL = 32;
+
+  const DERAILMENT_CARD: EventCard = {
+    id: 125,
+    type: EventCardType.Derailment,
+    title: 'Derailment!',
+    description: 'Trains within 3 mileposts of Paris lose 1 turn and 1 load',
+    effectConfig: {
+      type: EventCardType.Derailment,
+      cities: ['Paris'],
+      radius: 3,
+    },
+  };
+
+  beforeEach(async () => {
+    gameId = uuidv4();
+    userId1 = uuidv4();
+    playerId1 = uuidv4();
+
+    await db.query(
+      'INSERT INTO users (id, username, email, password_hash) VALUES ($1, $2, $3, $4)',
+      [userId1, `cu1_${userId1.slice(0, 6)}`, `cu1_${userId1.slice(0, 6)}@test.local`, 'hash']
+    );
+
+    await db.query(
+      'INSERT INTO games (id, status, current_player_index, max_players) VALUES ($1, $2, $3, $4)',
+      [gameId, 'active', 0, 6]
+    );
+
+    // Player inside Paris zone with 2 loads
+    await db.query(
+      `INSERT INTO players (
+        id, game_id, user_id, name, color, money, train_type,
+        position_x, position_y, position_row, position_col,
+        current_turn_number, hand, loads
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+      [playerId1, gameId, userId1, 'ConcPlayer', '#00FF00', 100, 'freight',
+       null, null, PARIS_ROW, PARIS_COL, 1, [], ['coal', 'steel']]
+    );
+  });
+
+  afterEach(async () => {
+    await db.query('DELETE FROM player_tracks WHERE game_id = $1', [gameId]);
+    await db.query('DELETE FROM players WHERE game_id = $1', [gameId]);
+    await db.query('DELETE FROM games WHERE id = $1', [gameId]);
+    await db.query('DELETE FROM users WHERE id = $1', [userId1]);
+  });
+
+  it('two concurrent draws serialize: each removes exactly one load without duplication', async () => {
+    // Fire two processEventCard calls concurrently
+    const [result1, result2] = await Promise.all([
+      EventCardService.processEventCard(gameId, DERAILMENT_CARD, playerId1),
+      EventCardService.processEventCard(gameId, DERAILMENT_CARD, playerId1),
+    ]);
+
+    // Both should succeed (no error)
+    expect(result1.cardType).toBe(EventCardType.Derailment);
+    expect(result2.cardType).toBe(EventCardType.Derailment);
+
+    // Final DB state: player should have exactly 0 loads (each draw removed 1 of 2)
+    const row = await db.query(
+      'SELECT loads FROM players WHERE id = $1 AND game_id = $2',
+      [playerId1, gameId]
+    );
+    const finalLoads = row.rows[0].loads as string[];
+    expect(finalLoads).toHaveLength(0);
+
+    // Total load_lost effects across both results should be exactly 2
+    const totalLoadLost =
+      result1.perPlayerEffects.filter(e => e.effectType === 'load_lost').length +
+      result2.perPlayerEffects.filter(e => e.effectType === 'load_lost').length;
+    expect(totalLoadLost).toBe(2);
   });
 });
