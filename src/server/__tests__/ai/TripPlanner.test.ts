@@ -35,7 +35,11 @@ jest.mock('../../services/ai/schemas', () => ({
   TRIP_PLAN_SCHEMA: { type: 'object' },
 }));
 jest.mock('../../services/ai/prompts/systemPrompts', () => ({
-  getTripPlanningPrompt: jest.fn(() => 'system-prompt'),
+  // JIRA-190: getTripPlanningPrompt returns { system, user } not a string
+  getTripPlanningPrompt: jest.fn(() => ({
+    system: 'mock-system-prompt',
+    user: 'mock-user-prompt: Plan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.',
+  })),
 }));
 jest.mock('../../services/ai/MapTopology', () => ({
   estimateHopDistance: jest.fn(() => 0),
@@ -142,13 +146,32 @@ function makeConfig(): LLMStrategyConfig {
   };
 }
 
-/** Build an LLM response JSON string with the given candidates */
+/**
+ * Build an LLM response JSON string with the given candidates.
+ * JIRA-190: auto-converts old-format stops (city) to new-format (supplyCity/deliveryCity).
+ */
 function buildLlmResponse(candidates: Array<{
-  stops: Array<{ action: string; load: string; city: string; demandCardId?: number; payment?: number }>;
+  stops: Array<{ action: string; load: string; city?: string; supplyCity?: string; deliveryCity?: string; demandCardId?: number; payment?: number }>;
   reasoning: string;
 }>, chosenIndex = 0, upgradeOnRoute?: string): string {
+  const convertedCandidates = candidates.map(c => ({
+    ...c,
+    stops: c.stops.map(s => {
+      const action = s.action.toUpperCase();
+      // Already using new format
+      if (s.supplyCity || s.deliveryCity) return s;
+      // Convert old city field to new format
+      if (action === 'PICKUP' || action === 'pickup') {
+        const { city, ...rest } = s;
+        return { ...rest, supplyCity: city };
+      } else {
+        const { city, ...rest } = s;
+        return { ...rest, deliveryCity: city };
+      }
+    }),
+  }));
   return JSON.stringify({
-    candidates,
+    candidates: convertedCandidates,
     chosenIndex,
     reasoning: 'Chose the best trip',
     ...(upgradeOnRoute && { upgradeOnRoute }),
@@ -1514,6 +1537,396 @@ describe('TripPlanner', () => {
   });
 });
 
+// ── JIRA-190: Prompt shape and field rename tests ────────────────────────────
+
+describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC6)', () => {
+  // Use real implementation (bypass the mock at the top of this file)
+  let getTripPlanningPromptReal: (
+    skillLevel: BotSkillLevel,
+    context: GameContext,
+    memory: BotMemoryState,
+  ) => { system: string; user: string };
+
+  beforeAll(() => {
+    const mod = jest.requireActual('../../services/ai/prompts/systemPrompts') as {
+      getTripPlanningPrompt: (s: BotSkillLevel, c: GameContext, m: BotMemoryState) => { system: string; user: string };
+    };
+    getTripPlanningPromptReal = mod.getTripPlanningPrompt;
+  });
+
+  function makeMinimalContext(): GameContext {
+    return {
+      position: { city: 'Berlin', row: 10, col: 10 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Berlin'],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: 'Berlin hub',
+      citiesOnNetwork: ['Berlin', 'Essen'],
+      turnBuildCost: 0,
+      turnNumber: 5,
+      demands: [
+        {
+          cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Wien', payout: 15,
+          isSupplyReachable: true, isDeliveryReachable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 8,
+          isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+          demandScore: 0, efficiencyPerTurn: 5, networkCitiesUnlocked: 0,
+          victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 42,
+        } as DemandContext,
+      ],
+      canDeliver: [],
+      canPickup: [],
+    } as GameContext;
+  }
+
+  function makeMinimalMemory(): BotMemoryState {
+    return { lastAbandonedRouteKey: null, previousRouteStops: null, consecutiveLlmFailures: 0 } as BotMemoryState;
+  }
+
+  // AC2: return type is object with system and user keys
+  it('AC2: returns an object with system and user keys (not a string)', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(typeof result).toBe('object');
+    expect(result).toHaveProperty('system');
+    expect(result).toHaveProperty('user');
+    expect(typeof result.system).toBe('string');
+    expect(typeof result.user).toBe('string');
+  });
+
+  // AC1: system prompt is byte-identical across two different contexts at same skill level
+  it('AC1: system prompt is byte-identical for two distinct contexts at same skill level', () => {
+    const ctxA = makeMinimalContext();
+    const ctxB = { ...makeMinimalContext(), money: 999, turnNumber: 50, loads: ['Coal'] };
+    const memA = makeMinimalMemory();
+    const memB = { ...makeMinimalMemory(), consecutiveLlmFailures: 5 };
+
+    const resultA = getTripPlanningPromptReal(BotSkillLevel.Medium, ctxA as GameContext, memA);
+    const resultB = getTripPlanningPromptReal(BotSkillLevel.Medium, ctxB as GameContext, memB);
+
+    expect(resultA.system).toBe(resultB.system);
+  });
+
+  // AC3: system prompt contains no DROP/drop/Drop references
+  it('AC3: system prompt contains no DROP, drop, or Drop', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).not.toMatch(/DROP|drop|Drop/);
+  });
+
+  // AC4: system prompt contains no worked example block (no "EXAMPLE" or "Steel" token from old example)
+  it('AC4: system prompt contains no EXAMPLE block or Steel worked-example marker', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).not.toContain('EXAMPLE');
+    // "Steel" was a distinctive load in the old example — regression marker
+    // (It may appear in user context but not in the static system prompt)
+    expect(result.system).not.toContain('Steel');
+  });
+
+  // AC5: system prompt does not contain multi-turn heuristics from COMMON_SYSTEM_SUFFIX
+  it('AC5: system prompt contains no multi-turn heuristics ("DURING THE FIRST 10 TURNS", "AFTER 4 DELIVERIES UPGRADE TRAIN ASAP")', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).not.toContain('DURING THE FIRST 10 TURNS');
+    expect(result.system).not.toContain('AFTER 4 DELIVERIES UPGRADE TRAIN ASAP');
+  });
+
+  // AC6: system prompt includes PICKUP/supplyCity constraint rule
+  it('AC6: system prompt contains a PICKUP and supplyCity constraint rule', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).toMatch(/PICKUP/);
+    expect(result.system).toMatch(/supplyCity/);
+  });
+
+  // AC1 (extended): dynamic content is in user, not repeated in system
+  it('user prompt contains dynamic context (position, cash, demand cards)', () => {
+    const ctx = makeMinimalContext();
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx, makeMinimalMemory());
+    // Dynamic content should appear in user, not be in system
+    expect(result.user).toContain('Berlin');
+    expect(result.user).toContain('50M ECU');
+    expect(result.user).toContain('Coal');
+  });
+});
+
+// ── JIRA-190: scoreCandidates field rename (AC7, AC8) ─────────────────────────
+
+describe('JIRA-190: TripPlanner scoreCandidates — supplyCity/deliveryCity field rename (AC7, AC8)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // AC7: PICKUP stop with supplyCity produces RouteStop with correct city and action
+  it('AC7: PICKUP stop with supplyCity produces RouteStop[].action===pickup, loadType===Cattle, city===Bern', async () => {
+    const response = JSON.stringify({
+      candidates: [{
+        stops: [
+          { action: 'PICKUP', load: 'Cattle', supplyCity: 'Bern' },
+          { action: 'DELIVER', load: 'Cattle', deliveryCity: 'Hamburg', demandCardId: 1, payment: 20 },
+        ],
+        reasoning: 'Cattle route',
+      }],
+      chosenIndex: 0,
+      reasoning: 'Best candidate',
+    });
+
+    const context = {
+      position: { city: 'Bern', row: 10, col: 10 },
+      money: 80,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: '',
+      citiesOnNetwork: ['Bern'],
+      turnBuildCost: 0,
+      turnNumber: 5,
+      demands: [{
+        cardIndex: 1, loadType: 'Cattle', supplyCity: 'Bern', deliveryCity: 'Hamburg', payout: 20,
+        isSupplyReachable: true, isDeliveryReachable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+        estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 5,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+        demandScore: 0, efficiencyPerTurn: 6.7, networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 80,
+      } as DemandContext],
+      canDeliver: [],
+      canPickup: [],
+    } as GameContext;
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const r = result as TripPlanResult;
+    const pickupStop = r.route.stops.find(s => s.action === 'pickup');
+    expect(pickupStop).toBeDefined();
+    expect(pickupStop!.loadType).toBe('Cattle');
+    expect(pickupStop!.city).toBe('Bern');
+  });
+
+  // AC8: a stop with action DROP is not present in the output
+  it('AC8: a stop with action DROP in the LLM response does not appear in RouteStop[]', async () => {
+    // The schema narrows action to PICKUP | DELIVER. A DROP stop coming through
+    // will have neither supplyCity nor deliveryCity → city resolves to undefined → filtered out.
+    const response = JSON.stringify({
+      candidates: [{
+        stops: [
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 1, payment: 15 },
+          // Rogue DROP stop (should be filtered — no supplyCity or deliveryCity)
+          { action: 'DROP', load: 'Coal', city: 'Paris' },
+        ],
+        reasoning: 'Route with rogue DROP',
+      }],
+      chosenIndex: 0,
+      reasoning: 'Only valid candidate',
+    });
+
+    const context = {
+      position: { city: 'Essen', row: 10, col: 5 },
+      money: 50,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: [],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: '',
+      citiesOnNetwork: ['Essen'],
+      turnBuildCost: 0,
+      turnNumber: 5,
+      demands: [{
+        cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15,
+        isSupplyReachable: true, isDeliveryReachable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true,
+        estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+        demandScore: 0, efficiencyPerTurn: 5, networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 65,
+      } as DemandContext],
+      canDeliver: [],
+      canPickup: [],
+    } as GameContext;
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const r = result as TripPlanResult;
+    const dropStops = r.route.stops.filter(s => s.action === 'drop');
+    expect(dropStops).toHaveLength(0);
+  });
+});
+
+// ── JIRA-190: retry path system-prompt stability (AC9) ────────────────────────
+
+describe('JIRA-190: retry path — system prompt byte-stable across retries (AC9)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('AC9: system prompt is byte-identical across the failed and retry attempt; user prompt on retry contains PREVIOUS ATTEMPT FAILED', async () => {
+    const validResponse = buildLlmResponse([{
+      stops: [
+        { action: 'pickup', load: 'Coal', city: 'Essen' },
+        { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+      ],
+      reasoning: 'Success on retry',
+    }]);
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn
+      .mockResolvedValueOnce({ text: 'INVALID JSON', usage: { input: 50, output: 5 } })
+      .mockResolvedValueOnce({ text: validResponse, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+    expect(chatFn).toHaveBeenCalledTimes(2);
+
+    const firstCall = chatFn.mock.calls[0][0];
+    const secondCall = chatFn.mock.calls[1][0];
+
+    // System prompt is byte-identical
+    expect(firstCall.systemPrompt).toBe(secondCall.systemPrompt);
+
+    // User prompt on second call contains error marker
+    expect(secondCall.userPrompt).toContain('PREVIOUS ATTEMPT FAILED');
+    // First call user prompt does NOT contain error marker
+    expect(firstCall.userPrompt).not.toContain('PREVIOUS ATTEMPT FAILED');
+  });
+});
+
+// ── JIRA-190: Integration test end-to-end (AC10) ─────────────────────────────
+
+describe('JIRA-190: Integration — planTrip produces valid route with demand-card cities (AC10)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('AC10: every pickup stop city matches a demand supplyCity; every deliver stop city matches a demand deliveryCity', async () => {
+    const demands: DemandContext[] = [
+      {
+        cardIndex: 1, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'München', payout: 18,
+        isSupplyReachable: true, isDeliveryReachable: true, isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 8,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 3, loadChipCarried: 0, estimatedTurns: 4,
+        demandScore: 0, efficiencyPerTurn: 4.5, networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 58,
+      },
+      {
+        cardIndex: 2, loadType: 'Coal', supplyCity: 'Ruhr', deliveryCity: 'Wien', payout: 14,
+        isSupplyReachable: true, isDeliveryReachable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 12,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 3,
+        demandScore: 0, efficiencyPerTurn: 4.7, networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 54,
+      },
+      {
+        cardIndex: 3, loadType: 'Steel', supplyCity: 'Hamburg', deliveryCity: 'Paris', payout: 22,
+        isSupplyReachable: true, isDeliveryReachable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false,
+        estimatedTrackCostToSupply: 15, estimatedTrackCostToDelivery: 20,
+        isLoadAvailable: true, isLoadOnTrain: false, ferryRequired: false,
+        loadChipTotal: 2, loadChipCarried: 0, estimatedTurns: 7,
+        demandScore: 0, efficiencyPerTurn: 3.1, networkCitiesUnlocked: 0,
+        victoryMajorCitiesEnRoute: 0, isAffordable: true, projectedFundsAfterDelivery: 62,
+      },
+    ];
+
+    // LLM returns a valid candidate using the demand card cities
+    const response = JSON.stringify({
+      candidates: [{
+        stops: [
+          { action: 'PICKUP', load: 'Wine', supplyCity: 'Bordeaux' },
+          { action: 'DELIVER', load: 'Wine', deliveryCity: 'München', demandCardId: 1, payment: 18 },
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Ruhr' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Wien', demandCardId: 2, payment: 14 },
+        ],
+        reasoning: 'Two deliveries in one route',
+      }],
+      chosenIndex: 0,
+      reasoning: 'Best route',
+    });
+
+    const context: GameContext = {
+      position: { city: 'Bordeaux', row: 20, col: 5 },
+      money: 80,
+      trainType: 'Freight',
+      speed: 9,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Ruhr'],
+      unconnectedMajorCities: [],
+      totalMajorCities: 8,
+      trackSummary: 'Ruhr hub',
+      citiesOnNetwork: ['Ruhr', 'Bordeaux'],
+      turnBuildCost: 0,
+      turnNumber: 10,
+      demands,
+      canDeliver: [],
+      canPickup: [],
+    } as GameContext;
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 200, output: 80 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const r = result as TripPlanResult;
+    expect(r.route).not.toBeNull();
+
+    const supplyCities = demands.map(d => d.supplyCity);
+    const deliveryCities = demands.map(d => d.deliveryCity);
+
+    for (const stop of r.route.stops) {
+      if (stop.action === 'pickup') {
+        expect(supplyCities).toContain(stop.city);
+      } else if (stop.action === 'deliver') {
+        expect(deliveryCities).toContain(stop.city);
+      }
+    }
+  });
+});
+
 // ── JIRA-187: effectivePayout in scoreCandidates ───────────────────────────
 
 describe('TripPlanner — JIRA-187 effectivePayout scoring (AC4, AC5)', () => {
@@ -1549,15 +1962,15 @@ describe('TripPlanner — JIRA-187 effectivePayout scoring (AC4, AC5)', () => {
       candidates: [
         {
           stops: [
-            { action: 'pickup', load: 'Coal', city: 'Essen' },
-            { action: 'deliver', load: 'Coal', city: 'Cardiff', demandCardId: 1, payment: 30 },
+            { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+            { action: 'DELIVER', load: 'Coal', deliveryCity: 'Cardiff', demandCardId: 1, payment: 30 },
           ],
           reasoning: 'Candidate A (Cardiff, capped)',
         },
         {
           stops: [
-            { action: 'pickup', load: 'Coal', city: 'Essen' },
-            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 2, payment: 30 },
+            { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+            { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 2, payment: 30 },
           ],
           reasoning: 'Candidate B (Berlin, open)',
         },
@@ -1605,8 +2018,8 @@ describe('TripPlanner — JIRA-187 effectivePayout scoring (AC4, AC5)', () => {
       candidates: [
         {
           stops: [
-            { action: 'pickup', load: 'Coal', city: 'Essen' },
-            { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 20 },
+            { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+            { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 1, payment: 20 },
           ],
           reasoning: 'Standard route',
         },

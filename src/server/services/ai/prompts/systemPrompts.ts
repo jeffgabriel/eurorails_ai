@@ -43,14 +43,6 @@ MULTI-ACTION TURNS — You SHOULD combine actions in a single turn to maximize e
 UPGRADE replaces BUILD for this turn's Phase B (you still MOVE, PICKUP, DELIVER normally).
 You CANNOT combine UPGRADE + BUILD, or DISCARD_HAND with anything.
 
-DURING THE FIRST 10 TURNS:
-. CHOOSE SHORT DELIVERIES THAT PAY < 25M and avoid ferries
-. BUILD TRAIN NETWORK IN CENTRAL EUROPE FIRST, THEN EXPAND
-. AVOID DELIVERIES TO UK, SPAIN, SOUTHERN ITALY, NORDIC COUNTRIES
-. DELIVERY CHAIN: Plan routes with multiple pickup and deliveries at nearby locations
-
-AFTER 4 DELIVERIES UPGRADE TRAIN ASAP
-
 . Verify the destination city appears on one of your demand cards
 . COMMIT TO YOUR PLAN
 . Games typically last ~100 turns. Don't play as if the game goes on forever
@@ -186,20 +178,15 @@ SCORING: trip_score = (total payout - build costs - usage fees) / estimated turn
 A 30M trip in 4 turns (7.5M/turn) beats a 60M trip in 12 turns (5M/turn).
 
 TRIP RULES:
-1. CARRIED LOADS ARE IMPLICIT: Loads already on the train are already in your possession — do NOT emit a PICKUP stop for them. Start the plan directly with a DELIVER stop for any carried load whose matching demand card you hold. Use a DROP stop instead if you need to free capacity.
+1. CARRIED LOADS ARE IMPLICIT: Loads already on the train are already in your possession — do NOT emit a PICKUP stop for them. Start the plan directly with a DELIVER stop for any carried load whose matching demand card you hold.
 2. COMBINE CORRIDORS: Two deliveries on one route beat two separate routes.
 3. EXISTING TRACK FIRST: On-network stops are essentially free.
 4. VICTORY ROUTING: Prefer trips through unconnected major cities when payout differences are within 30%.
 5. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
-6. DROP SEMANTICS: Use DROP to dump a load you cannot use (no demand card, or route impossible). DROP has no payment and no demandCardId. The load is abandoned at the city.
-7. Keep trips to 2-6 stops.
+6. Keep trips to 2-6 stops.
+7. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in your context. If no demand card has a supply/delivery pair you need, do not emit that stop.
 
-GEOGRAPHIC STRATEGY:
-CORE (cheap, high reuse): Paris — Ruhr — Holland — Berlin — Wien. Build here first.
-PERIPHERAL (expensive): London (ferry 8M+), Madrid (mountains), Scandinavia (ferry), deep Italy (alpine).
-- Early game (<80M cash, <4 cities): Stay in core. Fast cheap deliveries.
-- Mid game (80-180M, 4-5 cities): Expand to ONE peripheral region with 2+ demands pointing there.
-- Late game (180M+, 5-6 cities): Connect remaining major cities for victory.
+GEOGRAPHIC STRATEGY: Bias toward the core cluster (Paris — Ruhr — Holland — Berlin — Wien) when short on cash or cities; otherwise optimize by corridor efficiency.
 
 CAPITAL VELOCITY: Ask "how many turns until I get PAID?" not "which pays the most?"
 
@@ -213,10 +200,9 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   "candidates": [
     {
       "stops": [
-        { "action": "DELIVER", "load": "<carried load>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> },
-        { "action": "PICKUP", "load": "<load type>", "city": "<city name>" },
-        { "action": "DELIVER", "load": "<load type>", "city": "<city name>", "demandCardId": <card number>, "payment": <payout> },
-        { "action": "DROP", "load": "<load type>", "city": "<city name>" }
+        { "action": "DELIVER", "load": "<carried load>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> },
+        { "action": "PICKUP", "load": "<load type>", "supplyCity": "<city name from demand card>" },
+        { "action": "DELIVER", "load": "<load type>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> }
       ],
       "reasoning": "<why this trip is good>"
     }
@@ -224,31 +210,6 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
   "chosenIndex": <0-based index of the best candidate>,
   "reasoning": "<why you chose this candidate over the others>",
   "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>"
-}
-
-EXAMPLE (bot is already carrying Steel):
-{
-  "candidates": [
-    {
-      "stops": [
-        { "action": "DELIVER", "load": "Steel", "city": "Wroclaw", "demandCardId": 18, "payment": 14 },
-        { "action": "PICKUP", "load": "Wine", "city": "Paris" },
-        { "action": "DELIVER", "load": "Wine", "city": "Wien", "demandCardId": 42, "payment": 22 }
-      ],
-      "reasoning": "Deliver carried Steel immediately (no pickup needed), then pick up Wine on the way to Wien. 36M in ~5 turns."
-    },
-    {
-      "stops": [
-        { "action": "DROP", "load": "Steel", "city": "Berlin" },
-        { "action": "PICKUP", "load": "Coal", "city": "Ruhr" },
-        { "action": "DELIVER", "load": "Coal", "city": "Paris", "demandCardId": 55, "payment": 12 }
-      ],
-      "reasoning": "Drop Steel (no viable demand), pick up Coal for a quick Paris delivery. 12M in 3 turns."
-    }
-  ],
-  "chosenIndex": 0,
-  "reasoning": "36M in ~5 turns (7.2M/turn) beats 12M in 3 turns (4M/turn). Steel is already on the train.",
-  "upgradeOnRoute": "FastFreight"
 }`;
 
 /**
@@ -333,18 +294,23 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
 }
 
 /**
- * Get the system prompt for multi-stop trip planning (JIRA-126).
+ * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190).
  *
- * Builds a rich context from game state and instructs the LLM to generate
- * 2-3 candidate trips scored by netValue/estimatedTurns.
+ * Returns { system, user } where system is byte-stable per skill level (cacheable)
+ * and user contains the dynamic game state context per turn.
+ *
+ * System prompt: static rules + skill level modifier (never changes across calls at same skill level)
+ * User prompt: dynamic context built from current game state
  */
 export function getTripPlanningPrompt(
   skillLevel: BotSkillLevel,
   context: GameContext,
   memory: BotMemoryState,
-): string {
+): { system: string; user: string } {
+  const system = `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
   const dynamicContext = buildTripPlanningContext(context, memory);
-  return `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${dynamicContext}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
+  const user = `${dynamicContext}\n\nPlan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.`;
+  return { system, user };
 }
 
 // ── Cargo Conflict Prompt (JIRA-92) ──

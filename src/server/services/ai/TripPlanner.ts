@@ -52,16 +52,14 @@ export interface TripPlanResult {
   userPrompt?: string;
 }
 
-/** Raw LLM output matching TRIP_PLAN_SCHEMA */
+/** Raw LLM output matching TRIP_PLAN_SCHEMA (JIRA-190: renamed fields, no DROP) */
+type LLMTripPlanStop =
+  | { action: 'PICKUP'; load: string; supplyCity: string }
+  | { action: 'DELIVER'; load: string; deliveryCity: string; demandCardId: number; payment: number };
+
 interface LLMTripPlanResponse {
   candidates: Array<{
-    stops: Array<{
-      action: string;
-      load: string;
-      city: string;
-      demandCardId?: number;
-      payment?: number;
-    }>;
+    stops: Array<LLMTripPlanStop>;
     reasoning: string;
   }>;
   chosenIndex: number;
@@ -116,13 +114,14 @@ export class TripPlanner {
     const model = this.brain.modelName;
     const skillLevel = config.skillLevel;
 
-    const systemPrompt = getTripPlanningPrompt(skillLevel, context, memory);
-    const userPrompt = userPromptOverride ?? `Plan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.`;
+    const { system: systemPrompt, user: baseUserPrompt } = getTripPlanningPrompt(skillLevel, context, memory);
+    const userPrompt = userPromptOverride ?? baseUserPrompt;
 
     const llmLog: LlmAttempt[] = [];
     let lastError: string | undefined;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // Append error to user prompt only — system stays byte-stable across retries (R9)
       const promptWithError = lastError
         ? `${userPrompt}\n\nPREVIOUS ATTEMPT FAILED: ${lastError}\nPlease fix the issue and try again.`
         : userPrompt;
@@ -287,15 +286,34 @@ export class TripPlanner {
       const rawCandidate = parsed.candidates[llmIdx];
       // Convert LLM stops to RouteStop format
       // JIRA-164: Filter out sentinel city names that LLMs may hallucinate from context serialization
+      // JIRA-190: Read supplyCity (PICKUP) / deliveryCity (DELIVER) — no DROP in LLM schema
       const stops: RouteStop[] = rawCandidate.stops
-        .filter(s => s.city !== 'OnTrain' && s.city !== '(already carried)')
-        .map(s => ({
-          action: s.action.toLowerCase() as 'pickup' | 'deliver' | 'drop',
-          loadType: s.load,
-          city: s.city,
-          demandCardId: s.demandCardId,
-          payment: s.payment,
-        }));
+        .filter(s => {
+          // Only PICKUP and DELIVER are valid — any other action (e.g. DROP) is filtered out (ADR-2)
+          const actionUpper = s.action.toUpperCase();
+          if (actionUpper !== 'PICKUP' && actionUpper !== 'DELIVER') return false;
+          const cityField = actionUpper === 'PICKUP'
+            ? (s as { action: string; load: string; supplyCity?: string }).supplyCity
+            : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity;
+          // Filter out missing city fields and sentinel city names (JIRA-164)
+          return !!cityField && cityField !== 'OnTrain' && cityField !== '(already carried)';
+        })
+        .map(s => {
+          const actionUpper = s.action.toUpperCase();
+          const cityField = actionUpper === 'PICKUP'
+            ? (s as { action: string; load: string; supplyCity?: string }).supplyCity!
+            : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity!;
+          const deliverStop = actionUpper === 'DELIVER'
+            ? s as { action: string; load: string; deliveryCity?: string; demandCardId?: number; payment?: number }
+            : null;
+          return {
+            action: s.action.toLowerCase() as 'pickup' | 'deliver',
+            loadType: s.load,
+            city: cityField,
+            demandCardId: deliverStop?.demandCardId,
+            payment: deliverStop?.payment,
+          };
+        });
 
       // Build a temporary StrategicRoute for validation
       const tempRoute: StrategicRoute = {

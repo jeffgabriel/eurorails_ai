@@ -211,6 +211,16 @@ export const ROUTE_ENRICHMENT_SCHEMA = {
   required: ['decision', 'reasoning'],
 };
 
+/**
+ * JSON Schema for the LLM trip planning response (JIRA-126, JIRA-190).
+ * Multi-stop trip planner: generates 2-3 candidate trips with stops and reasoning,
+ * then selects the best candidate by index.
+ *
+ * JIRA-190: Field renames — city → supplyCity (PICKUP) / deliveryCity (DELIVER).
+ * DROP variant removed. Two discriminated stop types replace the single generic stop.
+ *
+ * Note: Anthropic requires additionalProperties: false on all object types.
+ */
 export const TRIP_PLAN_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,
@@ -227,13 +237,14 @@ export const TRIP_PLAN_SCHEMA = {
               type: 'object' as const,
               additionalProperties: false as const,
               properties: {
-                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER', 'DROP'] },
+                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
                 load: { type: 'string' as const },
-                city: { type: 'string' as const },
+                supplyCity: { type: 'string' as const },
+                deliveryCity: { type: 'string' as const },
                 demandCardId: { type: 'number' as const },
                 payment: { type: 'number' as const },
               },
-              required: ['action', 'load', 'city'],
+              required: ['action', 'load'],
             },
           },
           reasoning: { type: 'string' as const },
