@@ -15,6 +15,26 @@ function ensureDir(): void {
   mkdirSync(LOGS_DIR, { recursive: true });
 }
 
+/**
+ * JIRA-194: Per-candidate diagnostic record for TripPlanner selection overrides.
+ * Populated ONLY when the LLM's chosenIndex was not honored.
+ */
+export interface TripPlannerSelectionDiagnostic {
+  /** The chosenIndex the LLM returned. */
+  llmChosenIndex: number;
+  /** The llmIndex actually selected (-1 when no validated candidates). */
+  actualSelectedLlmIndex: number;
+  /** Why the LLM's choice was not honored. */
+  fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops';
+  /** Per-candidate evidence: validated candidates have empty validatorErrors. */
+  candidates: Array<{
+    llmIndex: number;
+    rawStops: Array<{ action: string; load: string; city: string | null }>;
+    validatorErrors: string[];
+    prunedToZero: boolean;
+  }>;
+}
+
 /** Shape of a single LLM call transcript entry. */
 export interface LLMTranscriptEntry {
   callId: string;
@@ -35,6 +55,8 @@ export interface LLMTranscriptEntry {
   tokenUsage?: { input: number; output: number };
   attemptNumber: number;
   totalAttempts: number;
+  /** JIRA-194: TripPlanner selection override diagnostic. Only present when LLM chosenIndex was not honored. */
+  tripPlannerSelection?: TripPlannerSelectionDiagnostic;
 }
 
 /**

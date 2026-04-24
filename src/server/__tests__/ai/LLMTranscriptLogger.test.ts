@@ -1,4 +1,4 @@
-import { appendLLMCall, LLMTranscriptEntry } from '../../services/ai/LLMTranscriptLogger';
+import { appendLLMCall, LLMTranscriptEntry, TripPlannerSelectionDiagnostic } from '../../services/ai/LLMTranscriptLogger';
 import * as fs from 'fs';
 import { join } from 'path';
 
@@ -108,5 +108,56 @@ describe('LLMTranscriptLogger', () => {
     );
 
     consoleSpy.mockRestore();
+  });
+});
+
+// ── JIRA-194: LLMTranscriptEntry round-trip with tripPlannerSelection ─────────
+
+describe('LLMTranscriptLogger — JIRA-194 tripPlannerSelection round-trip', () => {
+  it('AC8: LLMTranscriptEntry with tripPlannerSelection round-trips through JSON.stringify/JSON.parse', () => {
+    const diag: TripPlannerSelectionDiagnostic = {
+      llmChosenIndex: 0,
+      actualSelectedLlmIndex: 1,
+      fallbackReason: 'chosen_not_in_validated',
+      candidates: [
+        {
+          llmIndex: 0,
+          rawStops: [
+            { action: 'PICKUP', load: 'Ham', city: 'Warszawa' },
+            { action: 'DELIVER', load: 'Ham', city: 'Torino' },
+          ],
+          validatorErrors: ['No demand card for Ham→Torino'],
+          prunedToZero: false,
+        },
+        {
+          llmIndex: 1,
+          rawStops: [
+            { action: 'PICKUP', load: 'Oil', city: 'Beograd' },
+            { action: 'DELIVER', load: 'Oil', city: 'Zurich' },
+          ],
+          validatorErrors: [],
+          prunedToZero: false,
+        },
+      ],
+    };
+
+    const entry: LLMTranscriptEntry = makeEntry({ tripPlannerSelection: diag });
+    const serialized = JSON.stringify(entry);
+    const parsed: LLMTranscriptEntry = JSON.parse(serialized);
+
+    expect(parsed.tripPlannerSelection).toBeDefined();
+    expect(parsed.tripPlannerSelection!.llmChosenIndex).toBe(0);
+    expect(parsed.tripPlannerSelection!.actualSelectedLlmIndex).toBe(1);
+    expect(parsed.tripPlannerSelection!.fallbackReason).toBe('chosen_not_in_validated');
+    expect(parsed.tripPlannerSelection!.candidates).toHaveLength(2);
+    expect(parsed.tripPlannerSelection!.candidates[0].validatorErrors).toHaveLength(1);
+    expect(parsed.tripPlannerSelection!.candidates[0].validatorErrors[0]).toBe('No demand card for Ham→Torino');
+    expect(parsed.tripPlannerSelection!.candidates[1].validatorErrors).toHaveLength(0);
+  });
+
+  it('AC6: entry without tripPlannerSelection does not serialize the key', () => {
+    const entry: LLMTranscriptEntry = makeEntry(); // no tripPlannerSelection
+    const serialized = JSON.stringify(entry);
+    expect(serialized).not.toContain('tripPlannerSelection');
   });
 });

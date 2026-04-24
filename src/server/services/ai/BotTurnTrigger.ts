@@ -264,6 +264,8 @@ export async function onTurnChange(
         advisorUsedFallback: result.advisorUsedFallback,
         initialBuildOptions: result.initialBuildOptions,
         initialBuildPairings: result.initialBuildPairings,
+        // JIRA-194: Trip planning result (includes chosenByLlm/fallbackReason on override)
+        tripPlanning: result.tripPlanning,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);

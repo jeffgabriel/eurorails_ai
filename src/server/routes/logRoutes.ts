@@ -514,6 +514,14 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
     if (chosen) sections += `Chosen: Route ${tp.chosen + 1}/${tp.candidates.length} — ${chosen.stops.join('→')} (score: ${chosen.score}, ${chosen.estimatedTurns}T, ${chosen.buildCostEstimate}M build)\n`;
     if (tp.llmReasoning) sections += `Reasoning: ${escapeHtml(tp.llmReasoning)}\n`;
     sections += `</div></details>`;
+    // JIRA-194: TripPlanner selection override diagnostic
+    if (tp.fallbackReason) {
+      sections += `<details><summary>TripPlanner Override — LLM candidate ${tp.chosenByLlm} not used (${escapeHtml(tp.fallbackReason)})</summary><div class="section">`;
+      sections += `LLM chose candidate index: ${tp.chosenByLlm}\n`;
+      sections += `Override reason: ${escapeHtml(tp.fallbackReason)}\n`;
+      sections += `Actual selected index: ${tp.chosen} (highest-scoring validated candidate)\n`;
+      sections += `</div></details>`;
+    }
   }
 
   // Build Advisor
@@ -714,6 +722,24 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
       sections += `<div style="color:#e74c3c;font-size:13px;margin-top:6px;">Error: ${escapeHtml(entry.error)}</div>`;
     }
 
+    // JIRA-194: TripPlanner selection override diagnostic
+    if (entry.tripPlannerSelection) {
+      const sel = entry.tripPlannerSelection;
+      sections += `<details><summary>TripPlanner Selection Override — LLM chose ${sel.llmChosenIndex}, used ${sel.actualSelectedLlmIndex} (${escapeHtml(sel.fallbackReason)})</summary><div class="section">`;
+      sections += `LLM chosenIndex: ${sel.llmChosenIndex}\n`;
+      sections += `Actually selected llmIndex: ${sel.actualSelectedLlmIndex === -1 ? 'none (no validated candidates)' : String(sel.actualSelectedLlmIndex)}\n`;
+      sections += `Fallback reason: ${escapeHtml(sel.fallbackReason)}\n\n`;
+      sections += `Candidates:\n`;
+      for (const c of sel.candidates) {
+        const stops = c.rawStops.map(s => `${s.action}(${s.load}@${s.city ?? '?'})`).join('→');
+        sections += `  [${c.llmIndex}] ${stops}`;
+        if (c.prunedToZero) sections += ` — PRUNED TO ZERO`;
+        if (c.validatorErrors.length > 0) sections += `\n    Errors: ${c.validatorErrors.map(e => escapeHtml(e)).join('; ')}`;
+        sections += `\n`;
+      }
+      sections += `</div></details>`;
+    }
+
     // System prompt diff for retries
     if (isRetry && prev) {
       const sysDiff = computeLineDiff(prev.systemPrompt, entry.systemPrompt);
@@ -806,3 +832,10 @@ llmRouter.get('/api/:gameId', (req, res) => {
 llmRouter.get('/:gameId', handleLLMViewer);
 
 export default router;
+
+/**
+ * JIRA-194: Test helpers — exported for unit-testing viewer rendering logic.
+ * These are internal render helpers not intended for production callers.
+ * @internal
+ */
+export { renderTurnCard as _renderTurnCard, renderLLMCallCards as _renderLLMCallCards };

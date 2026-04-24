@@ -26,6 +26,7 @@ import { RouteValidator } from './RouteValidator';
 import { RouteOptimizer } from './RouteOptimizer';
 import { TRIP_PLAN_SCHEMA } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
+import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -50,6 +51,14 @@ export interface TripPlanResult {
   llmLog: LlmAttempt[];
   systemPrompt?: string;
   userPrompt?: string;
+  /**
+   * JIRA-194: Present ONLY when the LLM's chosenIndex was overridden.
+   * Two scalars sufficient for game-log mirror (full diagnostic is in llmLog entry).
+   */
+  selection?: {
+    llmChosenIndex: number;
+    fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops';
+  };
 }
 
 /** Raw LLM output matching TRIP_PLAN_SCHEMA (JIRA-190: renamed fields, no DROP) */
@@ -166,7 +175,7 @@ export class TripPlanner {
         }
 
         // Convert and validate each candidate
-        const candidates = this.scoreCandidates(parsed, context, snapshot, gridPoints);
+        const { validCandidates: candidates, rejections } = this.scoreCandidates(parsed, context, snapshot, gridPoints);
 
         if (candidates.length === 0) {
           const err = 'All candidates failed validation';
@@ -185,15 +194,50 @@ export class TripPlanner {
         const ci = parsed.chosenIndex;
         // Find the sorted position of the LLM's chosen candidate by its original llmIndex
         const chosenCandidateIdx = candidates.findIndex(c => c.llmIndex === ci);
+
+        // JIRA-194: Selection diagnostic — only built on override (anti-patterns-logging-noise)
+        let selectionDiagnostic: TripPlannerSelectionDiagnostic | undefined;
+
         if (chosenCandidateIdx >= 0 && candidates[chosenCandidateIdx].stops.length > 0) {
           selectedIdx = chosenCandidateIdx;
           console.log(`[TripPlanner] chosenIndex honored: LLM picked candidate ${ci} (sorted pos ${chosenCandidateIdx}, ${candidates[chosenCandidateIdx].stops.length} feasible stops)`);
+          // Honored — no diagnostic (R5)
         } else {
           selectedIdx = bestIdx;
-          const reason = chosenCandidateIdx < 0
-            ? `chosenIndex ${ci} not found in validated candidates (LLM's pick was fully invalid)`
-            : `chosenIndex ${ci} has 0 feasible stops after validation`;
-          console.log(`[TripPlanner] Falling back to internal score: candidate at sorted pos ${bestIdx} (${reason})`);
+          const fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' = chosenCandidateIdx < 0
+            ? 'chosen_not_in_validated'
+            : 'chosen_zero_stops';
+          console.log(`[TripPlanner] Falling back to internal score: candidate at sorted pos ${bestIdx} (${fallbackReason === 'chosen_not_in_validated' ? `chosenIndex ${ci} not found in validated candidates` : `chosenIndex ${ci} has 0 feasible stops after validation`})`);
+
+          // Build diagnostic payload (JIRA-194: R2)
+          const rejectionMap = new Map(rejections.map(r => [r.llmIndex, r]));
+          const diagCandidates: TripPlannerSelectionDiagnostic['candidates'] = parsed.candidates.map((raw, idx) => {
+            const validatedEntry = candidates.find(c => c.llmIndex === idx);
+            const rejEntry = rejectionMap.get(idx);
+            const rawStops = raw.stops.map(s => {
+              const action = s.action;
+              const load = s.load;
+              const city = action.toUpperCase() === 'PICKUP'
+                ? (s as { action: string; load: string; supplyCity?: string }).supplyCity ?? null
+                : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity ?? null;
+              return { action, load, city };
+            });
+            return {
+              llmIndex: idx,
+              rawStops,
+              validatorErrors: rejEntry?.errors ?? [],
+              prunedToZero: validatedEntry
+                ? validatedEntry.stops.length === 0
+                : (rejEntry?.prunedToZero ?? false),
+            };
+          });
+
+          selectionDiagnostic = {
+            llmChosenIndex: ci,
+            actualSelectedLlmIndex: candidates[bestIdx]?.llmIndex ?? -1,
+            fallbackReason,
+            candidates: diagCandidates,
+          };
         }
 
         const chosen = candidates[selectedIdx];
@@ -208,12 +252,17 @@ export class TripPlanner {
           upgradeOnRoute: parsed.upgradeOnRoute,
         };
 
-        llmLog.push({
+        // Build success llmLog entry; attach diagnostic when override occurred (JIRA-194)
+        const successLogEntry: LlmAttempt & { tripPlannerSelection?: TripPlannerSelectionDiagnostic } = {
           attemptNumber: attempt + 1,
           status: 'success',
           responseText: response.text.substring(0, 500),
           latencyMs,
-        });
+        };
+        if (selectionDiagnostic) {
+          successLogEntry.tripPlannerSelection = selectionDiagnostic;
+        }
+        llmLog.push(successLogEntry);
 
         return {
           candidates,
@@ -224,6 +273,12 @@ export class TripPlanner {
           llmLog,
           systemPrompt,
           userPrompt,
+          ...(selectionDiagnostic ? {
+            selection: {
+              llmChosenIndex: selectionDiagnostic.llmChosenIndex,
+              fallbackReason: selectionDiagnostic.fallbackReason,
+            },
+          } : {}),
         };
       } catch (error) {
         const latencyMs = Date.now() - startMs;
@@ -266,7 +321,8 @@ export class TripPlanner {
   }
 
   /**
-   * Score and validate LLM candidates. Returns only valid candidates sorted by score.
+   * Score and validate LLM candidates.
+   * Returns valid candidates sorted by score, plus per-rejected-candidate error info.
    *
    * Uses chain-aware sequential turn estimation for multi-stop trips:
    * - First deliver stop: uses existing estimatedTurns from DemandContext (bot→supply→delivery)
@@ -278,9 +334,10 @@ export class TripPlanner {
     context: GameContext,
     snapshot: WorldSnapshot,
     gridPoints: GridPoint[],
-  ): TripCandidate[] {
+  ): { validCandidates: TripCandidate[]; rejections: Array<{ llmIndex: number; errors: string[]; prunedToZero: boolean }> } {
     const trainSpeed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
     const validCandidates: TripCandidate[] = [];
+    const rejections: Array<{ llmIndex: number; errors: string[]; prunedToZero: boolean }> = [];
 
     for (let llmIdx = 0; llmIdx < parsed.candidates.length; llmIdx++) {
       const rawCandidate = parsed.candidates[llmIdx];
@@ -341,11 +398,21 @@ export class TripPlanner {
       // Validate via RouteValidator (pure predicate — no reorder side-effect)
       const validation = RouteValidator.validate(tempRoute, context, snapshot);
       if (!validation.valid && !validation.prunedRoute) {
+        // JIRA-194: Capture rejection errors for diagnostic
+        const errors = validation.errors?.length ? validation.errors : ['RouteValidator: route is invalid'];
+        rejections.push({ llmIndex: llmIdx, errors, prunedToZero: false });
         continue; // completely invalid
       }
 
       // Use pruned route if available
       const finalStops = validation.prunedRoute?.stops ?? stops;
+
+      // JIRA-194: Track if the candidate survived validation but was pruned to zero stops
+      if (finalStops.length === 0) {
+        const errors = validation.errors?.length ? validation.errors : ['RouteValidator: all stops pruned'];
+        rejections.push({ llmIndex: llmIdx, errors, prunedToZero: true });
+        // Fall through — will be added with 0 stops and caught in the chosen-zero-stops check
+      }
 
       // Calculate scoring metrics from demand context
       let totalPayout = 0;
@@ -468,7 +535,7 @@ export class TripPlanner {
       });
     }
 
-    return validCandidates.sort((a, b) => b.score - a.score);
+    return { validCandidates: validCandidates.sort((a, b) => b.score - a.score), rejections };
   }
 
   /**

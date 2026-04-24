@@ -19,6 +19,7 @@ import { GuardrailEnforcer } from './GuardrailEnforcer';
 import { TurnExecutor } from './TurnExecutor';
 import { ActionResolver } from './ActionResolver';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
+import { appendLLMCall } from './LLMTranscriptLogger';
 import {
   WorldSnapshot,
   AIActionType,
@@ -281,6 +282,8 @@ export class AIStrategyEngine {
       let initialBuildEvaluatedPairings: InitialBuildPlan['evaluatedPairings'];
       // JIRA-170: Auto-delivered loads (before TripPlanner consultation) to include in turn result
       const autoDeliveredLoads: Array<{ loadType: string; city: string; payment: number; cardId: number }> = [];
+      // JIRA-194: Trip planning result (selection diagnostic for game log + LLM transcript)
+      let tripPlanResult: import('./TripPlanner').TripPlanResult | null = null;
 
       if (context.isInitialBuild && (!activeRoute || activeRoute.phase !== 'build')) {
         // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
@@ -443,7 +446,40 @@ export class AIStrategyEngine {
         // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
         const tripPlanner = new TripPlanner(brain!);
 
-        const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+        const tripResultRaw = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+        // JIRA-194: Capture full TripPlanResult for selection diagnostic
+        if (tripResultRaw.route) {
+          tripPlanResult = tripResultRaw as TripPlanResult;
+          // Write LLM transcript entry when LLM's chosenIndex was overridden (R2, R6)
+          if (tripPlanResult.selection) {
+            // Find the success llmLog entry that carries the diagnostic (set by TripPlanner)
+            const successEntry = tripPlanResult.llmLog.find(a => a.status === 'success');
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const diag = (successEntry as any)?.tripPlannerSelection;
+            if (diag && brain) {
+              appendLLMCall(gameId, {
+                callId: `trip-planner-selection-${snapshot.turnNumber}-${botPlayerId}`,
+                gameId,
+                playerId: botPlayerId,
+                playerName: (snapshot.bot.botConfig as { name?: string } | null)?.name,
+                turn: snapshot.turnNumber,
+                timestamp: new Date().toISOString(),
+                caller: 'trip-planner',
+                method: 'selectionOverride',
+                model: brain.modelName,
+                systemPrompt: '',
+                userPrompt: '',
+                responseText: '',
+                status: 'success',
+                latencyMs: 0,
+                attemptNumber: 1,
+                totalAttempts: 1,
+                tripPlannerSelection: diag,
+              });
+            }
+          }
+        }
+        const tripResult = tripResultRaw;
         // Wrap tripResult into routeResult-compatible shape for downstream code
         const routeResult = tripResult.route
           ? { route: (tripResult as TripPlanResult).route, model: 'trip-planner', latencyMs: (tripResult as TripPlanResult).llmLatencyMs, tokenUsage: (tripResult as TripPlanResult).llmTokens, llmLog: tripResult.llmLog, systemPrompt: (tripResult as TripPlanResult).systemPrompt, userPrompt: (tripResult as TripPlanResult).userPrompt }
@@ -1186,6 +1222,26 @@ export class AIStrategyEngine {
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
+        // JIRA-194: Trip planning result — include selection diagnostic when override occurred
+        tripPlanning: tripPlanResult ? {
+          trigger: 'no-active-route',
+          candidates: tripPlanResult.candidates.map(c => ({
+            stops: c.stops.map(s => `${s.action}(${s.loadType}@${s.city})`),
+            score: c.score,
+            netValue: c.netValue,
+            estimatedTurns: c.estimatedTurns,
+            buildCostEstimate: c.buildCostEstimate,
+            usageFeeEstimate: c.usageFeeEstimate,
+          })),
+          chosen: tripPlanResult.chosen,
+          llmLatencyMs: tripPlanResult.llmLatencyMs,
+          llmTokens: tripPlanResult.llmTokens,
+          llmReasoning: tripPlanResult.route?.reasoning ?? '',
+          ...(tripPlanResult.selection ? {
+            chosenByLlm: tripPlanResult.selection.llmChosenIndex,
+            fallbackReason: tripPlanResult.selection.fallbackReason,
+          } : {}),
+        } : undefined,
         // JIRA-148: Initial build planner evaluated options for diagnostics
         initialBuildOptions: initialBuildEvaluatedOptions,
         initialBuildPairings: initialBuildEvaluatedPairings,

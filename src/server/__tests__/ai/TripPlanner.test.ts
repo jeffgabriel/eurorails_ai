@@ -2041,3 +2041,182 @@ describe('TripPlanner — JIRA-187 effectivePayout scoring (AC4, AC5)', () => {
     expect(r.candidates[0].score).toBeGreaterThan(0);
   });
 });
+
+// ── JIRA-194: TripPlanner selection override diagnostics ─────────────────
+
+describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Default: all candidates valid
+    (RouteValidator.validate as jest.Mock).mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // AC5: LLM returns 3 candidates; chosenIndex=0 fails validation; candidates 1,2 pass.
+  // Result must have selection with llmChosenIndex=0, actualSelectedLlmIndex in {1,2},
+  // fallbackReason in {'chosen_not_in_validated','chosen_zero_stops'}, and
+  // candidates[0].validatorErrors.length > 0.
+  it('AC5: selection diagnostic populated when chosenIndex fails RouteValidator', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ loadType: 'Ham', deliveryCity: 'Torino', supplyCity: 'Warszawa', payout: 20 }),
+        makeDemand({ loadType: 'Oil', deliveryCity: 'Zurich', supplyCity: 'Beograd', payout: 18 }),
+        makeDemand({ loadType: 'Coal', deliveryCity: 'Berlin', supplyCity: 'Essen', payout: 15 }),
+      ],
+    });
+
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Ham', supplyCity: 'Warszawa' },
+          { action: 'deliver', load: 'Ham', deliveryCity: 'Torino', demandCardId: 1, payment: 20 },
+        ],
+        reasoning: 'Ham delivery',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', supplyCity: 'Beograd' },
+          { action: 'deliver', load: 'Oil', deliveryCity: 'Zurich', demandCardId: 2, payment: 18 },
+        ],
+        reasoning: 'Oil delivery',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'deliver', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 3, payment: 15 },
+        ],
+        reasoning: 'Coal delivery',
+      },
+    ], 0); // chosenIndex=0 (Ham)
+
+    // Candidate 0 (Ham, llmIndex=0) fails validation; 1 and 2 pass
+    (RouteValidator.validate as jest.Mock)
+      .mockReturnValueOnce({ valid: false, errors: ['No demand card for Ham→Torino'] }) // candidate 0
+      .mockReturnValueOnce({ valid: true, errors: [] }) // candidate 1
+      .mockReturnValueOnce({ valid: true, errors: [] }); // candidate 2
+
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).toBeDefined();
+    expect('candidates' in result).toBe(true);
+    const r = result as TripPlanResult;
+
+    // selection must be present (override happened)
+    expect(r.selection).toBeDefined();
+    expect(r.selection!.llmChosenIndex).toBe(0);
+    expect(r.selection!.fallbackReason).toMatch(/chosen_not_in_validated|chosen_zero_stops/);
+    // actualSelectedLlmIndex must be 1 or 2 (the validated candidates)
+    expect([1, 2]).toContain((r.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection?.actualSelectedLlmIndex ?? -999);
+    // The LLM transcript diagnostic must include candidate 0's validator errors
+    const diag = (r.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection;
+    expect(diag).toBeDefined();
+    expect(diag.candidates[0].validatorErrors.length).toBeGreaterThan(0);
+    expect(diag.candidates[0].validatorErrors[0]).toContain('Ham');
+  });
+
+  // AC6: All 3 candidates validate; chosenIndex=0 is honored → no selection field.
+  it('AC6: selection is undefined when chosenIndex is honored', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ loadType: 'Oil', deliveryCity: 'Zurich', supplyCity: 'Beograd', payout: 18 }),
+      ],
+    });
+
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', supplyCity: 'Beograd' },
+          { action: 'deliver', load: 'Oil', deliveryCity: 'Zurich', demandCardId: 2, payment: 18 },
+        ],
+        reasoning: 'Oil delivery',
+      },
+    ], 0); // chosenIndex=0 (honored since only one candidate, all valid)
+
+    // Candidate 0 validates cleanly
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).toBeDefined();
+    expect('candidates' in result).toBe(true);
+    const r = result as TripPlanResult;
+
+    // Honored — no selection field (R5)
+    expect(r.selection).toBeUndefined();
+    // Also no tripPlannerSelection in the success llmLog entry
+    const successEntry = r.llmLog.find(a => a.status === 'success');
+    expect((successEntry as any)?.tripPlannerSelection).toBeUndefined();
+    // Verify via JSON.stringify — no 'tripPlannerSelection' key in serialized entry
+    const serialized = JSON.stringify(successEntry);
+    expect(serialized).not.toContain('tripPlannerSelection');
+  });
+
+  // AC8: Serialization round-trip — LLMTranscriptEntry with tripPlannerSelection populated
+  it('AC8: LLMTranscriptEntry with tripPlannerSelection round-trips through JSON.stringify/JSON.parse', () => {
+    const entry = {
+      callId: 'test-id',
+      gameId: 'g1',
+      playerId: 'bot-1',
+      turn: 5,
+      timestamp: '2024-01-01T00:00:00Z',
+      caller: 'trip-planner',
+      method: 'selectionOverride',
+      model: 'claude-sonnet-4-6',
+      systemPrompt: '',
+      userPrompt: '',
+      responseText: '',
+      status: 'success' as const,
+      latencyMs: 0,
+      attemptNumber: 1,
+      totalAttempts: 1,
+      tripPlannerSelection: {
+        llmChosenIndex: 0,
+        actualSelectedLlmIndex: 1,
+        fallbackReason: 'chosen_not_in_validated' as const,
+        candidates: [
+          {
+            llmIndex: 0,
+            rawStops: [{ action: 'PICKUP', load: 'Ham', city: 'Warszawa' }, { action: 'DELIVER', load: 'Ham', city: 'Torino' }],
+            validatorErrors: ['No demand card for Ham→Torino'],
+            prunedToZero: false,
+          },
+          {
+            llmIndex: 1,
+            rawStops: [{ action: 'PICKUP', load: 'Oil', city: 'Beograd' }, { action: 'DELIVER', load: 'Oil', city: 'Zurich' }],
+            validatorErrors: [],
+            prunedToZero: false,
+          },
+        ],
+      },
+    };
+
+    const serialized = JSON.stringify(entry);
+    const parsed = JSON.parse(serialized);
+
+    expect(parsed.tripPlannerSelection).toBeDefined();
+    expect(parsed.tripPlannerSelection.llmChosenIndex).toBe(0);
+    expect(parsed.tripPlannerSelection.actualSelectedLlmIndex).toBe(1);
+    expect(parsed.tripPlannerSelection.fallbackReason).toBe('chosen_not_in_validated');
+    expect(parsed.tripPlannerSelection.candidates).toHaveLength(2);
+    expect(parsed.tripPlannerSelection.candidates[0].validatorErrors[0]).toContain('Ham');
+  });
+});

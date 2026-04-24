@@ -127,6 +127,10 @@ export interface GameTurnLogEntry {
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
+    /** JIRA-194: LLM's original chosenIndex when it was overridden. Only present on override. */
+    chosenByLlm?: number;
+    /** JIRA-194: Why the LLM's chosenIndex was not honored. Only present on override. */
+    fallbackReason?: 'chosen_not_in_validated' | 'chosen_zero_stops';
   };
 
   // Turn Validation (JIRA-126)
