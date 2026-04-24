@@ -69,7 +69,7 @@ export class AnthropicAdapter implements ProviderAdapter {
         }
       }
 
-      const result = await this.executeRequest(body, controller.signal);
+      const result = await this.executeRequest(body, controller.signal, isHaiku);
 
       // On schema rejection (400), retry without the json_schema format
       if (result.error && result.error.status === 400 && request.outputSchema) {
@@ -86,7 +86,7 @@ export class AnthropicAdapter implements ProviderAdapter {
               delete body.output_config;
             }
           }
-          const retryResult = await this.executeRequest(body, controller.signal);
+          const retryResult = await this.executeRequest(body, controller.signal, isHaiku);
           if (retryResult.error) {
             this.throwApiError(retryResult.error.status, retryResult.error.body);
           }
@@ -112,9 +112,21 @@ export class AnthropicAdapter implements ProviderAdapter {
     }
   }
 
+  /**
+   * Strip markdown code fences from a string.
+   * Handles ` ```json\n...\n``` ` and ` ```\n...\n``` ` formats.
+   * Returns the input unchanged if no fences are detected.
+   */
+  static stripCodeFences(text: string): string {
+    // Strip leading fence: ```json\n or ```\n
+    const stripped = text.replace(/^```(?:json)?\s*\n/, '').replace(/\n```\s*$/, '');
+    return stripped;
+  }
+
   private async executeRequest(
     body: Record<string, unknown>,
     signal: AbortSignal,
+    isHaiku: boolean = false,
   ): Promise<{ response?: ProviderResponse; error?: { status: number; body: string } }> {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -143,7 +155,13 @@ export class AnthropicAdapter implements ProviderAdapter {
     const textBlock = Array.isArray(data.content)
       ? data.content.find((block: { type: string }) => block.type === 'text')
       : undefined;
-    const text = textBlock?.text ?? '';
+    let text = textBlock?.text ?? '';
+
+    // Haiku models wrap JSON in markdown code fences — strip them at the adapter
+    // boundary so all downstream callers receive raw JSON on the first attempt.
+    if (isHaiku) {
+      text = AnthropicAdapter.stripCodeFences(text);
+    }
 
     return {
       response: {

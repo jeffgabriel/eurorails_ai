@@ -469,6 +469,45 @@ describe('AnthropicAdapter', () => {
     });
   });
 
+  // --- AC5: Haiku fence-strip (R7, R8) ---
+  describe('Haiku code-fence stripping', () => {
+    it('(i) Haiku model + fenced JSON with json tag → text is stripped', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse('```json\n{"a":1}\n```'));
+
+      const result = await adapter.chat(makeRequest()); // model is claude-haiku-*
+
+      expect(result.text).toBe('{"a":1}');
+    });
+
+    it('(ii) Haiku model + raw JSON (no fences) → text passes through unchanged', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse('{"a":1}'));
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.text).toBe('{"a":1}');
+    });
+
+    it('(iii) Haiku model + fenced JSON without json tag → text is stripped', async () => {
+      mockFetch.mockResolvedValue(makeSuccessResponse('```\n{"a":1}\n```'));
+
+      const result = await adapter.chat(makeRequest());
+
+      expect(result.text).toBe('{"a":1}');
+    });
+
+    it('(iv) non-Haiku model + fenced JSON → text is NOT stripped', async () => {
+      const fencedText = '```json\n{"a":1}\n```';
+      mockFetch.mockResolvedValue(makeSuccessResponse(fencedText));
+
+      const result = await adapter.chat({
+        ...makeRequest(),
+        model: 'claude-opus-4-7-20250514',
+      });
+
+      expect(result.text).toBe(fencedText);
+    });
+  });
+
   describe('error handling', () => {
     it('should throw ProviderAuthError on 401', async () => {
       mockFetch.mockResolvedValue({
