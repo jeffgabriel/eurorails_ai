@@ -202,17 +202,60 @@ function isPickupComplete(
 /**
  * Delivery completion check.
  *
- * A delivery is complete when the load is no longer on the train AND the
- * corresponding demand card is gone. Both conditions must be true to confirm
- * the delivery was fulfilled (as opposed to the load being dropped or lost).
+ * A delivery is complete when:
+ * 1. We have a demand card identifier (demandCardId is non-nullish), AND
+ * 2. The load is no longer on the train, AND
+ * 3. The corresponding demand card is no longer in context.demands.
+ *
+ * When demandCardId is nullish, we have no evidence the delivery was fulfilled
+ * (fail-closed: treat as NOT complete). This prevents false-positive completions
+ * when the LLM omits demandCardId from its response (JIRA-193 Bug A fix, R5).
  */
-function isDeliveryComplete(stop: RouteStop, context: GameContext): boolean {
+export function isDeliveryComplete(stop: RouteStop, context: GameContext): boolean {
+  // Fail-closed: without a card identifier we cannot confirm completion
+  if (stop.demandCardId == null) return false;
+
   const loadOnTrain = context.loads.includes(stop.loadType);
   const demandCardIds = context.demands.map(d => d.cardIndex);
-  const demandPresent =
-    stop.demandCardId != null && demandCardIds.includes(stop.demandCardId);
+  const demandPresent = demandCardIds.includes(stop.demandCardId);
 
   return !loadOnTrain && !demandPresent;
+}
+
+/**
+ * Apply the effect of a successfully-executed route stop to the local state mirrors.
+ *
+ * This is the single source of truth for load-state mutation after a stop is executed.
+ * Replaces two duplicated inline splice blocks in TurnExecutorPlanner.execute() and
+ * fills the missing pickup-side mutation (JIRA-193 Bug A structural fix, R2).
+ *
+ * Mutation semantics:
+ * - pickup  → add loadType to context.loads + snapshot.bot.loads
+ * - deliver → remove first occurrence of loadType from both
+ * - drop    → same as deliver
+ * - other   → no-op (does not throw)
+ *
+ * @param stop     The route stop that was just successfully executed.
+ * @param context  Bot-turn GameContext. Mutated in place.
+ * @param snapshot WorldSnapshot. Mutated in place.
+ */
+export function applyStopEffectToLocalState(
+  stop: RouteStop,
+  context: GameContext,
+  snapshot: WorldSnapshot,
+): void {
+  const { action, loadType } = stop;
+
+  if (action === 'pickup') {
+    context.loads.push(loadType);
+    snapshot.bot.loads.push(loadType);
+  } else if (action === 'deliver' || action === 'drop') {
+    const ctxIdx = context.loads.indexOf(loadType);
+    if (ctxIdx !== -1) context.loads.splice(ctxIdx, 1);
+    const snapIdx = snapshot.bot.loads.indexOf(loadType);
+    if (snapIdx !== -1) snapshot.bot.loads.splice(snapIdx, 1);
+  }
+  // unknown actions are no-ops
 }
 
 // ── getNetworkFrontier ─────────────────────────────────────────────────────

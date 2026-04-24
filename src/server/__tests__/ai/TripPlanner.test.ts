@@ -2220,3 +2220,146 @@ describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
     expect(parsed.tripPlannerSelection.candidates[0].validatorErrors[0]).toContain('Ham');
   });
 });
+
+// ── JIRA-193: TripPlanner demandCardId fill-in (AC4, R6) ─────────────────
+
+describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
+  /**
+   * When the LLM omits demandCardId on a DELIVER stop, TripPlanner should attempt
+   * to fill it in from context.demands by matching loadType + deliveryCity.
+   * - Exactly one match → fill in cardIndex
+   * - Zero or multiple matches → leave undefined (ambiguous — never guess)
+   */
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('AC4-a: fills in demandCardId when LLM omits it and exactly one held card matches', async () => {
+    // LLM response: deliver Coal to Berlin WITHOUT demandCardId
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin' }, // no demandCardId
+        ],
+        reasoning: 'Coal to Berlin',
+      },
+    ]);
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 42, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }),
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const deliverStop = result!.candidates[0].stops.find(s => s.action === 'deliver');
+    expect(deliverStop).toBeDefined();
+    expect(deliverStop!.demandCardId).toBe(42);
+  });
+
+  it('AC4-b: leaves demandCardId undefined when zero held cards match (no match)', async () => {
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Paris' }, // no demandCardId
+        ],
+        reasoning: 'Coal to Paris',
+      },
+    ]);
+
+    // No demand for Coal→Paris in context
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 10, loadType: 'Wine', supplyCity: 'Lyon', deliveryCity: 'Paris', payout: 15 }),
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const deliverStop = result!.candidates[0].stops.find(s => s.action === 'deliver');
+    expect(deliverStop).toBeDefined();
+    expect(deliverStop!.demandCardId).toBeUndefined();
+  });
+
+  it('AC4-c: leaves demandCardId undefined when multiple held cards match (ambiguous)', async () => {
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin' }, // no demandCardId
+        ],
+        reasoning: 'Coal to Berlin',
+      },
+    ]);
+
+    // Two Coal→Berlin demand cards — ambiguous, must not guess
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 5, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }),
+        makeDemand({ cardIndex: 6, loadType: 'Coal', supplyCity: 'Hamburg', deliveryCity: 'Berlin', payout: 18 }),
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const deliverStop = result!.candidates[0].stops.find(s => s.action === 'deliver');
+    expect(deliverStop).toBeDefined();
+    expect(deliverStop!.demandCardId).toBeUndefined();
+  });
+
+  it('AC4-d: preserves existing demandCardId when LLM provides it', async () => {
+    // LLM already emits demandCardId=99 — fill-in should not overwrite it
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'PICKUP', load: 'Coal', supplyCity: 'Essen' },
+          { action: 'DELIVER', load: 'Coal', deliveryCity: 'Berlin', demandCardId: 99, payment: 20 },
+        ],
+        reasoning: 'Coal to Berlin',
+      },
+    ]);
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ cardIndex: 42, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 20 }),
+      ],
+    });
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    expect(result).not.toBeNull();
+    const deliverStop = result!.candidates[0].stops.find(s => s.action === 'deliver');
+    expect(deliverStop).toBeDefined();
+    // LLM-provided demandCardId=99 should be preserved, not overwritten with 42
+    expect(deliverStop!.demandCardId).toBe(99);
+  });
+});

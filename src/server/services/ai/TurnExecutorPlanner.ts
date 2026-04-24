@@ -38,7 +38,7 @@ import {
   LlmAttempt,
   BotMemoryState,
 } from '../../../shared/types/GameTypes';
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from './routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState } from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
 import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
@@ -291,6 +291,12 @@ export class TurnExecutorPlanner {
 
         plans.push(actionResult.plan!);
 
+        // Single source of truth for load-state mutation after a successful stop.
+        // Covers pickup (add), deliver (remove), drop (remove), and no-ops unknown actions.
+        // Replaces two inline splice blocks that previously existed only in deliver/drop
+        // branches, and fills the missing pickup-side mutation (JIRA-193 R2, R3, R4).
+        applyStopEffectToLocalState(currentStop, context, snapshot);
+
         if (currentStop.action === 'pickup') {
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });
           console.log(`${tag} Picked up ${currentStop.loadType} at ${targetCity}. Advancing stop index (no reorder — ADR-4).`);
@@ -314,11 +320,6 @@ export class TurnExecutorPlanner {
         } else if (currentStop.action === 'drop') {
           // DROP: advance stop index (same pattern as pickup, no replan needed)
           console.log(`${tag} Dropped ${currentStop.loadType} at ${targetCity}. Advancing stop index.`);
-          // Remove dropped load from local context/snapshot so downstream sees correct state
-          const dropCtxIdx = context.loads.indexOf(currentStop.loadType);
-          if (dropCtxIdx !== -1) context.loads.splice(dropCtxIdx, 1);
-          const dropSnapIdx = snapshot.bot.loads.indexOf(currentStop.loadType);
-          if (dropSnapIdx !== -1) snapshot.bot.loads.splice(dropSnapIdx, 1);
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
           activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
         } else {
@@ -329,17 +330,6 @@ export class TurnExecutorPlanner {
           deliveriesThisTurn++;
           trace.deliveries.push({ load: currentStop.loadType, city: targetCity });
 
-          // Remove delivered load from context so that skipCompletedStops / isStopComplete
-          // sees the correct carried loads on subsequent iterations (prevents 20x re-delivery).
-          const deliveredIdx = context.loads.indexOf(currentStop.loadType);
-          if (deliveredIdx !== -1) {
-            context.loads.splice(deliveredIdx, 1);
-          }
-          // Also remove from snapshot for downstream helpers
-          const snapLoadIdx = snapshot.bot.loads.indexOf(currentStop.loadType);
-          if (snapLoadIdx !== -1) {
-            snapshot.bot.loads.splice(snapLoadIdx, 1);
-          }
           console.log(`${tag} Context updated: loads=[${context.loads.join(',')}]`);
 
           // Filter the just-delivered demand from context.demands so TripPlanner

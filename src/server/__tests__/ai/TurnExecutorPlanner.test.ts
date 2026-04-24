@@ -40,11 +40,22 @@ jest.mock('../../../shared/services/computeTrackUsageFees', () => ({
   computeTrackUsageFees: jest.fn(() => 0),
 }));
 
-jest.mock('../../services/ai/routeHelpers', () => ({
-  isStopComplete: jest.fn(),
-  resolveBuildTarget: jest.fn(),
-  getNetworkFrontier: jest.fn(() => []),
-}));
+jest.mock('../../services/ai/routeHelpers', () => {
+  // Import the real module to forward the real implementation of applyStopEffectToLocalState
+  const real = jest.requireActual('../../services/ai/routeHelpers');
+  return {
+    isStopComplete: jest.fn(),
+    resolveBuildTarget: jest.fn(),
+    getNetworkFrontier: jest.fn(() => []),
+    isDeliveryComplete: jest.fn(),
+    // applyStopEffectToLocalState uses the real implementation by default so that
+    // existing tests that check context.loads / snapshot.bot.loads mutation still pass.
+    // Individual tests that need to spy on it can override via mockApplyStopEffect.
+    applyStopEffectToLocalState: jest.fn((...args: Parameters<typeof real.applyStopEffectToLocalState>) =>
+      real.applyStopEffectToLocalState(...args),
+    ),
+  };
+});
 
 jest.mock('../../services/ai/computeBuildSegments', () => ({
   computeBuildSegments: jest.fn(() => []),
@@ -167,7 +178,7 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
   },
 }));
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState } from '../../services/ai/routeHelpers';
 import { computeBuildSegments } from '../../services/ai/computeBuildSegments';
 import { loadGridPoints } from '../../services/ai/MapTopology';
 import { ActionResolver } from '../../services/ai/ActionResolver';
@@ -183,6 +194,7 @@ import { buildUnionTrackGraph } from '../../../shared/services/trackUsageFees';
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
 const mockGetNetworkFrontier = getNetworkFrontier as jest.Mock;
+const mockApplyStopEffect = applyStopEffectToLocalState as jest.Mock;
 const mockComputeBuildSegments = computeBuildSegments as jest.Mock;
 const mockLoadGridPoints = loadGridPoints as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
@@ -4385,5 +4397,114 @@ describe('TurnExecutorPlanner.execute — JIRA-187 capped-city decision tree', (
       expect(deliverStep.cardId).toBe(7);
       expect(deliverStep.payout).toBe(30);
     });
+  });
+});
+
+// ── JIRA-193 Wien regression test (AC1) ──────────────────────────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-193 Wien scenario (AC1)', () => {
+  /**
+   * Reproduces the bug: bot at Wien picks up Wine (mid-turn), but then the deliver
+   * stop was wrongly considered "complete" (because demandCardId was undefined and
+   * !demandPresent was true), causing route_complete before the bot had a chance to
+   * continue moving toward the delivery city.
+   *
+   * With the fix:
+   * - applyStopEffectToLocalState adds Wine to context.loads after pickup
+   * - skipCompletedStops calls isStopComplete(deliver) → returns false (demandCardId=undefined,
+   *   fail-closed) so deliver stop is NOT skipped
+   * - bot continues moving toward delivery city with remaining budget
+   *
+   * AC1: result.compositionTrace.a2.terminationReason !== 'route_complete'
+   *      AND result.plans includes at least one MoveTrain AFTER the PickupLoad plan.
+   */
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockResolveBuildTarget.mockReturnValue(null);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+    // applyStopEffectToLocalState mock: call the real implementation to mutate context
+    // so that skipCompletedStops sees the updated loads array.
+    mockApplyStopEffect.mockImplementation(
+      (stop: RouteStop, ctx: GameContext, snap: WorldSnapshot) => {
+        if (stop.action === 'pickup') {
+          ctx.loads.push(stop.loadType);
+          snap.bot.loads.push(stop.loadType);
+        } else if (stop.action === 'deliver' || stop.action === 'drop') {
+          const ci = ctx.loads.indexOf(stop.loadType);
+          if (ci !== -1) ctx.loads.splice(ci, 1);
+          const si = snap.bot.loads.indexOf(stop.loadType);
+          if (si !== -1) snap.bot.loads.splice(si, 1);
+        }
+      },
+    );
+  });
+
+  it('(AC1) does not terminate route_complete after pickup when deliver stop has nullish demandCardId', async () => {
+    // Route: pickup(Wine@Wien) → deliver(Wine@Berlin, demandCardId=undefined)
+    // Both Wien and Berlin are on the bot's network so the move-toward-city path executes.
+    const pickupStop: RouteStop = { action: 'pickup', loadType: 'Wine', city: 'Wien' };
+    const deliverStop: RouteStop = { action: 'deliver', loadType: 'Wine', city: 'Berlin' };
+    const route = makeRoute({
+      stops: [pickupStop, deliverStop],
+      currentStopIndex: 0,
+      startingCity: 'Wien',
+    });
+
+    // Bot starts at Wien (pickup city); Berlin is on network so movement path triggers
+    const context = makeContext({
+      position: { city: 'Wien', row: 5, col: 5 },
+      speed: 9,
+      loads: [],
+      citiesOnNetwork: ['Wien', 'Berlin'],
+    });
+    const snapshot = makeSnapshot();
+
+    const pickupPlan = { type: AIActionType.PickupLoad, load: 'Wine', city: 'Wien' };
+    const movePlan = { type: AIActionType.MoveTrain, path: [{ row: 5, col: 6 }], cost: 0 };
+
+    // isStopComplete: always returns false — no stops are complete
+    // This is key: deliver stop with nullish demandCardId must NOT be skipped
+    mockIsStopComplete.mockReturnValue(false);
+
+    mockResolve.mockResolvedValue({ success: true, plan: pickupPlan }); // pickup succeeds
+    mockResolveMove.mockResolvedValue({ success: true, plan: movePlan }); // move toward Berlin
+
+    const result = await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // AC1 assertion 1: termination reason must NOT be route_complete
+    expect(result.compositionTrace.a2.terminationReason).not.toBe('route_complete');
+
+    // AC1 assertion 2: plans must include at least one MoveTrain AFTER the PickupLoad
+    const pickupIdx = result.plans.findIndex(p => p.type === AIActionType.PickupLoad);
+    expect(pickupIdx).toBeGreaterThanOrEqual(0);
+    const plansAfterPickup = result.plans.slice(pickupIdx + 1);
+    const hasMoveAfterPickup = plansAfterPickup.some(p => p.type === AIActionType.MoveTrain);
+    expect(hasMoveAfterPickup).toBe(true);
+  });
+
+  it('(AC6 wiring) applyStopEffectToLocalState is called exactly once per successful stop execution', async () => {
+    const pickupStop: RouteStop = { action: 'pickup', loadType: 'Wine', city: 'Wien' };
+    const route = makeRoute({
+      stops: [pickupStop, { action: 'deliver', loadType: 'Wine', city: 'Berlin' }],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Wien', row: 5, col: 5 }, speed: 9 });
+    const snapshot = makeSnapshot();
+
+    mockIsStopComplete.mockReturnValue(false);
+    const pickupPlan = { type: AIActionType.PickupLoad, load: 'Wine', city: 'Wien' };
+    mockResolve.mockResolvedValueOnce({ success: true, plan: pickupPlan });
+    mockResolveMove.mockResolvedValue({ success: false, error: 'no path' });
+
+    await TurnExecutorPlanner.execute(route, snapshot, context);
+
+    // applyStopEffectToLocalState should have been called once for the pickup
+    expect(mockApplyStopEffect).toHaveBeenCalledTimes(1);
+    expect(mockApplyStopEffect).toHaveBeenCalledWith(
+      pickupStop,
+      expect.any(Object), // context
+      expect.any(Object), // snapshot
+    );
   });
 });

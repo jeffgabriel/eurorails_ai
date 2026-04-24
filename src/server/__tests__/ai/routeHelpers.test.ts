@@ -6,10 +6,33 @@
  * - resolveBuildTarget: route-based targets, victory build override, null (all on-network)
  */
 
-import { isStopComplete, resolveBuildTarget, getNetworkFrontier } from '../../services/ai/routeHelpers';
+import { isStopComplete, resolveBuildTarget, getNetworkFrontier, applyStopEffectToLocalState, isDeliveryComplete } from '../../services/ai/routeHelpers';
 import { GameContext, RouteStop, StrategicRoute, TrainType, WorldSnapshot, TerrainType, TrackSegment } from '../../../shared/types/GameTypes';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+function makeSnapshot(loads: string[] = []): WorldSnapshot {
+  return {
+    gameId: 'game-1',
+    gameStatus: 'active' as import('../../../shared/types/GameTypes').GameStatus,
+    turnNumber: 1,
+    bot: {
+      playerId: 'bot-1',
+      userId: 'user-1',
+      money: 50,
+      position: { row: 10, col: 10 },
+      existingSegments: [],
+      demandCards: [],
+      resolvedDemands: [],
+      trainType: 'Freight',
+      loads: [...loads],
+      botConfig: null,
+      connectedMajorCityCount: 0,
+    },
+    allPlayerTracks: [],
+    loadAvailability: {},
+  };
+}
 
 function makeContext(overrides: Partial<GameContext> = {}): GameContext {
   return {
@@ -258,13 +281,14 @@ describe('isStopComplete — delivery stops', () => {
     expect(isStopComplete(stop, 0, allStops, context)).toBe(false);
   });
 
-  it('returns true for delivery with no demandCardId when load is not on train', () => {
-    // demandCardId is undefined → demandPresent is false; load not on train → complete
+  it('returns false for delivery with no demandCardId even when load is not on train (JIRA-193 R5 — fail-closed)', () => {
+    // Previously this returned true (old buggy behavior), but without a demandCardId
+    // we cannot confirm the delivery was actually fulfilled — fail-closed to false.
     const stop: RouteStop = { action: 'deliver', loadType: 'Coal', city: 'Paris' };
     const allStops = [stop];
     const context = makeContext({ loads: [], demands: [] });
 
-    expect(isStopComplete(stop, 0, allStops, context)).toBe(true);
+    expect(isStopComplete(stop, 0, allStops, context)).toBe(false);
   });
 });
 
@@ -277,6 +301,125 @@ describe('isStopComplete — unknown action types', () => {
     const context = makeContext();
 
     expect(isStopComplete(stop, 0, allStops, context)).toBe(false);
+  });
+});
+
+// ── isDeliveryComplete — AC3 nullish demandCardId ─────────────────────────
+
+describe('isDeliveryComplete — nullish demandCardId (AC3)', () => {
+  it('(i) returns false when demandCardId is undefined, regardless of context (R5)', () => {
+    const stop: RouteStop = { action: 'deliver', loadType: 'Coal', city: 'Paris' };
+    const context = makeContext({ loads: [], demands: [] });
+
+    expect(isDeliveryComplete(stop, context)).toBe(false);
+  });
+
+  it('(ii) returns false when demandCardId is null, regardless of context (R5)', () => {
+    const stop: RouteStop = { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: null as unknown as number };
+    const context = makeContext({ loads: [], demands: [] });
+
+    expect(isDeliveryComplete(stop, context)).toBe(false);
+  });
+
+  it('(iii) returns false when demandCardId is present and card IS in context.demands', () => {
+    // Card still held → delivery not yet done
+    const stop: RouteStop = { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 };
+    const context = makeContext({
+      loads: [],
+      demands: [
+        {
+          cardIndex: 1,
+          loadType: 'Coal',
+          supplyCity: 'Berlin',
+          deliveryCity: 'Paris',
+          payout: 20,
+          isSupplyReachable: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isDeliveryOnNetwork: true,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          isLoadAvailable: false,
+          isLoadOnTrain: false,
+          ferryRequired: false,
+          loadChipTotal: 4,
+          loadChipCarried: 0,
+          estimatedTurns: 2,
+          demandScore: 10,
+          efficiencyPerTurn: 10,
+          networkCitiesUnlocked: 1,
+          victoryMajorCitiesEnRoute: 0,
+          canAffordToBuild: true,
+        },
+      ],
+    });
+
+    expect(isDeliveryComplete(stop, context)).toBe(false);
+  });
+
+  it('(iv) returns true when demandCardId is present, card is gone, and load not on train', () => {
+    const stop: RouteStop = { action: 'deliver', loadType: 'Coal', city: 'Paris', demandCardId: 1 };
+    const context = makeContext({ loads: [], demands: [] });
+
+    expect(isDeliveryComplete(stop, context)).toBe(true);
+  });
+});
+
+// ── applyStopEffectToLocalState — AC2 ─────────────────────────────────────
+
+describe('applyStopEffectToLocalState (AC2)', () => {
+  it('(i) pickup action appends loadType to both context.loads and snapshot.bot.loads', () => {
+    const stop: RouteStop = { action: 'pickup', loadType: 'Wine', city: 'Wien' };
+    const context = makeContext({ loads: [] });
+    const snapshot = makeSnapshot([]);
+
+    applyStopEffectToLocalState(stop, context, snapshot);
+
+    expect(context.loads).toEqual(['Wine']);
+    expect(snapshot.bot.loads).toEqual(['Wine']);
+  });
+
+  it('(ii) deliver action removes first occurrence of loadType from both when present', () => {
+    const stop: RouteStop = { action: 'deliver', loadType: 'Wine', city: 'Berlin', demandCardId: 1 };
+    const context = makeContext({ loads: ['Wine', 'Coal'] });
+    const snapshot = makeSnapshot(['Wine', 'Coal']);
+
+    applyStopEffectToLocalState(stop, context, snapshot);
+
+    expect(context.loads).toEqual(['Coal']);
+    expect(snapshot.bot.loads).toEqual(['Coal']);
+  });
+
+  it('(ii) deliver action is a no-op when loadType is absent', () => {
+    const stop: RouteStop = { action: 'deliver', loadType: 'Wine', city: 'Berlin', demandCardId: 1 };
+    const context = makeContext({ loads: ['Coal'] });
+    const snapshot = makeSnapshot(['Coal']);
+
+    applyStopEffectToLocalState(stop, context, snapshot);
+
+    expect(context.loads).toEqual(['Coal']);
+    expect(snapshot.bot.loads).toEqual(['Coal']);
+  });
+
+  it('(iii) drop action removes first occurrence of loadType — same as deliver', () => {
+    const stop: RouteStop = { action: 'drop', loadType: 'Wine', city: 'Paris' };
+    const context = makeContext({ loads: ['Wine'] });
+    const snapshot = makeSnapshot(['Wine']);
+
+    applyStopEffectToLocalState(stop, context, snapshot);
+
+    expect(context.loads).toEqual([]);
+    expect(snapshot.bot.loads).toEqual([]);
+  });
+
+  it('(iv) unknown action mutates neither array and does not throw', () => {
+    const stop = { action: 'noSuchAction' as 'pickup', loadType: 'Wine', city: 'X' };
+    const context = makeContext({ loads: ['Coal'] });
+    const snapshot = makeSnapshot(['Coal']);
+
+    expect(() => applyStopEffectToLocalState(stop, context, snapshot)).not.toThrow();
+    expect(context.loads).toEqual(['Coal']);
+    expect(snapshot.bot.loads).toEqual(['Coal']);
   });
 });
 

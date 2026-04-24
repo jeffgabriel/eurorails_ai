@@ -363,11 +363,26 @@ export class TripPlanner {
           const deliverStop = actionUpper === 'DELIVER'
             ? s as { action: string; load: string; deliveryCity?: string; demandCardId?: number; payment?: number }
             : null;
+
+          // Fill-in fallback for missing demandCardId on deliver stops (JIRA-193 R6):
+          // When the LLM omits demandCardId, attempt to resolve it from context.demands
+          // by matching loadType + deliveryCity. Only assign when exactly one card matches
+          // (ambiguous matches are left undefined — the defensive isDeliveryComplete fix is safe).
+          let resolvedDemandCardId = deliverStop?.demandCardId;
+          if (deliverStop && resolvedDemandCardId == null) {
+            const matches = context.demands.filter(
+              d => d.loadType === s.load && d.deliveryCity === cityField,
+            );
+            if (matches.length === 1) {
+              resolvedDemandCardId = matches[0].cardIndex;
+            }
+          }
+
           return {
             action: s.action.toLowerCase() as 'pickup' | 'deliver',
             loadType: s.load,
             city: cityField,
-            demandCardId: deliverStop?.demandCardId,
+            demandCardId: resolvedDemandCardId,
             payment: deliverStop?.payment,
           };
         });
