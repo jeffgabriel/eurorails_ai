@@ -220,6 +220,10 @@ export class TurnExecutorPlanner {
     let remainingBudget = context.speed;
     // Track the last move target city for AC13(b) build direction check
     let lastMoveTargetCity: string | null = null;
+    // JIRA-194: Reset move target whenever activeRoute is replaced mid-turn so that
+    // assertBuildDirectionAgreesWithMove does not compare against a stale stop index
+    // from the pre-replan route. The assertion already early-returns on null (line 1171).
+    const resetMoveTarget = (): void => { lastMoveTargetCity = null; };
     // Post-delivery replan LLM data for debug overlay propagation
     let replanLlmLog: LlmAttempt[] | undefined;
     let replanSystemPrompt: string | undefined;
@@ -469,6 +473,7 @@ export class TurnExecutorPlanner {
               if (replanResult.route) {
                 const enrichedRoute = await RouteEnrichmentAdvisor.enrich(replanResult.route, snapshot, context, brain, gridPoints);
                 activeRoute = TurnExecutorPlanner.skipCompletedStops(enrichedRoute, context);
+                resetMoveTarget(); // JIRA-194: new route — stale stop indices no longer valid
                 console.log(
                   `${tag} Post-delivery replan succeeded. New route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
                 );
@@ -477,16 +482,19 @@ export class TurnExecutorPlanner {
                 console.warn(`${tag} Post-delivery TripPlanner returned null route. Continuing on existing route.`);
                 activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
                 activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+                resetMoveTarget(); // JIRA-194: route shape replaced — clear stale move target
               }
             } catch (err) {
               console.warn(`${tag} Post-delivery replan failed (${(err as Error).message}). Continuing on existing route.`);
               activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
               activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+              resetMoveTarget(); // JIRA-194: route shape replaced — clear stale move target
             }
           } else {
             // No brain available — revalidate existing route and continue
             activeRoute = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
             activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+            resetMoveTarget(); // JIRA-194: route shape replaced — clear stale move target
           }
         }
 

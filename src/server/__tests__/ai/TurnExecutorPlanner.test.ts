@@ -1602,6 +1602,228 @@ describe('TurnExecutorPlanner.execute — post-delivery replan', () => {
   });
 });
 
+// ── JIRA-194: Reset lastMoveTargetCity on post-delivery replan ───────────────
+
+describe('TurnExecutorPlanner.execute — JIRA-194 reset move target after post-delivery replan', () => {
+  let mockPlanTrip: jest.Mock;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockIsStopComplete.mockReturnValue(false);
+    mockRevalidate.mockImplementation((route: StrategicRoute) => route);
+    mockComputeEffectivePathLength.mockReturnValue(3);
+
+    // Default: no build target so Phase B does not interfere (overridden per-test)
+    mockResolveBuildTarget.mockReturnValue(null);
+
+    mockPlanTrip = jest.fn().mockResolvedValue({ route: null, llmLog: [] });
+    MockTripPlanner.mockImplementation(() => ({ planTrip: mockPlanTrip }) as any);
+  });
+
+  // AC2: After a post-delivery replan, Phase B resolves build target on the NEW
+  // route — the invariant must not throw even though the old lastMoveTargetCity
+  // would have been at a LATER stop in the old route.
+  it('AC2: does not throw invariant when build target is on replanned route (new route has different stop order)', async () => {
+    // Old route: deliver@Zurich(0) → pickup@Warszawa(1) → deliver@Torino(2)
+    // Bot is already at Zurich (stop 0 complete).
+    // After delivery, TripPlanner replans to: pickup@Beograd(0) → deliver@Zurich(1)
+    // Phase A moved toward Zurich (stop 0) on the old route → lastMoveTargetCity = 'Zurich'.
+    // Phase B resolves build target = Beograd (stop 0 on new route, stop -1 on old route).
+    // Without the JIRA-194 fix the assertion would fire: Beograd@old=-1 < Zurich@old=0.
+    // With the fix, lastMoveTargetCity is reset to null after replan → assertion skips.
+
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Zurich',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // New route returned by TripPlanner after delivery
+    const newRoute = makeRoute({
+      stops: [makeStop('pickup', 'Beograd', 'Oil'), makeStop('deliver', 'Zurich', 'Oil')],
+      currentStopIndex: 0,
+      reasoning: 'replanned after delivery',
+    });
+    mockPlanTrip.mockResolvedValue({ route: newRoute, llmLog: [] });
+    mockEnrich.mockResolvedValue(newRoute);
+
+    // Phase B: build target is Beograd (stop 0 on the new route)
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Beograd',
+      isVictoryBuild: false,
+      stopIndex: 0,
+    });
+
+    // Old route: bot is at Zurich (delivery city = stop 0)
+    const oldRoute = makeRoute({
+      stops: [
+        makeStop('deliver', 'Zurich', 'Coal'),
+        makeStop('pickup', 'Warszawa', 'Ham'),
+        makeStop('deliver', 'Torino', 'Ham'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Zurich', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [{ row: 1, col: 1, name: 'Zurich' }] as any;
+
+    // Should NOT throw the build-direction invariant
+    await expect(
+      TurnExecutorPlanner.execute(oldRoute, snapshot, context, fakeBrain, fakeGridPoints),
+    ).resolves.not.toThrow();
+  });
+
+  // AC3: Same-route turn (no replan) — invariant still fires on genuine disagreement.
+  // This is a regression guard: the fix must NOT suppress legitimate violations.
+  it('AC3: still throws invariant on same-route turn when build target precedes move target', async () => {
+    // Route: pickup@Paris(0) → deliver@München(1)
+    // currentStopIndex=1 so Phase A processes München (stop 1 on the route).
+    // München IS on the network → Phase A moves toward it, exhausting the full budget.
+    // lastMoveTargetCity becomes 'München'.
+    // Phase B resolves build target = Paris (stop 0 — BEFORE München at stop 1).
+    // assertBuildDirectionAgreesWithMove(Paris@0, München@1) → 0 < 1 → THROWS.
+
+    // Exhaust the full budget on the move so Phase A breaks and Phase B runs
+    mockComputeEffectivePathLength.mockReturnValue(9);
+
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        to: 'München',
+        path: [{ row: 3, col: 3 }, { row: 4, col: 4 }],
+      },
+    });
+
+    // Phase B: build target is Paris (stop 0 — behind the move direction)
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Paris',
+      isVictoryBuild: false,
+      stopIndex: 0,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Paris', 'Wine'), makeStop('deliver', 'München', 'Wine')],
+      // currentStopIndex=1 → Phase A's first stop is München
+      currentStopIndex: 1,
+    });
+    // Bot is NOT at München, but München IS on network → Phase A moves toward it
+    const context = makeContext({
+      position: { city: 'SomewhereElse', row: 1, col: 1 },
+      citiesOnNetwork: ['München'],
+    });
+    const snapshot = makeSnapshot();
+
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context),
+    ).rejects.toThrow('INVARIANT VIOLATION');
+  });
+
+  // AC4: Three non-success replan branches must also reset lastMoveTargetCity.
+
+  it('AC4a: null-route fallback branch resets move target — invariant does not fire stale index', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // TripPlanner returns null route → null-route fallback
+    mockPlanTrip.mockResolvedValue({ route: null, llmLog: [] });
+
+    // Phase B: build target is a city that only exists in the OLD route at index 0
+    // If lastMoveTargetCity were NOT reset, the assertion could fire depending on route.
+    // With the fix, lastMoveTargetCity = null → assertion skips.
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Paris',
+      isVictoryBuild: false,
+      stopIndex: 0,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [] as any;
+
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints),
+    ).resolves.not.toThrow();
+  });
+
+  it('AC4b: throw-catch replan branch resets move target — invariant does not fire stale index', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    // TripPlanner throws → catch branch
+    mockPlanTrip.mockRejectedValue(new Error('LLM timeout'));
+
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Paris',
+      isVictoryBuild: false,
+      stopIndex: 0,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+    const fakeBrain = {} as any;
+    const fakeGridPoints = [] as any;
+
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context, fakeBrain, fakeGridPoints),
+    ).resolves.not.toThrow();
+  });
+
+  it('AC4c: no-brain branch resets move target — invariant does not fire stale index', async () => {
+    const deliverPlan = {
+      type: AIActionType.DeliverLoad,
+      load: 'Coal',
+      city: 'Berlin',
+      cardId: 42,
+      payout: 8,
+    };
+    mockResolve.mockResolvedValue({ success: true, plan: deliverPlan });
+
+    mockResolveBuildTarget.mockReturnValue({
+      targetCity: 'Paris',
+      isVictoryBuild: false,
+      stopIndex: 0,
+    });
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Coal'), makeStop('pickup', 'Paris', 'Wine')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({ position: { city: 'Berlin', row: 2, col: 2 } });
+    const snapshot = makeSnapshot();
+
+    // No brain → no TripPlanner → no-brain branch
+    await expect(
+      TurnExecutorPlanner.execute(route, snapshot, context),
+    ).resolves.not.toThrow();
+  });
+});
+
 // ── Route mutation invariants (AC13) ──────────────────────────────────────
 
 describe('TurnExecutorPlanner — AC13(b): assertBuildDirectionAgreesWithMove', () => {
