@@ -59,10 +59,11 @@ describe('getRiverEdgeKeys', () => {
   it('returns canonical (order-independent) keys for Elbe', () => {
     const keys = getRiverEdgeKeys('Elbe');
     // rivers.json Elbe first edge: Start {Col:52, Row:30}, End {Row:53, Col:30}
-    // a = "30,52", b = "53,30"
-    // strcmp("30,52", "53,30"): "3" vs "5" → "3" < "5" → a comes first
-    // canonical key = "30,52|53,30"
-    const expectedKey = '30,52|53,30';
+    // After transposition fix: endRow = End.Col = 30, endCol = End.Row = 53
+    // a = "30,52", b = "30,53"
+    // r1 === r2 (both 30), c1(52) <= c2(53) → a comes first
+    // canonical key = "30,52|30,53"
+    const expectedKey = '30,52|30,53';
     expect(keys!.has(expectedKey)).toBe(true);
   });
 
