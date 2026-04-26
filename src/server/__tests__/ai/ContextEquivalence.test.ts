@@ -145,18 +145,14 @@ async function buildLegacyPath(
 }
 
 /**
- * Simulate the new single-pass build path (post-BE-001).
+ * New single-pass build path (BE-001 implementation).
  *
- * PRE-BE-001 (current state): We replicate the same logic as buildLegacyPath
- * because ContextBuilder.build() does not yet accept memory. This confirms
- * the fixture infrastructure works correctly and both paths produce the same
- * result before any refactoring.
+ * Calls ContextBuilder.build() with memory so all memory-dependent fields
+ * (deliveryCount, upgradeAdvice, enRoutePickups, previousTurnSummary) are
+ * computed inside build() in a single pass — no patch-up blocks needed.
  *
- * POST-BE-001: Replace this entire function body with:
- *   return ContextBuilder.build(snapshot, memory, skillLevel, gridPoints);
- *
- * The deep-equality assertions below should continue to pass after that
- * replacement — that is the proof of equivalence.
+ * The deep-equality assertions prove this is behaviourally equivalent to
+ * the legacy build-then-patch sequence.
  */
 async function buildNewPath(
   snapshot: WorldSnapshot,
@@ -164,12 +160,7 @@ async function buildNewPath(
   skillLevel: BotSkillLevel,
   gridPoints: [],
 ): Promise<GameContext> {
-  // TODO (BE-001): Replace this block with:
-  //   return ContextBuilder.build(snapshot, memory, skillLevel, gridPoints);
-  //
-  // Until BE-001 lands, simulate the new behaviour using the same patch-up
-  // sequence so the test infrastructure can be verified now.
-  return buildLegacyPath(snapshot, memory, skillLevel, gridPoints);
+  return ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
 }
 
 // ── Acceptable divergences ──────────────────────────────────────────────────
@@ -215,8 +206,8 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
       if (ACCEPTABLE_DIVERGENCES.length > 0) {
         for (const field of ACCEPTABLE_DIVERGENCES) {
           // Remove divergent fields before comparing (they are acceptable fixes)
-          delete (legacy as Record<string, unknown>)[field];
-          delete (newCtx as Record<string, unknown>)[field];
+          delete (legacy as unknown as Record<string, unknown>)[field];
+          delete (newCtx as unknown as Record<string, unknown>)[field];
         }
       }
 
@@ -265,8 +256,8 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
 
       if (ACCEPTABLE_DIVERGENCES.length > 0) {
         for (const field of ACCEPTABLE_DIVERGENCES) {
-          delete (legacy as Record<string, unknown>)[field];
-          delete (newCtx as Record<string, unknown>)[field];
+          delete (legacy as unknown as Record<string, unknown>)[field];
+          delete (newCtx as unknown as Record<string, unknown>)[field];
         }
       }
 
@@ -325,8 +316,8 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
 
       if (ACCEPTABLE_DIVERGENCES.length > 0) {
         for (const field of ACCEPTABLE_DIVERGENCES) {
-          delete (legacy as Record<string, unknown>)[field];
-          delete (newCtx as Record<string, unknown>)[field];
+          delete (legacy as unknown as Record<string, unknown>)[field];
+          delete (newCtx as unknown as Record<string, unknown>)[field];
         }
       }
 

@@ -218,33 +218,9 @@ export class AIStrategyEngine {
         : null;
 
       // ── Stage 2: Build game context ──
-      let context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
-
-      // JIRA-60: Inject delivery count from memory for upgrade advice gating
-      context.deliveryCount = memory.deliveryCount ?? 0;
-
-      // JIRA-161: Recalculate upgradeAdvice now that deliveryCount is known.
-      // ContextBuilder.build() computed advice without delivery count (no memory at that point).
-      // This ensures advice is suppressed when the gate will block the upgrade anyway.
-      context.upgradeAdvice = ContextBuilder.computeUpgradeAdvice(
-        snapshot, context.demands, context.canBuild, context.deliveryCount,
-      );
-
-      // JIRA-87: Inject en-route pickup opportunities from active route
-      if (memory.activeRoute?.stops) {
-        context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
-          snapshot, memory.activeRoute.stops, gridPoints,
-        );
-      }
-
-      // Inject previous turn summary from memory for LLM context continuity
-      if (memory.lastReasoning || memory.lastPlanHorizon) {
-        const parts: string[] = [];
-        if (memory.lastAction) parts.push(`Action: ${memory.lastAction}`);
-        if (memory.lastReasoning) parts.push(`Reasoning: ${memory.lastReasoning}`);
-        if (memory.lastPlanHorizon) parts.push(`Plan: ${memory.lastPlanHorizon}`);
-        context.previousTurnSummary = parts.join('. ');
-      }
+      // JIRA-195: Memory passed in so all memory-dependent fields (deliveryCount, upgradeAdvice,
+      // enRoutePickups, previousTurnSummary) are computed correctly in a single pass.
+      let context = await ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
 
       console.log(`${tag} Context: canDeliver=${context.canDeliver.length}, canPickup=${context.canPickup.length}, canBuild=${context.canBuild}, canUpgrade=${context.canUpgrade}, reachable=${context.reachableCities.length} cities, onNetwork=${context.citiesOnNetwork.length} cities`);
 
@@ -415,27 +391,11 @@ export class AIStrategyEngine {
           }
 
           // Re-capture snapshot and rebuild context so TripPlanner sees fresh demand cards
+          // JIRA-195: Pass memory so memory-dependent fields are computed correctly in a single pass.
           if (autoDeliveredLoads.length > 0) {
             try {
               snapshot = await capture(gameId, botPlayerId);
-              context = await ContextBuilder.build(snapshot, skillLevel, gridPoints);
-              // Re-inject memory-dependent context fields
-              context.deliveryCount = memory.deliveryCount ?? 0;
-              context.upgradeAdvice = ContextBuilder.computeUpgradeAdvice(
-                snapshot, context.demands, context.canBuild, context.deliveryCount,
-              );
-              if (memory.activeRoute?.stops) {
-                context.enRoutePickups = ContextBuilder.computeEnRoutePickups(
-                  snapshot, memory.activeRoute.stops, gridPoints,
-                );
-              }
-              if (memory.lastReasoning || memory.lastPlanHorizon) {
-                const parts: string[] = [];
-                if (memory.lastAction) parts.push(`Action: ${memory.lastAction}`);
-                if (memory.lastReasoning) parts.push(`Reasoning: ${memory.lastReasoning}`);
-                if (memory.lastPlanHorizon) parts.push(`Plan: ${memory.lastPlanHorizon}`);
-                context.previousTurnSummary = parts.join('. ');
-              }
+              context = await ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
               console.log(`${tag} [JIRA-170] Refreshed snapshot and context after auto-delivery`);
             } catch (refreshErr) {
               console.warn(`${tag} [JIRA-170] Failed to refresh context after auto-delivery: ${(refreshErr as Error).message}`);

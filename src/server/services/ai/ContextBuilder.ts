@@ -23,6 +23,7 @@ import {
   RouteStop,
   StrategicRoute,
   EnRoutePickup,
+  BotMemoryState,
 } from '../../../shared/types/GameTypes';
 import { buildTrackNetwork } from '../../../shared/services/TrackNetworkService';
 import { getMajorCityGroups, getFerryEdges } from '../../../shared/services/majorCityGroups';
@@ -56,6 +57,9 @@ export class ContextBuilder {
     snapshot: WorldSnapshot,
     skillLevel: BotSkillLevel,
     gridPoints: GridPoint[],
+    /** JIRA-195: Memory passed in so memory-dependent fields are computed once, correctly.
+     *  Optional for backward compatibility with existing test call sites that omit it. */
+    memory?: BotMemoryState,
   ): Promise<GameContext> {
     const botPosition = snapshot.bot.position;
     const trainType = snapshot.bot.trainType as TrainType;
@@ -104,7 +108,10 @@ export class ContextBuilder {
 
     // Determine if the bot can upgrade and generate advice (JIRA-55: pass demands + canBuild for ROI)
     const canUpgrade = ContextBuilder.checkCanUpgrade(snapshot);
-    const upgradeAdvice = ContextBuilder.computeUpgradeAdvice(snapshot, demands, canBuild);
+    // JIRA-195: Use deliveryCount from memory when available so upgradeAdvice gate is correct first pass.
+    // When memory is absent (e.g. unit tests without memory), falls back to 0 (same as pre-JIRA-195).
+    const deliveryCount = memory?.deliveryCount ?? 0;
+    const upgradeAdvice = ContextBuilder.computeUpgradeAdvice(snapshot, demands, canBuild, deliveryCount);
 
     // Determine game phase
     const isInitialBuild = snapshot.gameStatus === 'initialBuild';
@@ -126,6 +133,21 @@ export class ContextBuilder {
       snapshot.bot.existingSegments,
       gridPoints,
     );
+
+    // JIRA-195: Compute memory-dependent fields in a single pass when memory is provided.
+    // Previously these were patched in by AIStrategyEngine after build() returned.
+    const enRoutePickups = memory?.activeRoute?.stops
+      ? ContextBuilder.computeEnRoutePickups(snapshot, memory.activeRoute.stops, gridPoints)
+      : undefined;
+
+    let previousTurnSummary: string | undefined;
+    if (memory?.lastReasoning || memory?.lastPlanHorizon) {
+      const parts: string[] = [];
+      if (memory.lastAction) parts.push(`Action: ${memory.lastAction}`);
+      if (memory.lastReasoning) parts.push(`Reasoning: ${memory.lastReasoning}`);
+      if (memory.lastPlanHorizon) parts.push(`Plan: ${memory.lastPlanHorizon}`);
+      previousTurnSummary = parts.join('. ');
+    }
 
     return {
       position: botPosition
@@ -157,6 +179,9 @@ export class ContextBuilder {
       phase,
       turnNumber: snapshot.turnNumber,
       upgradeAdvice,
+      deliveryCount,
+      enRoutePickups,
+      previousTurnSummary,
     };
   }
 
