@@ -2,7 +2,7 @@
   "_comment": "F3 — Post-auto-delivery fixture. Turn 22, memory reflects just-completed delivery (deliveryCount=5), no activeRoute (reset after completion).",
   "snapshot": {
     "gameId": "fixture-game-3",
-    "gameStatus": "playing",
+    "gameStatus": "active",
     "turnNumber": 22,
     "bot": {
       "playerId": "bot-player-1",

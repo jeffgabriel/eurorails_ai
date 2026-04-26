@@ -23,7 +23,7 @@ function makeSnapshot(overrides: {
 }): WorldSnapshot {
   return {
     gameId: 'test-game',
-    gameStatus: overrides.gameStatus ?? 'playing',
+    gameStatus: overrides.gameStatus ?? 'active',
     turnNumber: overrides.turnNumber ?? 10,
     bot: {
       playerId: 'bot-1',
@@ -45,7 +45,7 @@ function makeSnapshot(overrides: {
 
 function makeDemand(estimatedTurns: number = 3, trackCostToSupply: number = 10, trackCostToDelivery: number = 10): DemandContext {
   return {
-    cardId: 1,
+    cardIndex: 1,
     loadType: 'Steel',
     supplyCity: 'Ruhr',
     deliveryCity: 'Wien',
@@ -53,15 +53,21 @@ function makeDemand(estimatedTurns: number = 3, trackCostToSupply: number = 10, 
     estimatedTurns,
     estimatedTrackCostToSupply: trackCostToSupply,
     estimatedTrackCostToDelivery: trackCostToDelivery,
-    isReachable: true,
-    supplyReachable: false,
-    deliveryReachable: false,
-    supplyOnNetwork: false,
-    deliveryOnNetwork: false,
-    score: 8,
-    rank: 1,
-    supplyRarity: 'common',
-    isStale: false,
+    isSupplyReachable: false,
+    isDeliveryReachable: false,
+    isSupplyOnNetwork: false,
+    isDeliveryOnNetwork: false,
+    isLoadAvailable: true,
+    isLoadOnTrain: false,
+    ferryRequired: false,
+    loadChipTotal: 3,
+    loadChipCarried: 0,
+    demandScore: 8,
+    efficiencyPerTurn: 2.5,
+    networkCitiesUnlocked: 0,
+    victoryMajorCitiesEnRoute: 0,
+    isAffordable: true,
+    projectedFundsAfterDelivery: 80,
   };
 }
 

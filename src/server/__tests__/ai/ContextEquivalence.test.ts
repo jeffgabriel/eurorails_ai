@@ -245,7 +245,7 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
     it('fixture loads and has expected shape', () => {
       expect(fixture.snapshot).toBeDefined();
       expect(fixture.memory).toBeDefined();
-      expect(fixture.snapshot.gameStatus).toBe('playing');
+      expect(fixture.snapshot.gameStatus).toBe('active');
       expect(fixture.memory.deliveryCount).toBeGreaterThan(0);
       expect(fixture.memory.activeRoute).not.toBeNull();
     });
@@ -305,7 +305,7 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
     it('fixture loads and has expected shape', () => {
       expect(fixture.snapshot).toBeDefined();
       expect(fixture.memory).toBeDefined();
-      expect(fixture.snapshot.gameStatus).toBe('playing');
+      expect(fixture.snapshot.gameStatus).toBe('active');
       expect(fixture.memory.deliveryCount).toBeGreaterThanOrEqual(4);
       expect(fixture.memory.activeRoute).toBeNull();
     });

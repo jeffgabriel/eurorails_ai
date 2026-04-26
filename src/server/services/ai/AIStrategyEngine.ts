@@ -14,6 +14,7 @@
 
 import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
+import { ContextSerializer } from './prompts/ContextSerializer';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { GuardrailEnforcer } from './GuardrailEnforcer';
 import { TurnExecutor } from './TurnExecutor';
@@ -237,7 +238,7 @@ export class AIStrategyEngine {
       // If the bot has an active route, auto-execute the next step.
       // If not, consult LLM for a new strategic route.
       // JIRA-131: Always serialize context prompt for debug overlay observability
-      const debugUserPrompt = ContextBuilder.serializePrompt(context, skillLevel);
+      const debugUserPrompt = ContextSerializer.serializePrompt(context, skillLevel);
       let decision: LLMDecisionResult;
       // JIRA-129: Create brain at outer scope so BuildAdvisor can use it during Phase B composition
       const brain = AIStrategyEngine.hasLLMApiKey(botConfig) ? AIStrategyEngine.createBrain(botConfig!) : null;
@@ -554,7 +555,7 @@ export class AIStrategyEngine {
                   .reduce((sum, s) => sum + (s.payment ?? 0), 0);
 
                 try {
-                  const upgradePrompt = ContextBuilder.serializeUpgradeBeforeDropPrompt(
+                  const upgradePrompt = ContextSerializer.serializeUpgradeBeforeDropPrompt(
                     snapshot, activeRoute, upgradeOptions, totalRoutePayout, context.demands,
                   );
                   const upgradeResult = await brain!.evaluateUpgradeBeforeDrop(upgradePrompt, snapshot, context);
@@ -595,7 +596,7 @@ export class AIStrategyEngine {
 
               if (conflictingLoads.length > 0) {
                 try {
-                  const cargoPrompt = ContextBuilder.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
+                  const cargoPrompt = ContextSerializer.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
                   const conflictResult = await brain!.evaluateCargoConflict(cargoPrompt, snapshot, context);
 
                   if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {

@@ -2,7 +2,7 @@
   "_comment": "F2 — Mid-game fixture. Turn 15, memory.deliveryCount=3, activeRoute populated, lastReasoning populated.",
   "snapshot": {
     "gameId": "fixture-game-2",
-    "gameStatus": "playing",
+    "gameStatus": "active",
     "turnNumber": 15,
     "bot": {
       "playerId": "bot-player-1",

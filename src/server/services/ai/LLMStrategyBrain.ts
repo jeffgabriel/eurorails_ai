@@ -20,6 +20,7 @@ import {
 import { ResponseParser, ParseError } from './ResponseParser';
 import { ActionResolver } from './ActionResolver';
 import { ContextBuilder } from './ContextBuilder';
+import { ContextSerializer } from './prompts/ContextSerializer';
 import { getRoutePlanningPrompt, getCargoConflictPrompt, getUpgradeBeforeDropPrompt } from './prompts/systemPrompts';
 import { AnthropicAdapter } from './providers/AnthropicAdapter';
 import { GoogleAdapter } from './providers/GoogleAdapter';
@@ -140,7 +141,7 @@ export class LLMStrategyBrain {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     const llmLog: LlmAttempt[] = [];
-    const initialRouteUserPrompt = ContextBuilder.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
+    const initialRouteUserPrompt = ContextSerializer.serializeRoutePlanningPrompt(context, this.config.skillLevel, gridPoints, snapshot.bot.existingSegments, lastAbandonedRouteKey, previousRouteStops);
 
     while (attempt <= LLMStrategyBrain.MAX_LLM_RETRIES) {
       let userPrompt = initialRouteUserPrompt;

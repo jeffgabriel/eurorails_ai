@@ -38,7 +38,7 @@ function makeSnapshot(overrides: {
   }
   return {
     gameId: 'test-game',
-    gameStatus: overrides.gameStatus ?? 'playing',
+    gameStatus: overrides.gameStatus ?? 'active',
     turnNumber: 10,
     bot,
     allPlayerTracks: [],

@@ -81,7 +81,7 @@ function makeSnapshot(overrides: {
 }): WorldSnapshot {
   return {
     gameId: 'test-game',
-    gameStatus: overrides.gameStatus ?? 'playing',
+    gameStatus: overrides.gameStatus ?? 'active',
     turnNumber: overrides.turnNumber ?? 10,
     bot: {
       playerId: 'bot-1',
