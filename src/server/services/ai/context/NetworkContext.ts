@@ -269,4 +269,67 @@ export class NetworkContext {
 
     return minCost === Infinity ? 999 : minCost;
   }
+
+  // ── Track summary (JIRA-133) ──────────────────────────────────────────────
+
+  private static readonly MAP_CENTER_ROW = 30;
+  private static readonly MAP_CENTER_COL = 40;
+
+  private static compassDirection(row: number, col: number): string {
+    const dr = row - NetworkContext.MAP_CENTER_ROW;
+    const dc = col - NetworkContext.MAP_CENTER_COL;
+    if (Math.abs(dr) < 3 && Math.abs(dc) < 5) return 'central';
+    const angle = Math.atan2(dc, -dr) * 180 / Math.PI;
+    if (angle >= -22.5 && angle < 22.5) return 'north';
+    if (angle >= 22.5 && angle < 67.5) return 'northeast';
+    if (angle >= 67.5 && angle < 112.5) return 'east';
+    if (angle >= 112.5 && angle < 157.5) return 'southeast';
+    if (angle >= 157.5 || angle < -157.5) return 'south';
+    if (angle >= -157.5 && angle < -112.5) return 'southwest';
+    if (angle >= -112.5 && angle < -67.5) return 'west';
+    return 'northwest';
+  }
+
+  /** Summarize track as "N mileposts. Backbone: City1 → City2. Spurs: ..." (JIRA-133). */
+  static computeTrackSummary(segments: TrackSegment[], gridPoints: GridPoint[]): string {
+    if (segments.length === 0) return 'No track built';
+    const mileposts = segments.length;
+    const cityPositions = new Map<string, { row: number; col: number; isMajor: boolean }>();
+    for (const seg of segments) {
+      for (const endpoint of [seg.from, seg.to]) {
+        const gp = gridPoints.find(p => p.row === endpoint.row && p.col === endpoint.col);
+        if (gp?.city?.name && !cityPositions.has(gp.city.name)) {
+          cityPositions.set(gp.city.name, { row: gp.row, col: gp.col, isMajor: gp.terrain === TerrainType.MajorCity });
+        }
+      }
+    }
+    if (cityPositions.size === 0) return `${mileposts} mileposts (no cities connected yet)`;
+    const majorCities = Array.from(cityPositions.entries())
+      .filter(([, info]) => info.isMajor)
+      .map(([name, info]) => ({ name, ...info }));
+    if (majorCities.length === 0) return `${mileposts} mileposts covering ${Array.from(cityPositions.keys()).join(', ')}`;
+    majorCities.sort((a, b) => a.col !== b.col ? a.col - b.col : a.row - b.row);
+    const majorCityNames = new Set(majorCities.map(c => c.name));
+    const spurs: Array<{ name: string; nearestMajor: string; direction: string }> = [];
+    for (const [name, info] of cityPositions) {
+      if (majorCityNames.has(name)) continue;
+      let nearest = majorCities[0]; let bestDist = Infinity;
+      for (const mc of majorCities) {
+        const dist = hexDistance(info.row, info.col, mc.row, mc.col);
+        if (dist < bestDist) { bestDist = dist; nearest = mc; }
+      }
+      spurs.push({ name, nearestMajor: nearest.name, direction: NetworkContext.compassDirection(info.row, info.col) });
+    }
+    const backboneStr = majorCities.map(c => c.name).join(' → ');
+    const backboneDir = majorCities.length > 0
+      ? NetworkContext.compassDirection(
+          Math.round(majorCities.reduce((s, c) => s + c.row, 0) / majorCities.length),
+          Math.round(majorCities.reduce((s, c) => s + c.col, 0) / majorCities.length),
+        )
+      : '';
+    let result = `${mileposts} mileposts. Backbone: ${backboneStr}`;
+    if (backboneDir) result += ` (${backboneDir})`;
+    if (spurs.length > 0) result += `. Spurs: ${spurs.map(s => `${s.name} (${s.direction} via ${s.nearestMajor})`).join(', ')}`;
+    return result;
+  }
 }
