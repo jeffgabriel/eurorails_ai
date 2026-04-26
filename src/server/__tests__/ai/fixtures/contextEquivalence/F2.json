@@ -1,0 +1,95 @@
+{
+  "_comment": "F2 — Mid-game fixture. Turn 15, memory.deliveryCount=3, activeRoute populated, lastReasoning populated.",
+  "snapshot": {
+    "gameId": "fixture-game-2",
+    "gameStatus": "playing",
+    "turnNumber": 15,
+    "bot": {
+      "playerId": "bot-player-1",
+      "userId": "user-bot-1",
+      "money": 95,
+      "position": { "row": 24, "col": 52 },
+      "existingSegments": [
+        {
+          "from": { "x": 2080, "y": 960, "row": 24, "col": 52, "terrain": 0 },
+          "to": { "x": 2120, "y": 1000, "row": 25, "col": 53, "terrain": 0 },
+          "cost": 1
+        },
+        {
+          "from": { "x": 2120, "y": 1000, "row": 25, "col": 53, "terrain": 0 },
+          "to": { "x": 2160, "y": 1040, "row": 26, "col": 54, "terrain": 0 },
+          "cost": 1
+        }
+      ],
+      "demandCards": [10, 11, 12],
+      "resolvedDemands": [
+        {
+          "cardId": 10,
+          "demands": [
+            { "city": "Wien", "loadType": "Steel", "payment": 25 },
+            { "city": "Berlin", "loadType": "Coal", "payment": 20 },
+            { "city": "Hamburg", "loadType": "Grain", "payment": 16 }
+          ]
+        },
+        {
+          "cardId": 11,
+          "demands": [
+            { "city": "München", "loadType": "Cars", "payment": 22 },
+            { "city": "Frankfurt", "loadType": "Chemicals", "payment": 19 },
+            { "city": "Ruhr", "loadType": "Fish", "payment": 14 }
+          ]
+        },
+        {
+          "cardId": 12,
+          "demands": [
+            { "city": "Paris", "loadType": "Textiles", "payment": 17 },
+            { "city": "Bruxelles", "loadType": "Beer", "payment": 15 },
+            { "city": "Warszawa", "loadType": "Glass", "payment": 21 }
+          ]
+        }
+      ],
+      "trainType": "freight",
+      "loads": ["Steel"],
+      "botConfig": { "skillLevel": "medium" },
+      "ferryHalfSpeed": false,
+      "connectedMajorCityCount": 2
+    },
+    "allPlayerTracks": [],
+    "loadAvailability": {
+      "Ruhr": ["Steel", "Coal"],
+      "Hamburg": ["Fish", "Grain"],
+      "Szczecin": ["Textiles"],
+      "Frankfurt": ["Cars"],
+      "München": ["Beer"]
+    },
+    "opponents": [],
+    "hexGrid": [],
+    "majorCityGroups": [],
+    "ferryEdges": []
+  },
+  "memory": {
+    "currentBuildTarget": "Wien",
+    "turnsOnTarget": 3,
+    "lastAction": "MoveTrain",
+    "consecutiveDiscards": 0,
+    "deliveryCount": 3,
+    "totalEarnings": 62,
+    "turnNumber": 14,
+    "activeRoute": {
+      "stops": [
+        { "action": "pickup", "loadType": "Steel", "city": "Ruhr" },
+        { "action": "deliver", "loadType": "Steel", "city": "Wien", "demandCardId": 10, "payment": 25 }
+      ],
+      "currentStopIndex": 1,
+      "phase": "travel",
+      "createdAtTurn": 12,
+      "reasoning": "Steel delivery to Wien is highest payout on current network"
+    },
+    "turnsOnRoute": 3,
+    "routeHistory": [],
+    "lastReasoning": "Moving toward Wien to deliver Steel. Network extends through Berlin corridor.",
+    "lastPlanHorizon": "Deliver Steel to Wien, then build toward Paris for second major city connection.",
+    "previousRouteStops": null,
+    "consecutiveLlmFailures": 0
+  }
+}

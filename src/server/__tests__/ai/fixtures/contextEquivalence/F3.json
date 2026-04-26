@@ -1,0 +1,94 @@
+{
+  "_comment": "F3 — Post-auto-delivery fixture. Turn 22, memory reflects just-completed delivery (deliveryCount=5), no activeRoute (reset after completion).",
+  "snapshot": {
+    "gameId": "fixture-game-3",
+    "gameStatus": "playing",
+    "turnNumber": 22,
+    "bot": {
+      "playerId": "bot-player-1",
+      "userId": "user-bot-1",
+      "money": 130,
+      "position": { "row": 37, "col": 55 },
+      "existingSegments": [
+        {
+          "from": { "x": 2200, "y": 1480, "row": 37, "col": 55, "terrain": 0 },
+          "to": { "x": 2160, "y": 1440, "row": 36, "col": 54, "terrain": 0 },
+          "cost": 1
+        },
+        {
+          "from": { "x": 2160, "y": 1440, "row": 36, "col": 54, "terrain": 0 },
+          "to": { "x": 2120, "y": 1400, "row": 35, "col": 53, "terrain": 0 },
+          "cost": 1
+        },
+        {
+          "from": { "x": 2080, "y": 960, "row": 24, "col": 52, "terrain": 0 },
+          "to": { "x": 2120, "y": 1000, "row": 25, "col": 53, "terrain": 0 },
+          "cost": 1
+        }
+      ],
+      "demandCards": [20, 21, 22],
+      "resolvedDemands": [
+        {
+          "cardId": 20,
+          "demands": [
+            { "city": "Paris", "loadType": "Wine", "payment": 28 },
+            { "city": "Berlin", "loadType": "Electronics", "payment": 23 },
+            { "city": "Hamburg", "loadType": "Fish", "payment": 14 }
+          ]
+        },
+        {
+          "cardId": 21,
+          "demands": [
+            { "city": "Frankfurt", "loadType": "Cars", "payment": 20 },
+            { "city": "Wien", "loadType": "Coal", "payment": 18 },
+            { "city": "München", "loadType": "Beer", "payment": 16 }
+          ]
+        },
+        {
+          "cardId": 22,
+          "demands": [
+            { "city": "Bruxelles", "loadType": "Chemicals", "payment": 22 },
+            { "city": "Warszawa", "loadType": "Grain", "payment": 19 },
+            { "city": "Praha", "loadType": "Glass", "payment": 12 }
+          ]
+        }
+      ],
+      "trainType": "fast_freight",
+      "loads": [],
+      "botConfig": { "skillLevel": "medium" },
+      "ferryHalfSpeed": false,
+      "connectedMajorCityCount": 3
+    },
+    "allPlayerTracks": [],
+    "loadAvailability": {
+      "Bordeaux": ["Wine"],
+      "Ruhr": ["Steel", "Coal"],
+      "Hamburg": ["Fish", "Grain"],
+      "Frankfurt": ["Cars"],
+      "München": ["Beer"]
+    },
+    "opponents": [],
+    "hexGrid": [],
+    "majorCityGroups": [],
+    "ferryEdges": []
+  },
+  "memory": {
+    "currentBuildTarget": "Paris",
+    "turnsOnTarget": 1,
+    "lastAction": "DeliverLoad",
+    "consecutiveDiscards": 0,
+    "deliveryCount": 5,
+    "totalEarnings": 118,
+    "turnNumber": 21,
+    "activeRoute": null,
+    "turnsOnRoute": 0,
+    "routeHistory": [],
+    "lastReasoning": "Just delivered Coal to Wien for 18M. Now need to find next delivery opportunity and plan route toward Paris for major city connection.",
+    "lastPlanHorizon": "Next: pickup Wine from Bordeaux corridor, deliver to Paris. Build toward Paris major city for 3rd connection.",
+    "previousRouteStops": [
+      { "action": "pickup", "loadType": "Coal", "city": "Ruhr" },
+      { "action": "deliver", "loadType": "Coal", "city": "Wien", "demandCardId": 21, "payment": 18 }
+    ],
+    "consecutiveLlmFailures": 0
+  }
+}

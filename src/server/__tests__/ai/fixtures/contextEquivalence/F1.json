@@ -1,0 +1,74 @@
+{
+  "_comment": "F1 — Initial build fixture. Turn 1, memory empty, no activeRoute, deliveryCount=0.",
+  "snapshot": {
+    "gameId": "fixture-game-1",
+    "gameStatus": "initialBuild",
+    "turnNumber": 1,
+    "bot": {
+      "playerId": "bot-player-1",
+      "userId": "user-bot-1",
+      "money": 50,
+      "position": null,
+      "existingSegments": [],
+      "demandCards": [1, 2, 3],
+      "resolvedDemands": [
+        {
+          "cardId": 1,
+          "demands": [
+            { "city": "Berlin", "loadType": "Steel", "payment": 22 },
+            { "city": "Paris", "loadType": "Coal", "payment": 18 },
+            { "city": "Wien", "loadType": "Grain", "payment": 15 }
+          ]
+        },
+        {
+          "cardId": 2,
+          "demands": [
+            { "city": "Hamburg", "loadType": "Fish", "payment": 14 },
+            { "city": "Frankfurt", "loadType": "Cars", "payment": 20 },
+            { "city": "München", "loadType": "Beer", "payment": 16 }
+          ]
+        },
+        {
+          "cardId": 3,
+          "demands": [
+            { "city": "Warszawa", "loadType": "Textiles", "payment": 19 },
+            { "city": "Praha", "loadType": "Glass", "payment": 12 },
+            { "city": "Bruxelles", "loadType": "Chemicals", "payment": 17 }
+          ]
+        }
+      ],
+      "trainType": "freight",
+      "loads": [],
+      "botConfig": { "skillLevel": "medium" },
+      "ferryHalfSpeed": false,
+      "connectedMajorCityCount": 0
+    },
+    "allPlayerTracks": [],
+    "loadAvailability": {
+      "Ruhr": ["Steel", "Coal"],
+      "Hamburg": ["Fish", "Grain"],
+      "Frankfurt": ["Cars", "Chemicals"],
+      "Szczecin": ["Textiles"]
+    },
+    "opponents": [],
+    "hexGrid": [],
+    "majorCityGroups": [],
+    "ferryEdges": []
+  },
+  "memory": {
+    "currentBuildTarget": null,
+    "turnsOnTarget": 0,
+    "lastAction": null,
+    "consecutiveDiscards": 0,
+    "deliveryCount": 0,
+    "totalEarnings": 0,
+    "turnNumber": 0,
+    "activeRoute": null,
+    "turnsOnRoute": 0,
+    "routeHistory": [],
+    "lastReasoning": null,
+    "lastPlanHorizon": null,
+    "previousRouteStops": null,
+    "consecutiveLlmFailures": 0
+  }
+}
