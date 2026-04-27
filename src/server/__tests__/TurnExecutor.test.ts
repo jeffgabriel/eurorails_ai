@@ -700,6 +700,57 @@ describe('TurnExecutor — handlePickupLoad', () => {
     expect(result.action).toBe(AIActionType.PickupLoad);
   });
 
+  it('JIRA-196 Fix A: succeeds when snapshot loads are pre-mutated but DB has capacity', async () => {
+    // Simulate: planner mutated snapshot.bot.loads to ["Steel", "Steel"] (2/2),
+    // but DB actually only has load_count=1 (one load). The snapshot pre-check
+    // (now deleted) would have falsely rejected this. The FOR UPDATE DB check
+    // must be the gate and it should allow the pickup.
+    mockClient2.query
+      .mockResolvedValueOnce({ rows: [] })                        // BEGIN
+      .mockResolvedValueOnce({ rows: [{ load_count: 1 }] })       // FOR UPDATE → 1/2, room available
+      .mockResolvedValueOnce({ rows: [] })                        // array_append UPDATE
+      .mockResolvedValueOnce({ rows: [] });                       // COMMIT
+
+    const plan = makePickupPlan('Steel');
+    const snapshot = makePickupSnapshot2({ loads: ['Steel', 'Steel'], trainType: 'Freight' });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.action).toBe(AIActionType.PickupLoad);
+
+    // Confirm the array_append UPDATE ran (i.e. we got past the DB check)
+    const appendCall = mockClient2.query.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('array_append'),
+    );
+    expect(appendCall).toBeDefined();
+    expect(appendCall![1]).toEqual(['Steel', 'bot-1']);
+  });
+
+  it('JIRA-196 Fix A: rejects via DB FOR UPDATE check when DB is truly at capacity', async () => {
+    // DB returns load_count=2 for a Freight (capacity=2). The FOR UPDATE gate
+    // must still reject with the correct DB-side error message.
+    mockClient2.query
+      .mockResolvedValueOnce({ rows: [] })                        // BEGIN
+      .mockResolvedValueOnce({ rows: [{ load_count: 2 }] })       // FOR UPDATE → 2/2, full
+      .mockResolvedValueOnce({ rows: [] });                       // ROLLBACK
+
+    const plan = makePickupPlan('Steel');
+    // snapshot.loads is empty here — the DB check is what matters
+    const snapshot = makePickupSnapshot2({ loads: [], trainType: 'Freight' });
+
+    const result = await TurnExecutor.execute(plan, snapshot);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Train at full capacity in DB (2/2)');
+
+    // Confirm array_append was NOT called
+    const appendCall = mockClient2.query.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('array_append'),
+    );
+    expect(appendCall).toBeUndefined();
+  });
+
   it('should insert pickup action into turn_actions table', async () => {
     const { loadGridPoints } = require('../services/ai/MapTopology');
     (loadGridPoints as jest.Mock).mockReturnValue(new Map([

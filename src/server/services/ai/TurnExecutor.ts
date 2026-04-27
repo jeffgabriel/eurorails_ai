@@ -502,22 +502,9 @@ export class TurnExecutor {
     const currentPoint = posKey ? grid.get(posKey) : undefined;
     const cityName = currentPoint?.name ?? '';
 
-    // Server-side capacity check: reject pickup if train is full
+    // Critical DB op: append load to player's loads array
     const trainType = snapshot.bot.trainType as TrainType;
     const capacity = TRAIN_PROPERTIES[trainType]?.capacity ?? 2;
-    if (snapshot.bot.loads.length >= capacity) {
-      return {
-        success: false,
-        action: AIActionType.PickupLoad,
-        cost: 0,
-        segmentsBuilt: 0,
-        remainingMoney: snapshot.bot.money,
-        durationMs: Date.now() - startTime,
-        error: `Train at full capacity (${snapshot.bot.loads.length}/${capacity})`,
-      };
-    }
-
-    // Critical DB op: append load to player's loads array
     const client = await db.connect();
     try {
       await client.query('BEGIN');
