@@ -154,7 +154,8 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   // Reset the TripPlanner factory so each test gets a fresh instance mock
-  MockTripPlannerClass.mockImplementation(() => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (MockTripPlannerClass as any).mockImplementation(() => ({
     planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
   }));
 
@@ -184,7 +185,8 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
     const newRoute = makeRoute({ currentStopIndex: 0, reasoning: 'new enriched route' });
     const enrichedRoute = { ...newRoute, reasoning: 'enriched' };
 
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({
         route: newRoute,
         llmLog: [{ role: 'user', content: 'test' }] as unknown as LlmAttempt[],
@@ -212,7 +214,8 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
 
   it('propagates llmLog, systemPrompt, userPrompt from TripPlanner', async () => {
     const llmLog = [{ role: 'assistant', content: 'log' }] as unknown as LlmAttempt[];
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({
         route: makeRoute(),
         llmLog,
@@ -237,7 +240,8 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
   });
 
   it('patches deliveryCount in memory before calling TripPlanner (JIRA-185)', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: makeRoute(), llmLog: [] }),
     }));
 
@@ -266,7 +270,8 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
 
 describe('PostDeliveryReplanner.replan — sub-path 2: TripPlanner returns null route', () => {
   it('revalidates and returns with moveTargetInvalidated=true', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
     const revalidatedRoute = makeRoute({ reasoning: 'revalidated' });
@@ -288,7 +293,8 @@ describe('PostDeliveryReplanner.replan — sub-path 2: TripPlanner returns null 
   });
 
   it('does not call adviseEnrichment when route is null', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
 
@@ -310,7 +316,8 @@ describe('PostDeliveryReplanner.replan — sub-path 2: TripPlanner returns null 
 
 describe('PostDeliveryReplanner.replan — sub-path 3: TripPlanner throws', () => {
   it('catches error, revalidates, returns with moveTargetInvalidated=true', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockRejectedValue(new Error('LLM timeout')),
     }));
     const revalidatedRoute = makeRoute({ reasoning: 'revalidated-after-throw' });
@@ -332,7 +339,8 @@ describe('PostDeliveryReplanner.replan — sub-path 3: TripPlanner throws', () =
   });
 
   it('does not propagate LLM prompts when TripPlanner throws', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockRejectedValue(new Error('network error')),
     }));
 
@@ -436,7 +444,8 @@ describe('PostDeliveryReplanner.replan — sub-path 4: no brain or no gridPoints
 
 describe('PostDeliveryReplanner — moveTargetInvalidated invariant', () => {
   it('is true in success path', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: makeRoute(), llmLog: [] }),
     }));
     const { moveTargetInvalidated } = await PostDeliveryReplanner.replan(
@@ -446,7 +455,8 @@ describe('PostDeliveryReplanner — moveTargetInvalidated invariant', () => {
   });
 
   it('is true in null-route path', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
     const { moveTargetInvalidated } = await PostDeliveryReplanner.replan(
@@ -456,7 +466,8 @@ describe('PostDeliveryReplanner — moveTargetInvalidated invariant', () => {
   });
 
   it('is true in throw path', async () => {
-    MockTripPlannerClass.mockImplementation(() => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockRejectedValue(new Error('boom')),
     }));
     const { moveTargetInvalidated } = await PostDeliveryReplanner.replan(

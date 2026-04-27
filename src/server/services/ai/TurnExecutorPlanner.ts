@@ -980,7 +980,7 @@ export class TurnExecutorPlanner {
    *
    * Returns the resolved action result.
    */
-  private static async executeStopAction(
+  static async executeStopAction(
     stop: RouteStop,
     snapshot: WorldSnapshot,
     context: GameContext,
