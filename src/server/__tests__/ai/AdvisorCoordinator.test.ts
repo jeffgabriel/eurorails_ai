@@ -218,9 +218,9 @@ describe('AdvisorCoordinator', () => {
       expect(MockBuildAdvisor.retryWithSolvencyFeedback).not.toHaveBeenCalled();
     });
 
-    it('returns null plan when BuildAdvisor.advise returns keep action', async () => {
-      const keepResult: BuildAdvisorResult = { action: 'keep', reasoning: 'no build needed' };
-      MockBuildAdvisor.advise.mockResolvedValue(keepResult);
+    it('returns null plan when BuildAdvisor.advise returns non-build action (replan)', async () => {
+      const replanResult: BuildAdvisorResult = { action: 'replan', target: 'Paris', waypoints: [], reasoning: 'replan instead' };
+      MockBuildAdvisor.advise.mockResolvedValue(replanResult);
 
       const result = await AdvisorCoordinator.adviseBuild(
         'Paris', 20, makeRoute(), makeSnapshot(), makeContext(), makeBrain(), testGrid, TAG,
@@ -239,7 +239,7 @@ describe('AdvisorCoordinator', () => {
       };
       MockBuildAdvisor.advise.mockResolvedValue(advisorResult);
 
-      const buildPlan = { type: AIActionType.BuildTrack, segments: [{ from: { row: 0, col: 0, x: 0, y: 0, terrain: TerrainType.MajorCity }, to: { row: 0, col: 1, x: 50, y: 0, terrain: TerrainType.Clear }, cost: 1 }] };
+      const buildPlan = { type: AIActionType.BuildTrack, segments: [{ from: { row: 0, col: 0, x: 0, y: 0, terrain: TerrainType.MajorCity }, to: { row: 0, col: 1, x: 50, y: 0, terrain: TerrainType.Clear }, cost: 1 }] } as any;
       MockActionResolver.resolve.mockResolvedValue({ success: true, plan: buildPlan });
 
       const result = await AdvisorCoordinator.adviseBuild(
@@ -251,11 +251,11 @@ describe('AdvisorCoordinator', () => {
     });
 
     it('passes buildResolverLog through when present (build success path)', async () => {
-      const advisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', reasoning: 'build' };
+      const advisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [], reasoning: 'build' };
       MockBuildAdvisor.advise.mockResolvedValue(advisorResult);
 
-      const buildPlan = { type: AIActionType.BuildTrack, segments: [] };
-      const resolverLog = { enabled: true as const, targetCity: 'Paris', budget: 20, candidates: [], outcome: 'success' as const };
+      const buildPlan = { type: AIActionType.BuildTrack, segments: [] } as any;
+      const resolverLog = { enabled: true, targetCity: 'Paris', budget: 20 } as any;
       MockActionResolver.resolve.mockResolvedValue({ success: true, plan: buildPlan, buildResolverLog: resolverLog });
 
       const result = await AdvisorCoordinator.adviseBuild(
@@ -269,6 +269,7 @@ describe('AdvisorCoordinator', () => {
       const advisorResult: BuildAdvisorResult = {
         action: 'build',
         target: 'Paris',
+        waypoints: [],
         reasoning: 'build',
       };
       MockBuildAdvisor.advise.mockResolvedValue(advisorResult);
@@ -285,13 +286,13 @@ describe('AdvisorCoordinator', () => {
     });
 
     it('returns plan from solvency retry when it succeeds (solvency-retry success)', async () => {
-      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', reasoning: 'build' };
+      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [], reasoning: 'build' };
       const retryAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [[0, 1]], reasoning: 'retry' };
 
       MockBuildAdvisor.advise.mockResolvedValue(firstAdvisorResult);
       MockBuildAdvisor.retryWithSolvencyFeedback.mockResolvedValue(retryAdvisorResult);
 
-      const retryPlan = { type: AIActionType.BuildTrack, segments: [] };
+      const retryPlan = { type: AIActionType.BuildTrack, segments: [] } as any;
       // First call fails, second (retry) succeeds
       MockActionResolver.resolve
         .mockResolvedValueOnce({ success: false, error: 'too expensive' })
@@ -305,8 +306,8 @@ describe('AdvisorCoordinator', () => {
     });
 
     it('returns null plan when solvency retry also fails (solvency-retry failure)', async () => {
-      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', reasoning: 'build' };
-      const retryAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', reasoning: 'retry' };
+      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [], reasoning: 'build' };
+      const retryAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [], reasoning: 'retry' };
 
       MockBuildAdvisor.advise.mockResolvedValue(firstAdvisorResult);
       MockBuildAdvisor.retryWithSolvencyFeedback.mockResolvedValue(retryAdvisorResult);
@@ -336,7 +337,7 @@ describe('AdvisorCoordinator', () => {
     });
 
     it('passes correct remainingBudget overshoot to retryWithSolvencyFeedback', async () => {
-      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', reasoning: 'build' };
+      const firstAdvisorResult: BuildAdvisorResult = { action: 'build', target: 'Paris', waypoints: [], reasoning: 'build' };
       MockBuildAdvisor.advise.mockResolvedValue(firstAdvisorResult);
       MockActionResolver.resolve.mockResolvedValueOnce({ success: false, error: 'too expensive' });
       MockBuildAdvisor.retryWithSolvencyFeedback.mockResolvedValue(null);

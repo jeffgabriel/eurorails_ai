@@ -43,9 +43,8 @@ import { computeBuildSegments } from './computeBuildSegments';
 import { loadGridPoints, makeKey, getHexNeighbors, hexDistance } from './MapTopology';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
 import { ActionResolver } from './ActionResolver';
-import { BuildAdvisor } from './BuildAdvisor';
+import { AdvisorCoordinator } from './AdvisorCoordinator';
 import { TripPlanner } from './TripPlanner';
-import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { getMemory } from './BotMemory';
 import { computeEffectivePathLength, getMajorCityLookup } from '../../../shared/services/majorCityGroups';
 import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsageFees';
@@ -461,7 +460,7 @@ export class TurnExecutorPlanner {
               }
 
               if (replanResult.route) {
-                const enrichedRoute = await RouteEnrichmentAdvisor.enrich(replanResult.route, snapshot, context, brain, gridPoints);
+                const enrichedRoute = await AdvisorCoordinator.adviseEnrichment(replanResult.route, snapshot, context, brain, gridPoints);
                 activeRoute = TurnExecutorPlanner.skipCompletedStops(enrichedRoute, context);
                 resetMoveTarget(); // JIRA-194: new route — stale stop indices no longer valid
                 console.log(
@@ -863,77 +862,25 @@ export class TurnExecutorPlanner {
       }
     }
 
-    // ── BuildAdvisor (LLM) with max 1 solvency retry (AC7) ───────────────
+    // ── AdvisorCoordinator.adviseBuild (LLM) with max 1 solvency retry (AC7) ─
     if (useAdvisor && brain != null && gridPoints != null) {
-      try {
-        const advisorResult = await BuildAdvisor.advise(
-          snapshot,
-          context,
-          activeRoute,
-          gridPoints,
-          brain,
-        );
-
-        if (advisorResult && (advisorResult.action === 'build' || advisorResult.action === 'buildAlternative')) {
-          const advisorTargetCity = advisorResult.target ?? targetCity;
-          const waypoints: [number, number][] = advisorResult.waypoints ?? [];
-
-          // Try building toward advisor target
-          const details: Record<string, any> = { toward: advisorTargetCity };
-          if (waypoints.length > 0) details.waypoints = waypoints;
-
-          const buildResult = await ActionResolver.resolve(
-            { action: 'BUILD', details, reasoning: advisorResult.reasoning ?? '', planHorizon: '' },
-            snapshot,
-            context,
-            activeRoute.startingCity,
-          );
-
-          if (buildResult.success && buildResult.plan) {
-            console.log(`${tag} BuildAdvisor succeeded: building toward "${advisorTargetCity}"`);
-            trace.build.cost = buildResult.plan.type === AIActionType.BuildTrack
-              ? buildResult.plan.segments.reduce((s, seg) => s + seg.cost, 0)
-              : 0;
-            // JIRA-179: propagate BuildRouteResolver log to composition trace
-            if (buildResult.buildResolverLog) trace.buildResolver = buildResult.buildResolverLog;
-            return buildResult.plan;
-          }
-
-          // ── Solvency retry (max 1) — AC7 ─────────────────────────────
-          console.warn(`${tag} BuildAdvisor build failed (${buildResult.error}), attempting 1 solvency retry`);
-          const retryAdvisorResult = await BuildAdvisor.retryWithSolvencyFeedback(
-            advisorResult,
-            remainingBudget + 1, // Indicate overshoot — actual cost exceeded budget
-            remainingBudget,
-            snapshot,
-            context,
-            activeRoute,
-            gridPoints,
-            brain,
-          );
-
-          if (retryAdvisorResult && (retryAdvisorResult.action === 'build' || retryAdvisorResult.action === 'buildAlternative')) {
-            const retryCity = retryAdvisorResult.target ?? targetCity;
-            const retryWaypoints: [number, number][] = retryAdvisorResult.waypoints ?? [];
-            const retryDetails: Record<string, any> = { toward: retryCity };
-            if (retryWaypoints.length > 0) retryDetails.waypoints = retryWaypoints;
-
-            const retryBuildResult = await ActionResolver.resolve(
-              { action: 'BUILD', details: retryDetails, reasoning: retryAdvisorResult.reasoning ?? '', planHorizon: '' },
-              snapshot,
-              context,
-              activeRoute.startingCity,
-            );
-            if (retryBuildResult.success && retryBuildResult.plan) {
-              console.log(`${tag} BuildAdvisor solvency retry succeeded: building toward "${retryCity}"`);
-              // JIRA-179: propagate BuildRouteResolver log to composition trace
-              if (retryBuildResult.buildResolverLog) trace.buildResolver = retryBuildResult.buildResolverLog;
-              return retryBuildResult.plan;
-            }
-          }
-        }
-      } catch (err) {
-        console.warn(`${tag} BuildAdvisor threw error: ${(err as Error).message}. Falling back to heuristic.`);
+      const advisorBuildResult = await AdvisorCoordinator.adviseBuild(
+        targetCity,
+        remainingBudget,
+        activeRoute,
+        snapshot,
+        context,
+        brain,
+        gridPoints,
+        tag,
+      );
+      if (advisorBuildResult.plan) {
+        trace.build.cost = advisorBuildResult.plan.type === AIActionType.BuildTrack
+          ? advisorBuildResult.plan.segments.reduce((s, seg) => s + seg.cost, 0)
+          : 0;
+        // JIRA-179: propagate BuildRouteResolver log to composition trace
+        if (advisorBuildResult.buildResolverLog) trace.buildResolver = advisorBuildResult.buildResolverLog as typeof trace.buildResolver;
+        return advisorBuildResult.plan;
       }
     }
 
