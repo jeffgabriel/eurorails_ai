@@ -54,6 +54,7 @@ import { InitialBuildPlanner } from './InitialBuildPlanner';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 import { Stage3Result } from './schemas';
+import { ActiveRouteContinuer } from './ActiveRouteContinuer';
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
@@ -318,47 +319,9 @@ export class AIStrategyEngine {
           userPrompt: `[Computed] Initial build: ${routeSummary}, startingCity=${buildPlan.startingCity}`,
         };
       } else if (activeRoute) {
-        // ── Auto-execute from active route (no LLM call) ──
-        console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
-        const execResult = await TurnExecutorPlanner.execute(activeRoute, snapshot, context, brain, gridPoints);
-
-        // Convert TurnExecutorResult.plans[] to a single TurnPlan
-        const execPlan = execResult.plans.length === 0
-          ? { type: AIActionType.PassTurn as const }
-          : execResult.plans.length === 1
-            ? execResult.plans[0]
-            : { type: 'MultiAction' as const, steps: execResult.plans };
-
-        const routeSummary = `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`;
-        decision = {
-          plan: execPlan,
-          reasoning: `[route-executor] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`,
-          planHorizon: routeSummary,
-          model: 'route-executor',
-          latencyMs: 0,
-          retried: false,
-          userPrompt: `[Route] stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}. ${routeSummary}`,
-          // Propagate post-delivery replan LLM data for debug overlay
-          ...(execResult.replanLlmLog && { llmLog: execResult.replanLlmLog }),
-          ...(execResult.replanSystemPrompt && { systemPrompt: execResult.replanSystemPrompt }),
-          ...(execResult.replanUserPrompt && { userPrompt: execResult.replanUserPrompt }),
-        };
-
-        execCompositionTrace = execResult.compositionTrace;
-        if (execResult.routeComplete) {
-          routeWasCompleted = true;
-          console.log(`${tag} Route completed!`);
-        } else if (execResult.routeAbandoned) {
-          routeWasAbandoned = true;
-          console.log(`${tag} Route abandoned: ${execResult.compositionTrace.a2.terminationReason}`);
-        } else {
-          // Save updated route state (advanced stop/phase)
-          activeRoute = execResult.updatedRoute;
-        }
-        // Propagate hasDelivery from TurnExecutorPlanner (used downstream for route clearing)
-        if (execResult.hasDelivery) {
-          hasDelivery = true;
-        }
+        // ── Auto-execute from active route (delegated to ActiveRouteContinuer) ──
+        const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag);
+        ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace } = partial);
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── JIRA-170: Auto-deliver before LLM consultation ──
         // When the bot has no active route but can immediately deliver, execute deliveries

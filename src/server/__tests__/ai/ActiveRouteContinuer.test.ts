@@ -18,6 +18,8 @@ import type {
   WorldSnapshot,
   GridPoint,
   LlmAttempt,
+  TurnPlan,
+  LLMDecisionResult,
 } from '../../../shared/types/GameTypes';
 import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import type { CompositionTrace, TurnExecutorResult } from '../../services/ai/TurnExecutorPlanner';
@@ -123,7 +125,7 @@ function makeTrace(): CompositionTrace {
 function makeExecResult(overrides: Partial<TurnExecutorResult> = {}): TurnExecutorResult {
   const route = makeRoute({ currentStopIndex: 1 });
   return {
-    plans: [{ type: AIActionType.Move, path: [] }],
+    plans: [{ type: AIActionType.PassTurn }],
     updatedRoute: route,
     compositionTrace: makeTrace(),
     routeComplete: false,
@@ -166,13 +168,13 @@ describe('ActiveRouteContinuer.run', () => {
       // activeRoute should be the updatedRoute from TurnExecutorPlanner
       expect(result.activeRoute).toBe(updatedRoute);
       expect(result.decision.model).toBe('route-executor');
-      expect(result.decision.plan).toEqual(execResult.plans[0]);
+      expect(result.decision.plan).toEqual({ type: AIActionType.PassTurn });
       expect(result.execCompositionTrace).toBe(execResult.compositionTrace);
     });
 
     it('collapses multiple plans into a MultiAction step', async () => {
-      const plan1 = { type: AIActionType.Move, path: [] };
-      const plan2 = { type: AIActionType.PickupLoad, load: 'Coal', city: 'Lyon' };
+      const plan1 = { type: AIActionType.PassTurn } as TurnPlan;
+      const plan2 = { type: AIActionType.DiscardHand } as TurnPlan;
       const execResult = makeExecResult({ plans: [plan1, plan2] });
       mockExecute.mockResolvedValue(execResult);
 
@@ -293,9 +295,9 @@ describe('ActiveRouteContinuer.run', () => {
       );
 
       // The decision must carry JIRA-185 replan data for the debug overlay
-      expect((result.decision as Record<string, unknown>).llmLog).toBe(replanLlmLog);
-      expect((result.decision as Record<string, unknown>).systemPrompt).toBe(replanSystemPrompt);
-      expect((result.decision as Record<string, unknown>).userPrompt).toBe(replanUserPrompt);
+      expect((result.decision as LLMDecisionResult).llmLog).toBe(replanLlmLog);
+      expect((result.decision as LLMDecisionResult).systemPrompt).toBe(replanSystemPrompt);
+      expect((result.decision as LLMDecisionResult).userPrompt).toBe(replanUserPrompt);
     });
 
     it('does not add llmLog/systemPrompt fields when replan fields are absent', async () => {
@@ -315,10 +317,10 @@ describe('ActiveRouteContinuer.run', () => {
         tag,
       );
 
-      expect((result.decision as Record<string, unknown>).llmLog).toBeUndefined();
-      expect((result.decision as Record<string, unknown>).systemPrompt).toBeUndefined();
+      expect((result.decision as LLMDecisionResult).llmLog).toBeUndefined();
+      expect((result.decision as LLMDecisionResult).systemPrompt).toBeUndefined();
       // userPrompt should still exist (the default route prompt), just not the replan one
-      expect(typeof (result.decision as Record<string, unknown>).userPrompt).toBe('string');
+      expect(typeof (result.decision as LLMDecisionResult).userPrompt).toBe('string');
     });
   });
 });
