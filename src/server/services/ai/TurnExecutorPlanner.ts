@@ -820,7 +820,7 @@ export class TurnExecutorPlanner {
    *      b. On failure → 1 solvency retry via retryWithSolvencyFeedback → try again
    *   3. Heuristic fallback (single code path) → ActionResolver BUILD toward targetCity
    */
-  private static async executeBuildPhase(
+  static async executeBuildPhase(
     targetCity: string,
     isVictoryBuild: boolean,
     buildTargetStopIndex: number,
@@ -1607,7 +1607,7 @@ export class TurnExecutorPlanner {
    * @returns { handled: true; plans: TurnPlan[]; routeAbandoned?: boolean } on 2a/2b
    *          { handled: false; error: CappedCityError } on 2c
    */
-  private static resolveCappedCityDelivery(
+  static resolveCappedCityDelivery(
     snapshot: WorldSnapshot,
     activeRoute: StrategicRoute,
     context: GameContext,
