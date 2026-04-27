@@ -259,6 +259,62 @@ export const TRIP_PLAN_SCHEMA = {
   required: ['candidates', 'chosenIndex', 'reasoning'],
 };
 
+// ── Stage3Result ──────────────────────────────────────────────────────────
+
+/**
+ * Typed handoff record assembled at the end of the four-branch Stage 3 decision
+ * gate inside AIStrategyEngine.takeTurn (JIRA-195b sub-slice A).
+ *
+ * Names the 13 mutable locals that flow from the decision branches into
+ * sub-stages F1-F4. Sub-slices B/C/D will migrate each decision branch to
+ * return through this typed contract instead of bare locals. Sub-slice A
+ * assembles a temporary instance just before F1 (upgrade injection) so that
+ * F1 reads from the named field rather than the bare local — the first step
+ * in making the implicit Stage 3 return contract explicit.
+ */
+export interface Stage3Result {
+  /** LLM (or computed) decision produced by the active branch. */
+  decision: import('../../../shared/types/GameTypes').LLMDecisionResult;
+  /** Strategic route after the decision gate (may be null when no route exists). */
+  activeRoute: import('../../../shared/types/GameTypes').StrategicRoute | null;
+  /** True when the active route completed all stops this turn. */
+  routeWasCompleted: boolean;
+  /** True when the active route was abandoned this turn. */
+  routeWasAbandoned: boolean;
+  /** True when at least one delivery was executed in Stage 3. */
+  hasDelivery: boolean;
+  /** Remaining route stops before the route was completed or abandoned (BE-010). */
+  previousRouteStops: import('../../../shared/types/GameTypes').RouteStop[] | null;
+  /** Secondary delivery diagnostic logged when a dead-load drop enabled a delivery. */
+  secondaryDeliveryLog?: {
+    action: string;
+    reasoning: string;
+    pickupCity?: string;
+    loadType?: string;
+    deliveryCity?: string;
+    deadLoadsDropped?: string[];
+  };
+  /** Drop-load actions staged for dead loads (fed into TurnComposer). */
+  deadLoadDropActions: import('../../../shared/types/GameTypes').TurnPlanDropLoad[];
+  /** Upgrade action to inject into the turn plan (JIRA-105), or null when none. */
+  pendingUpgradeAction: import('../../../shared/types/GameTypes').TurnPlanUpgradeTrain | null;
+  /** Reason an upgrade was blocked (JIRA-161), or null when no suppression occurred. */
+  upgradeSuppressionReason: string | null;
+  /** Composition trace from TurnExecutorPlanner, populated on active-route paths. */
+  execCompositionTrace: import('./TurnExecutorPlanner').CompositionTrace | null;
+  /**
+   * Game state snapshot at the time of the decision gate.
+   * Mutated by JIRA-170 auto-delivery refresh; sub-slice D will surface this
+   * through Stage3Result so downstream sub-stages receive the refreshed value.
+   */
+  snapshot: import('../../../shared/types/GameTypes').WorldSnapshot;
+  /**
+   * Bot context at the time of the decision gate.
+   * Mutated by JIRA-170 auto-delivery refresh alongside snapshot.
+   */
+  context: import('../../../shared/types/GameTypes').GameContext;
+}
+
 // ── PhaseAResult ──────────────────────────────────────────────────────────
 
 /**

@@ -53,6 +53,7 @@ import { TripPlanner, TripPlanResult } from './TripPlanner';
 import { InitialBuildPlanner } from './InitialBuildPlanner';
 import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
+import { Stage3Result } from './schemas';
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
@@ -711,14 +712,34 @@ export class AIStrategyEngine {
 
       console.log(`${tag} Decision: plan=${decision.plan.type}, model=${decision.model}, latency=${decision.latencyMs}ms, retried=${decision.retried}`);
 
-      // ── JIRA-105: Inject pending upgrade action into decision plan (before TurnComposer) ──
+      // ── JIRA-195b sub-slice A: Assemble Stage3Result from four-branch locals ──
+      // The four decision branches still write to bare locals above; this temporary
+      // assembly point makes the typed handoff contract explicit so that F1 (and
+      // subsequent sub-stages in B/C/D) can read from a named record.
+      const stage3: Stage3Result = {
+        decision,
+        activeRoute,
+        routeWasCompleted,
+        routeWasAbandoned,
+        hasDelivery,
+        previousRouteStops,
+        secondaryDeliveryLog,
+        deadLoadDropActions,
+        pendingUpgradeAction,
+        upgradeSuppressionReason,
+        execCompositionTrace,
+        snapshot,
+        context,
+      };
+
+      // ── F1: JIRA-105: Inject pending upgrade action into decision plan (before TurnComposer) ──
       // JIRA-161: Gate 2 removed — redundant with Gate 1 in tryConsumeUpgrade and
       // the delivery count guard in the upgrade-before-drop path. Gate 2 used stale
       // memory.deliveryCount and silently blocked valid upgrades after the LLM decided to upgrade.
-      if (pendingUpgradeAction) {
+      if (stage3.pendingUpgradeAction) {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
-        decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, pendingUpgradeAction] };
-        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${pendingUpgradeAction.targetTrain}) into turn plan`);
+        decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, stage3.pendingUpgradeAction] };
+        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${stage3.pendingUpgradeAction.targetTrain}) into turn plan`);
       }
 
       // ── Stage 3b: Validate composed plan against hard gates ──
