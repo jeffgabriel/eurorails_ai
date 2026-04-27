@@ -259,3 +259,48 @@ export const TRIP_PLAN_SCHEMA = {
   required: ['candidates', 'chosenIndex', 'reasoning'],
 };
 
+// ── PhaseAResult ──────────────────────────────────────────────────────────
+
+/**
+ * Typed handoff record from MovementPhasePlanner.run() to BuildPhasePlanner.run().
+ * This is the sole state vehicle between the two phase planners (JIRA-195 R5).
+ *
+ * Replaces the implicit local variables that previously flowed between Phase A
+ * and Phase B inside TurnExecutorPlanner.execute(). Using a typed record makes
+ * the boundary explicit and prevents JIRA-194's class of stale-locals bugs.
+ */
+export interface PhaseAResult {
+  /** Active strategic route after Phase A movement (advanced stop indices, possibly replanned). */
+  activeRoute: import('../../../shared/types/GameTypes').StrategicRoute;
+  /**
+   * Last city the bot was explicitly commanded to move toward (for AC13(b) build direction check).
+   * Null when no move was emitted in Phase A or when a replan cleared it (JIRA-194).
+   */
+  lastMoveTargetCity: string | null;
+  /** Number of deliveries executed during Phase A (for JIRA-185 deliveryCount patching). */
+  deliveriesThisTurn: number;
+  /** Turn plans accumulated during Phase A (moves, pickups, deliveries). */
+  accumulatedPlans: import('../../../shared/types/GameTypes').TurnPlan[];
+  /**
+   * Load state side-effects applied to snapshot/context during Phase A.
+   * Preserved here so BuildPhasePlanner can reconstruct context if needed.
+   * Currently a plain object snapshot of the loads arrays after Phase A.
+   */
+  loadStateMutations: {
+    snapshotLoads: string[];
+    contextLoads: string[];
+  };
+  /** Post-delivery replan LLM data (propagated from PostDeliveryReplanner). */
+  replanLlmLog?: import('../../../shared/types/GameTypes').LlmAttempt[];
+  /** Post-delivery replan system prompt. */
+  replanSystemPrompt?: string;
+  /** Post-delivery replan user prompt. */
+  replanUserPrompt?: string;
+  /** True when the route was abandoned during Phase A. */
+  routeAbandoned: boolean;
+  /** True when all route stops completed during Phase A. */
+  routeComplete: boolean;
+  /** True when at least one delivery was made in Phase A. */
+  hasDelivery: boolean;
+}
+
