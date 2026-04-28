@@ -178,12 +178,14 @@ describe('InitialBuildRunner.run', () => {
         tag,
       );
 
-      // activeRoute is built from the planner output
-      expect(result.activeRoute.startingCity).toBe('Lyon');
-      expect(result.activeRoute.phase).toBe('build');
-      expect(result.activeRoute.currentStopIndex).toBe(0);
-      expect(result.activeRoute.stops).toEqual(buildPlan.route);
-      expect(result.activeRoute.reasoning).toBe('[initial-build-planner] high-payoff Lyon→Berlin');
+      // activeRoute is built from the planner output (always non-null from this branch)
+      expect(result.activeRoute).not.toBeNull();
+      const route = result.activeRoute!;
+      expect(route.startingCity).toBe('Lyon');
+      expect(route.phase).toBe('build');
+      expect(route.currentStopIndex).toBe(0);
+      expect(route.stops).toEqual(buildPlan.route);
+      expect(route.reasoning).toBe('[initial-build-planner] high-payoff Lyon→Berlin');
 
       // decision is shaped as an LLMDecisionResult-like object with the initial-build model
       expect(result.decision.model).toBe('initial-build-planner');

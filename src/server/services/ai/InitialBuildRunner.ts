@@ -58,7 +58,12 @@ export class InitialBuildRunner {
     gridPoints: GridPoint[],
     memory: BotMemoryState,
     tag: string,
-  ): Promise<Pick<Stage3Result, 'activeRoute' | 'decision' | 'execCompositionTrace'>> {
+  ): Promise<
+    Pick<Stage3Result, 'activeRoute' | 'decision' | 'execCompositionTrace'> & {
+      evaluatedOptions?: InitialBuildPlan['evaluatedOptions'];
+      evaluatedPairings?: InitialBuildPlan['evaluatedPairings'];
+    }
+  > {
     // ── JIRA-142b: Computed initial build — bypass LLM entirely ──
     // JIRA-167: Only plan on the FIRST initial-build turn. On subsequent turns,
     // activeRoute already has phase='build' from the prior turn, so we fall
@@ -115,6 +120,8 @@ export class InitialBuildRunner {
       activeRoute,
       decision,
       execCompositionTrace,
+      evaluatedOptions: buildPlan.evaluatedOptions,
+      evaluatedPairings: buildPlan.evaluatedPairings,
     };
   }
 }
