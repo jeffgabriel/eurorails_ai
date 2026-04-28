@@ -56,6 +56,7 @@ import { MAX_RECOMPOSE_ATTEMPTS } from '../../../shared/constants/gameRules';
 import { Stage3Result } from './schemas';
 import { ActiveRouteContinuer } from './ActiveRouteContinuer';
 import { InitialBuildRunner } from './InitialBuildRunner';
+import { NewRoutePlanner } from './NewRoutePlanner';
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
@@ -276,341 +277,30 @@ export class AIStrategyEngine {
         const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag);
         ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace } = partial);
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
-        // ── JIRA-170: Auto-deliver before LLM consultation ──
-        // When the bot has no active route but can immediately deliver, execute deliveries
-        // against the DB now so TripPlanner sees fresh demand cards when planning next trip.
-        if (context.canDeliver.length > 0) {
-          console.log(`${tag} [JIRA-170] Auto-delivering ${context.canDeliver.length} load(s) before LLM consultation`);
-          for (const opp of context.canDeliver) {
-            const deliverPlan: TurnPlanDeliverLoad = {
-              type: AIActionType.DeliverLoad,
-              load: opp.loadType,
-              city: opp.deliveryCity,
-              cardId: opp.cardIndex,
-              payout: opp.payout,
-            };
-            try {
-              const deliverResult = await TurnExecutor.executePlan(deliverPlan, snapshot);
-              if (deliverResult.success) {
-                hasDelivery = true;
-                autoDeliveredLoads.push({
-                  loadType: opp.loadType,
-                  city: opp.deliveryCity,
-                  payment: deliverResult.payment ?? opp.payout,
-                  cardId: opp.cardIndex,
-                });
-                console.log(`${tag} [JIRA-170] Auto-delivered ${opp.loadType} at ${opp.deliveryCity} for ${deliverResult.payment ?? opp.payout}M`);
-              } else {
-                console.warn(`${tag} [JIRA-170] Auto-delivery of ${opp.loadType} at ${opp.deliveryCity} failed: ${deliverResult.error ?? 'unknown error'}`);
-              }
-            } catch (autoDeliveryErr) {
-              console.warn(`${tag} [JIRA-170] Auto-delivery of ${opp.loadType} at ${opp.deliveryCity} threw: ${(autoDeliveryErr as Error).message}`);
-            }
-          }
-
-          // Re-capture snapshot and rebuild context so TripPlanner sees fresh demand cards
-          // JIRA-195: Pass memory so memory-dependent fields are computed correctly in a single pass.
-          if (autoDeliveredLoads.length > 0) {
-            try {
-              snapshot = await capture(gameId, botPlayerId);
-              context = await ContextBuilder.build(snapshot, skillLevel, gridPoints, memory);
-              console.log(`${tag} [JIRA-170] Refreshed snapshot and context after auto-delivery`);
-            } catch (refreshErr) {
-              console.warn(`${tag} [JIRA-170] Failed to refresh context after auto-delivery: ${(refreshErr as Error).message}`);
-            }
-          }
+        // ── No active route, LLM available — delegated to NewRoutePlanner (JIRA-195b sub-slice D) ──
+        // NewRoutePlanner owns sub-stages D1-D7 + E. Returns the full Stage3Result
+        // including reassigned snapshot and context (the JIRA-170 boundary becomes
+        // explicit in the type system) plus autoDeliveredLoads and tripPlanResult
+        // for downstream game/LLM logging.
+        const stage3Partial = await NewRoutePlanner.run(
+          snapshot, context, brain!, gridPoints, memory, tag,
+          gameId, botPlayerId, skillLevel,
+        );
+        ({
+          decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery,
+          secondaryDeliveryLog, pendingUpgradeAction, upgradeSuppressionReason,
+          execCompositionTrace,
+        } = stage3Partial);
+        snapshot = stage3Partial.snapshot;
+        context = stage3Partial.context;
+        if (stage3Partial.deadLoadDropActions.length > 0) {
+          deadLoadDropActions.push(...stage3Partial.deadLoadDropActions);
         }
-
-        // ── No active route — consult TripPlanner for a new multi-stop trip (JIRA-126) ──
-        const tripPlanner = new TripPlanner(brain!);
-
-        const tripResultRaw = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
-        // JIRA-194: Capture full TripPlanResult for selection diagnostic
-        if (tripResultRaw.route) {
-          tripPlanResult = tripResultRaw as TripPlanResult;
-          // Write LLM transcript entry when LLM's chosenIndex was overridden (R2, R6)
-          if (tripPlanResult.selection) {
-            // Find the success llmLog entry that carries the diagnostic (set by TripPlanner)
-            const successEntry = tripPlanResult.llmLog.find(a => a.status === 'success');
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const diag = (successEntry as any)?.tripPlannerSelection;
-            if (diag && brain) {
-              appendLLMCall(gameId, {
-                callId: `trip-planner-selection-${snapshot.turnNumber}-${botPlayerId}`,
-                gameId,
-                playerId: botPlayerId,
-                playerName: (snapshot.bot.botConfig as { name?: string } | null)?.name,
-                turn: snapshot.turnNumber,
-                timestamp: new Date().toISOString(),
-                caller: 'trip-planner',
-                method: 'selectionOverride',
-                model: brain.modelName,
-                systemPrompt: '',
-                userPrompt: '',
-                responseText: '',
-                status: 'success',
-                latencyMs: 0,
-                attemptNumber: 1,
-                totalAttempts: 1,
-                tripPlannerSelection: diag,
-              });
-            }
-          }
+        if (stage3Partial.autoDeliveredLoads.length > 0) {
+          autoDeliveredLoads.push(...stage3Partial.autoDeliveredLoads);
         }
-        const tripResult = tripResultRaw;
-        // Wrap tripResult into routeResult-compatible shape for downstream code
-        const routeResult = tripResult.route
-          ? { route: (tripResult as TripPlanResult).route, model: 'trip-planner', latencyMs: (tripResult as TripPlanResult).llmLatencyMs, tokenUsage: (tripResult as TripPlanResult).llmTokens, llmLog: tripResult.llmLog, systemPrompt: (tripResult as TripPlanResult).systemPrompt, userPrompt: (tripResult as TripPlanResult).userPrompt }
-          : { route: null as StrategicRoute | null, llmLog: tripResult.llmLog, systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
-
-        if (routeResult.route) {
-          activeRoute = routeResult.route;
-          console.log(`${tag} Trip planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
-
-          // ── Route Enrichment Advisor (JIRA-156 P2): enrich new route with corridor map ──
-          if (brain && gridPoints.length > 0) {
-            try {
-              activeRoute = await RouteEnrichmentAdvisor.enrich(activeRoute, snapshot, context, brain, gridPoints);
-            } catch (enrichErr) {
-              console.warn(`${tag} RouteEnrichmentAdvisor failed (${(enrichErr as Error).message}), using original route`);
-            }
-          }
-
-          // ── JIRA-105: Consume upgradeOnRoute from LLM route plan ──
-          if (activeRoute.upgradeOnRoute) {
-            const { action: upgradeAction, reason: upgradeReason } = AIStrategyEngine.tryConsumeUpgrade(activeRoute, snapshot, tag, memory.deliveryCount ?? 0);
-            if (upgradeAction) {
-              pendingUpgradeAction = upgradeAction;
-            } else if (upgradeReason) {
-              upgradeSuppressionReason = upgradeReason;
-            }
-          }
-
-          // ── JIRA-89: Dead load check + secondary delivery planning ──
-          const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
-          const deadLoads = TurnExecutorPlanner.findDeadLoads(snapshot.bot.loads, snapshot.bot.resolvedDemands);
-          const deadLoadDropPlans: TurnPlanDropLoad[] = [];
-          if (deadLoads.length > 0 && snapshot.bot.position) {
-            // Check if bot is at a city (can only drop at cities)
-            const gridPointsMap = loadGridPointsMap();
-            const posKey = `${snapshot.bot.position.row},${snapshot.bot.position.col}`;
-            const botCity = gridPointsMap.get(posKey)?.name;
-            if (botCity) {
-              console.log(`${tag} JIRA-89: Dead loads detected: ${deadLoads.join(', ')} — dropping at ${botCity}`);
-              for (const load of deadLoads) {
-                deadLoadDropPlans.push({ type: AIActionType.DropLoad, load, city: botCity });
-              }
-              secondaryDeliveryLog = { action: 'dead_load_drop', reasoning: `Dropped dead loads: ${deadLoads.join(', ')}`, deadLoadsDropped: deadLoads };
-
-              // JIRA-89 fix: Create DropLoad actions and mutate snapshot
-              for (const deadLoad of deadLoads) {
-                deadLoadDropActions.push({
-                  type: AIActionType.DropLoad,
-                  load: deadLoad,
-                  city: botCity,
-                });
-                const dropIndex = snapshot.bot.loads.indexOf(deadLoad);
-                if (dropIndex >= 0) {
-                  snapshot.bot.loads.splice(dropIndex, 1);
-                }
-              }
-            }
-          }
-
-          // JIRA-126: Secondary delivery logic removed — TripPlanner already includes
-          // multi-stop trip planning with all demand cards considered simultaneously.
-
-          // ── JIRA-92: Cargo conflict check — drop carried loads blocking planned pickups ──
-          const routePickupCount = (() => {
-            let count = 0;
-            for (let i = activeRoute.currentStopIndex; i < activeRoute.stops.length; i++) {
-              if (activeRoute.stops[i].action === 'pickup') count++;
-              else break; // Count consecutive pickups from current index
-            }
-            return count;
-          })();
-          const effectiveFreeSlots = trainCapacity - snapshot.bot.loads.length;
-
-          if (
-            routePickupCount > effectiveFreeSlots &&
-            botConfig!.skillLevel !== BotSkillLevel.Easy &&
-            AIStrategyEngine.hasLLMApiKey(botConfig)
-          ) {
-            console.log(`${tag} JIRA-92: Cargo conflict — route needs ${routePickupCount} pickup slots, only ${effectiveFreeSlots} free`);
-
-            // ── JIRA-105b: Upgrade-before-drop check ──
-            // Before asking to drop, check if upgrading gives enough capacity
-            let upgradeBeforeDropHandled = false;
-            const currentCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
-            if (
-              pendingUpgradeAction === null &&
-              currentCapacity < 3 &&
-              (memory.deliveryCount ?? 0) >= MIN_DELIVERIES_BEFORE_UPGRADE
-            ) {
-              // Find capacity-increasing upgrade options (filter ActionResolver.UPGRADE_PATHS to targets with capacity > current)
-              const allPaths = ActionResolver.UPGRADE_PATHS[snapshot.bot.trainType] ?? {};
-              const paths: Record<string, number> = {};
-              for (const [target, cost] of Object.entries(allPaths)) {
-                const targetCapacity = TRAIN_PROPERTIES[target as TrainType]?.capacity ?? 0;
-                if (targetCapacity > currentCapacity) paths[target] = cost;
-              }
-              const upgradeOptions: { targetTrain: string; cost: number }[] = [];
-              for (const [target, cost] of Object.entries(paths)) {
-                if (snapshot.bot.money >= cost) {
-                  upgradeOptions.push({ targetTrain: target, cost });
-                }
-              }
-
-              if (upgradeOptions.length > 0) {
-                // Sort by cost ascending (cheapest first)
-                upgradeOptions.sort((a, b) => a.cost - b.cost);
-                console.log(`${tag} JIRA-105b: Upgrade-before-drop check — ${routePickupCount} pickups needed, ${effectiveFreeSlots} free slots, upgrade to ${upgradeOptions[0].targetTrain} available`);
-
-                // Calculate total route payout
-                const totalRoutePayout = activeRoute.stops
-                  .filter(s => s.action === 'deliver' && s.payment)
-                  .reduce((sum, s) => sum + (s.payment ?? 0), 0);
-
-                try {
-                  const upgradePrompt = ContextSerializer.serializeUpgradeBeforeDropPrompt(
-                    snapshot, activeRoute, upgradeOptions, totalRoutePayout, context.demands,
-                  );
-                  const upgradeResult = await brain!.evaluateUpgradeBeforeDrop(upgradePrompt, snapshot, context);
-
-                  if (upgradeResult?.action === 'upgrade' && upgradeResult.targetTrain) {
-                    // Validate the target train is in our options
-                    const matchedOption = upgradeOptions.find(o => o.targetTrain === upgradeResult.targetTrain);
-                    if (matchedOption) {
-                      console.log(`${tag} JIRA-105b: Upgrade-before-drop → upgrading to ${upgradeResult.targetTrain} instead of dropping — ${upgradeResult.reasoning}`);
-                      pendingUpgradeAction = {
-                        type: AIActionType.UpgradeTrain,
-                        targetTrain: matchedOption.targetTrain,
-                        cost: matchedOption.cost,
-                      };
-                      upgradeBeforeDropHandled = true;
-                    } else {
-                      console.warn(`${tag} JIRA-105b: LLM suggested "${upgradeResult.targetTrain}" but not in valid options, falling through to cargo conflict`);
-                    }
-                  } else {
-                    const skipReason = upgradeResult?.reasoning ?? 'LLM returned null';
-                    console.log(`${tag} JIRA-105b: Upgrade-before-drop → skip — ${skipReason}`);
-                    // JIRA-161: Capture suppression reason for debug overlay
-                    upgradeSuppressionReason = `LLM chose drop over upgrade: ${skipReason}`;
-                  }
-                } catch (err) {
-                  console.warn(`${tag} JIRA-105b: Upgrade-before-drop LLM call failed:`, err instanceof Error ? err.message : err);
-                }
-              }
-            }
-
-            // Only run cargo conflict drop if upgrade-before-drop didn't handle it
-            if (!upgradeBeforeDropHandled) {
-              // Identify carried loads NOT in route's delivery stops
-              const routeDeliveryLoads = new Set(
-                activeRoute.stops.filter(s => s.action === 'deliver').map(s => s.loadType),
-              );
-              const conflictingLoads = snapshot.bot.loads.filter(l => !routeDeliveryLoads.has(l));
-
-              if (conflictingLoads.length > 0) {
-                try {
-                  const cargoPrompt = ContextSerializer.serializeCargoConflictPrompt(snapshot, activeRoute, conflictingLoads, context.demands);
-                  const conflictResult = await brain!.evaluateCargoConflict(cargoPrompt, snapshot, context);
-
-                  if (conflictResult?.action === 'drop' && conflictResult.dropLoad) {
-                    console.log(`${tag} JIRA-92: evaluateCargoConflict → drop "${conflictResult.dropLoad}" — ${conflictResult.reasoning}`);
-                    // Remove the load from snapshot so downstream sees updated capacity
-                    const dropIndex = snapshot.bot.loads.indexOf(conflictResult.dropLoad);
-                    if (dropIndex >= 0) {
-                      snapshot.bot.loads.splice(dropIndex, 1);
-                    }
-                  } else {
-                    console.log(`${tag} JIRA-92: evaluateCargoConflict → keep — ${conflictResult?.reasoning ?? 'LLM returned null'}`);
-                  }
-                } catch (err) {
-                  console.warn(`${tag} JIRA-92: evaluateCargoConflict LLM call failed:`, err instanceof Error ? err.message : err);
-                }
-              }
-            }
-          }
-
-          // Execute the first step of the new route via TurnExecutorPlanner
-          const execResult = await TurnExecutorPlanner.execute(activeRoute, snapshot, context, brain, gridPoints);
-
-          // Convert TurnExecutorResult.plans[] to a single TurnPlan
-          let execPlan: TurnPlan = execResult.plans.length === 0
-            ? { type: AIActionType.PassTurn as const }
-            : execResult.plans.length === 1
-              ? execResult.plans[0]
-              : { type: 'MultiAction' as const, steps: execResult.plans };
-
-          // JIRA-89: Prepend dead load drops to the route plan so they execute first
-          if (deadLoadDropPlans.length > 0) {
-            const routeSteps = execPlan.type === 'MultiAction' ? execPlan.steps : [execPlan];
-            execPlan = { type: 'MultiAction' as const, steps: [...deadLoadDropPlans, ...routeSteps] };
-            console.log(`${tag} JIRA-89: Prepended ${deadLoadDropPlans.length} dead load drop(s) to route plan`);
-          }
-
-          decision = {
-            plan: execPlan,
-            reasoning: `[route-planned] ${activeRoute.reasoning}`,
-            planHorizon: `Route: ${activeRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
-            model: routeResult.model ?? 'unknown',
-            latencyMs: routeResult.latencyMs ?? 0,
-            tokenUsage: routeResult.tokenUsage,
-            retried: false,
-            llmLog: routeResult.llmLog,
-            systemPrompt: routeResult.systemPrompt,
-            userPrompt: routeResult.userPrompt,
-          };
-
-          execCompositionTrace = execResult.compositionTrace;
-          if (execResult.routeComplete) {
-            routeWasCompleted = true;
-          } else if (execResult.routeAbandoned) {
-            routeWasAbandoned = true;
-          } else {
-            activeRoute = execResult.updatedRoute;
-          }
-          // Propagate hasDelivery from TurnExecutorPlanner
-          if (execResult.hasDelivery) {
-            hasDelivery = true;
-          }
-        } else {
-          // Route planning failed — try heuristic fallback before passing
-          const failedAttempts = routeResult.llmLog.length;
-          const failedErrors = routeResult.llmLog.filter(a => a.status !== 'success').map(a => `#${a.attemptNumber}:${a.status}${a.error ? `(${a.error.substring(0, 100)})` : ''}`).join(', ');
-          console.warn(`${tag} [LLM] Route planning failed — ${failedAttempts} attempts: [${failedErrors}]. Attempting heuristic fallback`);
-          // JIRA-120: Thread LLM failure counter into context for discard gate
-          const fallbackContext = { ...context, consecutiveLlmFailures: memory.consecutiveLlmFailures ?? 0 };
-          const fallback = await ActionResolver.heuristicFallback(fallbackContext, snapshot, { llmFailed: true });
-          if (fallback.success && fallback.plan && fallback.plan.type !== AIActionType.PassTurn) {
-            console.log(`${tag} [heuristic] Fallback produced ${fallback.plan.type}`);
-            decision = {
-              plan: fallback.plan,
-              reasoning: `[heuristic-fallback] LLM planning failed — heuristic produced ${fallback.plan.type}`,
-              planHorizon: 'Immediate',
-              model: 'heuristic-fallback',
-              latencyMs: 0,
-              retried: false,
-              llmLog: routeResult.llmLog,
-              systemPrompt: routeResult.systemPrompt,
-              userPrompt: routeResult.userPrompt,
-            };
-          } else {
-            // Heuristic also failed — pass turn
-            console.error(`${tag} [LLM] Route planning and heuristic fallback both failed — passing turn`);
-            decision = {
-              plan: { type: AIActionType.PassTurn },
-              reasoning: '[llm-failed] LLM planning and heuristic fallback both failed — passing turn',
-              planHorizon: 'Immediate',
-              model: 'llm-failed',
-              latencyMs: 0,
-              retried: false,
-              llmLog: routeResult.llmLog,
-              systemPrompt: routeResult.systemPrompt,
-              userPrompt: routeResult.userPrompt,
-            };
-          }
+        if (stage3Partial.tripPlanResult) {
+          tripPlanResult = stage3Partial.tripPlanResult;
         }
       } else {
         // No LLM key — pass turn with debug logging
