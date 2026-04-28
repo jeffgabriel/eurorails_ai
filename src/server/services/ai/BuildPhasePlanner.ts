@@ -57,6 +57,10 @@ export interface PhaseBResult {
   replanSystemPrompt?: string;
   /** Post-delivery replan user prompt from Phase A. */
   replanUserPrompt?: string;
+  /** Accumulated upgrade action from Phase A post-delivery replans (JIRA-198). */
+  pendingUpgradeAction?: import('../../../shared/types/GameTypes').TurnPlanUpgradeTrain | null;
+  /** Suppression reason when an upgrade was blocked in Phase A (JIRA-198). */
+  upgradeSuppressionReason?: string | null;
 }
 
 // ── BuildPhasePlanner ─────────────────────────────────────────────────────
@@ -105,6 +109,8 @@ export class BuildPhasePlanner {
         replanLlmLog: phaseAResult.replanLlmLog,
         replanSystemPrompt: phaseAResult.replanSystemPrompt,
         replanUserPrompt: phaseAResult.replanUserPrompt,
+        pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+        upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
       };
     }
 
@@ -136,6 +142,8 @@ export class BuildPhasePlanner {
             replanLlmLog: phaseAResult.replanLlmLog,
             replanSystemPrompt: phaseAResult.replanSystemPrompt,
             replanUserPrompt: phaseAResult.replanUserPrompt,
+            pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+            upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
           };
         } else {
           // 2c: abandon route
@@ -151,6 +159,8 @@ export class BuildPhasePlanner {
             replanLlmLog: phaseAResult.replanLlmLog,
             replanSystemPrompt: phaseAResult.replanSystemPrompt,
             replanUserPrompt: phaseAResult.replanUserPrompt,
+            pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+            upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
           };
         }
       }
@@ -211,6 +221,8 @@ export class BuildPhasePlanner {
       replanLlmLog: phaseAResult.replanLlmLog,
       replanSystemPrompt: phaseAResult.replanSystemPrompt,
       replanUserPrompt: phaseAResult.replanUserPrompt,
+      pendingUpgradeAction: phaseAResult.pendingUpgradeAction,
+      upgradeSuppressionReason: phaseAResult.upgradeSuppressionReason,
     };
   }
 }

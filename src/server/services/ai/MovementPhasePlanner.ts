@@ -17,6 +17,7 @@
 import {
   TurnPlan,
   TurnPlanMoveTrain,
+  TurnPlanUpgradeTrain,
   WorldSnapshot,
   GameContext,
   StrategicRoute,
@@ -90,7 +91,7 @@ export class MovementPhasePlanner {
     if (activeRoute.currentStopIndex >= activeRoute.stops.length) {
       console.log(`${tag} Route complete — all stops done`);
       trace.a2.terminationReason = 'route_complete';
-      return MovementPhasePlanner.makeResult(activeRoute, [], false, null, 0, snapshot, context, true, false);
+      return MovementPhasePlanner.makeResult(activeRoute, [], false, null, 0, snapshot, context, true, false, undefined, undefined, undefined, undefined, undefined);
     }
 
     const plans: TurnPlan[] = [];
@@ -102,6 +103,10 @@ export class MovementPhasePlanner {
     let replanUserPrompt: string | undefined;
     // JIRA-185: Count deliveries this turn for post-delivery replan patching
     let deliveriesThisTurn = 0;
+    // JIRA-198: Accumulate upgrade signal across multiple in-turn replans.
+    // "last non-null action wins" — a later null does NOT clobber a prior non-null.
+    let pendingUpgradeAction: TurnPlanUpgradeTrain | null | undefined;
+    let upgradeSuppressionReason: string | null | undefined;
 
     // ── Phase A: Movement loop ────────────────────────────────────────────
     let loopIter = 0;
@@ -134,7 +139,7 @@ export class MovementPhasePlanner {
           trace.a2.terminationReason = 'action_failed';
           if (plans.length === 0) plans.push({ type: AIActionType.PassTurn });
           trace.outputPlan = plans.map(p => p.type);
-          return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, true, replanLlmLog, replanSystemPrompt, replanUserPrompt);
+          return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, true, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
         }
 
         plans.push(actionResult.plan!);
@@ -269,6 +274,18 @@ export class MovementPhasePlanner {
           if (replanResult.replanLlmLog) replanLlmLog = replanResult.replanLlmLog;
           if (replanResult.replanSystemPrompt) replanSystemPrompt = replanResult.replanSystemPrompt;
           if (replanResult.replanUserPrompt) replanUserPrompt = replanResult.replanUserPrompt;
+          // JIRA-198: Merge upgrade signal — last non-null action wins across replans.
+          if (replanResult.pendingUpgradeAction !== undefined) {
+            if (replanResult.pendingUpgradeAction !== null) {
+              // Non-null result: always adopt the latest upgrade decision
+              pendingUpgradeAction = replanResult.pendingUpgradeAction;
+              upgradeSuppressionReason = null;
+            } else if (pendingUpgradeAction === undefined || pendingUpgradeAction === null) {
+              // Null result: only update suppression reason if we don't already have a non-null action
+              pendingUpgradeAction = null;
+              upgradeSuppressionReason = replanResult.upgradeSuppressionReason;
+            }
+          }
         }
 
         continue;
@@ -427,10 +444,10 @@ export class MovementPhasePlanner {
     if (activeRoute.currentStopIndex >= activeRoute.stops.length) {
       console.log(`${tag} Route complete after movement loop`);
       trace.a2.terminationReason = 'route_complete';
-      return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, true, false, replanLlmLog, replanSystemPrompt, replanUserPrompt);
+      return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, true, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
     }
 
-    return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, false, replanLlmLog, replanSystemPrompt, replanUserPrompt);
+    return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
   }
 
   /**
@@ -450,6 +467,8 @@ export class MovementPhasePlanner {
     replanLlmLog?: LlmAttempt[],
     replanSystemPrompt?: string,
     replanUserPrompt?: string,
+    pendingUpgradeAction?: TurnPlanUpgradeTrain | null,
+    upgradeSuppressionReason?: string | null,
   ): PhaseAResult {
     return {
       activeRoute,
@@ -463,6 +482,8 @@ export class MovementPhasePlanner {
       replanLlmLog,
       replanSystemPrompt,
       replanUserPrompt,
+      pendingUpgradeAction,
+      upgradeSuppressionReason,
       routeAbandoned,
       routeComplete,
       hasDelivery,

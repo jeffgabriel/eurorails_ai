@@ -55,7 +55,7 @@ export class ActiveRouteContinuer {
     brain: LLMStrategyBrain | null,
     gridPoints: GridPoint[],
     tag: string,
-  ): Promise<Pick<Stage3Result, 'decision' | 'activeRoute' | 'routeWasCompleted' | 'routeWasAbandoned' | 'hasDelivery' | 'execCompositionTrace'>> {
+  ): Promise<Pick<Stage3Result, 'decision' | 'activeRoute' | 'routeWasCompleted' | 'routeWasAbandoned' | 'hasDelivery' | 'execCompositionTrace' | 'pendingUpgradeAction' | 'upgradeSuppressionReason'>> {
     // ── Auto-execute from active route (no LLM call) ──
     console.log(`${tag} Active route: stop ${activeRoute.currentStopIndex}/${activeRoute.stops.length}, phase=${activeRoute.phase}`);
     const execResult = await TurnExecutorPlanner.execute(activeRoute, snapshot, context, brain, gridPoints);
@@ -109,6 +109,10 @@ export class ActiveRouteContinuer {
       routeWasAbandoned,
       hasDelivery,
       execCompositionTrace,
+      // JIRA-198: Forward upgrade signal from TurnExecutorPlanner so the existing
+      // injection point at AIStrategyEngine.ts:345 fires for the active-route branch.
+      pendingUpgradeAction: execResult.pendingUpgradeAction ?? null,
+      upgradeSuppressionReason: execResult.upgradeSuppressionReason ?? null,
     };
   }
 }

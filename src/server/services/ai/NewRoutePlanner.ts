@@ -477,7 +477,7 @@ export class NewRoutePlanner {
    * solvency check. Mirrors AIStrategyEngine.tryConsumeUpgrade verbatim — moved here
    * because this is the only caller after the JIRA-195b sub-slice D extraction.
    */
-  private static tryConsumeUpgrade(
+  static tryConsumeUpgrade(
     route: StrategicRoute,
     snapshot: WorldSnapshot,
     tag: string,

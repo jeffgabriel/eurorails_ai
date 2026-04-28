@@ -30,6 +30,8 @@ import { AdvisorCoordinator } from './AdvisorCoordinator';
 import { TripPlanner } from './TripPlanner';
 import { getMemory } from './BotMemory';
 import { TurnExecutorPlanner } from './TurnExecutorPlanner';
+import { NewRoutePlanner } from './NewRoutePlanner';
+import type { TurnPlanUpgradeTrain } from '../../../shared/types/GameTypes';
 
 // ── ReplanResult ──────────────────────────────────────────────────────────
 
@@ -55,6 +57,18 @@ export interface ReplanResult {
   replanSystemPrompt?: string;
   /** User prompt sent to TripPlanner, if called. */
   replanUserPrompt?: string;
+  /**
+   * Upgrade action to inject into the turn plan (JIRA-198), or null when the
+   * eligibility gate blocked the LLM-requested upgrade.
+   * Undefined when the LLM did not request an upgrade (sub-paths 2/3/4 also
+   * leave this undefined because no upgradeOnRoute was emitted).
+   */
+  pendingUpgradeAction?: TurnPlanUpgradeTrain | null;
+  /**
+   * Human-readable reason explaining why an upgrade was blocked (JIRA-198).
+   * Undefined when no upgrade was requested or when the upgrade was accepted.
+   */
+  upgradeSuppressionReason?: string | null;
 }
 
 // ── PostDeliveryReplanner ─────────────────────────────────────────────────
@@ -138,12 +152,31 @@ export class PostDeliveryReplanner {
         console.log(
           `${tag} [PostDeliveryReplanner] Replan succeeded. New route: ${finalRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
         );
+
+        // JIRA-198: Consume the LLM-emitted upgradeOnRoute hint (if any) through
+        // the existing eligibility gate. Pass deliveries-already-done-this-turn so
+        // the gate counts in-turn deliveries (ADR-5, matches replanMemory convention).
+        let pendingUpgradeAction: TurnPlanUpgradeTrain | null | undefined;
+        let upgradeSuppressionReason: string | null | undefined;
+        if (finalRoute.upgradeOnRoute) {
+          const upgradeResult = NewRoutePlanner.tryConsumeUpgrade(
+            finalRoute,
+            snapshot,
+            tag,
+            (memory.deliveryCount ?? 0) + deliveriesThisTurn,
+          );
+          pendingUpgradeAction = upgradeResult.action;
+          upgradeSuppressionReason = upgradeResult.reason ?? null;
+        }
+
         return {
           route: finalRoute,
           moveTargetInvalidated: true, // JIRA-194: new route — stale stop indices no longer valid
           replanLlmLog,
           replanSystemPrompt,
           replanUserPrompt,
+          pendingUpgradeAction,
+          upgradeSuppressionReason,
         };
       }
 

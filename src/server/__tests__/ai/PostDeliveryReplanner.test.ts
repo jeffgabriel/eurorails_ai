@@ -1,5 +1,5 @@
 /**
- * PostDeliveryReplanner unit tests (JIRA-195 Slice 3a).
+ * PostDeliveryReplanner unit tests (JIRA-195 Slice 3a + JIRA-198 upgrade consumption).
  *
  * Covers all four sub-paths:
  *   1. Success — TripPlanner returns a route → enriched + skipCompletedStops
@@ -8,11 +8,20 @@
  *   4. No brain — brain null or gridPoints empty → revalidate existing route
  *
  * In every sub-path, moveTargetInvalidated must be true (JIRA-194 contract).
+ *
+ * JIRA-198 upgrade consumption scenarios (B13.2):
+ *   - Success: upgradeOnRoute eligible → pendingUpgradeAction populated
+ *   - Gate-blocked: delivery count below threshold → pendingUpgradeAction null + reason
+ *   - Unaffordable: insufficient funds → pendingUpgradeAction null + reason
+ *   - Invalid-path: invalid upgrade from current train → pendingUpgradeAction null + reason
+ *   - Sub-paths 2/3/4: both fields undefined
+ *   - Multi-replan accumulation: last non-null wins; null does not clobber non-null
  */
 
 import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import type {
+  AIActionType,
   GameContext,
   GridPoint,
   LlmAttempt,
@@ -44,6 +53,13 @@ jest.mock('../../services/ai/BotMemory', () => ({
   }),
 }));
 
+// JIRA-198: Mock NewRoutePlanner.tryConsumeUpgrade at the module boundary
+jest.mock('../../services/ai/NewRoutePlanner', () => ({
+  NewRoutePlanner: {
+    tryConsumeUpgrade: jest.fn(),
+  },
+}));
+
 jest.mock('../../services/ai/TripPlanner', () => ({
   TripPlanner: jest.fn().mockImplementation(() => ({
     planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
@@ -59,9 +75,11 @@ jest.mock('../../services/ai/AdvisorCoordinator', () => ({
 // Import mocked modules to access their mock functions
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { AdvisorCoordinator } from '../../services/ai/AdvisorCoordinator';
+import { NewRoutePlanner } from '../../services/ai/NewRoutePlanner';
 
 const MockTripPlannerClass = TripPlanner as jest.MockedClass<typeof TripPlanner>;
 const mockAdviseEnrichment = AdvisorCoordinator.adviseEnrichment as jest.Mock;
+const mockTryConsumeUpgrade = NewRoutePlanner.tryConsumeUpgrade as jest.Mock;
 
 // TurnExecutorPlanner static methods — spy on the real implementation
 let mockSkipCompletedStops: jest.SpyInstance;
@@ -171,6 +189,9 @@ beforeEach(() => {
 
   // By default, adviseEnrichment passes the route through
   mockAdviseEnrichment.mockImplementation(async (route: StrategicRoute) => route);
+
+  // By default, tryConsumeUpgrade returns no action (not called unless route has upgradeOnRoute)
+  mockTryConsumeUpgrade.mockReturnValue({ action: null, reason: 'Upgrade blocked: default mock' });
 });
 
 afterEach(() => {
@@ -481,5 +502,257 @@ describe('PostDeliveryReplanner — moveTargetInvalidated invariant', () => {
       makeRoute(), makeSnapshot(), makeContext(), null, makeGridPoints(), 0, '[TEST]',
     );
     expect(moveTargetInvalidated).toBe(true);
+  });
+});
+
+// ── JIRA-198: Upgrade consumption in sub-path 1 ───────────────────────────
+
+describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-path 1)', () => {
+  /**
+   * Helper: set up TripPlanner to return a route with upgradeOnRoute set,
+   * and set up AdvisorCoordinator to pass it through unchanged.
+   */
+  function setupRouteWithUpgrade(upgradeOnRoute: string) {
+    const routeWithUpgrade = makeRoute({ upgradeOnRoute });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: routeWithUpgrade, llmLog: [] }),
+    }));
+    // adviseEnrichment passes through (set in beforeEach)
+    return routeWithUpgrade;
+  }
+
+  it('AC1: returns pendingUpgradeAction populated when upgrade is eligible', async () => {
+    setupRouteWithUpgrade('fast_freight');
+    const upgradeAction = { type: 'UpgradeTrain' as AIActionType, targetTrain: 'fast_freight', cost: 20 };
+    mockTryConsumeUpgrade.mockReturnValue({ action: upgradeAction });
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      2, // deliveriesThisTurn
+      '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toEqual(upgradeAction);
+    expect(result.upgradeSuppressionReason).toBeNull();
+    // tryConsumeUpgrade was called with the correct delivery count
+    // (memory.deliveryCount=2 + deliveriesThisTurn=2 = 4, which meets the gate)
+    expect(mockTryConsumeUpgrade).toHaveBeenCalledWith(
+      expect.objectContaining({ upgradeOnRoute: 'fast_freight' }),
+      expect.anything(),
+      '[TEST]',
+      4, // memory.deliveryCount(2) + deliveriesThisTurn(2)
+    );
+  });
+
+  it('AC2: returns null + reason when delivery count is below threshold (gate-blocked)', async () => {
+    setupRouteWithUpgrade('fast_freight');
+    mockTryConsumeUpgrade.mockReturnValue({
+      action: null,
+      reason: 'Upgrade blocked: only 3 deliveries (need 4)',
+    });
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      1, // deliveriesThisTurn — memory(2)+1=3, below gate of 4
+      '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeNull();
+    expect(result.upgradeSuppressionReason).toBe('Upgrade blocked: only 3 deliveries (need 4)');
+  });
+
+  it('AC2: returns null + reason when bot cannot afford the upgrade (unaffordable)', async () => {
+    setupRouteWithUpgrade('fast_freight');
+    mockTryConsumeUpgrade.mockReturnValue({
+      action: null,
+      reason: 'Upgrade blocked: insufficient funds (need 20M, have 15M)',
+    });
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      2,
+      '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeNull();
+    expect(result.upgradeSuppressionReason).toContain('insufficient funds');
+  });
+
+  it('AC2: returns null + reason for invalid upgrade path', async () => {
+    setupRouteWithUpgrade('fast_freight');
+    mockTryConsumeUpgrade.mockReturnValue({
+      action: null,
+      reason: 'Upgrade blocked: invalid upgrade path "fast_freight" from "Superfreight"',
+    });
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(),
+      makeSnapshot(),
+      makeContext(),
+      makeBrain(),
+      makeGridPoints(),
+      2,
+      '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeNull();
+    expect(result.upgradeSuppressionReason).toContain('invalid upgrade path');
+  });
+
+  it('sub-path 2 (null route): both upgrade fields undefined', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeUndefined();
+    expect(result.upgradeSuppressionReason).toBeUndefined();
+    expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('sub-path 3 (throw): both upgrade fields undefined', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockRejectedValue(new Error('LLM error')),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeUndefined();
+    expect(result.upgradeSuppressionReason).toBeUndefined();
+    expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('sub-path 4 (no brain): both upgrade fields undefined', async () => {
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), null, makeGridPoints(), 0, '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeUndefined();
+    expect(result.upgradeSuppressionReason).toBeUndefined();
+    expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('sub-path 1 with no upgradeOnRoute: both upgrade fields undefined', async () => {
+    // Route has no upgradeOnRoute — tryConsumeUpgrade should NOT be called
+    const routeWithoutUpgrade = makeRoute(); // no upgradeOnRoute
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: routeWithoutUpgrade, llmLog: [] }),
+    }));
+
+    const result = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+    );
+
+    expect(result.pendingUpgradeAction).toBeUndefined();
+    expect(result.upgradeSuppressionReason).toBeUndefined();
+    expect(mockTryConsumeUpgrade).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-198: Multi-replan accumulation (last non-null wins) ─────────────
+
+describe('JIRA-198: multi-replan accumulation — last non-null action wins', () => {
+  /**
+   * These tests exercise MovementPhasePlanner's accumulator logic indirectly
+   * by verifying that PostDeliveryReplanner.replan returns the right values
+   * for each replan call, then checking the "last non-null wins" contract.
+   *
+   * The accumulator lives in MovementPhasePlanner. These tests verify the
+   * per-replan building blocks that feed into it.
+   */
+
+  it('second replan emits valid upgrade after first suppressed → valid upgrade wins', async () => {
+    // First replan call: suppressed (delivery count below threshold)
+    const routeWithUpgrade = makeRoute({ upgradeOnRoute: 'fast_freight' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: routeWithUpgrade, llmLog: [] }),
+    }));
+    mockTryConsumeUpgrade.mockReturnValue({
+      action: null,
+      reason: 'Upgrade blocked: only 3 deliveries (need 4)',
+    });
+
+    const result1 = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 1, '[TEST]',
+    );
+
+    expect(result1.pendingUpgradeAction).toBeNull();
+    expect(result1.upgradeSuppressionReason).toContain('only 3 deliveries');
+
+    // Second replan call: upgrade now eligible
+    const upgradeAction = { type: 'UpgradeTrain' as AIActionType, targetTrain: 'fast_freight', cost: 20 };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: routeWithUpgrade, llmLog: [] }),
+    }));
+    mockTryConsumeUpgrade.mockReturnValue({ action: upgradeAction });
+
+    const result2 = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
+    );
+
+    expect(result2.pendingUpgradeAction).toEqual(upgradeAction);
+    expect(result2.upgradeSuppressionReason).toBeNull();
+
+    // Verify: accumulator (in MovementPhasePlanner) would keep the non-null from result2
+    // since result2.pendingUpgradeAction !== null, it replaces the earlier null.
+  });
+
+  it('second replan emits null after first had valid upgrade → non-null is preserved', async () => {
+    // First replan: valid upgrade
+    const routeWithUpgrade = makeRoute({ upgradeOnRoute: 'fast_freight' });
+    const upgradeAction = { type: 'UpgradeTrain' as AIActionType, targetTrain: 'fast_freight', cost: 20 };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: routeWithUpgrade, llmLog: [] }),
+    }));
+    mockTryConsumeUpgrade.mockReturnValue({ action: upgradeAction });
+
+    const result1 = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
+    );
+
+    expect(result1.pendingUpgradeAction).toEqual(upgradeAction);
+
+    // Second replan: null route → sub-path 2 (no upgrade fields produced)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (MockTripPlannerClass as any).mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
+    }));
+
+    const result2 = await PostDeliveryReplanner.replan(
+      makeRoute(), makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 2, '[TEST]',
+    );
+
+    // Sub-path 2 returns undefined for both upgrade fields
+    expect(result2.pendingUpgradeAction).toBeUndefined();
+    expect(result2.upgradeSuppressionReason).toBeUndefined();
+
+    // The accumulator in MovementPhasePlanner checks: if result2.pendingUpgradeAction is
+    // undefined (not null), it does NOT update the accumulator — preserving result1's value.
+    // This contract is enforced by the "pendingUpgradeAction !== undefined" guard in
+    // MovementPhasePlanner.
   });
 });

@@ -352,6 +352,17 @@ export interface PhaseAResult {
   replanSystemPrompt?: string;
   /** Post-delivery replan user prompt. */
   replanUserPrompt?: string;
+  /**
+   * Accumulated upgrade action from post-delivery replans (JIRA-198).
+   * Last non-null action wins across multiple in-turn replans.
+   * Undefined when no replan emitted an upgradeOnRoute hint.
+   */
+  pendingUpgradeAction?: import('../../../shared/types/GameTypes').TurnPlanUpgradeTrain | null;
+  /**
+   * Suppression reason from the most recent replan that blocked an upgrade (JIRA-198).
+   * Overwritten only by a later non-null action; a later null does not clobber a prior non-null.
+   */
+  upgradeSuppressionReason?: string | null;
   /** True when the route was abandoned during Phase A. */
   routeAbandoned: boolean;
   /** True when all route stops completed during Phase A. */

@@ -26,6 +26,7 @@ import {
   TurnPlanDropLoad,
   TurnPlanMoveTrain,
   TurnPlanDeliverLoad,
+  TurnPlanUpgradeTrain,
   WorldSnapshot,
   GameContext,
   StrategicRoute,
@@ -148,6 +149,10 @@ export interface TurnExecutorResult {
   replanSystemPrompt?: string;
   /** Post-delivery replan user prompt */
   replanUserPrompt?: string;
+  /** Accumulated upgrade action from post-delivery replans (JIRA-198). Last non-null wins. */
+  pendingUpgradeAction?: TurnPlanUpgradeTrain | null;
+  /** Suppression reason when an upgrade was blocked in Phase A (JIRA-198). */
+  upgradeSuppressionReason?: string | null;
 }
 
 // ── TurnExecutorPlanner ────────────────────────────────────────────────────
@@ -237,6 +242,8 @@ export class TurnExecutorPlanner {
       replanLlmLog: phaseBResult.replanLlmLog,
       replanSystemPrompt: phaseBResult.replanSystemPrompt,
       replanUserPrompt: phaseBResult.replanUserPrompt,
+      pendingUpgradeAction: phaseBResult.pendingUpgradeAction,
+      upgradeSuppressionReason: phaseBResult.upgradeSuppressionReason,
     };
   }
 

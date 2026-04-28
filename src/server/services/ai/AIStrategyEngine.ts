@@ -275,7 +275,7 @@ export class AIStrategyEngine {
       } else if (activeRoute) {
         // ── Auto-execute from active route (delegated to ActiveRouteContinuer) ──
         const partial = await ActiveRouteContinuer.run(activeRoute, snapshot, context, brain, gridPoints, tag);
-        ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace } = partial);
+        ({ decision, activeRoute, routeWasCompleted, routeWasAbandoned, hasDelivery, execCompositionTrace, pendingUpgradeAction, upgradeSuppressionReason } = partial);
       } else if (AIStrategyEngine.hasLLMApiKey(botConfig)) {
         // ── No active route, LLM available — delegated to NewRoutePlanner (JIRA-195b sub-slice D) ──
         // NewRoutePlanner owns sub-stages D1-D7 + E. Returns the full Stage3Result
