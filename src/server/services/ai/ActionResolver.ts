@@ -78,7 +78,7 @@ export class ActionResolver {
         return ActionResolver.resolveMove(details, snapshot);
       case AIActionType.DeliverLoad:
       case 'DELIVER':
-        return ActionResolver.resolveDeliver(details, snapshot);
+        return ActionResolver.resolveDeliver(details, snapshot, context);
       case AIActionType.PickupLoad:
       case 'PICKUP':
         return ActionResolver.resolvePickup(details, snapshot, context);
@@ -87,7 +87,7 @@ export class ActionResolver {
         return ActionResolver.resolveUpgrade(details, snapshot);
       case AIActionType.DropLoad:
       case 'DROP':
-        return ActionResolver.resolveDropLoad(details, snapshot);
+        return ActionResolver.resolveDropLoad(details, snapshot, context);
       case AIActionType.DiscardHand:
       case 'DISCARD_HAND':
         return ActionResolver.resolveDiscard(snapshot);
@@ -687,6 +687,7 @@ export class ActionResolver {
   private static async resolveDeliver(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    context: GameContext,
   ): Promise<ResolvedAction> {
     const loadType = details.load;
     const cityName = details.at ?? details.city ?? details.to;
@@ -699,9 +700,9 @@ export class ActionResolver {
       return { success: false, error: `Bot is not at "${cityName}". Move there before delivering.` };
     }
 
-    // Bot must be carrying the load
-    if (!snapshot.bot.loads.includes(loadType)) {
-      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    // Bot must be carrying the load (use context.loads — the planner's in-loop working state)
+    if (!context.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${context.loads.join(', ')}].` };
     }
 
     // Must have a matching demand card
@@ -743,10 +744,10 @@ export class ActionResolver {
       return { success: false, error: `Bot is not at "${cityName}". Move there before picking up.` };
     }
 
-    // Bot must have capacity
+    // Bot must have capacity (use context.loads — the planner's in-loop working state)
     const capacity = ActionResolver.getBotCapacity(snapshot);
-    if (snapshot.bot.loads.length >= capacity) {
-      return { success: false, error: `Train is full (${snapshot.bot.loads.length}/${capacity}). Drop a load first.` };
+    if (context.loads.length >= capacity) {
+      return { success: false, error: `Train is full (${context.loads.length}/${capacity}). Drop a load first.` };
     }
 
     // Bot must hold a demand card matching this load type (no speculative pickups)
@@ -804,6 +805,7 @@ export class ActionResolver {
   private static async resolveDropLoad(
     details: Record<string, string>,
     snapshot: WorldSnapshot,
+    context: GameContext,
   ): Promise<ResolvedAction> {
     const loadType = details.load;
     const cityName = details.at ?? details.city;
@@ -811,9 +813,9 @@ export class ActionResolver {
       return { success: false, error: 'DROP requires details.load specifying the load type to drop.' };
     }
 
-    // Bot must be carrying the load
-    if (!snapshot.bot.loads.includes(loadType)) {
-      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${snapshot.bot.loads.join(', ')}].` };
+    // Bot must be carrying the load (use context.loads — the planner's in-loop working state)
+    if (!context.loads.includes(loadType)) {
+      return { success: false, error: `Bot is not carrying "${loadType}". Current loads: [${context.loads.join(', ')}].` };
     }
 
     // Resolve city from bot position if not specified
@@ -1161,6 +1163,7 @@ export class ActionResolver {
       const result = await ActionResolver.resolveDeliver(
         { load: best.loadType, at: best.deliveryCity },
         snapshot,
+        context,
       );
       if (result.success) return result;
     }
@@ -1257,8 +1260,8 @@ export class ActionResolver {
     // If all higher-priority actions failed and the bot is carrying loads with
     // poor delivery feasibility, dropping the worst one frees a cargo slot so
     // future turns can pick up something useful instead of passing endlessly.
-    if (!context.isInitialBuild && snapshot.bot.loads.length > 0) {
-      const scored = snapshot.bot.loads.map(loadType => {
+    if (!context.isInitialBuild && context.loads.length > 0) {
+      const scored = context.loads.map(loadType => {
         const matchingDemands = context.demands.filter(d => d.loadType === loadType);
         if (matchingDemands.length === 0) return { loadType, score: Infinity };
         const bestScore = Math.min(
@@ -1276,6 +1279,7 @@ export class ActionResolver {
         const result = await ActionResolver.resolveDropLoad(
           { load: worst.loadType },
           snapshot,
+          context,
         );
         if (result.success) return result;
       }

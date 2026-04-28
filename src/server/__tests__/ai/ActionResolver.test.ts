@@ -1436,7 +1436,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Steel', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Steel'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1490,7 +1490,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Oil', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Oil'] }),
       );
 
       expect(result.success).toBe(false);
@@ -1513,7 +1513,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDeliverIntent('Steel', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Steel'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1529,7 +1529,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      const result = await ActionResolver.resolve(intent, snapshotWithDemand(), makeGameContext());
+      const result = await ActionResolver.resolve(intent, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }));
       expect(result.success).toBe(true);
     });
 
@@ -1540,7 +1540,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      expect((await ActionResolver.resolve(intent1, snapshotWithDemand(), makeGameContext())).success).toBe(true);
+      expect((await ActionResolver.resolve(intent1, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }))).success).toBe(true);
 
       const intent2: LLMActionIntent = {
         action: AIActionType.DeliverLoad,
@@ -1548,7 +1548,7 @@ describe('ActionResolver', () => {
         reasoning: 'Deliver',
         planHorizon: 'short',
       };
-      expect((await ActionResolver.resolve(intent2, snapshotWithDemand(), makeGameContext())).success).toBe(true);
+      expect((await ActionResolver.resolve(intent2, snapshotWithDemand(), makeGameContext({ loads: ['Steel'] }))).success).toBe(true);
     });
   });
 
@@ -1636,7 +1636,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makePickupIntent('Steel', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal', 'Wine'] }),
       );
 
       expect(result.success).toBe(false);
@@ -1656,7 +1656,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makePickupIntent('Steel', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal', 'Wine'] }),
       );
 
       expect(result.success).toBe(true);
@@ -1982,7 +1982,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal', 'Ruhr'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(true);
@@ -2000,7 +2000,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(true);
@@ -2035,7 +2035,7 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal', 'Berlin'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(false);
@@ -2070,11 +2070,222 @@ describe('ActionResolver', () => {
       const result = await ActionResolver.resolve(
         makeDropIntent('Coal'),
         snapshot,
-        makeGameContext(),
+        makeGameContext({ loads: ['Coal'] }),
       );
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('not at a named city');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // JIRA-197: context.loads contract tests (AC1–AC4)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('JIRA-197: context.loads contract', () => {
+    beforeEach(() => {
+      setupGridPoints([
+        { row: 10, col: 10, name: 'Praha', terrain: TerrainType.MajorCity },
+        { row: 20, col: 20, name: 'Wien', terrain: TerrainType.MajorCity },
+        { row: 5, col: 5, name: 'Bordeaux', terrain: TerrainType.MajorCity },
+      ]);
+      setupMajorCityGroups([
+        { cityName: 'Praha', center: { row: 10, col: 10 } },
+        { cityName: 'Wien', center: { row: 20, col: 20 } },
+        { cityName: 'Bordeaux', center: { row: 5, col: 5 } },
+      ]);
+    });
+
+    // AC1: resolveDeliver reads context.loads — delivers a load that was just picked up
+    // (snapshot.bot.loads is empty as it would be at turn start, context.loads has the in-turn pickup)
+    it('AC1: resolveDeliver succeeds when load is in context.loads but not snapshot.bot.loads', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 10, col: 10 }, // at Praha
+          loads: [], // snapshot (DB-committed) is empty — bot picked up Wine this turn
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ],
+        } as any,
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine'], // planner's in-turn working state has the just-picked-up Wine
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.DeliverLoad, details: { load: 'Wine', at: 'Praha' }, reasoning: 'Deliver Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDeliverLoad;
+      expect(plan.type).toBe(AIActionType.DeliverLoad);
+      expect(plan.load).toBe('Wine');
+      expect(plan.city).toBe('Praha');
+      expect(plan.payout).toBe(25);
+    });
+
+    // AC2: resolvePickup reads context.loads for capacity — rejects when context shows train full
+    // (snapshot.bot.loads is empty, but context.loads has 2 in-turn pickups already)
+    it('AC2: resolvePickup rejects when context.loads is at capacity even if snapshot.bot.loads is empty', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 5, col: 5 }, // at Bordeaux
+          loads: [], // DB-committed empty
+          trainType: TrainType.Freight, // capacity = 2
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ],
+        } as any,
+        loadAvailability: { Bordeaux: ['Wine'] },
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine', 'Wine'], // 2 in-turn pickups already — train is full per planner state
+        capacity: 2,
+        demands: [{
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Bordeaux',
+          deliveryCity: 'Praha',
+          payout: 25,
+          isSupplyReachable: true,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as DemandContext[],
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.PickupLoad, details: { load: 'Wine', at: 'Bordeaux' }, reasoning: 'Pickup Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('full');
+      expect(result.error).toContain('2/2');
+    });
+
+    // AC3: resolveDropLoad reads context.loads — drops a load that was just picked up
+    // (snapshot.bot.loads is empty, context.loads has the in-turn pickup)
+    it('AC3: resolveDropLoad succeeds when load is in context.loads but not snapshot.bot.loads', async () => {
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          position: { row: 10, col: 10 }, // at Praha
+          loads: [], // DB-committed empty
+        } as any,
+      });
+
+      const context = makeGameContext({
+        loads: ['Wine'], // planner's in-turn working state has just-picked-up Wine
+      });
+
+      const result = await ActionResolver.resolve(
+        { action: AIActionType.DropLoad, details: { load: 'Wine', at: 'Praha' }, reasoning: 'Drop Wine', planHorizon: 'short' },
+        snapshot,
+        context,
+      );
+
+      expect(result.success).toBe(true);
+      const plan = result.plan as TurnPlanDropLoad;
+      expect(plan.type).toBe(AIActionType.DropLoad);
+      expect(plan.load).toBe('Wine');
+    });
+
+    // AC4: Integration — pickup Wine@Wien then deliver Wine@Praha in same multi-action turn
+    // Bot starts at Wien with empty DB loads; context picks up Wine; then moves and delivers.
+    // This is the JIRA-197 regression test: pre-fix this would fail at deliver because
+    // resolveDeliver read snapshot.bot.loads (empty) instead of context.loads (has Wine).
+    it('AC4: multi-action pickup-then-deliver succeeds in same turn (JIRA-197 regression)', async () => {
+      // Setup: Wien (20,20) produces Wine; Praha (10,10) demands Wine
+      const snapshot = makeWorldSnapshot({
+        bot: {
+          playerId: 'bot-1',
+          userId: 'user-bot',
+          money: 100,
+          position: { row: 20, col: 20 }, // at Wien
+          existingSegments: [makeSegment(20, 20, 10, 10)],
+          demandCards: [1],
+          resolvedDemands: [
+            { cardId: 1, demands: [{ city: 'Praha', loadType: 'Wine', payment: 25 }] },
+          ] as ResolvedDemand[],
+          trainType: TrainType.Freight,
+          loads: [], // DB-committed empty at turn start
+          botConfig: null,
+          ferryHalfSpeed: false,
+          connectedMajorCityCount: 0,
+        } as WorldSnapshot['bot'],
+        loadAvailability: { Wien: ['Wine'] },
+      });
+
+      // Mock move path from Wien to Praha
+      mockComputeTrackUsageForMove.mockReturnValue({
+        isValid: true,
+        path: [
+          { from: { row: 20, col: 20 }, to: { row: 15, col: 15 } },
+          { from: { row: 15, col: 15 }, to: { row: 10, col: 10 } },
+        ] as PathEdge[],
+        ownersUsed: new Set<string>(),
+        ownersPaid: [],
+        feeTotal: 0,
+      } as unknown as TrackUsageComputation);
+
+      const context = makeGameContext({
+        loads: [], // turn starts empty (same as snapshot)
+        capacity: 2,
+        speed: 9,
+        demands: [{
+          cardIndex: 0,
+          loadType: 'Wine',
+          supplyCity: 'Wien',
+          deliveryCity: 'Praha',
+          payout: 25,
+          isSupplyReachable: true,
+          isDeliveryOnNetwork: true,
+          isDeliveryReachable: true,
+          isSupplyOnNetwork: true,
+          isLoadOnTrain: false,
+          isLoadAvailable: true,
+          ferryRequired: false,
+          estimatedTrackCostToSupply: 0,
+          estimatedTrackCostToDelivery: 0,
+          loadChipTotal: 4, loadChipCarried: 0, estimatedTurns: 0,
+          demandScore: 0, efficiencyPerTurn: 0, networkCitiesUnlocked: 0, victoryMajorCitiesEnRoute: 0,
+        }] as DemandContext[],
+      });
+
+      const intent: LLMActionIntent = {
+        actions: [
+          { action: AIActionType.PickupLoad, details: { load: 'Wine', at: 'Wien' } },
+          { action: AIActionType.MoveTrain, details: { to: 'Praha' } },
+          { action: AIActionType.DeliverLoad, details: { load: 'Wine', at: 'Praha' } },
+        ],
+        reasoning: 'Pickup Wine at Wien, move to Praha, deliver',
+        planHorizon: 'short',
+      };
+
+      const result = await ActionResolver.resolve(intent, snapshot, context);
+
+      // Pre-fix: DeliverLoad step fails ("Bot is not carrying Wine") → result.success = false
+      // Post-fix: pickup updates context.loads, deliver reads context.loads → success
+      expect(result.success).toBe(true);
+      expect(result.plan!.type).toBe('MultiAction');
+      if (result.plan!.type === 'MultiAction') {
+        expect(result.plan!.steps).toHaveLength(3);
+        expect(result.plan!.steps[0].type).toBe(AIActionType.PickupLoad);
+        expect(result.plan!.steps[1].type).toBe(AIActionType.MoveTrain);
+        expect(result.plan!.steps[2].type).toBe(AIActionType.DeliverLoad);
+      }
     });
   });
 
@@ -2353,6 +2564,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -2382,6 +2594,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel', 'Wine'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 10, cardIndex: 0 },
           { loadType: 'Wine', deliveryCity: 'Berlin', payout: 20, cardIndex: 0 },
@@ -2716,6 +2929,7 @@ describe('ActionResolver', () => {
     it('should drop load when load on train but delivery not on network (JIRA-54)', async () => {
       setupGridPoints([{ row: 5, col: 5, name: 'Berlin' }]);
       const context = makeGameContext({
+        loads: ['Wine'],
         canDeliver: [],
         canPickup: [],
         canBuild: false,
@@ -2757,6 +2971,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Wine', 'Coal'],
         canDeliver: [],
         canPickup: [],
         canBuild: false,
@@ -2855,6 +3070,7 @@ describe('ActionResolver', () => {
       });
 
       const context = makeGameContext({
+        loads: ['Steel', 'Wine'],
         canDeliver: [
           { loadType: 'Steel', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -2986,6 +3202,7 @@ describe('ActionResolver', () => {
 
       const context = makeGameContext({
         money: 10,
+        loads: ['Coal'],
         canDeliver: [
           { loadType: 'Coal', deliveryCity: 'Berlin', payout: 15, cardIndex: 0 },
         ],
@@ -3261,7 +3478,7 @@ describe('ActionResolver', () => {
           { action: 'DELIVER', details: { load: 'Coal', at: 'Vienna' } },
         );
 
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
+        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext({ loads: ['Coal'] }));
 
         // Cumulative state simulation: MOVE updates bot position to Vienna,
         // then DELIVER succeeds because bot is now at Vienna
@@ -3401,7 +3618,7 @@ describe('ActionResolver', () => {
           { action: 'DELIVER', details: { load: 'Wine', at: 'Vienna' } },
         );
 
-        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext());
+        const result = await ActionResolver.resolve(intent, snapshot, makeGameContext({ loads: ['Wine'] }));
 
         expect(result.success).toBe(true);
         if (result.plan!.type === 'MultiAction') {
@@ -3861,7 +4078,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
 
         const intent = makeMultiIntent(
           { action: 'MOVE', details: { to: 'CityB' } },
@@ -4006,7 +4223,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
 
         const intent = makeMultiIntent(
           { action: 'MOVE', details: { to: 'CityB' } },
@@ -4115,7 +4332,7 @@ describe('ActionResolver', () => {
           } as WorldSnapshot['bot'],
         });
 
-        const context = makeGameContext({ speed: 9 });
+        const context = makeGameContext({ speed: 9, loads: ['Coal'] });
         const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
         const intent = makeMultiIntent(
