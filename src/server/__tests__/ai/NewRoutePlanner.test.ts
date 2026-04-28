@@ -192,7 +192,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
 
 function makeMemory(overrides: Partial<BotMemoryState> = {}): BotMemoryState {
   return {
-    deliveryCount: 5, // above MIN_DELIVERIES_BEFORE_UPGRADE (4) — enables upgrade gates
+    deliveryCount: 5, // above MIN_DELIVERIES_BEFORE_UPGRADE (1) — enables upgrade gates
     consecutiveLlmFailures: 0,
     activeRoute: null,
     lastReasoning: undefined,
@@ -423,7 +423,7 @@ describe('NewRoutePlanner.run', () => {
         makeContext(),
         makeBrain(),
         gridPoints,
-        makeMemory({ deliveryCount: 1 }), // below MIN_DELIVERIES_BEFORE_UPGRADE = 4
+        makeMemory({ deliveryCount: 0 }), // below MIN_DELIVERIES_BEFORE_UPGRADE = 1
         tag, gameId, botPlayerId, BotSkillLevel.Medium,
       );
 

@@ -201,8 +201,8 @@ describe('JIRA-161: tryConsumeUpgrade exposes rejection reason', () => {
 // ── Gate 2 removal regression test ──────────────────────────────────────────
 
 describe('JIRA-161: MIN_DELIVERIES_BEFORE_UPGRADE constant', () => {
-  it('is exported and equals 4', () => {
-    expect(MIN_DELIVERIES_BEFORE_UPGRADE).toBe(4);
+  it('is exported and equals 1', () => {
+    expect(MIN_DELIVERIES_BEFORE_UPGRADE).toBe(1);
   });
 });
 

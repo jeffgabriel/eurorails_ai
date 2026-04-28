@@ -80,10 +80,9 @@ describe('UpgradeContext.compute', () => {
       expect(UpgradeContext.compute(snapshot, [], true, 5)).toBeUndefined();
     });
 
-    it('returns undefined when deliveryCount is below MIN_DELIVERIES_BEFORE_UPGRADE (4)', () => {
+    it('returns undefined when deliveryCount is below MIN_DELIVERIES_BEFORE_UPGRADE (1)', () => {
       const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50, turnNumber: 15 });
       expect(UpgradeContext.compute(snapshot, [], true, 0)).toBeUndefined();
-      expect(UpgradeContext.compute(snapshot, [], true, 3)).toBeUndefined();
     });
 
     it('returns undefined when trainType is Superfreight', () => {
@@ -91,11 +90,11 @@ describe('UpgradeContext.compute', () => {
       expect(UpgradeContext.compute(snapshot, [], true, 5)).toBeUndefined();
     });
 
-    it('returns undefined when deliveryCount equals threshold (4)', () => {
-      // deliveryCount >= 4 unlocks advice; exactly 4 passes the gate
+    it('returns advice when deliveryCount equals threshold (1)', () => {
+      // deliveryCount >= 1 unlocks advice; exactly 1 passes the gate
       const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 80, turnNumber: 5 });
       // At turn 5 with money >= 20, no urgent/warning text — may be undefined if no parts
-      const result = UpgradeContext.compute(snapshot, [], true, 4);
+      const result = UpgradeContext.compute(snapshot, [], true, 1);
       // No urgent text at turn 5 but Fast Freight info should appear if money >= 20
       if (result !== undefined) {
         expect(result).toContain('Fast Freight');
@@ -180,7 +179,7 @@ describe('UpgradeContext.compute', () => {
   describe('default parameter behavior', () => {
     it('uses deliveryCount=0 when not provided (suppresses advice)', () => {
       const snapshot = makeSnapshot({ trainType: TrainType.Freight, money: 50, turnNumber: 15 });
-      // Without deliveryCount, defaults to 0 which is below gate (4)
+      // Without deliveryCount, defaults to 0 which is below gate (1)
       const result = UpgradeContext.compute(snapshot, [], true);
       expect(result).toBeUndefined();
     });

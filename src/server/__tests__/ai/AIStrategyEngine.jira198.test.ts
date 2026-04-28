@@ -338,7 +338,7 @@ describe('JIRA-198: AIStrategyEngine.takeTurn — active-route upgrade injection
    * Expected: decision.plan is a MultiAction containing UpgradeTrain.
    */
   it('AC4: injects UpgradeTrain into plan when active route replan emits upgradeOnRoute', async () => {
-    // Bot has 5 prior deliveries — above MIN_DELIVERIES_BEFORE_UPGRADE (4)
+    // Bot has 5 prior deliveries — above MIN_DELIVERIES_BEFORE_UPGRADE (1)
     mockGetMemory.mockResolvedValue(makeMemory(5));
 
     const activeRoute = makeActiveRoute();
@@ -381,12 +381,12 @@ describe('JIRA-198: AIStrategyEngine.takeTurn — active-route upgrade injection
   });
 
   /**
-   * AC2 (regression): Bot has only 3 deliveries — below the gate of 4.
+   * AC2 (regression): Bot has only 0 deliveries — below the gate of 1.
    * No upgrade should appear in the plan.
    */
   it('AC2 regression: does NOT inject UpgradeTrain when delivery count is below gate', async () => {
-    // Bot has only 3 prior deliveries — below MIN_DELIVERIES_BEFORE_UPGRADE (4)
-    mockGetMemory.mockResolvedValue(makeMemory(3));
+    // Bot has only 0 prior deliveries — below MIN_DELIVERIES_BEFORE_UPGRADE (1)
+    mockGetMemory.mockResolvedValue(makeMemory(0));
 
     const activeRoute = makeActiveRoute();
 
@@ -400,7 +400,7 @@ describe('JIRA-198: AIStrategyEngine.takeTurn — active-route upgrade injection
       compositionTrace: defaultTrace,
       hasDelivery: false,
       pendingUpgradeAction: null,
-      upgradeSuppressionReason: 'Upgrade blocked: only 3 deliveries (need 4)',
+      upgradeSuppressionReason: 'Upgrade blocked: only 0 deliveries (need 1)',
     });
 
     const result = await AIStrategyEngine.takeTurn('game-jira198', 'bot-jira198');

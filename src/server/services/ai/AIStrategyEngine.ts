@@ -60,10 +60,12 @@ import { NewRoutePlanner } from './NewRoutePlanner';
 
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
- * Prevents premature upgrades that leave the bot cash-poor and unable to build track.
+ * Set to 1 so the gate only blocks on turn 0 (no deliveries yet); the
+ * cost-affordability check at tryConsumeUpgrade already prevents cash-poor
+ * upgrades, making a higher delivery-count gate redundant.
  * Adjust this value to tune bot upgrade timing across all skill levels.
  */
-export const MIN_DELIVERIES_BEFORE_UPGRADE = 4;
+export const MIN_DELIVERIES_BEFORE_UPGRADE = 1;
 
 export interface BotTurnResult {
   action: AIActionType;

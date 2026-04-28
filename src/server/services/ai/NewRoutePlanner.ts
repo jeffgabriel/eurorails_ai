@@ -57,9 +57,9 @@ import type { Stage3Result } from './schemas';
 /**
  * Minimum number of completed deliveries before a bot may upgrade its train.
  * Mirrors the constant in AIStrategyEngine.ts (single source of truth re-imported here
- * to avoid a circular import).
+ * to avoid a circular import). Keep in lockstep with the canonical export.
  */
-const MIN_DELIVERIES_BEFORE_UPGRADE = 4;
+const MIN_DELIVERIES_BEFORE_UPGRADE = 1;
 
 /**
  * NewRoutePlanner result — full Stage3Result plus two diagnostic fields the

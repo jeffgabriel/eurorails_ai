@@ -326,7 +326,7 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
 
     it('deliveryCount=5 satisfies the MIN_DELIVERIES_BEFORE_UPGRADE gate', async () => {
       const ctx = await buildNewPath(fixture.snapshot, fixture.memory, skillLevel, gridPoints);
-      // deliveryCount=5 >= MIN_DELIVERIES_BEFORE_UPGRADE (4), so upgradeAdvice is eligible
+      // deliveryCount=5 >= MIN_DELIVERIES_BEFORE_UPGRADE (1), so upgradeAdvice is eligible
       // (still may be undefined depending on trainType / money / turn, but gate is open)
       expect(ctx.deliveryCount).toBe(5);
     });
