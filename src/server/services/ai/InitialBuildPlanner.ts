@@ -253,7 +253,17 @@ export class InitialBuildPlanner {
             // so Milano/London don't dominate starting city selection.
             // Double-delivery scoring applies -30 additive on a ~(-100,+200) scale;
             // single-delivery efficiency is ~(-5,+5), so use 0.7 multiplicative discount.
-            if (PERIPHERAL_CITIES.has(group.cityName)) {
+            //
+            // Gate: skip the penalty when the starting city IS the supply or delivery city
+            // of the planned route. In that case the bot is anchored at the peripheral city
+            // because the route demands it — not for opportunistic geographic reasons.
+            // Penalising it here would deter the obviously correct opening (e.g. Cheese from
+            // Bern to Milano, starting in Milano).
+            if (
+              PERIPHERAL_CITIES.has(group.cityName) &&
+              group.cityName !== supplyCity &&
+              group.cityName !== demand.city
+            ) {
               efficiency *= 0.7;
             }
 

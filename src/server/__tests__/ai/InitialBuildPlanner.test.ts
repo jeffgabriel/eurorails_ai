@@ -286,6 +286,233 @@ describe('InitialBuildPlanner', () => {
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
       expect(options.length).toBe(0);
     });
+
+    // ── Peripheral penalty gate tests (JIRA-178 fix) ─────────────────────────
+
+    it('AC1: start==deliveryCity (Milano) skips 0.7 penalty; beats Holland-start option', () => {
+      // Cheese available at Bern (small city, not a major-city starting candidate)
+      // and at Holland (major city, will be evaluated as a starting candidate).
+      // Demand: deliver Cheese to Milano (peripheral city).
+      //
+      // For the Bern-supply branch: best starting city is Milano (closest major
+      // city to Bern in our grid) — group.cityName === demand.city → gate fires,
+      // no 0.7 penalty.
+      //
+      // For the Holland-supply branch: best starting city is Holland itself —
+      // Holland is not peripheral, so no penalty applies either way.
+      //
+      // We force Milano-start(Bern-supply) to out-rank Holland-start(Holland-supply)
+      // by controlling build costs: Bern route is cheap (6M), Holland→Milano is expensive (32M).
+      mockGetSourceCitiesForLoad.mockReturnValue(['Bern', 'Holland']);
+
+      // Bern is a small city in the grid — add it
+      const bern = makeCityPoint(21, 13, 'Bern', TerrainType.SmallCity, ['Cheese']);
+      const extendedGrid = [...grid, bern];
+
+      // Milano center: row=22, col=13. Bern: row=21, col=13.
+      // hexDistance(Milano→Bern) ≈ 1 — extremely close.
+      // Holland center: row=14, col=10. Milano center: row=22, col=13.
+      // hexDistance(Holland→Milano) ≈ 9 — far.
+
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        // Make Milano→Bern (supply) very cheap: 3M each leg
+        if ((r1 === 22 && c1 === 13) || (r2 === 22 && c2 === 13)) {
+          if ((r1 === 21 && c1 === 13) || (r2 === 21 && c2 === 13)) {
+            return 3; // Milano↔Bern leg
+          }
+        }
+        // Make Holland→Milano (supply=Holland leg to delivery) expensive: 16M
+        if ((r1 === 14 && c1 === 10) || (r2 === 14 && c2 === 10)) {
+          return 16;
+        }
+        // default
+        return Math.round(mockHexDistance(r1, c1, r2, c2) * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Milano', loadType: 'Cheese', payment: 20 }],
+        }],
+        loadAvailability: {
+          'Bern': ['Cheese'],
+          'Holland': ['Cheese'],
+        },
+      });
+
+      const demandScores = new Map([['Cheese:Milano', 1.03]]);
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid, demandScores);
+
+      // We should have options for both supply cities
+      const bernOption = options.find(o => o.supplyCity === 'Bern' && o.startingCity === 'Milano');
+      const hollandOption = options.find(o => o.supplyCity === 'Holland' && o.startingCity === 'Holland');
+
+      expect(bernOption).toBeDefined();
+      expect(hollandOption).toBeDefined();
+
+      // Key assertion: Milano-start (no penalty, delivery anchors there) must rank higher
+      expect(bernOption!.efficiency).toBeGreaterThan(hollandOption!.efficiency);
+    });
+
+    it('AC2: JIRA-178 regression — Milano start with neither endpoint at Milano still gets 0.7 penalty', () => {
+      // Demand: deliver Cheese to Frankfurt. Supply: Essen (small city close to Ruhr).
+      // The expandDemandOptions function keeps ONE best starting city per (supply, delivery) pair.
+      // We force Ruhr to have the same estimatedTurns as Milano (equal hex distances)
+      // so we can isolate the efficiency difference. We then compute the expected
+      // penalised efficiency and assert the returned option's efficiency matches.
+      //
+      // start=Milano, supply=Essen, delivery=Frankfurt → Milano ≠ Essen, Milano ≠ Frankfurt
+      // → 0.7 penalty MUST be applied to efficiency.
+      //
+      // Strategy: make Milano the closest major city to Essen (so it wins as bestForPair),
+      // then verify its efficiency is rawEfficiency * 0.7 (not rawEfficiency).
+      mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
+
+      // Milano at (22,13), Essen at (16,11), Frankfurt at (17,14).
+      // We'll use uniform costs to isolate the penalty effect.
+      const FIXED_COST = 4;
+      mockEstimatePathCost.mockReturnValue(FIXED_COST);
+
+      // Make Milano the closest major city to Essen by temporarily overriding hexDistance
+      // for the Milano→Essen leg only. Instead, we rely on the real hexDistance values:
+      // Milano (22,13) to Essen (16,11): hexDist ≈ 6. Ruhr (15,12) to Essen (16,11): hexDist ≈ 1.
+      // Ruhr is actually closest, so Ruhr will be bestForPair (lowest estimatedTurns).
+      // We make the demand score explicitly test the penalty: assert that when Ruhr is selected
+      // as start, Ruhr is NOT peripheral → no penalty. We then test the complementary case
+      // by checking a separate option where Milano WOULD be start (AC3 covers that).
+      //
+      // Simpler approach: we verify the penalty fires by checking that for a (supply, delivery)
+      // pair where Milano is the only viable starting city, efficiency = rawEff * 0.7.
+      // We block all non-Milano major cities by making their path costs exceed budget.
+      mockEstimatePathCost.mockImplementation((r1: number, c1: number, r2: number, c2: number) => {
+        // Milano center: row=22, col=13
+        const isMilanoRow = r1 === 22 || r2 === 22;
+        const isMilanoCol = c1 === 13 || c2 === 13;
+        // Cheap ONLY for Milano-origin paths (both from Milano center row AND col)
+        if (isMilanoRow && isMilanoCol) return FIXED_COST;
+        // All other paths: very expensive (above 20M budget half) so only Milano survives
+        return 25;
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Frankfurt', loadType: 'Cheese', payment: 20 }],
+        }],
+        loadAvailability: { 'Essen': ['Cheese'] },
+      });
+
+      const contextScore = 1.0;
+      const demandScores = new Map([['Cheese:Frankfurt', contextScore]]);
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid, demandScores);
+
+      const milanoOption = options.find(o => o.startingCity === 'Milano');
+
+      // Milano-start must be the best (only affordable) starting city
+      expect(milanoOption).toBeDefined();
+
+      // Compute expected efficiency: contextScore=1.0, totalBuildCost=FIXED_COST+FIXED_COST=8
+      // localCostFactor = max(0, 1 - 8/40) = 0.8
+      // rawEfficiency = 1.0 * (1 + 0.8) = 1.8
+      // With JIRA-178 penalty (start≠supply, start≠delivery): efficiency = 1.8 * 0.7 = 1.26
+      const totalBuildCost = FIXED_COST + FIXED_COST;
+      const localCostFactor = Math.max(0, 1 - totalBuildCost / 40);
+      const rawEfficiency = contextScore * (1 + localCostFactor);
+      const expectedEfficiency = rawEfficiency * 0.7;
+
+      expect(milanoOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
+    });
+
+    it('AC3: start==supplyCity (Milano) skips 0.7 penalty', () => {
+      // Demand: deliver Cheese to Praha. Supply available AT Milano.
+      // start=Milano, supply=Milano, delivery=Praha → Milano == supplyCity → no penalty.
+      mockGetSourceCitiesForLoad.mockReturnValue(['Milano']);
+
+      const praha = makeCityPoint(13, 20, 'Praha', TerrainType.MediumCity, []);
+      const extendedGrid = [...grid, praha];
+
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        return Math.round(mockHexDistance(r1, c1, r2, c2) * 1.5);
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Praha', loadType: 'Cheese', payment: 20 }],
+        }],
+        loadAvailability: { 'Milano': ['Cheese'] },
+      });
+
+      const demandScores = new Map([['Cheese:Praha', 1.0]]);
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid, demandScores);
+
+      const milanoOption = options.find(o => o.startingCity === 'Milano');
+      expect(milanoOption).toBeDefined();
+
+      // Verify by computing what efficiency would be WITH penalty vs WITHOUT.
+      // With gate: no penalty → efficiency = rawEfficiency.
+      // Without gate: efficiency = rawEfficiency * 0.7.
+      // We check that the option was NOT penalised: efficiency should be positive
+      // and equal to what we'd compute without the 0.7 multiplier.
+      // Since supply==start, buildCostToSupply = 0, so total cost is just supply→Praha.
+      const costs = milanoOption!.totalBuildCost;
+      const turnsFactor = 1 - costs / 40; // localCostFactor
+      const expectedEfficiency = 1.0 * (1 + Math.max(0, turnsFactor));
+      expect(milanoOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
+    });
+
+    it('AC4: London symmetry — start==supplyCity (London) skips penalty', () => {
+      // London is the supply city AND start city; delivery is a continental city.
+      // London is in Britain; we need supply and delivery both in Britain to avoid
+      // the cross-channel ferry filter. We supply FROM London and deliver TO London
+      // (same city would be trivial), or use a continent-only scenario.
+      //
+      // Simpler: supply available AT London. Delivery = London.
+      // start=London, supply=London, delivery=London — but supply==delivery is degenerate.
+      //
+      // Valid approach: supply=London, delivery=some city also in Britain.
+      // Britain set: London, Birmingham, Nottingham, Liverpool, etc.
+      // We add a British delivery city to the grid.
+      //
+      // Or better: test the symmetric case (start==supply==London).
+      // Delivery city must be reachable from London without a ferry — i.e. also British.
+      // We add 'Southampton' as a small city in the grid (Britain region).
+      mockGetSourceCitiesForLoad.mockReturnValue(['London']);
+
+      const southampton = makeCityPoint(18, 5, 'Southampton', TerrainType.SmallCity, ['Cloth']);
+      const extendedGrid = [...grid, southampton];
+
+      // Force London-origin paths to be cheap, all others expensive (so London is the only viable start)
+      const FIXED_COST = 4;
+      mockEstimatePathCost.mockImplementation((r1: number, c1: number, r2: number, c2: number) => {
+        // London center: row=14, col=6
+        if ((r1 === 14 && c1 === 6) || (r2 === 14 && c2 === 6)) return FIXED_COST;
+        return 25; // over budget for non-London paths
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Southampton', loadType: 'Cloth', payment: 15 }],
+        }],
+        loadAvailability: { 'London': ['Cloth'] },
+      });
+
+      const contextScore = 1.0;
+      const demandScores = new Map([['Cloth:Southampton', contextScore]]);
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid, demandScores);
+      const londonOption = options.find(o => o.startingCity === 'London');
+
+      // London-start should be present (start==supply → gate fires, no penalty)
+      expect(londonOption).toBeDefined();
+
+      // Expected: no penalty because group.cityName ('London') === supplyCity ('London')
+      // totalBuildCost = 0 (start==supply) + FIXED_COST (supply→delivery) = FIXED_COST
+      const totalBuildCost = londonOption!.totalBuildCost;
+      const localCostFactor = Math.max(0, 1 - totalBuildCost / 40);
+      const expectedEfficiency = contextScore * (1 + localCostFactor);
+      expect(londonOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
+    });
   });
 
   describe('computeDoubleDeliveryPairings', () => {
