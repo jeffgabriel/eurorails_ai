@@ -366,9 +366,9 @@ export class TurnExecutorPlanner {
     snapshot: WorldSnapshot,
     context: GameContext,
   ): { loadType: string; score: number } | null {
-    if (snapshot.bot.loads.length === 0) return null;
+    if (context.loads.length === 0) return null;
 
-    const scored = snapshot.bot.loads.map(loadType => {
+    const scored = context.loads.map(loadType => {
       const matchingDemands = context.demands.filter(d => d.loadType === loadType);
       if (matchingDemands.length === 0) {
         // No demand card for this load — worst possible score

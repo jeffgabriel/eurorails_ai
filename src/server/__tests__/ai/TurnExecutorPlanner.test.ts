@@ -49,8 +49,9 @@ jest.mock('../../services/ai/routeHelpers', () => {
     getNetworkFrontier: jest.fn(() => []),
     isDeliveryComplete: jest.fn(),
     // applyStopEffectToLocalState uses the real implementation by default so that
-    // existing tests that check context.loads / snapshot.bot.loads mutation still pass.
+    // existing tests that check context.loads mutation still pass.
     // Individual tests that need to spy on it can override via mockApplyStopEffect.
+    // JIRA-196 Fix B: signature now takes (stop, context) only — snapshot dropped.
     applyStopEffectToLocalState: jest.fn((...args: Parameters<typeof real.applyStopEffectToLocalState>) =>
       real.applyStopEffectToLocalState(...args),
     ),
@@ -1173,23 +1174,19 @@ describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
     } as any;
   }
 
-  function makeSnapshotWithLoads(loads: string[]): WorldSnapshot {
-    return {
-      ...makeSnapshot(),
-      bot: { ...makeSnapshot().bot, loads },
-    } as unknown as WorldSnapshot;
-  }
+  // JIRA-196 Fix B: evaluateCargoForDrop now reads from context.loads (planner working
+  // state), not snapshot.bot.loads (DB-committed state). Tests updated accordingly.
 
   it('returns null when bot carries no loads', () => {
-    const snapshot = makeSnapshotWithLoads([]);
-    const context = makeContext();
+    const snapshot = makeSnapshot();
+    const context = makeContext({ loads: [] });
 
     expect(TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context)).toBeNull();
   });
 
   it('scores loads with no demand card as Infinity (worst)', () => {
-    const snapshot = makeSnapshotWithLoads(['Coal']);
-    const context = makeContext({ demands: [] }); // no demands
+    const snapshot = makeSnapshot();
+    const context = makeContext({ loads: ['Coal'], demands: [] }); // no demands
 
     const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
 
@@ -1199,8 +1196,9 @@ describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
   });
 
   it('scores delivery-on-network as 0 (best — keep)', () => {
-    const snapshot = makeSnapshotWithLoads(['Coal']);
+    const snapshot = makeSnapshot();
     const context = makeContext({
+      loads: ['Coal'],
       demands: [makeDemandContext({ loadType: 'Coal', isDeliveryOnNetwork: true })],
     });
 
@@ -1210,8 +1208,9 @@ describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
   });
 
   it('returns the worst-scored load when multiple loads carried', () => {
-    const snapshot = makeSnapshotWithLoads(['Wine', 'Coal']);
+    const snapshot = makeSnapshot();
     const context = makeContext({
+      loads: ['Wine', 'Coal'],
       demands: [
         // Wine: score = 15 - 10 = 5 (high = bad)
         makeDemandContext({ loadType: 'Wine', estimatedTrackCostToDelivery: 15, payout: 10 }),
@@ -1227,8 +1226,9 @@ describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
   });
 
   it('picks the no-demand load over a feasible one', () => {
-    const snapshot = makeSnapshotWithLoads(['OrphanLoad', 'Coal']);
+    const snapshot = makeSnapshot();
     const context = makeContext({
+      loads: ['OrphanLoad', 'Coal'],
       demands: [
         makeDemandContext({ loadType: 'Coal', isDeliveryOnNetwork: true }), // score=0
         // OrphanLoad has no demand → Infinity
@@ -1239,6 +1239,29 @@ describe('TurnExecutorPlanner.evaluateCargoForDrop', () => {
 
     expect(result!.loadType).toBe('OrphanLoad');
     expect(result!.score).toBe(Infinity);
+  });
+
+  it('(AC4) sees planner-simulated pickup loads not yet committed to DB', () => {
+    // DB state: snapshot.bot.loads = [] (no loads committed yet)
+    // Planner state: context.loads = ['Steel'] (just simulated a pickup)
+    const snapshot = makeSnapshot(); // snapshot.bot.loads = []
+    const context = makeContext({
+      loads: ['Steel'], // simulated pickup not yet in DB
+      demands: [
+        // Steel: on network, good deal
+        makeDemandContext({ loadType: 'Steel', isDeliveryOnNetwork: true }),
+        // Wine: expensive delivery, not on network
+        makeDemandContext({ loadType: 'Wine', estimatedTrackCostToDelivery: 30, payout: 5 }),
+      ],
+    });
+
+    // evaluateCargoForDrop must use context.loads (sees Steel), not snapshot.bot.loads (empty)
+    const result = TurnExecutorPlanner.evaluateCargoForDrop(snapshot, context);
+
+    // Steel is on network (score=0), no loads with worse score exist — returns Steel
+    expect(result).not.toBeNull();
+    expect(result!.loadType).toBe('Steel');
+    expect(result!.score).toBe(0);
   });
 });
 
@@ -1261,15 +1284,14 @@ describe('TurnExecutorPlanner.execute — full-capacity drop recovery', () => {
       stops: [makeStop('pickup', 'Paris', 'Wine')],
       currentStopIndex: 0,
     });
+    // JIRA-196 Fix B: evaluateCargoForDrop now reads from context.loads, not snapshot.bot.loads.
+    // Put the load in context.loads so the drop candidate is found correctly.
     const context = makeContext({
       position: { city: 'Paris', row: 1, col: 1 },
-      // Bot is carrying Coal which has no demand → Infinity score → drop it
+      loads: ['Coal'], // Bot is carrying Coal — no demand → Infinity score → drop it
       demands: [],
     });
-    const snapshot = {
-      ...makeSnapshot(),
-      bot: { ...makeSnapshot().bot, loads: ['Coal'] },
-    } as unknown as WorldSnapshot;
+    const snapshot = makeSnapshot();
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context);
 
@@ -2599,7 +2621,9 @@ describe('TurnExecutorPlanner — Bug D: mutable context.loads after DeliverLoad
     expect(context.loads).toContain('Wine');
   });
 
-  it('removes delivered load from snapshot.bot.loads after successful delivery', async () => {
+  it('removes delivered load from context.loads after successful delivery (JIRA-196 Fix B: snapshot unchanged)', async () => {
+    // JIRA-196 Fix B: applyStopEffectToLocalState no longer mutates snapshot.bot.loads.
+    // The snapshot stays at DB-committed state; only context.loads is updated by the planner.
     const deliverPlan = {
       type: AIActionType.DeliverLoad,
       load: 'Coal',
@@ -2621,7 +2645,10 @@ describe('TurnExecutorPlanner — Bug D: mutable context.loads after DeliverLoad
 
     await TurnExecutorPlanner.execute(route, snapshot, context);
 
-    expect(snapshot.bot.loads).not.toContain('Coal');
+    // context.loads should have Coal removed (planner state updated)
+    expect(context.loads).not.toContain('Coal');
+    // snapshot.bot.loads must remain unchanged (DB-committed state)
+    expect(snapshot.bot.loads).toContain('Coal');
   });
 
   it('executes delivery exactly once when stop is complete after removal', async () => {
@@ -4426,15 +4453,13 @@ describe('TurnExecutorPlanner.execute — JIRA-193 Wien scenario (AC1)', () => {
     // applyStopEffectToLocalState mock: call the real implementation to mutate context
     // so that skipCompletedStops sees the updated loads array.
     mockApplyStopEffect.mockImplementation(
-      (stop: RouteStop, ctx: GameContext, snap: WorldSnapshot) => {
+      (stop: RouteStop, ctx: GameContext) => {
+        // JIRA-196 Fix B: only mutate context.loads — snapshot is not touched
         if (stop.action === 'pickup') {
           ctx.loads.push(stop.loadType);
-          snap.bot.loads.push(stop.loadType);
         } else if (stop.action === 'deliver' || stop.action === 'drop') {
           const ci = ctx.loads.indexOf(stop.loadType);
           if (ci !== -1) ctx.loads.splice(ci, 1);
-          const si = snap.bot.loads.indexOf(stop.loadType);
-          if (si !== -1) snap.bot.loads.splice(si, 1);
         }
       },
     );
@@ -4500,11 +4525,11 @@ describe('TurnExecutorPlanner.execute — JIRA-193 Wien scenario (AC1)', () => {
     await TurnExecutorPlanner.execute(route, snapshot, context);
 
     // applyStopEffectToLocalState should have been called once for the pickup
+    // JIRA-196 Fix B: called with (stop, context) only — no snapshot argument
     expect(mockApplyStopEffect).toHaveBeenCalledTimes(1);
     expect(mockApplyStopEffect).toHaveBeenCalledWith(
       pickupStop,
       expect.any(Object), // context
-      expect.any(Object), // snapshot
     );
   });
 });

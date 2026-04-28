@@ -138,7 +138,7 @@ export class MovementPhasePlanner {
         }
 
         plans.push(actionResult.plan!);
-        applyStopEffectToLocalState(currentStop, context, snapshot);
+        applyStopEffectToLocalState(currentStop, context);
 
         if (currentStop.action === 'pickup') {
           trace.pickups.push({ load: currentStop.loadType, city: targetCity });

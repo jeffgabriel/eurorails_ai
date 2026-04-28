@@ -3967,3 +3967,34 @@ describe('ContextBuilder.rebuildCanDeliver', () => {
     expect(result).toEqual([]);
   });
 });
+
+// ── AC3: ContextBuilder.build produces independent context.loads ─────────────
+// JIRA-196 Fix B: context.loads must be a copy of snapshot.bot.loads, not an alias.
+// Mutating context.loads must NOT mutate snapshot.bot.loads.
+
+describe('ContextBuilder.build — context.loads is independent of snapshot.bot.loads (AC3)', () => {
+  it('mutating context.loads does not affect snapshot.bot.loads', async () => {
+    const gridPoints = [
+      makeCityPoint(0, 0, 'Lyon', TerrainType.MajorCity, ['Wine']),
+    ];
+    const snapshot = makeWorldSnapshot({
+      botLoads: ['Steel'],
+      botPosition: { row: 0, col: 0 },
+      botSegments: [],
+      resolvedDemands: [],
+      opponents: [],
+    });
+
+    const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+
+    // Sanity: context.loads starts as a copy of snapshot.bot.loads
+    expect(context.loads).toEqual(['Steel']);
+
+    // Mutate context.loads
+    context.loads.push('Cheese');
+
+    // snapshot.bot.loads must remain unchanged
+    expect(snapshot.bot.loads).toEqual(['Steel']);
+    expect(context.loads).toEqual(['Steel', 'Cheese']);
+  });
+});

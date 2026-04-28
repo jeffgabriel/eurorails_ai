@@ -223,37 +223,38 @@ export function isDeliveryComplete(stop: RouteStop, context: GameContext): boole
 }
 
 /**
- * Apply the effect of a successfully-executed route stop to the local state mirrors.
+ * Apply the effect of a successfully-executed route stop to the planner's working state.
  *
  * This is the single source of truth for load-state mutation after a stop is executed.
  * Replaces two duplicated inline splice blocks in TurnExecutorPlanner.execute() and
  * fills the missing pickup-side mutation (JIRA-193 Bug A structural fix, R2).
  *
+ * Contract (JIRA-196 Fix B):
+ * - Only `context.loads` is mutated. `snapshot.bot.loads` is never touched here — it
+ *   stays in sync with DB-committed state across the entire planner run.
+ * - context.loads must be an independent copy of snapshot.bot.loads (ensured by
+ *   ContextBuilder.makeContext) so planner mutations do not leak into the snapshot.
+ *
  * Mutation semantics:
- * - pickup  → add loadType to context.loads + snapshot.bot.loads
- * - deliver → remove first occurrence of loadType from both
+ * - pickup  → add loadType to context.loads
+ * - deliver → remove first occurrence of loadType from context.loads
  * - drop    → same as deliver
  * - other   → no-op (does not throw)
  *
  * @param stop     The route stop that was just successfully executed.
- * @param context  Bot-turn GameContext. Mutated in place.
- * @param snapshot WorldSnapshot. Mutated in place.
+ * @param context  Bot-turn GameContext (planner working state). Mutated in place.
  */
 export function applyStopEffectToLocalState(
   stop: RouteStop,
   context: GameContext,
-  snapshot: WorldSnapshot,
 ): void {
   const { action, loadType } = stop;
 
   if (action === 'pickup') {
     context.loads.push(loadType);
-    snapshot.bot.loads.push(loadType);
   } else if (action === 'deliver' || action === 'drop') {
     const ctxIdx = context.loads.indexOf(loadType);
     if (ctxIdx !== -1) context.loads.splice(ctxIdx, 1);
-    const snapIdx = snapshot.bot.loads.indexOf(loadType);
-    if (snapIdx !== -1) snapshot.bot.loads.splice(snapIdx, 1);
   }
   // unknown actions are no-ops
 }

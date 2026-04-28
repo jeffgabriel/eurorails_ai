@@ -48,6 +48,7 @@ jest.mock('../../services/ai/routeHelpers', () => {
     resolveBuildTarget: jest.fn(),
     getNetworkFrontier: jest.fn(() => []),
     isDeliveryComplete: jest.fn(),
+    // JIRA-196 Fix B: signature is now (stop, context) — snapshot parameter dropped
     applyStopEffectToLocalState: jest.fn((...args: Parameters<typeof real.applyStopEffectToLocalState>) =>
       real.applyStopEffectToLocalState(...args),
     ),

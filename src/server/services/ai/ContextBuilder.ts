@@ -176,7 +176,7 @@ export class ContextBuilder {
       trainType: snapshot.bot.trainType,
       speed,
       capacity: trainProps.capacity,
-      loads: snapshot.bot.loads,
+      loads: [...snapshot.bot.loads],
       connectedMajorCities,
       unconnectedMajorCities,
       totalMajorCities: 8,

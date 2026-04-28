@@ -368,26 +368,42 @@ describe('isDeliveryComplete — nullish demandCardId (AC3)', () => {
 // ── applyStopEffectToLocalState — AC2 ─────────────────────────────────────
 
 describe('applyStopEffectToLocalState (AC2)', () => {
-  it('(i) pickup action appends loadType to both context.loads and snapshot.bot.loads', () => {
+  it('(i) pickup action appends loadType to context.loads and leaves snapshot.bot.loads unchanged', () => {
     const stop: RouteStop = { action: 'pickup', loadType: 'Wine', city: 'Wien' };
     const context = makeContext({ loads: [] });
     const snapshot = makeSnapshot([]);
 
-    applyStopEffectToLocalState(stop, context, snapshot);
+    applyStopEffectToLocalState(stop, context);
 
     expect(context.loads).toEqual(['Wine']);
-    expect(snapshot.bot.loads).toEqual(['Wine']);
+    // JIRA-196 Fix B: snapshot must not be mutated by the planner helper
+    expect(snapshot.bot.loads).toEqual([]);
   });
 
-  it('(ii) deliver action removes first occurrence of loadType from both when present', () => {
+  it('(i-new AC1) pickup adds load to context.loads only — snapshot.bot.loads with prior content is unchanged', () => {
+    // snapshot starts with Steel (DB-committed); context is an independent copy
+    const stop: RouteStop = { action: 'pickup', loadType: 'Cheese', city: 'Bern' };
+    const context = makeContext({ loads: ['Steel'] });
+    const snapshot = makeSnapshot(['Steel']);
+
+    applyStopEffectToLocalState(stop, context);
+
+    // context gains Cheese
+    expect(context.loads).toEqual(['Steel', 'Cheese']);
+    // snapshot must remain unchanged (DB state)
+    expect(snapshot.bot.loads).toEqual(['Steel']);
+  });
+
+  it('(ii) deliver action removes first occurrence of loadType from context.loads and leaves snapshot unchanged', () => {
     const stop: RouteStop = { action: 'deliver', loadType: 'Wine', city: 'Berlin', demandCardId: 1 };
     const context = makeContext({ loads: ['Wine', 'Coal'] });
     const snapshot = makeSnapshot(['Wine', 'Coal']);
 
-    applyStopEffectToLocalState(stop, context, snapshot);
+    applyStopEffectToLocalState(stop, context);
 
     expect(context.loads).toEqual(['Coal']);
-    expect(snapshot.bot.loads).toEqual(['Coal']);
+    // snapshot must not be mutated
+    expect(snapshot.bot.loads).toEqual(['Wine', 'Coal']);
   });
 
   it('(ii) deliver action is a no-op when loadType is absent', () => {
@@ -395,31 +411,58 @@ describe('applyStopEffectToLocalState (AC2)', () => {
     const context = makeContext({ loads: ['Coal'] });
     const snapshot = makeSnapshot(['Coal']);
 
-    applyStopEffectToLocalState(stop, context, snapshot);
+    applyStopEffectToLocalState(stop, context);
 
     expect(context.loads).toEqual(['Coal']);
     expect(snapshot.bot.loads).toEqual(['Coal']);
   });
 
-  it('(iii) drop action removes first occurrence of loadType — same as deliver', () => {
+  it('(iii) drop action removes first occurrence of loadType from context.loads — snapshot unchanged', () => {
     const stop: RouteStop = { action: 'drop', loadType: 'Wine', city: 'Paris' };
     const context = makeContext({ loads: ['Wine'] });
     const snapshot = makeSnapshot(['Wine']);
 
-    applyStopEffectToLocalState(stop, context, snapshot);
+    applyStopEffectToLocalState(stop, context);
 
     expect(context.loads).toEqual([]);
-    expect(snapshot.bot.loads).toEqual([]);
+    // snapshot must not be mutated
+    expect(snapshot.bot.loads).toEqual(['Wine']);
   });
 
-  it('(iv) unknown action mutates neither array and does not throw', () => {
+  it('(iv) unknown action mutates neither context.loads nor snapshot.bot.loads and does not throw', () => {
     const stop = { action: 'noSuchAction' as 'pickup', loadType: 'Wine', city: 'X' };
     const context = makeContext({ loads: ['Coal'] });
     const snapshot = makeSnapshot(['Coal']);
 
-    expect(() => applyStopEffectToLocalState(stop, context, snapshot)).not.toThrow();
+    expect(() => applyStopEffectToLocalState(stop, context)).not.toThrow();
     expect(context.loads).toEqual(['Coal']);
     expect(snapshot.bot.loads).toEqual(['Coal']);
+  });
+
+  it('(AC2) duplicate same-type pickups: second stop is incomplete after only first has fired', () => {
+    // Route: [pickup Cheese, pickup Cheese, deliver Milano]
+    const pickupStop0: RouteStop = { action: 'pickup', loadType: 'Cheese', city: 'Bern' };
+    const pickupStop1: RouteStop = { action: 'pickup', loadType: 'Cheese', city: 'Bern' };
+    const deliverStop: RouteStop = { action: 'deliver', loadType: 'Cheese', city: 'Milano', demandCardId: 1 };
+    const allStops = [pickupStop0, pickupStop1, deliverStop];
+
+    const context = makeContext({ loads: [] });
+
+    // Apply pickup #0
+    applyStopEffectToLocalState(pickupStop0, context);
+    expect(context.loads).toEqual(['Cheese']);
+
+    // isPickupComplete for stop #1 must return false (only 1 Cheese loaded, need 2)
+    // isStopComplete delegates to isPickupComplete internally
+    // We test isPickupComplete indirectly via isStopComplete
+    expect(isStopComplete(pickupStop1, 1, allStops, context)).toBe(false);
+
+    // Apply pickup #1
+    applyStopEffectToLocalState(pickupStop1, context);
+    expect(context.loads).toEqual(['Cheese', 'Cheese']);
+
+    // Now isPickupComplete for stop #1 must return true (2 Cheese loaded, need 2)
+    expect(isStopComplete(pickupStop1, 1, allStops, context)).toBe(true);
   });
 });
 
