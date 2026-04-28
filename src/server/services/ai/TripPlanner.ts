@@ -24,6 +24,7 @@ import { estimateHopDistance, loadGridPoints } from './MapTopology';
 import { computeTrackUsageFees } from '../../../shared/services/computeTrackUsageFees';
 import { RouteValidator } from './RouteValidator';
 import { RouteOptimizer } from './RouteOptimizer';
+import { ResponseParser } from './ResponseParser';
 import { TRIP_PLAN_SCHEMA } from './schemas';
 import { getTripPlanningPrompt } from './prompts/systemPrompts';
 import type { TripPlannerSelectionDiagnostic } from './LLMTranscriptLogger';
@@ -155,15 +156,26 @@ export class TripPlanner {
 
         // Parse LLM response
         let parsed: LLMTripPlanResponse;
+        let recoveredFromTruncation = false;
         try {
           parsed = typeof response.text === 'string'
             ? JSON.parse(response.text)
             : response.text as unknown as LLMTripPlanResponse;
         } catch {
-          const err = `JSON parse error: ${response.text.substring(0, 200)}`;
-          llmLog.push({ attemptNumber: attempt + 1, status: 'parse_error', responseText: response.text.substring(0, 500), error: err, latencyMs });
-          lastError = err;
-          continue;
+          // Attempt truncated JSON recovery before declaring parse_error (ADR-1, ADR-2)
+          const recovered = typeof response.text === 'string'
+            ? ResponseParser.recoverTruncatedJson(response.text)
+            : null;
+          if (recovered !== null) {
+            console.warn('[TripPlanner] Recovered truncated JSON response');
+            parsed = recovered as unknown as LLMTripPlanResponse;
+            recoveredFromTruncation = true;
+          } else {
+            const err = `JSON parse error: ${response.text.substring(0, 200)}`;
+            llmLog.push({ attemptNumber: attempt + 1, status: 'parse_error', responseText: response.text.substring(0, 500), error: err, latencyMs });
+            lastError = err;
+            continue;
+          }
         }
 
         // Validate basic structure
@@ -253,11 +265,13 @@ export class TripPlanner {
         };
 
         // Build success llmLog entry; attach diagnostic when override occurred (JIRA-194)
+        // and recoveredFromTruncation flag when parse was recovered (JIRA-197, ADR-5, R5)
         const successLogEntry: LlmAttempt & { tripPlannerSelection?: TripPlannerSelectionDiagnostic } = {
           attemptNumber: attempt + 1,
           status: 'success',
           responseText: response.text.substring(0, 500),
           latencyMs,
+          ...(recoveredFromTruncation ? { recoveredFromTruncation: true } : {}),
         };
         if (selectionDiagnostic) {
           successLogEntry.tripPlannerSelection = selectionDiagnostic;

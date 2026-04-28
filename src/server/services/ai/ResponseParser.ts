@@ -213,6 +213,20 @@ export class ResponseParser {
   /**
    * Attempt to recover truncated JSON by closing open brackets/braces.
    * Returns the parsed object if recovery succeeds, null otherwise.
+   *
+   * Two-pass recovery (ADR-3):
+   *   Pass 1 (existing): scans chars tracking inString/stack; if end-of-text leaves
+   *     inString===false and stack non-empty, appends closers and tries JSON.parse.
+   *     Only runs pass 2 when pass 1 fails.
+   *   Pass 2 (new): when truncation lands inside a string (inString===true at end),
+   *     walks back to the last "value boundary" — the last position where we were
+   *     outside a string and the prior non-whitespace token was a closing `}` / `]`.
+   *     Drops the partial trailing value (and any trailing comma), closes remaining
+   *     structures, and tries JSON.parse. Returns null when no prior complete value
+   *     exists (trimming back would empty the container).
+   *   Why two passes: pass 1 is cheap and covers the common "missing closing bracket"
+   *   case. Pass 2 is needed specifically for mid-string truncation where the text
+   *   itself is structurally unbalanced at the string level.
    */
   static recoverTruncatedJson(text: string): Record<string, unknown> | null {
     let opens = 0;
@@ -220,6 +234,12 @@ export class ResponseParser {
     const stack: ('{' | '[')[] = [];
     let inString = false;
     let escaped = false;
+    // Why: track last "value boundary" for pass-2 walk-back.
+    // A value boundary is a position (just after a closing } or ]) where we are
+    // outside a string. We record the stack snapshot at that position so pass 2
+    // can reconstruct what closers to append after trimming.
+    let lastValueBoundaryIdx = -1;
+    let lastValueBoundaryStack: ('{' | '[')[] = [];
 
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
@@ -229,20 +249,61 @@ export class ResponseParser {
       if (inString) continue;
       if (ch === '{') { stack.push('{'); opens++; }
       else if (ch === '[') { stack.push('['); openBrackets++; }
-      else if (ch === '}') { if (stack.length > 0 && stack[stack.length - 1] === '{') stack.pop(); opens--; }
-      else if (ch === ']') { if (stack.length > 0 && stack[stack.length - 1] === '[') stack.pop(); openBrackets--; }
+      else if (ch === '}') {
+        if (stack.length > 0 && stack[stack.length - 1] === '{') stack.pop();
+        opens--;
+        // Record value boundary: just after this closing brace
+        lastValueBoundaryIdx = i + 1;
+        lastValueBoundaryStack = [...stack];
+      } else if (ch === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === '[') stack.pop();
+        openBrackets--;
+        // Record value boundary: just after this closing bracket
+        lastValueBoundaryIdx = i + 1;
+        lastValueBoundaryStack = [...stack];
+      }
     }
 
-    if (stack.length === 0) return null; // Not a bracket mismatch issue
+    // ── Pass 1: not-in-string, open brackets remain ──────────────────────────
+    // Why: the common "bracket not closed" truncation. If we ended outside a string
+    // and the stack is non-empty, append the missing closers and parse.
+    if (!inString && stack.length > 0) {
+      let repaired = text;
+      for (let i = stack.length - 1; i >= 0; i--) {
+        repaired += stack[i] === '{' ? '}' : ']';
+      }
+      try {
+        return JSON.parse(repaired);
+      } catch {
+        // Pass 1 failed — fall through to pass 2
+      }
+    }
 
-    // Close open brackets in reverse order (LIFO)
-    let repaired = text;
-    for (let i = stack.length - 1; i >= 0; i--) {
-      repaired += stack[i] === '{' ? '}' : ']';
+    // ── Pass 2: mid-string truncation — walk back to last complete value ──────
+    // Why: fires when inString===true at end-of-text, OR when pass 1's close-brackets
+    // produced structurally valid text that still failed JSON.parse (e.g., partial key).
+    // Strategy: trim back to the last value boundary (closing } or ]), strip any
+    // trailing comma or whitespace, then close remaining open structures.
+    if (lastValueBoundaryIdx <= 0) {
+      // No prior complete value — nothing to recover (R2c: would empty the container)
+      return null;
+    }
+
+    // Trim to just after the last complete value
+    let trimmed = text.substring(0, lastValueBoundaryIdx);
+
+    // Strip trailing comma and whitespace (the partial next value started after the comma)
+    trimmed = trimmed.replace(/,\s*$/, '').trimEnd();
+
+    if (trimmed.length === 0) return null;
+
+    // Close all still-open structures from the saved stack at that boundary
+    for (let i = lastValueBoundaryStack.length - 1; i >= 0; i--) {
+      trimmed += lastValueBoundaryStack[i] === '{' ? '}' : ']';
     }
 
     try {
-      return JSON.parse(repaired);
+      return JSON.parse(trimmed);
     } catch {
       return null;
     }

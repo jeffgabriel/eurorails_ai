@@ -2362,4 +2362,119 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
     // LLM-provided demandCardId=99 should be preserved, not overwritten with 42
     expect(deliverStop!.demandCardId).toBe(99);
   });
+
+  // ── Truncated JSON recovery (JIRA-197) ────────────────────────────────
+
+  describe('truncated JSON recovery', () => {
+    it('should recover truncated trip plan response and return success (AC4)', async () => {
+      // Flash turn 6 attempt #1 fixture: 3 complete stops, 4th truncated mid-string.
+      // TripPlanner should recover the 3 complete stops and return success without retrying.
+      const truncatedResponse =
+        '{"candidates":[{"stops":[' +
+        '{"action":"PICKUP","load":"Steel","supplyCity":"Luxembourg"},' +
+        '{"action":"PICKUP","load":"Wine","supplyCity":"Frankfurt"},' +
+        '{"action":"DELIVER","load":"Wine","deliveryCity":"Paris","demandCardId":14,"payment":11},' +
+        '{"action":"DELIVER","load":"S';
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 14, loadType: 'Wine', supplyCity: 'Frankfurt', deliveryCity: 'Paris', payout: 11 }),
+          makeDemand({ cardIndex: 1, loadType: 'Steel', supplyCity: 'Luxembourg', deliveryCity: 'Berlin', payout: 19 }),
+        ],
+      });
+
+      const { brain, chatFn, planRouteFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: truncatedResponse, usage: { input: 800, output: 400 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+      // Recovery succeeds — adapter called exactly once (no retry)
+      expect(chatFn).toHaveBeenCalledTimes(1);
+      // planRoute fallback NOT called
+      expect(planRouteFn).not.toHaveBeenCalled();
+      // Result is a successful TripPlanResult (has candidates, not just route:null)
+      expect(result).not.toBeNull();
+      expect('candidates' in result!).toBe(true);
+      const tripResult = result as TripPlanResult;
+      expect(tripResult.candidates.length).toBeGreaterThan(0);
+      // The recovered candidate has stops from the 3 complete stops (Steel pickup + Wine pickup + Wine deliver)
+      const chosen = tripResult.candidates[tripResult.chosen];
+      expect(chosen.stops.length).toBeGreaterThan(0);
+      // llmLog has exactly one entry with status 'success' and recoveredFromTruncation=true
+      expect(tripResult.llmLog).toHaveLength(1);
+      expect(tripResult.llmLog[0].status).toBe('success');
+      expect(tripResult.llmLog[0].recoveredFromTruncation).toBe(true);
+    });
+
+    it('should fall back to planRoute after 3 failed attempts when response is unrecoverable (AC5)', async () => {
+      // Adapter returns completely unparseable garbage — recoverTruncatedJson returns null.
+      // TripPlanner should exhaust 3 attempts, then call planRoute().
+      const garbageResponse = 'this is not json';
+
+      const fallbackRoute: StrategicRoute = {
+        stops: [{ action: 'pickup', loadType: 'Coal', city: 'Essen' }],
+        currentStopIndex: 0,
+        phase: 'build',
+        createdAtTurn: 5,
+        reasoning: 'fallback route',
+      };
+
+      const { brain, chatFn, planRouteFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: garbageResponse, usage: { input: 100, output: 5 } });
+      planRouteFn.mockResolvedValue({
+        route: fallbackRoute,
+        model: 'claude-sonnet-4-6',
+        latencyMs: 100,
+        tokenUsage: { input: 50, output: 20 },
+        llmLog: [],
+        systemPrompt: 'mock-system',
+        userPrompt: 'mock-user',
+      });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
+
+      // All 3 attempts exhaust (MAX_RETRIES=2, so 3 total)
+      expect(chatFn).toHaveBeenCalledTimes(3);
+      // planRoute fallback IS called
+      expect(planRouteFn).toHaveBeenCalledTimes(1);
+      // Result has route from planRoute (no candidates from TripPlanner)
+      expect(result).not.toBeNull();
+      expect('route' in result!).toBe(true);
+      const tripResult = result as TripPlanResult;
+      expect(tripResult.route).toBe(fallbackRoute);
+      expect(tripResult.candidates).toHaveLength(0);
+      // llmLog contains 3 parse_error entries (no behavior regression)
+      const tripPlannerAttempts = tripResult.llmLog.filter(e => e.status === 'parse_error');
+      expect(tripPlannerAttempts).toHaveLength(3);
+    });
+
+    it('should mark recovered attempt as recoveredFromTruncation in llmLog (R5)', async () => {
+      // Verify the observability field: recovered attempts get recoveredFromTruncation=true,
+      // normal success attempts do not have this field.
+      const truncatedResponse =
+        '{"candidates":[{"stops":[' +
+        '{"action":"PICKUP","load":"Steel","supplyCity":"Essen"},' +
+        '{"action":"DELIVER","load":"Steel","deliveryCity":"Berlin","demandCardId":1,"payment":15}' +
+        '],"reasoning":"Direct delivery"},{"';
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Steel', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+        ],
+      });
+
+      const { brain, chatFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: truncatedResponse, usage: { input: 300, output: 150 } });
+
+      const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+      expect(result).not.toBeNull();
+      const tripResult = result as TripPlanResult;
+      expect(tripResult.llmLog[0].status).toBe('success');
+      expect(tripResult.llmLog[0].recoveredFromTruncation).toBe(true);
+    });
+  });
 });

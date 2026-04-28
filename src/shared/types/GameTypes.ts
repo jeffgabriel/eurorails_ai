@@ -554,6 +554,12 @@ export interface LlmAttempt {
     responseText: string;
     error?: string;
     latencyMs: number;
+    /**
+     * JIRA-197 (ADR-5): Present and true when this success attempt was recovered from
+     * a truncated LLM response (pass-2 walk-back recovery). Omitted on normal success.
+     * Allows the debug overlay to label this attempt "success — recovered from truncation".
+     */
+    recoveredFromTruncation?: boolean;
 }
 
 // ─── LLM Strategy Brain Types ───────────────────────────────────────────────
