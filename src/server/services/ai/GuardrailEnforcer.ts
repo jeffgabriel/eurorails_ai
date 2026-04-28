@@ -3,7 +3,10 @@
  *
  * `checkPlan()` enforces hard rules on TurnPlan (checked in priority order):
  *   G1. Force DELIVER when canDeliver has opportunities (highest priority)
- *   Stuck. Force DiscardHand when no active route AND no deliverable load
+ *   Unaffordable-and-stuck (JIRA-68, JIRA-183, JIRA-199): Force DiscardHand when no active
+ *       route, no deliverable load, and no demand is both affordable AND connectable on the
+ *       existing network. Covers both "no track yet" and "cash but unplayable hand" failure
+ *       modes. An affordable connectable demand means the bot has a viable plan — don't discard.
  *   Broke-and-stuck. Force DiscardHand when bot is broke, has active route, and
  *       no demand is achievable on existing network (JIRA-177)
  *   G3. Block UPGRADE during initialBuild phase
@@ -36,7 +39,8 @@ export class GuardrailEnforcer {
    *
    * Guardrails (checked in priority order):
    *   G1: Force DELIVER when bot can deliver but LLM chose something else (highest priority)
-   *   Stuck: Force DiscardHand when no active route AND no deliverable load (JIRA-68, JIRA-183)
+   *   Unaffordable-and-stuck: Force DiscardHand when no active route, no deliverable load,
+   *       and no demand is affordable+connectable on existing network (JIRA-68, JIRA-183, JIRA-199)
    *   Broke-and-stuck: Force DiscardHand when broke, active route exists, and no demand is
    *       achievable on existing network (JIRA-177, JIRA-183)
    *   G3: Block UPGRADE during initialBuild phase
@@ -68,16 +72,31 @@ export class GuardrailEnforcer {
       };
     }
 
-    // Stuck (no route, no loads): force DiscardHand immediately when the bot has no active route
-    // and no load on-train that can be delivered on-network. Nothing productive can happen — discard
-    // for fresh cards. JIRA-68, JIRA-183: no noProgressTurns gate needed; state is deterministic.
+    // Stuck / Unaffordable-and-stuck guardrail: force DiscardHand when the bot has no active
+    // route, no deliverable load on-train, and no demand card is both affordable AND connectable
+    // on the existing network. This unified rule handles two overlapping failure modes:
+    //
+    //  • Classic stuck (JIRA-68, JIRA-183): demands is empty / all demands have no network
+    //    connectivity, so nothing productive can ever happen without new cards.
+    //  • Unaffordable-and-stuck (JIRA-199): bot has cash but every card requires a build it
+    //    can't complete from current position — e.g. game c4b4c111 Nano at turn 19 (40M cash,
+    //    3 unaffordable cards, looped on PassTurn for 14 turns).
+    //
+    // When an affordable+connectable demand exists the bot should NOT discard — it has a viable
+    // plan and just needs to execute it. JIRA-68, JIRA-183: no noProgressTurns gate needed.
     const hasDeliverableLoad = snapshot.bot.loads.length > 0 && context.demands.some(d => d.isLoadOnTrain && d.isDeliveryOnNetwork);
-    if (!hasActiveRoute && !hasDeliverableLoad && planType !== AIActionType.DiscardHand) {
-      console.warn(`[Guardrail Stuck] No active route and no deliverable load — forcing DiscardHand`);
+    const hasAffordableConnectableDemand = context.demands.some(
+      d => d.isAffordable && (d.isSupplyOnNetwork || d.isLoadOnTrain) && d.isDeliveryOnNetwork,
+    );
+    if (!hasActiveRoute && !hasDeliverableLoad && !hasAffordableConnectableDemand && planType !== AIActionType.DiscardHand) {
+      console.warn(
+        `[Guardrail Unaffordable-Stuck] Bot has $${snapshot.bot.money}M cash but no active route,` +
+        ` no deliverable load, and no affordable+connectable demand — forcing DiscardHand`,
+      );
       return {
         plan: { type: AIActionType.DiscardHand },
         overridden: true,
-        reason: `Stuck: no active route and no deliverable load on network — forcing DiscardHand`,
+        reason: `Unaffordable-Stuck: no active route, no deliverable load, and no affordable+connectable demand — forcing DiscardHand`,
       };
     }
 

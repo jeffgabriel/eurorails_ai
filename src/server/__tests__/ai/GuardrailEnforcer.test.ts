@@ -854,5 +854,249 @@ describe('GuardrailEnforcer', () => {
         });
       });
     });
+
+    describe('Unaffordable-and-stuck guardrail (JIRA-199)', () => {
+      // AC1: bot has cash, no active route, no loads, all demands unaffordable → force DiscardHand
+      it('AC1: forces DiscardHand when bot has cash, no active route, no loads, and all demands unaffordable', async () => {
+        // Reproduces JIRA-199 evidence: game c4b4c111, Nano at turn 19 — 40M cash,
+        // no active route, no loads on train, hand={23,83,66} all unaffordable.
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ cardIndex: 23, loadType: 'Cattle', isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ cardIndex: 83, loadType: 'Coal', isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ cardIndex: 66, loadType: 'Wine', isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toMatch(/unaffordable.stuck/i);
+      });
+
+      // AC2: empty-stops route treated as no active route — guardrail still fires
+      it('AC2: forces DiscardHand when route has empty stops (treated as no active route by call site)', async () => {
+        // AIStrategyEngine (JIRA-199 call-site fix) passes hasActiveRoute=false for a route
+        // with stops.length === 0. This test verifies the guardrail produces DiscardHand in
+        // that scenario — same result as AC1.
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        snap.bot.loads = [];
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        // hasActiveRoute=false reflects the call-site fix: an empty-stops route
+        // (stops.length===0 or currentStopIndex >= stops.length) is not an active route.
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toMatch(/unaffordable.stuck/i);
+      });
+
+      // AC3: one affordable connectable demand exists → rule must NOT fire
+      it('AC3: does NOT fire when at least one demand is affordable and connectable on the network', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      // AC4: active route in progress — rule must NOT fire even if all demands unaffordable
+      it('AC4: does NOT fire when bot has an active route in progress (route in progress is sacred)', async () => {
+        // hasActiveRoute=true because currentStopIndex < stops.length
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      // AC5: broke bot with active route — existing Broke-and-stuck guardrail still fires (regression)
+      it('AC5: broke bot with active route triggers existing Broke-and-stuck rule (regression check)', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isSupplyOnNetwork: false, isDeliveryOnNetwork: false, isLoadOnTrain: false, isAffordable: false }),
+          ],
+        });
+        const snap = makeSnapshot(2); // money < 5 → broke
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, true);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toContain('Broke-and-stuck');
+      });
+
+      // AC6: G1 (Force DELIVER) fires first even when all demands unaffordable (priority regression)
+      it('AC6: G1 Force DELIVER fires before Unaffordable-Stuck when delivery opportunity exists', async () => {
+        const delivery: DeliveryOpportunity = {
+          loadType: 'Coal',
+          deliveryCity: 'Berlin',
+          payout: 25,
+          cardIndex: 0,
+        };
+        const ctx = makeContext({
+          canDeliver: [delivery],
+          demands: [
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DeliverLoad);
+        expect(result.reason).toContain('Forced DELIVER');
+        // Must NOT be DiscardHand from Unaffordable-Stuck
+        expect(result.plan.type).not.toBe(AIActionType.DiscardHand);
+      });
+
+      // AC7: deliverable load on train → rule must NOT fire
+      it('AC7: does NOT fire when bot carries a load that can be delivered on-network', async () => {
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ loadType: 'Wood', isLoadOnTrain: true, isDeliveryOnNetwork: true, isAffordable: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        snap.bot.loads = ['Wood'];
+        const plan: TurnPlan = { type: AIActionType.MoveTrain, path: [], fees: new Set(), totalFee: 0 };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(false);
+        expect(result.plan).toBe(plan);
+      });
+
+      // AC8: exactly one console.warn with [Guardrail Unaffordable-Stuck] tag when rule fires
+      it('AC8: emits exactly one [Guardrail Unaffordable-Stuck] warn when rule fires, no warn when it does not', async () => {
+        const warnSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+        // Case 1: rule fires
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isAffordable: false, isSupplyOnNetwork: false, isDeliveryOnNetwork: false }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        const unaffordableWarnCalls = warnSpy.mock.calls.filter(
+          args => typeof args[0] === 'string' && args[0].startsWith('[Guardrail Unaffordable-Stuck]'),
+        );
+        expect(unaffordableWarnCalls).toHaveLength(1);
+
+        warnSpy.mockClear();
+
+        // Case 2: rule does NOT fire (has an affordable demand)
+        const ctxWithAffordable = makeContext({
+          canDeliver: [],
+          demands: [
+            makeDemand({ isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+          ],
+        });
+        await GuardrailEnforcer.checkPlan(plan, ctxWithAffordable, snap, false);
+
+        const noFireWarnCalls = warnSpy.mock.calls.filter(
+          args => typeof args[0] === 'string' && args[0].startsWith('[Guardrail Unaffordable-Stuck]'),
+        );
+        expect(noFireWarnCalls).toHaveLength(0);
+
+        warnSpy.mockRestore();
+      });
+
+      // AC10: JIRA-199 evidence fixture — Nano at turn 19 of game c4b4c111
+      it('AC10: JIRA-199 fixture: Nano turn 19 game c4b4c111 produces DiscardHand instead of PassTurn', async () => {
+        // Nano: money=40, no active route, no loads, hand={23,83,66}
+        // Network covers Wien/Budapest/Warszawa/Kaliningrad/Sarajevo/Lodz area.
+        // None of the three demand cards are affordable+connectable on that network.
+        const ctx = makeContext({
+          canDeliver: [],
+          demands: [
+            // Card 23: supply city not on network, delivery city not on network, not affordable
+            makeDemand({
+              cardIndex: 23,
+              loadType: 'Cattle',
+              supplyCity: 'Sarajevo',
+              deliveryCity: 'Kaliningrad',
+              payout: 35,
+              isAffordable: false,
+              isSupplyOnNetwork: false,
+              isDeliveryOnNetwork: false,
+            }),
+            // Card 83: supply city not on network, delivery city not on network, not affordable
+            makeDemand({
+              cardIndex: 83,
+              loadType: 'Machinery',
+              supplyCity: 'Lodz',
+              deliveryCity: 'Budapest',
+              payout: 28,
+              isAffordable: false,
+              isSupplyOnNetwork: false,
+              isDeliveryOnNetwork: false,
+            }),
+            // Card 66: supply city on network but build is unaffordable
+            makeDemand({
+              cardIndex: 66,
+              loadType: 'Coal',
+              supplyCity: 'Wien',
+              deliveryCity: 'Warszawa',
+              payout: 22,
+              isAffordable: false,
+              isSupplyOnNetwork: true,
+              isDeliveryOnNetwork: false,
+            }),
+          ],
+        });
+        const snap = makeSnapshot(40);
+        snap.bot.loads = [];
+        // LLM chose PassTurn (the observed stuck behaviour)
+        const plan: TurnPlan = { type: AIActionType.PassTurn };
+
+        const result = await GuardrailEnforcer.checkPlan(plan, ctx, snap, false);
+
+        expect(result.overridden).toBe(true);
+        expect(result.plan.type).toBe(AIActionType.DiscardHand);
+        expect(result.reason).toMatch(/unaffordable.stuck/i);
+      });
+    });
   });
 });

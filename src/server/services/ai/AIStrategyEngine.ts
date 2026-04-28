@@ -464,7 +464,11 @@ export class AIStrategyEngine {
       // ── Stage 4: Apply guardrails ──
       // JIRA-143: Snapshot plan before guardrail check for originalPlan capture
       const preGuardrailPlan = { action: decision.plan.type, reasoning: decision.reasoning ?? '' };
-      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, activeRoute != null);
+      // JIRA-199: tighten hasActiveRoute so an empty-stops or fully-exhausted route
+      // is NOT treated as an active route — prevents the Stuck/Unaffordable guardrails
+      // from being suppressed by a route that has already been consumed.
+      const hasActiveRoute = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
+      let guardrailResult = await GuardrailEnforcer.checkPlan(decision.plan, context, snapshot, hasActiveRoute);
       let finalPlan: TurnPlan = guardrailResult.plan;
       let originalPlan: { action: string; reasoning: string } | undefined;
 
