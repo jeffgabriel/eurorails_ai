@@ -25,7 +25,7 @@ import { capture } from '../../services/ai/WorldSnapshotService';
 import { TripPlanner } from '../../services/ai/TripPlanner';
 import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { ContextSerializer } from '../../services/ai/prompts/ContextSerializer';
-import { AIActionType, BotSkillLevel, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
+import { AIActionType, BotSkillLevel, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
 import type {
   WorldSnapshot,
   GameContext,
@@ -70,9 +70,10 @@ jest.mock('../../services/ai/ActionResolver', () => ({
   ActionResolver: {
     heuristicFallback: jest.fn(),
     UPGRADE_PATHS: {
-      Freight: { FastFreight: 20, HeavyFreight: 20 },
-      FastFreight: { Superfreight: 40 },
-      HeavyFreight: { Superfreight: 20 },
+      // Keys must match TrainType enum values (snake_case), not PascalCase
+      freight: { fast_freight: 20, heavy_freight: 20 },
+      fast_freight: { superfreight: 20, heavy_freight: 5 },
+      heavy_freight: { superfreight: 20, fast_freight: 5 },
     },
   },
 }));
@@ -164,7 +165,7 @@ function makeContext(overrides: Partial<GameContext> = {}): GameContext {
     opponents: [],
     phase: 'travel',
     turnNumber: 1,
-    trainType: 'Freight',
+    trainType: TrainType.Freight,
     ...overrides,
   };
 }
@@ -178,7 +179,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
       position: { row: 5, col: 5 },
       existingSegments: [],
       money: 100,
-      trainType: 'Freight',
+      trainType: TrainType.Freight,
       loads: [],
       connectedMajorCityCount: 0,
       resolvedDemands: [],
@@ -392,13 +393,13 @@ describe('NewRoutePlanner.run', () => {
 
   describe('Scenario 5 — JIRA-105 upgrade consumption', () => {
     it('sets pendingUpgradeAction when route has upgradeOnRoute and upgrade is valid+affordable', async () => {
-      const route = makeRoute({ upgradeOnRoute: 'FastFreight' });
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
       MockTripPlannerClass.mockImplementation(() => ({
         planTrip: jest.fn().mockResolvedValue(makeTripResult(route)),
       }) as unknown as TripPlanner);
 
       const result = await NewRoutePlanner.run(
-        makeSnapshot({ money: 100, trainType: 'Freight' }),
+        makeSnapshot({ money: 100, trainType: TrainType.Freight }),
         makeContext(),
         makeBrain(),
         gridPoints,
@@ -408,18 +409,18 @@ describe('NewRoutePlanner.run', () => {
 
       expect(result.pendingUpgradeAction).not.toBeNull();
       expect(result.pendingUpgradeAction!.type).toBe(AIActionType.UpgradeTrain);
-      expect(result.pendingUpgradeAction!.targetTrain).toBe('FastFreight');
+      expect(result.pendingUpgradeAction!.targetTrain).toBe(TrainType.FastFreight);
       expect(result.pendingUpgradeAction!.cost).toBe(20);
     });
 
     it('blocks upgrade and sets upgradeSuppressionReason when deliveryCount below threshold', async () => {
-      const route = makeRoute({ upgradeOnRoute: 'FastFreight' });
+      const route = makeRoute({ upgradeOnRoute: TrainType.FastFreight });
       MockTripPlannerClass.mockImplementation(() => ({
         planTrip: jest.fn().mockResolvedValue(makeTripResult(route)),
       }) as unknown as TripPlanner);
 
       const result = await NewRoutePlanner.run(
-        makeSnapshot({ money: 100, trainType: 'Freight' }),
+        makeSnapshot({ money: 100, trainType: TrainType.Freight }),
         makeContext(),
         makeBrain(),
         gridPoints,
@@ -469,13 +470,13 @@ describe('NewRoutePlanner.run', () => {
       const brain = makeBrain({
         evaluateUpgradeBeforeDrop: jest.fn().mockResolvedValue({
           action: 'upgrade',
-          targetTrain: 'HeavyFreight', // capacity 3
+          targetTrain: TrainType.HeavyFreight, // capacity 3
           reasoning: 'capacity is the bottleneck',
         }),
       });
 
       const result = await NewRoutePlanner.run(
-        makeSnapshot({ money: 100, trainType: 'Freight', loads: [] }),
+        makeSnapshot({ money: 100, trainType: TrainType.Freight, loads: [] }),
         makeContext(),
         brain,
         gridPoints,
@@ -485,7 +486,7 @@ describe('NewRoutePlanner.run', () => {
 
       expect(brain.evaluateUpgradeBeforeDrop).toHaveBeenCalledTimes(1);
       expect(result.pendingUpgradeAction).not.toBeNull();
-      expect(result.pendingUpgradeAction!.targetTrain).toBe('HeavyFreight');
+      expect(result.pendingUpgradeAction!.targetTrain).toBe(TrainType.HeavyFreight);
       expect(result.pendingUpgradeAction!.cost).toBe(20);
     });
   });
@@ -512,7 +513,7 @@ describe('NewRoutePlanner.run', () => {
         }),
       });
 
-      const snapshot = makeSnapshot({ money: 50, trainType: 'Freight', loads: ['Wood', 'Iron'] });
+      const snapshot = makeSnapshot({ money: 50, trainType: TrainType.Freight, loads: ['Wood', 'Iron'] });
 
       const result = await NewRoutePlanner.run(
         snapshot, makeContext(), brain, gridPoints,
@@ -538,7 +539,7 @@ describe('NewRoutePlanner.run', () => {
       const brain = makeBrain();
 
       await NewRoutePlanner.run(
-        makeSnapshot({ trainType: 'Freight', loads: ['Wood'] }),
+        makeSnapshot({ trainType: TrainType.Freight, loads: ['Wood'] }),
         makeContext(),
         brain, gridPoints, makeMemory({ deliveryCount: 5 }),
         tag, gameId, botPlayerId, BotSkillLevel.Easy,

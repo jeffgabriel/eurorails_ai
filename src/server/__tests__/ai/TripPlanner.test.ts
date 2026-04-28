@@ -873,7 +873,7 @@ describe('TripPlanner', () => {
       const result = await planner.planTrip(makeSnapshot(), makeContext(), [], makeMemory());
 
       expect(result).not.toBeNull();
-      expect(result!.route.upgradeOnRoute).toBe('FastFreight');
+      expect(result!.route.upgradeOnRoute).toBe('fast_freight'); // normalized from LLM PascalCase to TrainType snake_case
     });
 
     it('should leave upgradeOnRoute undefined when LLM omits it', async () => {

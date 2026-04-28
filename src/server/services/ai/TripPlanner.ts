@@ -254,6 +254,18 @@ export class TripPlanner {
 
         const chosen = candidates[selectedIdx];
 
+        // Normalize LLM PascalCase upgrade labels to TrainType snake_case enum values
+        // (mirrors ResponseParser.ts:467-473 — fixes silent rejection in tryConsumeUpgrade)
+        const UPGRADE_LABEL_TO_TRAIN: Record<string, TrainType> = {
+          FastFreight: TrainType.FastFreight,
+          HeavyFreight: TrainType.HeavyFreight,
+          Superfreight: TrainType.Superfreight,
+        };
+        const rawUpgrade = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
+        const normalizedUpgrade = rawUpgrade
+          ? (UPGRADE_LABEL_TO_TRAIN[rawUpgrade] ?? rawUpgrade)
+          : undefined;
+
         // Convert to StrategicRoute
         const route: StrategicRoute = {
           stops: chosen.stops,
@@ -261,7 +273,7 @@ export class TripPlanner {
           phase: 'build',
           createdAtTurn: context.turnNumber,
           reasoning: chosen.reasoning,
-          upgradeOnRoute: parsed.upgradeOnRoute,
+          upgradeOnRoute: normalizedUpgrade,
         };
 
         // Build success llmLog entry; attach diagnostic when override occurred (JIRA-194)
