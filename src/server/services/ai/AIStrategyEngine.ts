@@ -346,8 +346,13 @@ export class AIStrategyEngine {
       // memory.deliveryCount and silently blocked valid upgrades after the LLM decided to upgrade.
       if (stage3.pendingUpgradeAction) {
         const existingSteps = decision.plan.type === 'MultiAction' ? decision.plan.steps : [decision.plan];
-        decision.plan = { type: 'MultiAction' as const, steps: [...existingSteps, stage3.pendingUpgradeAction] };
-        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${stage3.pendingUpgradeAction.targetTrain}) into turn plan`);
+        const buildStepsDropped = existingSteps.filter(s => s.type === AIActionType.BuildTrack).length;
+        const stepsWithoutBuild = existingSteps.filter(s => s.type !== AIActionType.BuildTrack);
+        const newSteps = [...stepsWithoutBuild, stage3.pendingUpgradeAction];
+        decision.plan = newSteps.length === 1
+          ? newSteps[0]
+          : { type: 'MultiAction' as const, steps: newSteps };
+        console.log(`${tag} JIRA-105: Injected UpgradeTrain(${stage3.pendingUpgradeAction.targetTrain}) into turn plan${buildStepsDropped > 0 ? ` (dropped ${buildStepsDropped} BuildTrack step(s))` : ''}`);
       }
 
       // ── Stage 3b: Validate composed plan against hard gates ──
