@@ -2541,10 +2541,15 @@ describe('TurnExecutorPlanner — Bug C: mutable context.position after MoveTrai
     expect(context.position?.col).toBe(2);
   });
 
-  it('breaks at budget_exhausted when move consumes all budget', async () => {
+  it('breaks at budget_exhausted when move consumes all budget at a non-stop city', async () => {
+    // JIRA-202: budget_exhausted only fires when the bot ends at a city that is NOT
+    // the current stop. When the bot arrives at the stop city on the last milepost,
+    // the stop action fires that turn instead (arrival_stop_action path).
+    // This test uses a destination that is NOT the stop city to verify the
+    // budget_exhausted regression guard (AC4 / R3).
     const movePlan = {
       type: AIActionType.MoveTrain,
-      path: [{ row: 1, col: 1 }, { row: 2, col: 2 }],
+      path: [{ row: 1, col: 1 }, { row: 3, col: 3 }], // ends at Prague, not Berlin
       fees: new Set<string>(),
       totalFee: 0,
     };
@@ -2553,7 +2558,8 @@ describe('TurnExecutorPlanner — Bug C: mutable context.position after MoveTrai
     // Move consumes ALL 9mp
     mockComputeEffectivePathLength.mockReturnValue(9);
 
-    const gridPoints = [{ row: 2, col: 2, city: { name: 'Berlin' } }] as any;
+    // gridPoints: destination is Prague (not Berlin, the stop city)
+    const gridPoints = [{ row: 3, col: 3, city: { name: 'Prague' } }] as any;
 
     const route = makeRoute({
       stops: [makeStop('pickup', 'Berlin', 'Coal')],
@@ -2568,7 +2574,7 @@ describe('TurnExecutorPlanner — Bug C: mutable context.position after MoveTrai
 
     const result = await TurnExecutorPlanner.execute(route, snapshot, context, undefined, gridPoints);
 
-    // Budget exhausted → no delivery/pickup in same turn
+    // Budget exhausted at non-stop city → no pickup runs this turn
     expect(result.compositionTrace.a2.terminationReason).toBe('budget_exhausted');
     expect(result.plans.some(p => p.type === AIActionType.PickupLoad)).toBe(false);
   });

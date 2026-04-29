@@ -111,12 +111,16 @@ export class MovementPhasePlanner {
     // ── Phase A: Movement loop ────────────────────────────────────────────
     let loopIter = 0;
     const MAX_LOOP_ITERS = 20;
+    // JIRA-202: Allow one extra iteration when a move lands exactly on the
+    // current stop city with budget = 0 (free stop-action on arrival turn).
+    let pendingArrivalStopAction = false;
 
     while (
-      remainingBudget > 0 &&
+      (remainingBudget > 0 || pendingArrivalStopAction) &&
       activeRoute.currentStopIndex < activeRoute.stops.length &&
       loopIter < MAX_LOOP_ITERS
     ) {
+      pendingArrivalStopAction = false;
       loopIter++;
       trace.a2.iterations = loopIter;
 
@@ -316,11 +320,7 @@ export class MovementPhasePlanner {
         remainingBudget = Math.max(0, remainingBudget - milesConsumed);
         trace.moveBudget.used = context.speed - remainingBudget;
 
-        if (remainingBudget === 0) {
-          trace.a2.terminationReason = 'budget_exhausted';
-          break;
-        }
-
+        // Update position context before any post-move checks (ferry, arrival).
         const dest = movePlan.path[movePlan.path.length - 1];
         if (dest && gridPoints) {
           const arrivedGp = gridPoints.find(gp => gp.row === dest.row && gp.col === dest.col);
@@ -330,7 +330,7 @@ export class MovementPhasePlanner {
           console.log(`${tag} Context updated: position=${dest.row},${dest.col} (${cityName ?? 'no city'})`);
         }
 
-        // Ferry arrival guard
+        // Ferry arrival guard takes precedence over arrival stop action (R5).
         if (dest) {
           const gridPointMap = loadGridPointsMap();
           const destTerrain = gridPointMap.get(`${dest.row},${dest.col}`)?.terrain;
@@ -339,6 +339,21 @@ export class MovementPhasePlanner {
             console.log(`${tag} [Ferry] Turn ends at ferry port (${dest.row},${dest.col}) — bot must wait until next turn to cross`);
             break;
           }
+        }
+
+        if (remainingBudget === 0) {
+          // JIRA-202: When the final move lands on the current stop city, the free
+          // stop action (pickup / deliver / drop) still executes this turn.
+          // Set pendingArrivalStopAction so the loop runs one more iteration whose
+          // isBotAtCity branch handles the stop action (R1, R2, R3).
+          if (TurnExecutorPlanner.isBotAtCity(context, targetCity)) {
+            trace.a2.terminationReason = 'arrival_stop_action';
+            console.log(`${tag} Arrived at stop city ${targetCity} on last milepost — executing stop action this turn`);
+            pendingArrivalStopAction = true;
+            continue;
+          }
+          trace.a2.terminationReason = 'budget_exhausted';
+          break;
         }
 
         continue;

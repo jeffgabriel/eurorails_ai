@@ -535,3 +535,282 @@ describe('MovementPhasePlanner.run — PhaseAResult fields', () => {
     expect(result.deliveriesThisTurn).toBe(1);
   });
 });
+
+// ── JIRA-202: Arrival on last milepost executes stop action ───────────────
+
+/**
+ * Helper: build a GridPoint array with one entry at the given row/col
+ * whose city.name matches cityName, so the position-update code sets
+ * context.position.city correctly and isBotAtCity() returns true.
+ */
+function makeGridPointsForCity(row: number, col: number, cityName: string): GridPoint[] {
+  return [
+    {
+      row,
+      col,
+      terrain: 0 as TerrainType, // Clear
+      city: { name: cityName } as GridPoint['city'],
+      name: cityName,
+    } as unknown as GridPoint,
+  ];
+}
+
+describe('JIRA-202: arrival on last milepost executes stop action', () => {
+  // Shared setup: bot starts NOT at city, moves 9/9 mileposts to Berlin, budget = 0.
+  // computeEffectivePathLength is mocked globally to return 3; we override per-test to 9.
+
+  it('deliver on arrival — DeliverLoad plan emitted and delivery side-effects fire', async () => {
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(9); // consume full budget
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Wine')],
+      currentStopIndex: 0,
+    });
+    // Bot starts away from Berlin
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    // Move resolves toward Berlin, landing at row=10,col=10
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 10, col: 10 }],
+        milesUsed: 9,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    // Deliver action succeeds
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.DeliverLoad, load: 'Wine', city: 'Berlin' },
+    });
+
+    // Post-delivery replan returns empty route
+    mockPostDeliveryReplan.mockResolvedValue({
+      route: makeRoute({ stops: [], currentStopIndex: 0 }),
+      moveTargetInvalidated: true,
+    });
+
+    // Provide gridPoints so position update sets city='Berlin'
+    const gridPoints = makeGridPointsForCity(10, 10, 'Berlin');
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(true);
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.DeliverLoad)).toBe(true);
+    expect(result.hasDelivery).toBe(true);
+    expect(result.deliveriesThisTurn).toBe(1);
+    expect(mockPostDeliveryReplan).toHaveBeenCalledTimes(1);
+
+    // Reset the mock for other tests
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('pickup on arrival — PickupLoad plan emitted and stop index advances', async () => {
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 10, col: 10 }],
+        milesUsed: 9,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+    });
+
+    const gridPoints = makeGridPointsForCity(10, 10, 'Berlin');
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(true);
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PickupLoad)).toBe(true);
+    expect(result.hasDelivery).toBe(false);
+
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('non-stop milepost budget exhausted — no stop action runs (regression R3)', async () => {
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
+
+    const route = makeRoute({
+      stops: [makeStop('deliver', 'Berlin', 'Wine')],
+      currentStopIndex: 0,
+    });
+    // Bot starts away from Berlin, arrives at a different city (Prague)
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    // Move resolves to Prague (not Berlin), budget exhausted
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 7, col: 7 }],
+        milesUsed: 9,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    // gridPoints positions row=7,col=7 as 'Prague', not 'Berlin'
+    const gridPoints = makeGridPointsForCity(7, 7, 'Prague');
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(true);
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.DeliverLoad)).toBe(false);
+    expect(trace.a2.terminationReason).toBe('budget_exhausted');
+    expect(mockExecuteStopAction).not.toHaveBeenCalled();
+
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('ferry port arrival — ferry guard fires, no stop action even if ferry port is stop city (R5)', async () => {
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
+
+    // Patch loadGridPoints (MapTopology) to return a ferry port at destination
+    const MapTopology = jest.requireMock('../../services/ai/MapTopology');
+    const ferryMap = new Map<string, { terrain: TerrainType }>();
+    ferryMap.set('10,10', { terrain: TerrainType.FerryPort });
+    (MapTopology.loadGridPoints as jest.Mock).mockReturnValue(ferryMap);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'FerryCity', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['FerryCity'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 10, col: 10 }],
+        milesUsed: 9,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    // gridPoints mark destination as FerryCity so isBotAtCity would return true
+    const gridPoints = makeGridPointsForCity(10, 10, 'FerryCity');
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    // Ferry guard takes precedence — no stop action executes
+    expect(trace.a2.terminationReason).toBe('ferry_arrival');
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PickupLoad)).toBe(false);
+    expect(mockExecuteStopAction).not.toHaveBeenCalled();
+
+    // Restore mocks
+    (MapTopology.loadGridPoints as jest.Mock).mockReturnValue(new Map());
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('stop action failure on arrival path — route abandoned, action_failed termination', async () => {
+    const { computeEffectivePathLength } = jest.requireMock('../../../shared/services/majorCityGroups');
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(9);
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 1, col: 1, city: 'Paris' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+    const snapshot = makeSnapshot();
+
+    mockResolveMove.mockResolvedValue({
+      success: true,
+      plan: {
+        type: AIActionType.MoveTrain,
+        path: [{ row: 1, col: 1 }, { row: 10, col: 10 }],
+        milesUsed: 9,
+        cost: 0,
+        trackUsageFees: [],
+      },
+    });
+
+    // Pickup fails
+    mockExecuteStopAction.mockResolvedValue({
+      success: false,
+      error: 'load not available',
+    });
+
+    const gridPoints = makeGridPointsForCity(10, 10, 'Berlin');
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, snapshot, context, trace, undefined, gridPoints);
+
+    expect(result.routeAbandoned).toBe(true);
+    expect(trace.a2.terminationReason).toBe('action_failed');
+
+    (computeEffectivePathLength as jest.Mock).mockReturnValue(3);
+  });
+
+  it('mid-budget arrival — existing isBotAtCity branch handles stop action (R4 regression)', async () => {
+    // Bot arrives at stop city with budget remaining (not the edge case)
+    // computeEffectivePathLength returns default 3 (not 9)
+
+    const route = makeRoute({
+      stops: [makeStop('pickup', 'Berlin', 'Coal')],
+      currentStopIndex: 0,
+    });
+    // Bot already at Berlin — existing branch fires immediately
+    const context = makeContext({
+      position: { row: 10, col: 10, city: 'Berlin' },
+      citiesOnNetwork: ['Berlin'],
+      speed: 9,
+    });
+
+    mockExecuteStopAction.mockResolvedValue({
+      success: true,
+      plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Berlin' },
+    });
+
+    const trace = makeTrace();
+    const result = await MovementPhasePlanner.run(route, makeSnapshot(), context, trace);
+
+    // The regular isBotAtCity branch handles this — no move emitted
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.PickupLoad)).toBe(true);
+    expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(false);
+  });
+});
