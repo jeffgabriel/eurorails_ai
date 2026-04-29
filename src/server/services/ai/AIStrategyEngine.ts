@@ -65,7 +65,7 @@ import { NewRoutePlanner } from './NewRoutePlanner';
  * upgrades, making a higher delivery-count gate redundant.
  * Adjust this value to tune bot upgrade timing across all skill levels.
  */
-export const MIN_DELIVERIES_BEFORE_UPGRADE = 1;
+export const MIN_DELIVERIES_BEFORE_UPGRADE = 2;
 
 export interface BotTurnResult {
   action: AIActionType;
@@ -153,6 +153,8 @@ export interface BotTurnResult {
     firstViolation?: string;
     firstHardGates?: Array<{ gate: string; passed: boolean; detail?: string }>;
     phaseBStripped?: boolean;
+    /** JIRA-203: Termination reason distinguishing lockup recovery from legitimate PassTurn */
+    lockupTerminationReason?: string;
   };
   // JIRA-129: Build Advisor fields
   advisorAction?: string;
@@ -402,6 +404,60 @@ export class AIStrategyEngine {
         }
       }
 
+      // ── JIRA-203: Stuck-state recovery (Phase B strip → PassTurn lockup defense) ──
+      // When Phase B is stripped AND the post-strip plan is PassTurn AND we have an active
+      // route AND the SAME gate caused the strip on the previous turn AND position hasn't
+      // changed, the bot is in a lockup loop. Force RouteAbandoned (via DiscardHand) to
+      // break out instead of grinding PassTurn forever.
+      //
+      // R5 trigger: same gate stripped on CONSECUTIVE turns AND position unchanged.
+      // This avoids over-firing on legitimate one-turn strips (e.g., a CASH_SUFFICIENCY
+      // gate that resolves after income arrives the next turn).
+      let lockupTerminationReason: string | undefined;
+      const postStripPlanType = decision.plan.type === 'MultiAction'
+        ? (decision.plan.steps[0]?.type ?? AIActionType.PassTurn)
+        : decision.plan.type;
+      const hasActiveRouteForRecovery = activeRoute != null &&
+        activeRoute.currentStopIndex < activeRoute.stops.length;
+
+      if (
+        phaseBWasStripped &&
+        postStripPlanType === AIActionType.PassTurn &&
+        hasActiveRouteForRecovery
+      ) {
+        // Identify the first failing hard gate from this strip
+        const strippedGateName = firstValidationHardGates?.find(g => !g.passed)?.gate ?? null;
+        const currentPos = snapshot.bot.position;
+
+        // Check if this is the same gate on consecutive turns with unchanged position (R5)
+        const prevGate = memory.lastPhaseBStrippedGate ?? null;
+        const prevPos = memory.lastPositionWhenStripped ?? null;
+        const positionUnchanged = currentPos != null && prevPos != null &&
+          currentPos.row === prevPos.row && currentPos.col === prevPos.col;
+        const sameGateConsecutive = strippedGateName != null &&
+          prevGate === strippedGateName && positionUnchanged;
+
+        if (sameGateConsecutive) {
+          // Lockup detected: force RouteAbandoned + DiscardHand to break the cycle
+          console.warn(
+            `${tag} [JIRA-203] Stuck-state lockup detected: gate=${strippedGateName} stripped ` +
+            `on consecutive turns at position (${currentPos!.row},${currentPos!.col}) — ` +
+            `forcing RouteAbandoned + DiscardHand`,
+          );
+          decision.plan = { type: AIActionType.DiscardHand };
+          routeWasAbandoned = true;
+          activeRoute = null;
+          lockupTerminationReason = 'lockup_route_abandoned';
+        } else {
+          // One-off strip — not a lockup yet. Surface informational trace only.
+          lockupTerminationReason = 'phaseb_stripped_passturn';
+          console.log(
+            `${tag} [JIRA-203] Phase B stripped → PassTurn (gate=${strippedGateName ?? 'unknown'}). ` +
+            `Not a consecutive lockup — no recovery fired this turn.`,
+          );
+        }
+      }
+
       logPhase('Turn Validation', [], null, null, {
         turnValidation: {
           hardGates: validationResult.hardGates,
@@ -410,6 +466,7 @@ export class AIStrategyEngine {
           firstViolation: firstValidationViolation,
           firstHardGates: firstValidationHardGates,
           phaseBStripped: phaseBWasStripped,
+          lockupTerminationReason,
         },
       });
 
@@ -523,6 +580,10 @@ export class AIStrategyEngine {
       console.log(`${tag} Turn complete: ${finalPlan.type}${finalPlan.type === AIActionType.BuildTrack ? ` (${result.segmentsBuilt}seg/$${result.cost}M)` : ''} | success=${result.success} | money=${result.remainingMoney} | ${durationMs}ms`);
 
       // Update bot memory (including reasoning for next-turn context continuity)
+      // JIRA-203: Track Phase B strip state for consecutive-turn stuck-state detection (R5).
+      const strippedGateThisTurn = phaseBWasStripped
+        ? (firstValidationHardGates?.find(g => !g.passed)?.gate ?? null)
+        : null;
       const memoryPatch: Partial<typeof memory> = {
         lastAction: executedAction,
         consecutiveDiscards: executedAction === AIActionType.DiscardHand
@@ -535,6 +596,9 @@ export class AIStrategyEngine {
         turnNumber: snapshot.turnNumber,
         lastReasoning: decision.reasoning ?? null,
         lastPlanHorizon: decision.planHorizon ?? null,
+        // JIRA-203: Persist strip context for next turn's stuck-state detector
+        lastPhaseBStrippedGate: strippedGateThisTurn,
+        lastPositionWhenStripped: phaseBWasStripped ? (snapshot.bot.position ?? null) : null,
       };
 
       // Update route state in memory
@@ -864,6 +928,7 @@ export class AIStrategyEngine {
           firstViolation: firstValidationViolation,
           firstHardGates: firstValidationHardGates,
           phaseBStripped: phaseBWasStripped,
+          lockupTerminationReason,
         },
       };
     } catch (error) {

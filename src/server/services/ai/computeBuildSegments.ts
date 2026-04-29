@@ -221,6 +221,9 @@ export function computeBuildSegments(
    *  When provided, edges near existing track (within 1 hex) incur a cost
    *  penalty to discourage building parallel to the bot's own network. */
   existingTrackIndex?: Set<string>,
+  /** JIRA-203: Set of grid keys ("row,col") for small/medium cities that are at their player
+   *  cap. Dijkstra treats these as completely blocked — paths will not pass through them. */
+  saturatedCityKeys?: Set<string>,
 ): TrackSegment[] {
   const tag = '[computeBuild]';
   if (budget <= 0) {
@@ -382,6 +385,11 @@ export function computeBuildSegments(
         const nbNeighborCount = getHexNeighbors(nb.row, nb.col).length;
         if (nbNeighborCount <= 1) continue;
       }
+
+      // JIRA-203: Saturated-city exclusion — skip small/medium cities that are at their
+      // player cap. Treating them as blocked ensures the resolver never proposes paths
+      // that the validator would reject with CITY_ENTRY_LIMIT.
+      if (saturatedCityKeys?.has(nbKey)) continue;
 
       // Intra-city edge: free traversal through major city red area (no track built).
       // The red area connects all mileposts within a major city at zero cost.

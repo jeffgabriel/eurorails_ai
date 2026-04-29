@@ -495,6 +495,10 @@ export interface BotMemoryState {
     previousRouteStops?: RouteStop[] | null;
     /** Consecutive turns where LLM failed to produce a valid route plan (JIRA-120) */
     consecutiveLlmFailures: number;
+    /** JIRA-203: Hard gate name that stripped Phase B last turn (for stuck-state detection) */
+    lastPhaseBStrippedGate?: string | null;
+    /** JIRA-203: Bot position when Phase B was last stripped (for stuck-state detection) */
+    lastPositionWhenStripped?: { row: number; col: number } | null;
 }
 
 /** Simplified option summary for decision logging */
@@ -875,6 +879,8 @@ export interface ResolvedAction {
       connectedSegmentCount?: { preFilter: number; postFilter: number };
       /** JIRA-182: Number of ferry-port pairs whose A↔B edge was added during BFS */
       ferryCrossingsIncluded?: number;
+      /** JIRA-203: Saturated small/medium cities excluded from path computation */
+      rejectedSaturatedCities?: Array<{ row: number; col: number }>;
     };
 }
 

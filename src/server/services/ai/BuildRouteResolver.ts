@@ -72,6 +72,8 @@ export interface ResolverInput {
   connectedSegments: TrackSegment[];
   occupiedEdges: Set<string>;
   networkNodeKeys: Set<string> | undefined;
+  /** JIRA-203: Grid keys ("row,col") for saturated small/medium cities to exclude from paths. */
+  saturatedCityKeys?: Set<string>;
 }
 
 export interface ResolverOutcome {
@@ -82,6 +84,8 @@ export interface ResolverOutcome {
   /** selected.totalCost − cheapest-reacher.totalCost (0 when selected is cheapest). */
   costDelta: number;
   anchorClassification: AnchorClassification[];
+  /** JIRA-203: Saturated small/medium cities excluded from path computation (non-empty = saturation caused routing constraint). */
+  rejectedSaturatedCities: Array<{ row: number; col: number }>;
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -121,6 +125,7 @@ function chainedDijkstra(
   connectedSegments: TrackSegment[],
   occupiedEdges: Set<string>,
   networkNodeKeys: Set<string> | undefined,
+  saturatedCityKeys?: Set<string>,
 ): TrackSegment[] {
   if (waypointSequence.length === 0) {
     // No waypoints — single direct call
@@ -133,6 +138,7 @@ function chainedDijkstra(
       targetPositions,
       undefined,
       networkNodeKeys,
+      saturatedCityKeys,
     );
   }
 
@@ -156,6 +162,7 @@ function chainedDijkstra(
       legTargets,
       undefined,
       networkNodeKeys,
+      saturatedCityKeys,
     );
 
     if (legSegments.length === 0) break;
@@ -228,6 +235,7 @@ export class BuildRouteResolver {
       input.connectedSegments,
       input.occupiedEdges,
       input.networkNodeKeys,
+      input.saturatedCityKeys,
     );
     const { totalCost, reachesTarget, endpointDistanceToTarget } = measureSegments(
       segments, input.targetPositions,
@@ -255,6 +263,7 @@ export class BuildRouteResolver {
       input.targetPositions,
       undefined,
       input.networkNodeKeys,
+      input.saturatedCityKeys,
     );
     const { totalCost, reachesTarget, endpointDistanceToTarget } = measureSegments(
       segments, input.targetPositions,
@@ -288,6 +297,7 @@ export class BuildRouteResolver {
       input.connectedSegments,
       input.occupiedEdges,
       input.networkNodeKeys,
+      input.saturatedCityKeys,
     );
     const { totalCost, reachesTarget, endpointDistanceToTarget } = measureSegments(
       segments, input.targetPositions,
@@ -421,6 +431,21 @@ export class BuildRouteResolver {
       ? selected.totalCost - cheapestReacherCost
       : 0;
 
+    // JIRA-203: Decode saturated city coordinates from the input key set for telemetry.
+    const rejectedSaturatedCities: Array<{ row: number; col: number }> = [];
+    if (input.saturatedCityKeys) {
+      for (const key of input.saturatedCityKeys) {
+        const parts = key.split(',');
+        if (parts.length === 2) {
+          const row = parseInt(parts[0], 10);
+          const col = parseInt(parts[1], 10);
+          if (!isNaN(row) && !isNaN(col)) {
+            rejectedSaturatedCities.push({ row, col });
+          }
+        }
+      }
+    }
+
     return {
       selected,
       candidates: { llmGuided, dijkstraDirect, merged },
@@ -428,6 +453,7 @@ export class BuildRouteResolver {
       reasonText,
       costDelta,
       anchorClassification,
+      rejectedSaturatedCities,
     };
   }
 }

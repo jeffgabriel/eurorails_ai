@@ -68,6 +68,8 @@ export interface LLMPhaseFields {
     firstViolation?: string;
     firstHardGates?: Array<{ gate: string; passed: boolean; detail?: string }>;
     phaseBStripped?: boolean;
+    /** JIRA-203: Termination reason distinguishing lockup recovery from legitimate PassTurn */
+    lockupTerminationReason?: string;
   };
 }
 

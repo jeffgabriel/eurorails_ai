@@ -36,6 +36,7 @@ import { computeTrackUsageForMove } from '../../../shared/services/trackUsageFee
 import { NetworkBuildAnalyzer } from './NetworkBuildAnalyzer';
 import { TURN_BUILD_BUDGET } from '../../../shared/constants/gameRules';
 import { BuildRouteResolver, isBuildResolverEnabled, type ResolverOutcome } from './BuildRouteResolver';
+import { TurnValidator } from './TurnValidator';
 
 export class ActionResolver {
   /**
@@ -277,6 +278,11 @@ export class ActionResolver {
     if (isBuildResolverEnabled()) {
       // JIRA-179: BuildRouteResolver — produce three candidates and pick the best one.
       // The flag-off path below is byte-for-byte identical to the pre-change implementation.
+      // JIRA-203: Compute saturated city keys so the resolver excludes paths through capped cities.
+      const saturatedCityKeys = TurnValidator.computeSaturatedCityKeys(snapshot);
+      if (saturatedCityKeys.size > 0) {
+        console.log(`[ActionResolver] JIRA-203: ${saturatedCityKeys.size} saturated city/cities excluded from build paths`);
+      }
       resolverOutcome = BuildRouteResolver.resolve({
         waypoints,
         startPositions,
@@ -285,6 +291,7 @@ export class ActionResolver {
         connectedSegments,
         occupiedEdges,
         networkNodeKeys,
+        saturatedCityKeys,
       });
       segments = resolverOutcome.selected.segments;
       console.log(`[ActionResolver] BuildRouteResolver selected=${resolverOutcome.selected.id} ruleBranch=${resolverOutcome.ruleBranch} cost=${resolverOutcome.selected.totalCost}`);
@@ -451,6 +458,8 @@ export class ActionResolver {
         anchorClassification: resolverOutcome.anchorClassification,
         connectedSegmentCount: { preFilter: preFilterCount, postFilter: postFilterCount },
         ferryCrossingsIncluded,
+        // JIRA-203: Which saturated cities were excluded from path computation
+        rejectedSaturatedCities: resolverOutcome.rejectedSaturatedCities,
       };
       return { success: true, plan, buildResolverLog };
     }
