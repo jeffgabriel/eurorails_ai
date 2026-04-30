@@ -93,6 +93,7 @@ export class BuildAdvisor {
         userPrompt: user,
         outputSchema: BUILD_ADVISOR_SCHEMA,
         timeoutMs: 30000,
+        thinking: { type: 'adaptive' },
       });
 
       BuildAdvisor.lastDiagnostics.rawResponse = response.text.substring(0, 1000);
@@ -196,6 +197,7 @@ Please suggest a cheaper route with fewer/different waypoints, use opponent trac
         userPrompt: fullUserPrompt,
         outputSchema: BUILD_ADVISOR_SCHEMA,
         timeoutMs: 30000,
+        thinking: { type: 'adaptive' },
       });
 
       BuildAdvisor.lastDiagnostics.rawResponse = response.text.substring(0, 1000);
