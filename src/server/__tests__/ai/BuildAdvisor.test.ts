@@ -353,6 +353,27 @@ describe('BuildAdvisor', () => {
       expect(chatCall.timeoutMs).toBe(30000);
     });
 
+    it('should pass thinking: { type: "adaptive" } to the chat call (JIRA-205)', async () => {
+      const validResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Build toward Paris',
+      };
+      const brain = makeMockBrain(JSON.stringify(validResponse));
+
+      await BuildAdvisor.advise(
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      const chatCall = (brain.providerAdapter.chat as jest.Mock).mock.calls[0][0];
+      expect(chatCall.thinking).toEqual({ type: 'adaptive' });
+    });
+
     it('should allow empty waypoints for useOpponentTrack action', async () => {
       const opponentTrackResponse: BuildAdvisorResult = {
         action: 'useOpponentTrack',
@@ -436,6 +457,30 @@ describe('BuildAdvisor', () => {
 
       const chatCall = (brain.providerAdapter.chat as jest.Mock).mock.calls[0][0];
       expect(chatCall.timeoutMs).toBe(30000);
+    });
+
+    it('should pass thinking: { type: "adaptive" } to the retry chat call (JIRA-205)', async () => {
+      const cheaperResponse: BuildAdvisorResult = {
+        action: 'build',
+        target: 'Paris',
+        waypoints: [[1, 1]],
+        reasoning: 'Cheaper route',
+      };
+      const brain = makeMockBrain(JSON.stringify(cheaperResponse));
+
+      await BuildAdvisor.retryWithSolvencyFeedback(
+        { action: 'build', target: 'Paris', waypoints: [[1, 1]], reasoning: 'test' },
+        25,
+        15,
+        makeSnapshot(),
+        makeContext(),
+        makeRoute(),
+        testGrid,
+        brain,
+      );
+
+      const chatCall = (brain.providerAdapter.chat as jest.Mock).mock.calls[0][0];
+      expect(chatCall.thinking).toEqual({ type: 'adaptive' });
     });
 
     it('should return null on retry LLM failure', async () => {
