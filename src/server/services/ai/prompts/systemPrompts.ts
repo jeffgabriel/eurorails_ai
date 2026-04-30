@@ -185,6 +185,7 @@ TRIP RULES:
 5. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
 6. Keep trips to 2-6 stops.
 7. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in your context. If no demand card has a supply/delivery pair you need, do not emit that stop.
+8. ON-NETWORK DEMAND REQUIRED AS CANDIDATE: If any demand card is marked [ON-NETWORK] in your context (meaning both its supply and delivery cities are already on your rail network, requiring zero build cost), you MUST include the highest net-value such demand as an explicit candidate — even if a higher-payout off-network demand exists. Mentioning it only in reasoning text is NOT sufficient; it must appear as a complete candidate with stops.
 
 GEOGRAPHIC STRATEGY: Bias toward the core cluster (Paris — Ruhr — Holland — Berlin — Wien) when short on cash or cities; otherwise optimize by corridor efficiency.
 

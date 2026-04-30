@@ -54,11 +54,12 @@ export interface TripPlanResult {
   userPrompt?: string;
   /**
    * JIRA-194: Present ONLY when the LLM's chosenIndex was overridden.
+   * JIRA-206: Union widened to include affordability and LLM-rejection reasons.
    * Two scalars sufficient for game-log mirror (full diagnostic is in llmLog entry).
    */
   selection?: {
     llmChosenIndex: number;
-    fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops';
+    fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' | 'no_affordable_candidate' | 'llm_rejected_validated';
   };
 }
 
@@ -196,35 +197,124 @@ export class TripPlanner {
           continue;
         }
 
-        // Pick the best candidate — honor LLM's chosenIndex when chosen candidate validates;
-        // fall back to internal score when chosenIndex is out of range or has no feasible stops.
-        // Note: candidates[] is sorted by score; llmIndex tracks each entry's original LLM position.
-        const bestIdx = candidates.reduce((best, c, i) =>
-          c.score > candidates[best].score ? i : best, 0);
+        // JIRA-206 (R1, R3): Affordability filter — normalize upgrade label first, then
+        // compute upgrade cost and drop any candidate the bot cannot fund this turn.
+        const UPGRADE_LABEL_TO_TRAIN: Record<string, TrainType> = {
+          FastFreight: TrainType.FastFreight,
+          HeavyFreight: TrainType.HeavyFreight,
+          Superfreight: TrainType.Superfreight,
+        };
+        const rawUpgrade = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
+        const normalizedUpgrade = rawUpgrade
+          ? (UPGRADE_LABEL_TO_TRAIN[rawUpgrade] ?? rawUpgrade)
+          : undefined;
+        const upgradeCost = this.computeUpgradeCost(
+          typeof normalizedUpgrade === 'string' && Object.values(TrainType).includes(normalizedUpgrade as TrainType)
+            ? normalizedUpgrade as TrainType
+            : undefined,
+        );
+        const availableCash = snapshot.bot.money - upgradeCost;
+        const affordableCandidates = candidates.filter(c => {
+          const totalCost = c.buildCostEstimate + c.usageFeeEstimate;
+          const isAffordable = totalCost <= availableCash;
+          if (!isAffordable) {
+            console.log(`[TripPlanner] Affordability filter dropped candidate (llmIndex=${c.llmIndex}): cost ${totalCost}M > available ${availableCash}M (cash=${snapshot.bot.money}M - upgrade=${upgradeCost}M)`);
+          }
+          return isAffordable;
+        });
+
+        if (affordableCandidates.length === 0) {
+          // JIRA-206 (R6): Retry once with affordability gap hint, mirroring parse/validation retry
+          const gapMsg = `All ${candidates.length} validated candidate(s) are unaffordable. Available cash after upgrade: ${availableCash}M ECU. Costs: ${candidates.map(c => `candidate ${c.llmIndex}: ${c.buildCostEstimate + c.usageFeeEstimate}M`).join(', ')}. You MUST propose a route fundable from ${availableCash}M cash (no upgrade deduction if upgradeOnRoute is omitted).`;
+          console.log(`[TripPlanner] Affordability filter emptied validated set — retrying with hint`);
+          llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: gapMsg, latencyMs });
+          lastError = gapMsg;
+          continue;
+        }
+
+        // Pick the best candidate — honor LLM's chosenIndex when chosen candidate validates
+        // AND survives the affordability filter; fall back to internal score when chosenIndex
+        // is out of range or has no feasible stops. See ADR-2 for chosen_not_in_validated.
+        // Note: affordableCandidates[] is sorted by score (inherited from scoreCandidates sort).
+        const bestIdx = affordableCandidates.reduce((best, c, i) =>
+          c.score > affordableCandidates[best].score ? i : best, 0);
 
         let selectedIdx: number;
-        const ci = parsed.chosenIndex;
-        // Find the sorted position of the LLM's chosen candidate by its original llmIndex
-        const chosenCandidateIdx = candidates.findIndex(c => c.llmIndex === ci);
+        // When chosenIndex is missing (e.g. truncated JSON recovery), treat as chosenIndex=0
+        // to preserve bestIdx fallback behavior rather than triggering chosen_not_in_validated.
+        const ci: number = typeof parsed.chosenIndex === 'number' ? parsed.chosenIndex : 0;
+        const llmProvidedChosenIndex = typeof parsed.chosenIndex === 'number';
+        // Find the sorted position of the LLM's chosen candidate by its original llmIndex,
+        // but only among candidates that survived the affordability filter.
+        const chosenCandidateIdx = affordableCandidates.findIndex(c => c.llmIndex === ci);
 
         // JIRA-194: Selection diagnostic — only built on override (anti-patterns-logging-noise)
         let selectionDiagnostic: TripPlannerSelectionDiagnostic | undefined;
 
-        if (chosenCandidateIdx >= 0 && candidates[chosenCandidateIdx].stops.length > 0) {
+        if (chosenCandidateIdx >= 0 && affordableCandidates[chosenCandidateIdx].stops.length > 0) {
           selectedIdx = chosenCandidateIdx;
-          console.log(`[TripPlanner] chosenIndex honored: LLM picked candidate ${ci} (sorted pos ${chosenCandidateIdx}, ${candidates[chosenCandidateIdx].stops.length} feasible stops)`);
+          console.log(`[TripPlanner] chosenIndex honored: LLM picked candidate ${ci} (sorted pos ${chosenCandidateIdx}, ${affordableCandidates[chosenCandidateIdx].stops.length} feasible stops)`);
           // Honored — no diagnostic (R5)
+        } else if (chosenCandidateIdx < 0 && llmProvidedChosenIndex) {
+          // JIRA-206 (R2): LLM explicitly provided a chosenIndex that is not in the validated+affordable set.
+          // Return no-route rather than falling back to bestIdx (ADR-2).
+          // Only fires when the LLM actually provided chosenIndex — not when it was absent (e.g. truncated JSON).
+          // This is different from chosen_zero_stops where the LLM DID pick a validated candidate
+          // but it got pruned. Here the LLM's pick was not among validated candidates at all.
+          console.log(`[TripPlanner] chosen_not_in_validated → no-route: chosenIndex ${ci} not found in affordable validated candidates; not falling back to bestIdx`);
+          const rejectionMap = new Map(rejections.map(r => [r.llmIndex, r]));
+          const diagCandidates: TripPlannerSelectionDiagnostic['candidates'] = parsed.candidates.map((raw, idx) => {
+            const validatedEntry = affordableCandidates.find(c => c.llmIndex === idx);
+            const rejEntry = rejectionMap.get(idx);
+            const rawStops = raw.stops.map(s => {
+              const action = s.action;
+              const load = s.load;
+              const city = action.toUpperCase() === 'PICKUP'
+                ? (s as { action: string; load: string; supplyCity?: string }).supplyCity ?? null
+                : (s as { action: string; load: string; deliveryCity?: string }).deliveryCity ?? null;
+              return { action, load, city };
+            });
+            return {
+              llmIndex: idx,
+              rawStops,
+              validatorErrors: rejEntry?.errors ?? [],
+              prunedToZero: validatedEntry
+                ? validatedEntry.stops.length === 0
+                : (rejEntry?.prunedToZero ?? false),
+            };
+          });
+          const noRouteDiagnostic: TripPlannerSelectionDiagnostic = {
+            llmChosenIndex: ci,
+            actualSelectedLlmIndex: -1,
+            fallbackReason: 'llm_rejected_validated',
+            candidates: diagCandidates,
+          };
+          llmLog.push({
+            attemptNumber: attempt + 1,
+            status: 'success',
+            responseText: response.text.substring(0, 500),
+            latencyMs,
+            tripPlannerSelection: noRouteDiagnostic,
+          });
+          return {
+            route: null,
+            llmLog,
+            selection: {
+              llmChosenIndex: ci,
+              fallbackReason: 'llm_rejected_validated',
+            },
+          } as unknown as TripPlanResult;
         } else {
+          // chosen_zero_stops: LLM picked a validated candidate but it was pruned to 0 stops.
+          // Preserve existing bestIdx fallback (ADR-2: LLM DID intend to pick something).
           selectedIdx = bestIdx;
-          const fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' = chosenCandidateIdx < 0
-            ? 'chosen_not_in_validated'
-            : 'chosen_zero_stops';
-          console.log(`[TripPlanner] Falling back to internal score: candidate at sorted pos ${bestIdx} (${fallbackReason === 'chosen_not_in_validated' ? `chosenIndex ${ci} not found in validated candidates` : `chosenIndex ${ci} has 0 feasible stops after validation`})`);
+          const fallbackReason: 'chosen_zero_stops' = 'chosen_zero_stops';
+          console.log(`[TripPlanner] Falling back to internal score: candidate at sorted pos ${bestIdx} (chosenIndex ${ci} has 0 feasible stops after validation)`);
 
           // Build diagnostic payload (JIRA-194: R2)
           const rejectionMap = new Map(rejections.map(r => [r.llmIndex, r]));
           const diagCandidates: TripPlannerSelectionDiagnostic['candidates'] = parsed.candidates.map((raw, idx) => {
-            const validatedEntry = candidates.find(c => c.llmIndex === idx);
+            const validatedEntry = affordableCandidates.find(c => c.llmIndex === idx);
             const rejEntry = rejectionMap.get(idx);
             const rawStops = raw.stops.map(s => {
               const action = s.action;
@@ -246,27 +336,16 @@ export class TripPlanner {
 
           selectionDiagnostic = {
             llmChosenIndex: ci,
-            actualSelectedLlmIndex: candidates[bestIdx]?.llmIndex ?? -1,
+            actualSelectedLlmIndex: affordableCandidates[bestIdx]?.llmIndex ?? -1,
             fallbackReason,
             candidates: diagCandidates,
           };
         }
 
-        const chosen = candidates[selectedIdx];
-
-        // Normalize LLM PascalCase upgrade labels to TrainType snake_case enum values
-        // (mirrors ResponseParser.ts:467-473 — fixes silent rejection in tryConsumeUpgrade)
-        const UPGRADE_LABEL_TO_TRAIN: Record<string, TrainType> = {
-          FastFreight: TrainType.FastFreight,
-          HeavyFreight: TrainType.HeavyFreight,
-          Superfreight: TrainType.Superfreight,
-        };
-        const rawUpgrade = parsed.upgradeOnRoute ? String(parsed.upgradeOnRoute) : undefined;
-        const normalizedUpgrade = rawUpgrade
-          ? (UPGRADE_LABEL_TO_TRAIN[rawUpgrade] ?? rawUpgrade)
-          : undefined;
+        const chosen = affordableCandidates[selectedIdx];
 
         // Convert to StrategicRoute
+        // normalizedUpgrade was computed earlier in the affordability filter section
         const route: StrategicRoute = {
           stops: chosen.stops,
           currentStopIndex: 0,
@@ -344,6 +423,22 @@ export class TripPlanner {
 
     // Return failure with preserved llmLog for diagnostics
     return { route: null, llmLog };
+  }
+
+  /**
+   * JIRA-206 (R3): Compute the ECU cost of a same-turn upgrade signalled by upgradeOnRoute.
+   * Returns 20 for any valid tier upgrade (base→fast/heavy or fast/heavy→superfreight).
+   * Returns 0 when target is undefined.
+   * Reuses UPGRADE_LABEL_TO_TRAIN for label normalization.
+   */
+  private computeUpgradeCost(
+    target: TrainType | undefined,
+  ): number {
+    if (target === undefined) return 0;
+    // Any valid train upgrade costs 20M per game rules
+    const validTargets: TrainType[] = [TrainType.FastFreight, TrainType.HeavyFreight, TrainType.Superfreight];
+    if (validTargets.includes(target)) return 20;
+    return 0;
   }
 
   /**

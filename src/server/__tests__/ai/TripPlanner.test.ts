@@ -562,7 +562,10 @@ describe('TripPlanner', () => {
 
   describe('validation filtering', () => {
     it('should filter out infeasible candidates rejected by RouteValidator', async () => {
-      // First candidate fails validation, second passes
+      // First candidate fails validation, second passes.
+      // JIRA-206 (R2): LLM picks chosenIndex=0 (infeasible), which is not in the validated set.
+      // chosen_not_in_validated now returns no-route instead of falling back to bestIdx.
+      // Use chosenIndex=1 (the feasible candidate) so the route commits normally.
       (RouteValidator.validate as jest.Mock)
         .mockReturnValueOnce({ valid: false, errors: ['Supply unreachable'] })
         .mockReturnValueOnce({ valid: true, errors: [] });
@@ -582,7 +585,7 @@ describe('TripPlanner', () => {
           ],
           reasoning: 'Feasible route',
         },
-      ]);
+      ], 1 /* LLM picks the feasible candidate */);
 
       const context = makeContext({
         demands: [
@@ -1450,8 +1453,10 @@ describe('TripPlanner', () => {
       expect(result.route.reasoning).toBe('Candidate 0 — low payout');
     });
 
-    it('chosenIndex: 2 with Candidate 2 having zero feasible stops after validation → falls back to highest-scoring valid candidate', async () => {
-      // Candidate 0 validates fine. Candidate 2 gets fully pruned (returns prunedRoute with no stops).
+    it('chosenIndex: 2 with Candidate 2 rejected by RouteValidator → JIRA-206 chosen_not_in_validated returns no-route', async () => {
+      // Candidate 0 and 1 validate fine. Candidate 2 is rejected entirely.
+      // JIRA-206 (R2): LLM picks chosenIndex=2 (rejected), which is not in the validated set.
+      // chosen_not_in_validated now returns no-route instead of falling back to bestIdx.
       (RouteValidator.validate as jest.Mock).mockImplementation((route: StrategicRoute) => {
         // Candidate 2 is identified by its reasoning text
         if (route.reasoning === 'Candidate 2 — invalid') {
@@ -1483,7 +1488,7 @@ describe('TripPlanner', () => {
             reasoning: 'Candidate 2 — invalid',
           },
         ],
-        2, // chosenIndex = 2 (but Candidate 2 is fully invalid)
+        2, // chosenIndex = 2 (but Candidate 2 is fully rejected by RouteValidator)
       );
 
       const context = makeContext({
@@ -1497,14 +1502,14 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 300, output: 150 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
 
-      // Candidate 2 failed validation, so should fall back to best valid candidate (0 or 1)
-      expect(result.chosen).not.toBe(2);
-      expect(result.route.reasoning).not.toBe('Candidate 2 — invalid');
+      // JIRA-206: chosen_not_in_validated now returns no-route (route: null)
+      expect(result.route).toBeNull();
     });
 
-    it('chosenIndex out of range → falls back to internal score', async () => {
+    it('chosenIndex out of range → JIRA-206 returns no-route (llm_rejected_validated)', async () => {
+      // JIRA-206 (R2): chosen_not_in_validated now returns no-route instead of falling back to bestIdx.
       (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
 
       const response = buildLlmResponse(
@@ -1517,7 +1522,7 @@ describe('TripPlanner', () => {
             reasoning: 'Candidate 0',
           },
         ],
-        99, // chosenIndex out of range
+        99, // chosenIndex out of range — not in validated set
       );
 
       const context = makeContext({
@@ -1528,11 +1533,10 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
 
-      // Should fall back to valid candidate 0
-      expect(result.chosen).toBe(0);
-      expect(result.route.reasoning).toBe('Candidate 0');
+      // JIRA-206: chosen_not_in_validated → route: null with llm_rejected_validated
+      expect(result.route).toBeNull();
     });
   });
 });
@@ -2062,10 +2066,9 @@ describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
   });
 
   // AC5: LLM returns 3 candidates; chosenIndex=0 fails validation; candidates 1,2 pass.
-  // Result must have selection with llmChosenIndex=0, actualSelectedLlmIndex in {1,2},
-  // fallbackReason in {'chosen_not_in_validated','chosen_zero_stops'}, and
-  // candidates[0].validatorErrors.length > 0.
-  it('AC5: selection diagnostic populated when chosenIndex fails RouteValidator', async () => {
+  // JIRA-206 (R2): chosen_not_in_validated now returns { route: null } with llm_rejected_validated.
+  // The selection diagnostic is embedded in the llmLog success entry.
+  it('AC5: selection diagnostic populated when chosenIndex fails RouteValidator → JIRA-206 returns no-route', async () => {
     const { brain, chatFn } = makeMockBrain();
 
     const context = makeContext({
@@ -2111,16 +2114,13 @@ describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
     const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
 
+    // JIRA-206 (R2): chosen_not_in_validated returns no-route
     expect(result).toBeDefined();
-    expect('candidates' in result).toBe(true);
-    const r = result as TripPlanResult;
-
-    // selection must be present (override happened)
+    expect(result.route).toBeNull();
+    // selection field carries the reason (returned inline)
+    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
     expect(r.selection).toBeDefined();
-    expect(r.selection!.llmChosenIndex).toBe(0);
-    expect(r.selection!.fallbackReason).toMatch(/chosen_not_in_validated|chosen_zero_stops/);
-    // actualSelectedLlmIndex must be 1 or 2 (the validated candidates)
-    expect([1, 2]).toContain((r.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection?.actualSelectedLlmIndex ?? -999);
+    expect(r.selection!.fallbackReason).toBe('llm_rejected_validated');
     // The LLM transcript diagnostic must include candidate 0's validator errors
     const diag = (r.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection;
     expect(diag).toBeDefined();
@@ -2476,5 +2476,371 @@ describe('TripPlanner — JIRA-193 demandCardId fill-in (AC4)', () => {
       expect(tripResult.llmLog[0].status).toBe('success');
       expect(tripResult.llmLog[0].recoveredFromTruncation).toBe(true);
     });
+  });
+});
+
+// ── JIRA-206: Affordability filter, LLM-rejection no-route, on-network prompt rule ──────
+
+describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-route', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Default: RouteValidator.validate returns valid for all candidates
+    (RouteValidator.validate as jest.Mock).mockReturnValue({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // ── AC1 reference scenario: Nano T15 ─────────────────────────────────
+  // Game d7c3fd78 T15: $12M cash, freight train, no active route.
+  // LLM proposes Oil (24M build) and Steel (29M build) with upgradeOnRoute: 'FastFreight'.
+  // After upgrade cost (20M), available cash = $12M - $20M = -$8M → both unaffordable.
+  // After retrying with hint (MAX_RETRIES=2 allows retry), all retries exhaust → no-route.
+  it('AC1: Nano T15 reference — Oil 24M + Steel 29M unaffordable after 20M upgrade → no-route after retries', async () => {
+    const oilResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', city: 'Newcastle' },
+          { action: 'deliver', load: 'Oil', city: 'Zurich', demandCardId: 89, payment: 25 },
+        ],
+        reasoning: 'Oil Newcastle → Zurich',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Steel', city: 'Birmingham' },
+          { action: 'deliver', load: 'Steel', city: 'Berlin', demandCardId: 81, payment: 8 },
+        ],
+        reasoning: 'Steel Birmingham → Berlin',
+      },
+    ], 0, 'FastFreight'); // chosenIndex=0 (Oil), upgradeOnRoute='FastFreight'
+
+    const context = makeContext({
+      money: 12,
+      demands: [
+        makeDemand({ cardIndex: 89, loadType: 'Oil', supplyCity: 'Newcastle', deliveryCity: 'Zurich', payout: 25, estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 17 }),
+        makeDemand({ cardIndex: 81, loadType: 'Steel', supplyCity: 'Birmingham', deliveryCity: 'Berlin', payout: 8, estimatedTrackCostToSupply: 3, estimatedTrackCostToDelivery: 26 }),
+        makeDemand({ cardIndex: 88, loadType: 'Cheese', supplyCity: 'Holland', deliveryCity: 'Cardiff', payout: 15, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(12); // $12M cash
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    // All retries return the same unaffordable candidates
+    chatFn.mockResolvedValue({ text: oilResponse, usage: { input: 1462, output: 567 } });
+    // planRoute fallback returns null (no viable route)
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // AC1: The committed Oil route does NOT happen — route must be null
+    expect(result.route).toBeNull();
+  });
+
+  // ── R7a: All candidates fail affordability → no-route + no_affordable_candidate ──
+  it('R7a: all candidates unaffordable → no-route after retries with no_affordable_candidate', async () => {
+    // Both candidates have build costs exceeding bot cash
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Expensive Coal route',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+        ],
+        reasoning: 'Expensive Wine route',
+      },
+    ], 0);
+
+    const context = makeContext({
+      money: 5,
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTrackCostToSupply: 8, estimatedTrackCostToDelivery: 10 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 8 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(5); // only $5M
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // All candidates exceed $5M cash → no-route
+    expect(result.route).toBeNull();
+    // Should have retried (affordability hint triggers retry)
+    expect(chatFn).toHaveBeenCalledTimes(3); // initial + 2 retries (MAX_RETRIES=2)
+    // All llmLog entries for affordability failures are validation_error
+    const validationErrors = result.llmLog.filter(e => e.status === 'validation_error');
+    expect(validationErrors.length).toBeGreaterThan(0);
+    expect(validationErrors[0].error).toContain('unaffordable');
+  });
+
+  // ── R7b: On-network candidate survives filter, off-network unaffordable ──
+  it('R7b: on-network candidate (buildCost=0) survives affordability filter and is selected', async () => {
+    // Cheese: Holland → Cardiff is on-network (0M build). Oil: Newcastle → Zurich costs 24M build.
+    // Bot has $12M cash. Oil is unaffordable; Cheese survives.
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', city: 'Newcastle' },
+          { action: 'deliver', load: 'Oil', city: 'Zurich', demandCardId: 89, payment: 25 },
+        ],
+        reasoning: 'Oil — expensive build',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Cheese', city: 'Holland' },
+          { action: 'deliver', load: 'Cheese', city: 'Cardiff', demandCardId: 88, payment: 15 },
+        ],
+        reasoning: 'Cheese — on-network, free',
+      },
+    ], 1); // LLM picks Cheese (index 1)
+
+    const context = makeContext({
+      money: 12,
+      demands: [
+        makeDemand({ cardIndex: 89, loadType: 'Oil', supplyCity: 'Newcastle', deliveryCity: 'Zurich', payout: 25, estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 17 }),
+        makeDemand({ cardIndex: 88, loadType: 'Cheese', supplyCity: 'Holland', deliveryCity: 'Cardiff', payout: 15, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(12); // $12M cash
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // Cheese route is affordable and selected
+    expect(result.route).not.toBeNull();
+    expect(result!.route.stops.some(s => s.loadType === 'Cheese')).toBe(true);
+    // Oil was dropped by the affordability filter, so only 1 candidate in the affordable set
+    expect(chatFn).toHaveBeenCalledTimes(1); // no retry needed
+  });
+
+  // ── R7c: upgradeOnRoute cost subtracted before affordability check ──
+  it('R7c: upgradeOnRoute cost (20M) is subtracted from cash before affordability check', async () => {
+    // Bot has $32M cash. upgradeOnRoute='FastFreight' costs 20M. Available = $12M.
+    // Candidate buildCost = 24M > $12M → unaffordable.
+    // Without upgrade subtraction it would appear affordable ($24M < $32M). With subtraction it's not.
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', city: 'Newcastle' },
+          { action: 'deliver', load: 'Oil', city: 'Zurich', demandCardId: 89, payment: 25 },
+        ],
+        reasoning: 'Oil with upgrade',
+      },
+    ], 0, 'FastFreight'); // upgradeOnRoute = FastFreight (costs 20M)
+
+    const context = makeContext({
+      money: 32,
+      demands: [
+        makeDemand({ cardIndex: 89, loadType: 'Oil', supplyCity: 'Newcastle', deliveryCity: 'Zurich', payout: 25, estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 17 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(32); // $32M cash
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // $32M cash - $20M upgrade = $12M available. Build cost=24M > $12M → unaffordable → no-route
+    expect(result.route).toBeNull();
+    // The retry prompt should mention affordability
+    const validationErrors = result.llmLog.filter(e => e.status === 'validation_error');
+    expect(validationErrors.length).toBeGreaterThan(0);
+    expect(validationErrors[0].error).toContain('unaffordable');
+  });
+
+  // ── R7d: chosen_not_in_validated → no-route + llm_rejected_validated ──
+  it('R7d: chosen_not_in_validated → no-route with llm_rejected_validated (bestIdx NOT used)', async () => {
+    // LLM picks chosenIndex=99 (out of range). Candidate 0 validates fine.
+    // JIRA-206: return no-route instead of bestIdx fallback.
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Coal route',
+      },
+    ], 99); // chosenIndex=99 — not in validated set
+
+    const context = makeContext({
+      money: 50,
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(50);
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // JIRA-206 (R2): chosen_not_in_validated → route: null
+    expect(result.route).toBeNull();
+
+    // selection carries the reason
+    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
+    expect(r.selection).toBeDefined();
+    expect(r.selection!.fallbackReason).toBe('llm_rejected_validated');
+
+    // No retry was triggered (we return immediately, not retry)
+    expect(chatFn).toHaveBeenCalledTimes(1);
+  });
+
+  // ── R7e: chosen_zero_stops still falls back to bestIdx ─────────────────
+  it('R7e: chosen_zero_stops (pruned by validator) still falls back to bestIdx', async () => {
+    // Candidate 0 validates but returns prunedRoute with zero stops.
+    // Candidate 1 validates fine with stops. LLM picks chosenIndex=0 (zero-stop candidate).
+    // chosen_zero_stops → bestIdx fallback (not no-route).
+    (RouteValidator.validate as jest.Mock).mockImplementation((route: StrategicRoute) => {
+      if (route.reasoning === 'Pruned to zero') {
+        // Returns prunedRoute with empty stops
+        return { valid: true, errors: [], prunedRoute: { stops: [], currentStopIndex: 0, phase: 'build', createdAtTurn: 5, reasoning: 'Pruned to zero' } };
+      }
+      return { valid: true, errors: [] };
+    });
+
+    const response = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Pruned to zero',
+      },
+      {
+        stops: [
+          { action: 'pickup', load: 'Wine', city: 'Bordeaux' },
+          { action: 'deliver', load: 'Wine', city: 'Paris', demandCardId: 2, payment: 12 },
+        ],
+        reasoning: 'Valid Wine route',
+      },
+    ], 0); // LLM picks candidate 0 (gets pruned to zero)
+
+    const context = makeContext({
+      money: 50,
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(50);
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // chosen_zero_stops: bestIdx fallback → route is committed (Wine, the one with stops)
+    expect(result.route).not.toBeNull();
+    expect(result!.route.stops.some(s => s.loadType === 'Wine')).toBe(true);
+    // selection carries chosen_zero_stops reason
+    expect(result!.selection).toBeDefined();
+    expect(result!.selection!.fallbackReason).toBe('chosen_zero_stops');
+  });
+
+  // ── R7f: System prompt includes new on-network-demand rule ─────────────
+  it('R7f: system prompt contains on-network demand rule (rule 8)', () => {
+    // Use the real systemPrompts module (bypassing the mock at the top of this file)
+    const mod = jest.requireActual('../../services/ai/prompts/systemPrompts') as {
+      getTripPlanningPrompt: (s: BotSkillLevel, c: GameContext, m: BotMemoryState) => { system: string; user: string };
+    };
+
+    const context = makeContext({
+      citiesOnNetwork: ['Essen', 'Berlin'],
+      demands: [makeDemand()],
+    });
+    const memory = makeMemory();
+
+    const { system } = mod.getTripPlanningPrompt(BotSkillLevel.Medium, context, memory);
+
+    // The new rule 8 must be present in the system prompt
+    expect(system).toContain('ON-NETWORK DEMAND REQUIRED AS CANDIDATE');
+    expect(system).toContain('[ON-NETWORK]');
+    expect(system).toContain('highest net-value');
+  });
+
+  // ── R7g: Affordability retry succeeds on second attempt ────────────────
+  it('R7g: affordability filter empty → retry once; LLM returns fundable candidate → route committed', async () => {
+    // First attempt: Oil 24M build, bot has $5M cash → unaffordable → retry with hint
+    const expensiveResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Oil', city: 'Newcastle' },
+          { action: 'deliver', load: 'Oil', city: 'Zurich', demandCardId: 89, payment: 25 },
+        ],
+        reasoning: 'Oil — too expensive',
+      },
+    ], 0);
+
+    // Second attempt (retry): Cheese 0M build → affordable
+    const cheapResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Cheese', city: 'Holland' },
+          { action: 'deliver', load: 'Cheese', city: 'Cardiff', demandCardId: 88, payment: 15 },
+        ],
+        reasoning: 'Cheese — on-network, free',
+      },
+    ], 0);
+
+    const context = makeContext({
+      money: 5,
+      demands: [
+        makeDemand({ cardIndex: 89, loadType: 'Oil', supplyCity: 'Newcastle', deliveryCity: 'Zurich', payout: 25, estimatedTrackCostToSupply: 7, estimatedTrackCostToDelivery: 17 }),
+        makeDemand({ cardIndex: 88, loadType: 'Cheese', supplyCity: 'Holland', deliveryCity: 'Cardiff', payout: 15, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0 }),
+      ],
+    });
+
+    const snapshot = makeSnapshot(5); // $5M cash
+
+    const { brain, chatFn } = makeMockBrain();
+    chatFn
+      .mockResolvedValueOnce({ text: expensiveResponse, usage: { input: 100, output: 50 } }) // attempt 1: unaffordable
+      .mockResolvedValueOnce({ text: cheapResponse, usage: { input: 120, output: 60 } }); // attempt 2: fundable
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory());
+
+    // Retry succeeded — route is committed to Cheese
+    expect(result.route).not.toBeNull();
+    expect(result!.route.stops.some(s => s.loadType === 'Cheese')).toBe(true);
+    // Exactly 2 calls: initial (unaffordable) + retry (fundable)
+    expect(chatFn).toHaveBeenCalledTimes(2);
+    // The retry call should include affordability hint in the user prompt
+    const retryCall = chatFn.mock.calls[1][0];
+    expect(retryCall.userPrompt).toContain('PREVIOUS ATTEMPT FAILED');
+    expect(retryCall.userPrompt).toContain('unaffordable');
   });
 });

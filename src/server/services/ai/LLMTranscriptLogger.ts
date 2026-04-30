@@ -24,8 +24,8 @@ export interface TripPlannerSelectionDiagnostic {
   llmChosenIndex: number;
   /** The llmIndex actually selected (-1 when no validated candidates). */
   actualSelectedLlmIndex: number;
-  /** Why the LLM's choice was not honored. */
-  fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops';
+  /** Why the LLM's choice was not honored. JIRA-206: widened with affordability and LLM-rejection reasons. */
+  fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' | 'no_affordable_candidate' | 'llm_rejected_validated';
   /** Per-candidate evidence: validated candidates have empty validatorErrors. */
   candidates: Array<{
     llmIndex: number;
