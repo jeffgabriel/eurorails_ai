@@ -756,3 +756,39 @@ describe('JIRA-198: multi-replan accumulation — last non-null action wins', ()
     // MovementPhasePlanner.
   });
 });
+
+// ── JIRA-207B: keep_current_plan handling (R10e, AC10d) ─────────────────────
+
+describe('JIRA-207B: PostDeliveryReplanner keep_current_plan handling (R10e)', () => {
+  it('AC10d: keep_current_plan preserves activeRoute with moveTargetInvalidated=false', async () => {
+    // TripPlanner returns keep_current_plan → PostDeliveryReplanner must NOT cascade to heuristic
+    MockTripPlannerClass.mockImplementation(() => ({
+      planTrip: jest.fn().mockResolvedValue({
+        route: null,
+        llmLog: [],
+        selection: { llmChosenIndex: -1, fallbackReason: 'keep_current_plan' },
+      }),
+    }));
+
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'deliver', loadType: 'Hops', city: 'Ruhr', demandCardId: 7, payment: 16 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 3,
+      reasoning: 'Existing Hops route',
+    };
+
+    const result = await PostDeliveryReplanner.replan(
+      activeRoute, makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 0, '[TEST]',
+    );
+
+    // Route should be preserved (revalidated, not null)
+    expect(result.route).not.toBeNull();
+    // moveTargetInvalidated should be false (route unchanged — stale indices still valid)
+    expect(result.moveTargetInvalidated).toBe(false);
+    // AdvisorCoordinator.adviseEnrichment should NOT be called (no new route from LLM)
+    expect(AdvisorCoordinator.adviseEnrichment).not.toHaveBeenCalled();
+  });
+});
