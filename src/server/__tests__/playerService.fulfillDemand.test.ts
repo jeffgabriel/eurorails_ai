@@ -188,19 +188,20 @@ describe('PlayerService.fulfillDemand', () => {
       expect(result.newCard.id).toBe(99);
     });
 
-    it('should use the replacement card (even if it is an event card) — Project 3 handles the full loop', async () => {
+    it('should process multiple consecutive event cards before returning a demand card', async () => {
       setupPlayerDb();
-      // First draw: event card, second draw (replacement): another event card
       (demandDeckService.drawCard as jest.Mock)
         .mockReturnValueOnce(eventResult(121))
-        .mockReturnValueOnce(eventResult(130));
+        .mockReturnValueOnce(eventResult(130))
+        .mockReturnValueOnce(demandResult(99));
 
       const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
-      // Only first event card is processed; second draw is the replacement used as-is
-      expect(EventCardService.processEventCard).toHaveBeenCalledTimes(1);
-      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(2);
-      expect(result.newCard.id).toBe(130);
+      expect(EventCardService.processEventCard).toHaveBeenCalledTimes(2);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(130);
+      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(3);
+      expect(result.newCard.id).toBe(99);
     });
 
     it('should log an info message (not warn) when an event card is drawn', async () => {

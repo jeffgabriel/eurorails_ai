@@ -284,15 +284,16 @@ describe('PlayerService.deliverLoadForUser × EventCardService (BE-005)', () => 
     expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
   });
 
-  it('draws exactly one replacement card after processing an event card', async () => {
+  it('keeps drawing until a demand card is found', async () => {
     (demandDeckService.drawCard as jest.Mock)
       .mockReturnValueOnce(makeEventCard(121))
+      .mockReturnValueOnce(makeEventCard(130))
       .mockReturnValueOnce(makeDemandCard(99));
 
     await PlayerService.deliverLoadForUser(gameId, userId, city, resource as any, cardId);
 
-    // drawCard: once for the event card, once for the replacement
-    expect(demandDeckService.drawCard).toHaveBeenCalledTimes(2);
+    expect(EventCardService.processEventCard).toHaveBeenCalledTimes(2);
+    expect(demandDeckService.drawCard).toHaveBeenCalledTimes(3);
   });
 
   it('does not call EventCardService.processEventCard when only demand cards are drawn', async () => {

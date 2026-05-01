@@ -760,24 +760,19 @@ export class PlayerService {
       const player = playerResult.rows[0];
       
       // Draw a new card from the deck.
-      // If an event card is drawn, process it via EventCardService, discard it,
-      // then draw exactly one replacement card (Project 3 will implement the full
-      // "keep drawing until demand" loop).
+      // Keep drawing until we get a demand card — event cards are processed and discarded.
       let newCard: import('../../shared/types/DemandCard').DemandCard | null = null;
       let drawResult = demandDeckService.drawCard();
-      if (drawResult !== null && drawResult.type === 'event') {
-        // Process the event card via EventCardService (replaces Project 1 discard stub)
+      while (drawResult !== null && drawResult.type === 'event') {
         console.info(`[fulfillDemand] Drew event card ${drawResult.card.id} — processing via EventCardService`);
         await EventCardService.processEventCard(gameId, drawResult.card, playerId, client);
         demandDeckService.discardEventCard(drawResult.card.id);
-        // Draw exactly one replacement card (Project 3 extends this to a full loop)
         drawResult = demandDeckService.drawCard();
       }
       if (drawResult === null) {
         throw new Error('Failed to draw new card');
       }
-      // The replacement card may be a demand or event card; Project 3 handles the full loop.
-      newCard = drawResult.card as import('../../shared/types/DemandCard').DemandCard;
+      newCard = drawResult.card;
 
       // Create the new hand by replacing the fulfilled card with the new card
       const newHand = player.hand.map(id => id === cardId ? newCard!.id : id);
@@ -903,23 +898,21 @@ export class PlayerService {
         throw new Error("Invalid payment");
       }
 
-      // Draw a new card. If an event card is drawn, process it via EventCardService,
-      // discard it, then draw exactly one replacement card (Project 3 will implement
-      // the full "keep drawing until demand" loop).
+      // Draw a new card. Keep drawing until we get a demand card — event cards are
+      // processed and discarded.
       let newDrawResult = demandDeckService.drawCard();
-      if (newDrawResult !== null && newDrawResult.type === 'event') {
-        console.info(`[deliverLoad] Drew event card ${newDrawResult.card.id} — processing via EventCardService`);
+      while (newDrawResult !== null && newDrawResult.type === 'event') {
+        const eventCardId = newDrawResult.card.id;
+        discardedEventCardIds.push(eventCardId);
+        console.info(`[deliverLoad] Drew event card ${eventCardId} — processing via EventCardService`);
         await EventCardService.processEventCard(gameId, newDrawResult.card, playerId, client);
-        demandDeckService.discardEventCard(newDrawResult.card.id);
-        discardedEventCardIds.push(newDrawResult.card.id);
-        // Draw exactly one replacement card (Project 3 extends this to a full loop)
+        demandDeckService.discardEventCard(eventCardId);
         newDrawResult = demandDeckService.drawCard();
       }
       if (!newDrawResult) {
         throw new Error("Failed to draw new card");
       }
-      // The replacement card may be a demand or event card; Project 3 handles the full loop.
-      const newCard = newDrawResult.card as DemandCard;
+      const newCard = newDrawResult.card;
       drewCardId = newCard.id;
 
       const updatedHandIds = handIds.map((id) => (id === cardId ? newCard.id : id));
