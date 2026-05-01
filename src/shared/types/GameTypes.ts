@@ -349,6 +349,13 @@ export interface WorldSnapshot {
         ferryHalfSpeed?: boolean;
         /** Number of major cities connected by the bot's continuous track network */
         connectedMajorCityCount: number;
+        /**
+         * Total completed deliveries this game — used by BuildContext.checkCanUpgrade
+         * to enforce UPGRADE_DELIVERY_THRESHOLD before allowing train upgrades.
+         * Populated from BotMemoryState.deliveryCount by ContextBuilder.
+         * JIRA-207A.
+         */
+        deliveriesCompleted?: number;
     };
     allPlayerTracks: Array<{
         playerId: string;

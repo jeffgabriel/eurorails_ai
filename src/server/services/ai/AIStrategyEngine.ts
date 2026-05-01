@@ -57,15 +57,14 @@ import { Stage3Result } from './schemas';
 import { ActiveRouteContinuer } from './ActiveRouteContinuer';
 import { InitialBuildRunner } from './InitialBuildRunner';
 import { NewRoutePlanner } from './NewRoutePlanner';
+import { UPGRADE_DELIVERY_THRESHOLD } from './context/UpgradeGatingConstants';
 
 /**
- * Minimum number of completed deliveries before a bot may upgrade its train.
- * Set to 1 so the gate only blocks on turn 0 (no deliveries yet); the
- * cost-affordability check at tryConsumeUpgrade already prevents cash-poor
- * upgrades, making a higher delivery-count gate redundant.
- * Adjust this value to tune bot upgrade timing across all skill levels.
+ * @deprecated Use UPGRADE_DELIVERY_THRESHOLD from UpgradeGatingConstants instead.
+ * Re-exported here for backward compatibility with any external callers.
+ * JIRA-207A: Consolidated into UpgradeGatingConstants.ts.
  */
-export const MIN_DELIVERIES_BEFORE_UPGRADE = 2;
+export const MIN_DELIVERIES_BEFORE_UPGRADE = UPGRADE_DELIVERY_THRESHOLD;
 
 export interface BotTurnResult {
   action: AIActionType;
@@ -1191,8 +1190,8 @@ export class AIStrategyEngine {
     route.upgradeOnRoute = undefined; // one-time consumption
 
     // JIRA-119: Gate 1 — block upgrade before sufficient deliveries
-    if (deliveryCount < MIN_DELIVERIES_BEFORE_UPGRADE) {
-      const reason = `only ${deliveryCount} deliveries (need ${MIN_DELIVERIES_BEFORE_UPGRADE})`;
+    if (deliveryCount < UPGRADE_DELIVERY_THRESHOLD) {
+      const reason = `only ${deliveryCount} deliveries (need ${UPGRADE_DELIVERY_THRESHOLD})`;
       console.warn(`${tag} JIRA-119: upgradeOnRoute blocked — ${reason}`);
       return { action: null, reason: `Upgrade blocked: ${reason}` };
     }

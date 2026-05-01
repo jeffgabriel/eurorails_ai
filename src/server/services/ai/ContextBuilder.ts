@@ -120,11 +120,17 @@ export class ContextBuilder {
     // Determine if the bot can build
     const canBuild = (20 - turnBuildCost) > 0 && snapshot.bot.money > 0;
 
-    // Determine if the bot can upgrade
-    const canUpgrade = BuildContext.checkCanUpgrade(snapshot);
-
     // JIRA-195: Use deliveryCount from memory when available (stage-ordering fix).
     const deliveryCount = memory?.deliveryCount ?? 0;
+
+    // JIRA-207A: Propagate deliveriesCompleted onto snapshot.bot so that
+    // BuildContext.checkCanUpgrade can apply the delivery-threshold gate.
+    // This avoids changing the checkCanUpgrade signature while keeping the
+    // delivery count accessible at the point of the eligibility check.
+    snapshot.bot.deliveriesCompleted = deliveryCount;
+
+    // Determine if the bot can upgrade
+    const canUpgrade = BuildContext.checkCanUpgrade(snapshot);
 
     // Compute upgrade advice with deliveryCount gate
     const upgradeAdvice = UpgradeContext.compute(snapshot, demands, canBuild, deliveryCount);

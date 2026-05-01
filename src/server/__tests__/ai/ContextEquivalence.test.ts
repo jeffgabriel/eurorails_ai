@@ -172,10 +172,15 @@ async function buildNewPath(
  * inside build() rather than in the patch-up block. For most fields the output
  * is identical. Documented divergences below are intentional bug fixes:
  *
- * (none identified yet — registry will be populated during BE-001 if any
- *  field differs and the difference is the intended correction of a bug)
+ * - 'canUpgrade': JIRA-207A tightened BuildContext.checkCanUpgrade to require
+ *   deliveriesCompleted >= UPGRADE_DELIVERY_THRESHOLD in addition to cash.
+ *   The legacy path calls ContextBuilder.build() WITHOUT memory, so
+ *   snapshot.bot.deliveriesCompleted is not set (defaults to 0 → gate fails).
+ *   The new path calls with memory, which sets deliveriesCompleted correctly
+ *   before checkCanUpgrade runs. The divergence is an intentional improvement:
+ *   the legacy path under-evaluated upgrade eligibility, the new path does not.
  */
-const ACCEPTABLE_DIVERGENCES: string[] = [];
+const ACCEPTABLE_DIVERGENCES: string[] = ['canUpgrade'];
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
@@ -326,7 +331,7 @@ describe('ContextEquivalence — legacy build-then-patch vs new single-pass buil
 
     it('deliveryCount=5 satisfies the MIN_DELIVERIES_BEFORE_UPGRADE gate', async () => {
       const ctx = await buildNewPath(fixture.snapshot, fixture.memory, skillLevel, gridPoints);
-      // deliveryCount=5 >= MIN_DELIVERIES_BEFORE_UPGRADE (1), so upgradeAdvice is eligible
+      // deliveryCount=5 >= MIN_DELIVERIES_BEFORE_UPGRADE (2), so upgradeAdvice is eligible
       // (still may be undefined depending on trainType / money / turn, but gate is open)
       expect(ctx.deliveryCount).toBe(5);
     });

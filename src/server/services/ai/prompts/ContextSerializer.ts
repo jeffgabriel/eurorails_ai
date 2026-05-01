@@ -35,7 +35,7 @@ import {
 } from '../../../../shared/types/GameTypes';
 import { hexDistance } from '../MapTopology';
 import { estimateTrackCost } from '../context/DemandEngine';
-import { MIN_DELIVERIES_BEFORE_UPGRADE } from '../AIStrategyEngine';
+import { UPGRADE_DELIVERY_THRESHOLD, UPGRADE_OPERATING_BUFFER } from '../context/UpgradeGatingConstants';
 
 /** Major cities in the cheap, dense core of the map */
 const CORE_CITIES = new Set(['Paris', 'Ruhr', 'Holland', 'Berlin', 'Wien']);
@@ -528,7 +528,7 @@ export class ContextSerializer {
         lines.push('');
       }
     }
-    const upgradeEligible = (context.deliveryCount ?? 0) >= MIN_DELIVERIES_BEFORE_UPGRADE && context.money >= 30;
+    const upgradeEligible = (context.deliveryCount ?? 0) >= UPGRADE_DELIVERY_THRESHOLD && context.money >= UPGRADE_OPERATING_BUFFER;
     if (upgradeEligible && context.upgradeAdvice) {
       const strongUpgrade = context.trainType === 'Freight' && context.turnNumber >= 8;
       if (strongUpgrade) {

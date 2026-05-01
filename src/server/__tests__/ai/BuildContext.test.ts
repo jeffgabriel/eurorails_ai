@@ -19,6 +19,7 @@ function makeSnapshot(overrides: {
   money?: number;
   gameStatus?: GameStatus;
   turnBuildCost?: number;
+  deliveriesCompleted?: number;
 }): WorldSnapshot {
   const bot: WorldSnapshot['bot'] & { turnBuildCost?: number } = {
     playerId: 'bot-1',
@@ -32,6 +33,7 @@ function makeSnapshot(overrides: {
     loads: [],
     botConfig: { skillLevel: BotSkillLevel.Medium },
     connectedMajorCityCount: 0,
+    deliveriesCompleted: overrides.deliveriesCompleted ?? 5,
   };
   if (overrides.turnBuildCost !== undefined) {
     bot.turnBuildCost = overrides.turnBuildCost;
@@ -88,43 +90,40 @@ describe('BuildContext.compute', () => {
 
   describe('canUpgrade', () => {
     it('canUpgrade is false during initialBuild', () => {
-      const snapshot = makeSnapshot({ gameStatus: 'initialBuild', money: 100 });
+      const snapshot = makeSnapshot({ gameStatus: 'initialBuild', money: 100, deliveriesCompleted: 5 });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
-    });
-
-    it('canUpgrade is false when money < 5', () => {
-      const snapshot = makeSnapshot({ money: 4, trainType: TrainType.Freight });
-      const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
-      expect(result.canUpgrade).toBe(false);
-    });
-
-    it('Freight: canUpgrade is true when money >= 20', () => {
-      const snapshot = makeSnapshot({ money: 20, trainType: TrainType.Freight });
-      const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
-      expect(result.canUpgrade).toBe(true);
     });
 
     it('Freight: canUpgrade is false when money < 20', () => {
-      const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight });
+      const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight, deliveriesCompleted: 5 });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
     });
 
-    it('FastFreight: canUpgrade is true when money >= 5', () => {
-      const snapshot = makeSnapshot({ money: 5, trainType: TrainType.FastFreight });
+    it('Freight: canUpgrade is false when deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD (0 deliveries)', () => {
+      // cash OK, but delivery threshold unmet
+      const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 0 });
+      const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
+      expect(result.canUpgrade).toBe(false);
+    });
+
+    it('Freight: canUpgrade is false when operating buffer not met after upgrade (35M - 20M = 15M < 30M)', () => {
+      // delivery threshold met, cash met, but post-upgrade cash < UPGRADE_OPERATING_BUFFER
+      const snapshot = makeSnapshot({ money: 35, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+      const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
+      expect(result.canUpgrade).toBe(false);
+    });
+
+    it('Freight: canUpgrade is true when all three conditions met (60M, 5 deliveries)', () => {
+      // 60 >= 20, 5 >= 2, 60-20=40 >= 30
+      const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 5 });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(true);
     });
 
-    it('HeavyFreight: canUpgrade is true when money >= 5', () => {
-      const snapshot = makeSnapshot({ money: 5, trainType: TrainType.HeavyFreight });
-      const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
-      expect(result.canUpgrade).toBe(true);
-    });
-
-    it('Superfreight: canUpgrade is false', () => {
-      const snapshot = makeSnapshot({ money: 100, trainType: TrainType.Superfreight });
+    it('Superfreight: canUpgrade is false regardless of cash', () => {
+      const snapshot = makeSnapshot({ money: 100, trainType: TrainType.Superfreight, deliveriesCompleted: 10 });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
     });
@@ -146,28 +145,48 @@ describe('BuildContext.compute', () => {
 });
 
 describe('BuildContext.checkCanUpgrade', () => {
+  // ── Precondition gates ──────────────────────────────────────────────────────
+
   it('returns false during initialBuild', () => {
-    const snapshot = makeSnapshot({ gameStatus: 'initialBuild', money: 100 });
-    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
-  });
-
-  it('returns false when money < 5', () => {
-    const snapshot = makeSnapshot({ money: 4 });
-    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
-  });
-
-  it('Freight returns true with 20M', () => {
-    const snapshot = makeSnapshot({ money: 20, trainType: TrainType.Freight });
-    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(true);
-  });
-
-  it('Freight returns false with 19M', () => {
-    const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight });
+    const snapshot = makeSnapshot({ gameStatus: 'initialBuild', money: 100, deliveriesCompleted: 5 });
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
   });
 
   it('Superfreight always returns false', () => {
-    const snapshot = makeSnapshot({ money: 999, trainType: TrainType.Superfreight });
+    const snapshot = makeSnapshot({ money: 999, trainType: TrainType.Superfreight, deliveriesCompleted: 10 });
+    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
+  });
+
+  // ── Three-condition gate (AC20 cases) ───────────────────────────────────────
+
+  it('(AC20a) returns false when cash OK but deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD', () => {
+    // cash 60M >= 20M cost, but 0 deliveries < 2 threshold
+    const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 0 });
+    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
+  });
+
+  it('(AC20b) returns false when cash + delivery threshold met but operating buffer unmet', () => {
+    // 35 >= 20 (cash), 5 >= 2 (deliveries), but 35-20=15 < 30 (buffer)
+    const snapshot = makeSnapshot({ money: 35, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
+  });
+
+  it('(AC20c) returns true when all three conditions met', () => {
+    // 60 >= 20 (cash), 5 >= 2 (deliveries), 60-20=40 >= 30 (buffer)
+    const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(true);
+  });
+
+  it('returns false when money < upgrade cost', () => {
+    const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
+  });
+
+  it('uses deliveriesCompleted=0 as default when field absent', () => {
+    // snapshot bot has no deliveriesCompleted set — should default to 0 → threshold unmet
+    const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight });
+    // makeSnapshot defaults deliveriesCompleted to 5, so override here
+    snapshot.bot.deliveriesCompleted = undefined;
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
   });
 });
