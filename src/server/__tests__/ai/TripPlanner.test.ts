@@ -3250,3 +3250,187 @@ describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
     expect(result.route).not.toBeNull();
   });
 });
+
+// ── TEST-002: Game 5302ee21 reproduction tests (AC22, AC23) ─────────────────
+
+describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
+  // Use real getTripPlanningPrompt for prompt rendering tests (AC22)
+  let getTripPlanningPromptReal: (
+    skillLevel: BotSkillLevel,
+    context: GameContext,
+    memory: BotMemoryState,
+  ) => { system: string; user: string };
+
+  beforeAll(() => {
+    const mod = jest.requireActual('../../services/ai/prompts/systemPrompts') as {
+      getTripPlanningPrompt: (s: BotSkillLevel, c: GameContext, m: BotMemoryState) => { system: string; user: string };
+    };
+    getTripPlanningPromptReal = mod.getTripPlanningPrompt;
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
+  });
+
+  /**
+   * AC22: Game 5302ee21 T9 prompt rendering reproduction.
+   * Nano at Cardiff, capacity=2, deliveries=2, cash=37M.
+   */
+  it('AC22: T9 prompt rendering — unaffordable filtered, no FERRY tag, upgrade suppressed, ACTION GRAMMAR RULES present, ON-NETWORK rule rewritten', () => {
+    // T9 demand hand per spec
+    const t9Context: GameContext = {
+      position: { city: 'Cardiff', row: 10, col: 5 },
+      money: 37,
+      trainType: 'FastFreight' as TrainType,
+      speed: 12,
+      capacity: 2,
+      loads: [],
+      connectedMajorCities: ['Cardiff', 'Holland'],
+      unconnectedMajorCities: [{ cityName: 'Ruhr', estimatedCost: 2 }],
+      totalMajorCities: 8,
+      trackSummary: 'Cardiff-Holland corridor',
+      citiesOnNetwork: ['Cardiff', 'Holland'],
+      turnBuildCost: 0,
+      demands: [
+        // Card 7: Hops Cardiff→Ruhr 16M — AFFORDABLE (supply 2M, delivery 2M)
+        makeDemand({ cardIndex: 7, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Ruhr', payout: 16, isAffordable: true, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 2, estimatedTurns: 2, efficiencyPerTurn: 7 }),
+        // Card 7: Tobacco Napoli→Stockholm 63M — UNAFFORDABLE
+        makeDemand({ cardIndex: 7, loadType: 'Tobacco', supplyCity: 'Napoli', deliveryCity: 'Stockholm', payout: 63, isAffordable: false, isLoadOnTrain: false, ferryRequired: true, estimatedTrackCostToSupply: 80, estimatedTrackCostToDelivery: 90, estimatedTurns: 20, efficiencyPerTurn: 2 }),
+        // Card 7: Imports Antwerpen→Porto 36M — UNAFFORDABLE
+        makeDemand({ cardIndex: 7, loadType: 'Imports', supplyCity: 'Antwerpen', deliveryCity: 'Porto', payout: 36, isAffordable: false, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 40, estimatedTrackCostToDelivery: 50, estimatedTurns: 15, efficiencyPerTurn: 1.5 }),
+        // Card 80: Potatoes Szczecin→Wien 9M — AFFORDABLE
+        makeDemand({ cardIndex: 80, loadType: 'Potatoes', supplyCity: 'Szczecin', deliveryCity: 'Wien', payout: 9, isAffordable: true, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 5, estimatedTurns: 8, efficiencyPerTurn: 1 }),
+        // Card 80: Oranges Valencia→Bruxelles 29M — UNAFFORDABLE
+        makeDemand({ cardIndex: 80, loadType: 'Oranges', supplyCity: 'Valencia', deliveryCity: 'Bruxelles', payout: 29, isAffordable: false, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 35, estimatedTrackCostToDelivery: 40, estimatedTurns: 14, efficiencyPerTurn: 1.4 }),
+        // Card 80: China Birmingham→Belfast 15M — AFFORDABLE
+        makeDemand({ cardIndex: 80, loadType: 'China', supplyCity: 'Birmingham', deliveryCity: 'Belfast', payout: 15, isAffordable: true, isLoadOnTrain: false, ferryRequired: true, estimatedTrackCostToSupply: 5, estimatedTrackCostToDelivery: 8, estimatedTurns: 5, efficiencyPerTurn: 2 }),
+        // Card 10: Hops Cardiff→Holland 16M — AFFORDABLE + ON-NETWORK
+        makeDemand({ cardIndex: 10, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Holland', payout: 16, isAffordable: true, isLoadOnTrain: false, ferryRequired: false, isSupplyOnNetwork: true, isDeliveryOnNetwork: true, estimatedTrackCostToSupply: 0, estimatedTrackCostToDelivery: 0, estimatedTurns: 2, efficiencyPerTurn: 8 }),
+        // Card 10: Fish Aberdeen→Warszawa 38M — UNAFFORDABLE
+        makeDemand({ cardIndex: 10, loadType: 'Fish', supplyCity: 'Aberdeen', deliveryCity: 'Warszawa', payout: 38, isAffordable: false, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 50, estimatedTrackCostToDelivery: 60, estimatedTurns: 18, efficiencyPerTurn: 1.5 }),
+        // Card 10: Sheep Glasgow→Stuttgart 30M — AFFORDABLE
+        makeDemand({ cardIndex: 10, loadType: 'Sheep', supplyCity: 'Glasgow', deliveryCity: 'Stuttgart', payout: 30, isAffordable: true, isLoadOnTrain: false, ferryRequired: false, estimatedTrackCostToSupply: 10, estimatedTrackCostToDelivery: 15, estimatedTurns: 10, efficiencyPerTurn: 2 }),
+      ],
+      canDeliver: [],
+      canPickup: [],
+      reachableCities: ['Cardiff', 'Holland', 'Ruhr'],
+      canUpgrade: true, // Can upgrade in principle but cash/delivery check will fail
+      canBuild: true,
+      isInitialBuild: false,
+      opponents: [],
+      phase: 'execute',
+      turnNumber: 9,
+    };
+
+    // Memory: deliveries=2, cash=37M → upgrade gate: 37-20=17 < 30 → gate FAILS
+    const t9Memory: BotMemoryState = {
+      currentBuildTarget: null,
+      turnsOnTarget: 0,
+      lastAction: null,
+      consecutiveDiscards: 0,
+      deliveryCount: 2, // deliveriesCompleted = 2 >= UPGRADE_DELIVERY_THRESHOLD=2 (passes)
+      totalEarnings: 0,
+      turnNumber: 9,
+      activeRoute: null,
+      turnsOnRoute: 0,
+      routeHistory: [],
+      lastAbandonedRouteKey: null,
+      previousRouteStops: null,
+      consecutiveLlmFailures: 0,
+    } as BotMemoryState;
+
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, t9Context, t9Memory);
+    const { system, user } = result;
+
+    // (a) Unaffordable cards filtered from NEW OPTIONS — Tobacco, Oranges, Fish NOT in NEW OPTIONS
+    const newOptionsSection = user.split('NEW OPTIONS')[1] ?? '';
+    expect(newOptionsSection).not.toContain('Tobacco');
+    expect(newOptionsSection).not.toContain('Oranges');
+    expect(newOptionsSection).not.toContain('Fish');
+    // Affordable cards present: Hops (card 7), Potatoes, China, Hops (card 10), Sheep
+    expect(newOptionsSection).toContain('Hops');
+    expect(newOptionsSection).toContain('Potatoes');
+
+    // (b) [FERRY] tag absent from entire user prompt
+    expect(user).not.toContain('[FERRY]');
+
+    // (c) Upgrade gate: money=37, 37-20=17 < UPGRADE_OPERATING_BUFFER=30 → gate FAILS
+    // Suppression rule must be present
+    expect(user).toContain('UPGRADE STATUS: You do not qualify to upgrade this turn');
+    // UPGRADE AVAILABLE must NOT be in user prompt
+    expect(user).not.toContain('UPGRADE AVAILABLE');
+
+    // (d) ACTION GRAMMAR RULES and worked example present in system prompt
+    expect(system).toContain('ACTION GRAMMAR RULES');
+    expect(system).toContain('WORKED EXAMPLE');
+    expect(system).toContain('Cardiff');
+    expect(system).toContain('Hops');
+
+    // (e) ON-NETWORK rule no longer contains "complete candidate with stops"
+    expect(system).not.toContain('complete candidate with stops');
+    expect(system).toContain('ON-NETWORK DEMAND REQUIRED AS CANDIDATE');
+  });
+
+  /**
+   * AC23: Game 5302ee21 T10 LLM response reproduction.
+   * chosenIndex=0 invalid (DELIVER Hops Holland, no PICKUP), candidate 1 valid (PICKUP Hops Cardiff → DELIVER Hops Ruhr).
+   * Expects: chosen_invalid_alternative_used, non-null route matching candidate 1.
+   */
+  it('AC23: T10 chosenIndex=0 invalid (no PICKUP for Hops), candidate 1 valid → chosen_invalid_alternative_used', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      money: 37,
+      loads: [],
+      demands: [
+        makeDemand({ cardIndex: 10, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Holland', payout: 16, isAffordable: true, isSupplyOnNetwork: true, isDeliveryOnNetwork: true }),
+        makeDemand({ cardIndex: 7, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Ruhr', payout: 16, isAffordable: true }),
+      ],
+    });
+
+    // T10 LLM response: candidate 0 has DELIVER Hops Holland with NO prior PICKUP
+    const t10Response = JSON.stringify({
+      candidates: [
+        {
+          stops: [
+            // No PICKUP — invalid! Hops not carried.
+            { action: 'DELIVER', load: 'Hops', deliveryCity: 'Holland', demandCardId: 10, payment: 16 },
+          ],
+          reasoning: 'Candidate 0 — invalid: no PICKUP before DELIVER',
+        },
+        {
+          stops: [
+            { action: 'PICKUP', load: 'Hops', supplyCity: 'Cardiff' },
+            { action: 'DELIVER', load: 'Hops', deliveryCity: 'Ruhr', demandCardId: 7, payment: 16 },
+          ],
+          reasoning: 'Candidate 1 — valid: PICKUP Hops at Cardiff, DELIVER to Ruhr',
+        },
+      ],
+      chosenIndex: 0, // LLM picks invalid candidate
+      reasoning: 'Best play is to deliver Hops to Holland',
+    });
+
+    // Candidate 0 fails validation (no carried Hops, no PICKUP); candidate 1 passes
+    (RouteValidator.validate as jest.Mock)
+      .mockReturnValueOnce({ valid: false, errors: ['DELIVER Hops to Holland requires PICKUP Hops before it; Hops not in carried loads'] }) // candidate 0
+      .mockReturnValueOnce({ valid: true, errors: [] }); // candidate 1
+
+    chatFn.mockResolvedValue({ text: t10Response, usage: { input: 100, output: 50 } });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(37), context, [], makeMemory()) as TripPlanResult;
+
+    // Verifies: fallback selects candidate 1 with chosen_invalid_alternative_used
+    expect(result.route).not.toBeNull();
+    expect(result.selection).toBeDefined();
+    expect(result.selection!.fallbackReason).toBe('chosen_invalid_alternative_used');
+    expect(result.selection!.llmChosenIndex).toBe(0);
+
+    // Route stops should match candidate 1: PICKUP Hops Cardiff, DELIVER Hops Ruhr
+    const stops = result.route!.stops;
+    expect(stops.length).toBeGreaterThan(0);
+    expect(stops.some(s => s.action === 'pickup' && s.loadType === 'Hops')).toBe(true);
+    expect(stops.some(s => s.action === 'deliver' && s.city === 'Ruhr')).toBe(true);
+  });
+});
