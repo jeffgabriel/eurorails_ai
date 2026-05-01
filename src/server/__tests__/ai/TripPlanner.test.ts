@@ -2962,6 +2962,72 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
   });
 });
 
+// ── JIRA-207B: Per-candidate retry feedback tests (R1/R2, AC3) ──────────────
+
+describe('JIRA-207B: per-candidate retry feedback (R1/R2)', () => {
+  let RouteValidator: jest.MockedObject<typeof import('../../services/ai/RouteValidator').RouteValidator>;
+
+  beforeAll(() => {
+    RouteValidator = jest.requireMock('../../services/ai/RouteValidator').RouteValidator;
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    RouteValidator.validate.mockReturnValue({ valid: true, errors: [] });
+  });
+
+  // AC3: Retry prompt contains per-candidate breakdown when all candidates fail validation
+  it('AC3: retry prompt contains PREVIOUS ATTEMPT — VALIDATION FEEDBACK with per-candidate breakdown', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    // First LLM response: all candidates fail
+    const failResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Coal route — fails validation',
+      },
+    ], 0);
+
+    // Second LLM response: valid candidate
+    const validResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Coal route — valid',
+      },
+    ], 0);
+
+    // Candidate 0 fails on first call, passes on retry
+    (RouteValidator.validate as jest.Mock)
+      .mockReturnValueOnce({ valid: false, errors: ['missing PICKUP for Coal before DELIVER to Berlin'] }) // first attempt fails
+      .mockReturnValueOnce({ valid: true, errors: [] }); // retry succeeds
+
+    chatFn
+      .mockResolvedValueOnce({ text: failResponse, usage: { input: 100, output: 50 } })
+      .mockResolvedValueOnce({ text: validResponse, usage: { input: 100, output: 50 } });
+
+    const context = makeContext({
+      demands: [makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+    });
+
+    const planner = new TripPlanner(brain);
+    await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+
+    // Verify retry prompt contains the per-candidate breakdown
+    expect(chatFn).toHaveBeenCalledTimes(2);
+    const retryCall = chatFn.mock.calls[1][0];
+    expect(retryCall.userPrompt).toContain('PREVIOUS ATTEMPT — VALIDATION FEEDBACK:');
+    expect(retryCall.userPrompt).toContain('Candidate 0:');
+    expect(retryCall.userPrompt).toContain('INVALID');
+    expect(retryCall.userPrompt).toContain('missing_pickup');
+  });
+});
+
 // ── JIRA-207B: Short-circuit tests (R10c, AC10a, AC10a-bis) ─────────────────
 
 describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
