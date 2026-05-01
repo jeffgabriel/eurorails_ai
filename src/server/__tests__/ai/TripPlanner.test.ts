@@ -2961,3 +2961,136 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
     expect(retryCall.userPrompt).toContain('unaffordable');
   });
 });
+
+// ── JIRA-207B: Short-circuit tests (R10c, AC10a, AC10a-bis) ─────────────────
+
+describe('JIRA-207B: TripPlanner pre-LLM short-circuit (R10c)', () => {
+  let RouteValidator: jest.MockedObject<typeof import('../../services/ai/RouteValidator').RouteValidator>;
+
+  beforeAll(() => {
+    RouteValidator = jest.requireMock('../../services/ai/RouteValidator').RouteValidator;
+    RouteValidator.validate.mockReturnValue({ valid: true, errors: [] });
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+    RouteValidator.validate.mockReturnValue({ valid: true, errors: [] });
+  });
+
+  // AC10a: no commitment, no options → no_actionable_options (LLM not called)
+  it('AC10a: all demands unaffordable AND no activeRoute AND no carried loads → no_actionable_options, zero LLM calls', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    // All demands are unaffordable
+    const context = makeContext({
+      loads: [],
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: false }),
+        makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 12, isAffordable: false }),
+      ],
+    });
+
+    // No activeRoute, no carries
+    const memory = makeMemory({ activeRoute: null });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    expect(result.route).toBeNull();
+    // providerAdapter.chat must NOT be called
+    expect(chatFn).not.toHaveBeenCalled();
+    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
+    expect(r.selection?.fallbackReason).toBe('no_actionable_options');
+    expect(r.llmLog).toHaveLength(0);
+  });
+
+  // AC10a-bis: commitment exists (activeRoute has stops), no new options → keep_current_plan (LLM not called)
+  it('AC10a-bis: all demands unaffordable AND activeRoute has remaining stops → keep_current_plan, zero LLM calls', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      loads: [],
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: false }),
+      ],
+    });
+
+    // Active route has remaining stops → commitment exists
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Coal', city: 'Essen' },
+        { action: 'deliver', loadType: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+      ],
+      currentStopIndex: 0,
+      phase: 'build',
+      createdAtTurn: 3,
+      reasoning: 'Existing coal route',
+    };
+    const memory = makeMemory({ activeRoute });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    expect(result.route).toBeNull();
+    // providerAdapter.chat must NOT be called
+    expect(chatFn).not.toHaveBeenCalled();
+    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
+    expect(r.selection?.fallbackReason).toBe('keep_current_plan');
+    expect(r.llmLog).toHaveLength(0);
+  });
+
+  // AC10a-bis variant: commitment via carried loads → keep_current_plan
+  it('AC10a-bis: all demands isLoadOnTrain AND no new affordable options → keep_current_plan, zero LLM calls', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    // All demands are carry-load commitments
+    const context = makeContext({
+      loads: ['Hops'],
+      demands: [
+        makeDemand({ cardIndex: 7, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Ruhr', payout: 16, isAffordable: true, isLoadOnTrain: true }),
+      ],
+    });
+
+    const memory = makeMemory({ activeRoute: null });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    expect(result.route).toBeNull();
+    expect(chatFn).not.toHaveBeenCalled();
+    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
+    expect(r.selection?.fallbackReason).toBe('keep_current_plan');
+  });
+
+  // AC10c: no commitment but at least one affordable card → LLM IS called (no short-circuit)
+  it('AC10c: no activeRoute but at least one affordable card → LLM called normally (no short-circuit)', async () => {
+    const { brain, chatFn } = makeMockBrain();
+
+    const context = makeContext({
+      loads: [],
+      demands: [
+        makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+      ],
+    });
+
+    const llmResponse = buildLlmResponse([
+      {
+        stops: [
+          { action: 'pickup', load: 'Coal', city: 'Essen' },
+          { action: 'deliver', load: 'Coal', city: 'Berlin', demandCardId: 1, payment: 15 },
+        ],
+        reasoning: 'Coal delivery',
+      },
+    ], 0);
+    chatFn.mockResolvedValue({ text: llmResponse, usage: { input: 50, output: 30 } });
+
+    const memory = makeMemory({ activeRoute: null });
+
+    const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], memory);
+
+    // LLM should have been called (no short-circuit)
+    expect(chatFn).toHaveBeenCalledTimes(1);
+    expect(result.route).not.toBeNull();
+  });
+});
