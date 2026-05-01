@@ -1706,6 +1706,96 @@ describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC
     expect(result.user).toContain('50M ECU');
     expect(result.user).toContain('Coal');
   });
+
+  // JIRA-207B (R10, R10a, R10b): REPLAN framing — CURRENT PLAN + NEW OPTIONS
+  it('JIRA-207B: user prompt contains CURRENT PLAN and NEW OPTIONS blocks (R10)', () => {
+    const ctx = makeMinimalContext();
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx, makeMinimalMemory());
+    expect(result.user).toContain('CURRENT PLAN:');
+    expect(result.user).toContain('NEW OPTIONS');
+  });
+
+  it('JIRA-207B: CURRENT PLAN shows (no current plan in flight) when activeRoute is null (R10a)', () => {
+    const ctx = makeMinimalContext();
+    const mem = makeMinimalMemory();
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx, mem);
+    expect(result.user).toContain('(no current plan in flight)');
+  });
+
+  it('JIRA-207B: NEW OPTIONS filters out unaffordable cards — only affordable cards shown (R10b, AC9)', () => {
+    const ctx = makeMinimalContext();
+    // Override demands: 1 affordable, 1 unaffordable
+    (ctx as GameContext).demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true }),
+      makeDemand({ cardIndex: 2, loadType: 'Wine', supplyCity: 'Bordeaux', deliveryCity: 'Paris', payout: 30, isAffordable: false }),
+    ];
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, makeMinimalMemory());
+    // Affordable Coal card should appear in NEW OPTIONS
+    expect(result.user).toContain('Coal');
+    // Unaffordable Wine card should NOT appear in NEW OPTIONS
+    expect(result.user).not.toContain('Wine');
+  });
+
+  it('JIRA-207B: NEW OPTIONS filters out isLoadOnTrain carry-load cards (R10b, AC10)', () => {
+    const ctx = makeMinimalContext();
+    (ctx as GameContext).demands = [
+      makeDemand({ cardIndex: 7, loadType: 'Hops', supplyCity: 'Cardiff', deliveryCity: 'Ruhr', payout: 16, isAffordable: true, isLoadOnTrain: true }),
+      makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true, isLoadOnTrain: false }),
+    ];
+    (ctx as GameContext).loads = ['Hops'];
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, makeMinimalMemory());
+    // Coal (not on train) should appear in NEW OPTIONS
+    expect(result.user).toContain('Coal');
+    // Hops (on train) should NOT appear in NEW OPTIONS — only in CURRENT PLAN
+    // (Note: carried load may appear in CURRENT PLAN section only)
+    const newOptionsSection = result.user.split('NEW OPTIONS')[1] ?? '';
+    expect(newOptionsSection).not.toContain('Hops');
+  });
+
+  it('JIRA-207B: [FERRY] tag does NOT appear in user prompt (R11, AC11)', () => {
+    const ctx = makeMinimalContext();
+    (ctx as GameContext).demands = [
+      makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, isAffordable: true, ferryRequired: true }),
+    ];
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, makeMinimalMemory());
+    expect(result.user).not.toContain('[FERRY]');
+  });
+
+  it('JIRA-207B: upgrade suppression rule present when gate fails (R15, AC16)', () => {
+    // deliveriesCompleted=1 < UPGRADE_DELIVERY_THRESHOLD=2 → gate fails
+    const ctx = makeMinimalContext();
+    (ctx as GameContext).canUpgrade = true;
+    (ctx as GameContext).money = 60;
+    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: 1 } as BotMemoryState;
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, mem);
+    expect(result.user).toContain('UPGRADE STATUS: You do not qualify to upgrade this turn');
+    expect(result.user).toContain('Do NOT include "upgradeOnRoute"');
+  });
+
+  it('JIRA-207B: upgrade suppression rule absent when gate passes (R16, AC17)', () => {
+    // deliveriesCompleted=5 >= threshold=2, money=60 - 20=40 >= OPERATING_BUFFER=30 → gate passes
+    const ctx = makeMinimalContext();
+    (ctx as GameContext).canUpgrade = true;
+    (ctx as GameContext).money = 60;
+    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: 5 } as BotMemoryState;
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, mem);
+    expect(result.user).not.toContain('UPGRADE STATUS: You do not qualify');
+    // UPGRADE AVAILABLE should appear in user prompt when gate passes
+    expect(result.user).toContain('UPGRADE AVAILABLE');
+  });
+
+  it('JIRA-207B: ACTION GRAMMAR RULES and REASONING RULES in system prompt (R7, R8)', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).toContain('ACTION GRAMMAR RULES');
+    expect(result.system).toContain('REASONING RULES');
+    expect(result.system).toContain('Cardiff');
+  });
+
+  it('JIRA-207B: ON-NETWORK rule does NOT contain "complete candidate with stops" (R9, AC8)', () => {
+    const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
+    expect(result.system).not.toContain('complete candidate with stops');
+    expect(result.system).toContain('ON-NETWORK DEMAND REQUIRED AS CANDIDATE');
+  });
 });
 
 // ── JIRA-190: scoreCandidates field rename (AC7, AC8) ─────────────────────────
