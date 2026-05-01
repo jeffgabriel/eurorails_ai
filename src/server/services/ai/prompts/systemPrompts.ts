@@ -12,6 +12,7 @@
  */
 
 import { BotSkillLevel, GameContext, BotMemoryState, StrategicRoute, CorridorMap, FerryConnection, TrackSegment, GridPoint } from '../../../../shared/types/GameTypes';
+import { UPGRADE_DELIVERY_THRESHOLD, UPGRADE_OPERATING_BUFFER } from '../context/UpgradeGatingConstants';
 
 // ── Common Suffix ─────────────────────────────────────────────────────
 
@@ -168,30 +169,48 @@ export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
-// ── Trip Planning Prompt (JIRA-126) ──
+// ── Trip Planning Prompt (JIRA-126, JIRA-207B) ──
 
 const TRIP_PLANNING_SYSTEM_SUFFIX = `
 You are planning multi-stop TRIP CANDIDATES. Generate 2-3 candidate trips, then choose the best one.
-Each candidate should consider ALL 3 demand cards simultaneously.
+Each candidate should consider ALL demand cards in NEW OPTIONS simultaneously.
 
 SCORING: trip_score = (total payout - build costs - usage fees) / estimated turns
 A 30M trip in 4 turns (7.5M/turn) beats a 60M trip in 12 turns (5M/turn).
 
+ACTION GRAMMAR RULES — every stop must conform to these rules:
+- DELIVER requires a prior PICKUP in the same candidate's stop sequence, OR the load must already be in your CURRENT PLAN carried loads. You cannot emit a DELIVER without first establishing how the load reached your train.
+- Same-city same-load multi-load pickups must be written as SEPARATE PICKUP stops — one stop per load unit. You cannot pick up two loads with a single PICKUP stop.
+- Total PICKUP stops plus carried loads (from CURRENT PLAN) must not exceed train capacity.
+
+WORKED EXAMPLE — Cardiff×2 Hops → Holland + Ruhr (capacity 2, no loads carried):
+  CORRECT (two separate PICKUPs, each for one Hops unit):
+    stop 1: { "action": "PICKUP", "load": "Hops", "supplyCity": "Cardiff" }  -- picks up first Hops
+    stop 2: { "action": "PICKUP", "load": "Hops", "supplyCity": "Cardiff" }  -- picks up second Hops (use the correct demandCardId per delivery below)
+    stop 3: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Holland", "demandCardId": 10, "payment": 16 }
+    stop 4: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Ruhr", "demandCardId": 7, "payment": 16 }
+  WRONG (two DELIVERs with no PICKUPs — validator rejects because Hops is not in carried loads):
+    stop 1: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Holland", ... }
+    stop 2: { "action": "DELIVER", "load": "Hops", "deliveryCity": "Ruhr", ... }
+
+REASONING RULES:
+- When arguing against a demand card based on cost, you MUST cite the exact "Build cost" M figure shown in the prompt (e.g., "supply ~12M, delivery ~8M"). Qualitative descriptions ("expensive", "significant", "substantial") without citing the specific M figure are not allowed. If you cannot cite a specific figure, do not argue against the card on cost grounds.
+
 TRIP RULES:
-1. CARRIED LOADS ARE IMPLICIT: Loads already on the train are already in your possession — do NOT emit a PICKUP stop for them. Start the plan directly with a DELIVER stop for any carried load whose matching demand card you hold.
+1. CARRIED LOADS: Loads in your CURRENT PLAN (carried loads section) are already in your possession. Start the candidate with a DELIVER stop for any carried load; do NOT emit a PICKUP for it.
 2. COMBINE CORRIDORS: Two deliveries on one route beat two separate routes.
 3. EXISTING TRACK FIRST: On-network stops are essentially free.
 4. VICTORY ROUTING: Prefer trips through unconnected major cities when payout differences are within 30%.
 5. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
 6. Keep trips to 2-6 stops.
-7. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in your context. If no demand card has a supply/delivery pair you need, do not emit that stop.
-8. ON-NETWORK DEMAND REQUIRED AS CANDIDATE: If any demand card is marked [ON-NETWORK] in your context (meaning both its supply and delivery cities are already on your rail network, requiring zero build cost), you MUST include the highest net-value such demand as an explicit candidate — even if a higher-payout off-network demand exists. Mentioning it only in reasoning text is NOT sufficient; it must appear as a complete candidate with stops.
+7. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in NEW OPTIONS. If no demand card has a supply/delivery pair you need, do not emit that stop.
+8. ON-NETWORK DEMAND REQUIRED AS CANDIDATE: If any demand card in NEW OPTIONS is marked [ON-NETWORK] (meaning both its supply and delivery cities are already on your rail network, requiring zero build cost), you MUST propose the highest net-value such demand as a candidate — even if a higher-payout off-network demand exists. This rule is about WHICH demands you must propose as candidates; it says nothing about what stops that candidate contains — normal ACTION GRAMMAR RULES (above) still apply to the stops themselves.
 
 GEOGRAPHIC STRATEGY: Bias toward the core cluster (Paris — Ruhr — Holland — Berlin — Wien) when short on cash or cities; otherwise optimize by corridor efficiency.
 
 CAPITAL VELOCITY: Ask "how many turns until I get PAID?" not "which pays the most?"
 
-UPGRADES (20M each):
+UPGRADE OPTIONS (20M each):
 - Freight → Fast Freight: +3 speed. Best first upgrade after 1+ deliveries with 50M+ cash.
 - Fast Freight/Heavy Freight → Superfreight: The endgame train.
 Include "upgradeOnRoute" in your top-level response if upgrading.
@@ -214,10 +233,34 @@ RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 }`;
 
 /**
+ * JIRA-207B: Evaluate the upgrade gate — must pass ALL three conditions.
+ * Lives in the user-prompt builder so the system prompt stays byte-stable (R17).
+ */
+function canUpgradeThisTurn(context: GameContext, memory: BotMemoryState): boolean {
+  if (!context.canUpgrade) return false;
+  if (memory.deliveryCount < UPGRADE_DELIVERY_THRESHOLD) return false;
+  const upgradeCost = 20; // ECU millions — standard upgrade cost
+  if (context.money - upgradeCost < UPGRADE_OPERATING_BUFFER) return false;
+  return true;
+}
+
+/**
  * Build the dynamic trip planning context from current game state.
+ * JIRA-207B: Reframed as REPLAN prompt with CURRENT PLAN + NEW OPTIONS sections.
+ * NEW OPTIONS filters out unaffordable cards and carry-load cards (commitments).
+ * Upgrade prose is suppressed (with hard-suppression rule) when gate fails (Pattern B / R14-R17).
  */
 function buildTripPlanningContext(context: GameContext, memory: BotMemoryState): string {
   const lines: string[] = [];
+
+  // ── Upgrade gate (Pattern B — resolves here, not in system prompt) ──
+  const upgradeQualified = canUpgradeThisTurn(context, memory);
+
+  // ── Upgrade suppression rule (R15) — injected at top of user prompt when gate fails ──
+  if (!upgradeQualified) {
+    lines.push(`UPGRADE STATUS: You do not qualify to upgrade this turn (insufficient cash buffer or delivery count). Do NOT include "upgradeOnRoute" in your response. Treat all upgrade-related sections of the system prompt as not applicable for this turn.`);
+    lines.push('');
+  }
 
   // Position and cargo
   const posStr = context.position?.city
@@ -251,18 +294,85 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
   lines.push(`- Cities on network: ${context.citiesOnNetwork.length > 0 ? context.citiesOnNetwork.join(', ') : 'none'}`);
   lines.push('');
 
-  // All 3 demand cards with details
-  lines.push(`DEMAND CARDS (all 3 — evaluate simultaneously):`);
-  for (const d of context.demands) {
-    const onNetwork = d.isSupplyOnNetwork && d.isDeliveryOnNetwork ? ' [ON-NETWORK]' : '';
-    const affordable = d.isAffordable ? '' : ' [UNAFFORDABLE]';
-    const available = d.isLoadAvailable ? '' : (d.isLoadOnTrain ? ' [ON TRAIN]' : ' [UNAVAILABLE]');
-    const ferry = d.ferryRequired ? ' [FERRY]' : '';
-    lines.push(`  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity} → ${d.deliveryCity} (${d.payout}M)${onNetwork}${affordable}${available}${ferry}`);
-    lines.push(`    Build cost: supply ~${d.estimatedTrackCostToSupply}M, delivery ~${d.estimatedTrackCostToDelivery}M`);
-    lines.push(`    Estimated turns: ${d.estimatedTurns} | Efficiency: ${d.efficiencyPerTurn.toFixed(1)}M/turn`);
+  // ── CURRENT PLAN block (R10a) ──
+  // Build the set of demand card IDs that are "in flight" (carried load or active route stop).
+  const carryLoadCardIds = new Set<number>();
+  const activeRoute = memory.activeRoute;
+
+  // Identify which demand cards correspond to loads already on the train
+  const carriedLoadLines: string[] = [];
+  for (const loadType of context.loads) {
+    // Find the demand card for this carried load
+    const matchingDemand = context.demands.find(d => d.loadType === loadType && d.isLoadOnTrain);
+    if (matchingDemand) {
+      carryLoadCardIds.add(matchingDemand.cardIndex);
+      carriedLoadLines.push(`  Carried load: ${loadType} (card ${matchingDemand.cardIndex} → deliver to ${matchingDemand.deliveryCity} for ${matchingDemand.payout}M)`);
+    } else {
+      carriedLoadLines.push(`  Carried load: ${loadType} (demand card unresolved)`);
+    }
+  }
+
+  // Render remaining stops of active route
+  const remainingStopLines: string[] = [];
+  if (activeRoute && activeRoute.stops.length > activeRoute.currentStopIndex) {
+    const remaining = activeRoute.stops.slice(activeRoute.currentStopIndex);
+    remaining.forEach((stop, i) => {
+      const cardRef = stop.demandCardId != null ? ` (card ${stop.demandCardId})` : '';
+      const paymentRef = stop.payment != null ? ` → ${stop.payment}M` : '';
+      if (stop.action === 'pickup') {
+        remainingStopLines.push(`  ${i + 1}. PICKUP ${stop.loadType} at ${stop.city}${cardRef}`);
+      } else if (stop.action === 'deliver') {
+        remainingStopLines.push(`  ${i + 1}. DELIVER ${stop.loadType} at ${stop.city}${cardRef}${paymentRef}`);
+        if (stop.demandCardId != null) {
+          carryLoadCardIds.add(stop.demandCardId);
+        }
+      }
+    });
+  }
+
+  const hasPlan = remainingStopLines.length > 0 || carriedLoadLines.length > 0;
+  lines.push(`CURRENT PLAN:`);
+  if (!hasPlan) {
+    lines.push(`(no current plan in flight)`);
+  } else {
+    if (remainingStopLines.length > 0) {
+      lines.push(`  Remaining stops:`);
+      remainingStopLines.forEach(l => lines.push(l));
+    }
+    if (carriedLoadLines.length > 0) {
+      carriedLoadLines.forEach(l => lines.push(l));
+    }
   }
   lines.push('');
+
+  // ── NEW OPTIONS block (R10b) ──
+  // Filter: include only cards that are (a) affordable AND (b) not already a carry-load commitment.
+  const newOptionCards = context.demands.filter(d => {
+    if (!d.isAffordable) return false;
+    if (d.isLoadOnTrain) return false;
+    return true;
+  });
+
+  const newOptionsCount = newOptionCards.length;
+  lines.push(`NEW OPTIONS (${newOptionsCount} card${newOptionsCount !== 1 ? 's' : ''} — evaluate for replanning):`);
+  if (newOptionsCount === 0) {
+    lines.push(`(no actionable new options this turn)`);
+  } else {
+    for (const d of newOptionCards) {
+      const onNetwork = d.isSupplyOnNetwork && d.isDeliveryOnNetwork ? ' [ON-NETWORK]' : '';
+      const available = d.isLoadAvailable ? '' : ' [UNAVAILABLE]';
+      lines.push(`  Card ${d.cardIndex}: ${d.loadType} from ${d.supplyCity ?? '(on train)'} → ${d.deliveryCity} (${d.payout}M)${onNetwork}${available}`);
+      lines.push(`    Build cost: supply ~${d.estimatedTrackCostToSupply}M, delivery ~${d.estimatedTrackCostToDelivery}M`);
+      lines.push(`    Estimated turns: ${d.estimatedTurns} | Efficiency: ${d.efficiencyPerTurn.toFixed(1)}M/turn`);
+    }
+  }
+  lines.push('');
+
+  // Guidance: when both CURRENT PLAN and NEW OPTIONS are non-empty, invite keep-or-replan decision
+  if (hasPlan && newOptionsCount > 0) {
+    lines.push(`If your current plan still represents the best play, keep it (set chosenIndex to a candidate matching the current plan's first remaining stop). Otherwise, propose a replan from the NEW OPTIONS.`);
+    lines.push('');
+  }
 
   // Available pickups
   if (context.canPickup.length > 0) {
@@ -282,8 +392,8 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
     lines.push('');
   }
 
-  // Upgrade info
-  if (context.canUpgrade) {
+  // Upgrade info — only when gate passes (Pattern B / R16)
+  if (upgradeQualified) {
     lines.push(`UPGRADE AVAILABLE: You can upgrade your train for 20M.`);
     if (context.upgradeAdvice) {
       lines.push(`Upgrade advice: ${context.upgradeAdvice}`);
@@ -295,13 +405,14 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
 }
 
 /**
- * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190).
+ * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190, JIRA-207B).
  *
  * Returns { system, user } where system is byte-stable per skill level (cacheable)
  * and user contains the dynamic game state context per turn.
  *
- * System prompt: static rules + skill level modifier (never changes across calls at same skill level)
- * User prompt: dynamic context built from current game state
+ * System prompt: static rules + skill level modifier (never changes across calls at same skill level — R17)
+ * User prompt: dynamic context built from current game state, including CURRENT PLAN + NEW OPTIONS (R10),
+ *              and conditional upgrade suppression rule when gate fails (R15, Pattern B).
  */
 export function getTripPlanningPrompt(
   skillLevel: BotSkillLevel,
@@ -310,7 +421,7 @@ export function getTripPlanningPrompt(
 ): { system: string; user: string } {
   const system = `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
   const dynamicContext = buildTripPlanningContext(context, memory);
-  const user = `${dynamicContext}\n\nPlan the best multi-stop trip for this turn. Consider all 3 demand cards simultaneously.`;
+  const user = `${dynamicContext}\n\nReview your CURRENT PLAN and NEW OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from NEW OPTIONS.`;
   return { system, user };
 }
 

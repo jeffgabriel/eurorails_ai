@@ -180,7 +180,23 @@ export class PostDeliveryReplanner {
         };
       }
 
-      // Sub-path 2: TripPlanner returned null route
+      // Sub-path 2a: JIRA-207B (R10e) — TripPlanner returned keep_current_plan.
+      // Preserve the existing activeRoute without heuristic-fallback or DiscardHand.
+      const replanSelection = 'selection' in replanResult ? replanResult.selection : undefined;
+      if (!replanResult.route && replanSelection?.fallbackReason === 'keep_current_plan') {
+        console.log(`${tag} [PostDeliveryReplanner] keep_current_plan: preserving existing activeRoute, no replan triggered`);
+        const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
+        const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);
+        return {
+          route: skipped,
+          moveTargetInvalidated: false, // Route unchanged — stale indices remain valid
+          replanLlmLog,
+          replanSystemPrompt,
+          replanUserPrompt,
+        };
+      }
+
+      // Sub-path 2b: TripPlanner returned null route (other reasons).
       console.warn(`${tag} [PostDeliveryReplanner] TripPlanner returned null route. Continuing on existing route.`);
       const revalidated = TurnExecutorPlanner.revalidateRemainingDeliveries(activeRoute, context);
       const skipped = TurnExecutorPlanner.skipCompletedStops(revalidated, context);

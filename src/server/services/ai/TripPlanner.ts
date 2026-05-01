@@ -127,11 +127,42 @@ export class TripPlanner {
     gridPoints: GridPoint[],
     memory: BotMemoryState,
     userPromptOverride?: string,
-  ): Promise<TripPlanResult | { route: null; llmLog: LlmAttempt[] }> {
+  ): Promise<TripPlanResult | { route: null; llmLog: LlmAttempt[]; selection?: TripPlanResult['selection'] }> {
     const config = this.brain.strategyConfig;
     const adapter = this.brain.providerAdapter;
     const model = this.brain.modelName;
     const skillLevel = config.skillLevel;
+
+    // ── JIRA-207B (R10c): Pre-LLM short-circuit — evaluate NEW OPTIONS filter ──
+    // If every demand card is either unaffordable or already a carry-load commitment, the
+    // LLM has nothing to choose from. Skip the call and return a mechanically-determined result.
+    if (!userPromptOverride) {
+      const hasNewOptions = context.demands.some(d => d.isAffordable && !d.isLoadOnTrain);
+      if (!hasNewOptions) {
+        const activeRoute = memory.activeRoute;
+        const hasRemainingStops = activeRoute != null && activeRoute.currentStopIndex < activeRoute.stops.length;
+        const hasCarriedLoads = context.loads.length > 0;
+        const commitmentExists = hasRemainingStops || hasCarriedLoads;
+
+        if (commitmentExists) {
+          // Keep current plan — no new options available but bot has existing commitment
+          console.log(`[TripPlanner] keep_current_plan: no NEW OPTIONS available; existing route/loads preserved`);
+          return {
+            route: null,
+            llmLog: [],
+            selection: { llmChosenIndex: -1, fallbackReason: 'keep_current_plan' },
+          };
+        } else {
+          // No options, no commitment — let heuristic fallback produce DiscardHand
+          console.log(`[TripPlanner] no_actionable_options: no NEW OPTIONS and no current plan; heuristic fallback`);
+          return {
+            route: null,
+            llmLog: [],
+            selection: { llmChosenIndex: -1, fallbackReason: 'no_actionable_options' },
+          };
+        }
+      }
+    }
 
     const { system: systemPrompt, user: baseUserPrompt } = getTripPlanningPrompt(skillLevel, context, memory);
     const userPrompt = userPromptOverride ?? baseUserPrompt;
@@ -199,8 +230,62 @@ export class TripPlanner {
         const { validCandidates: candidates, rejections } = this.scoreCandidates(parsed, context, snapshot, gridPoints);
 
         if (candidates.length === 0) {
-          const err = 'All candidates failed validation';
-          llmLog.push({ attemptNumber: attempt + 1, status: 'validation_error', responseText: response.text.substring(0, 500), error: err, latencyMs });
+          // JIRA-207B (R1/R2): Per-candidate validation feedback replaces single-line error.
+          const feedbackLines: string[] = ['PREVIOUS ATTEMPT — VALIDATION FEEDBACK:'];
+          const candidateFailures: import('./LLMTranscriptLogger').CandidateFailure[] = [];
+
+          for (let idx = 0; idx < parsed.candidates.length; idx++) {
+            const rej = rejections.find(r => r.llmIndex === idx);
+            if (!rej) {
+              feedbackLines.push(`Candidate ${idx}: VALID (you may keep this exact stops list)`);
+            } else {
+              // Map validator errors to structured CandidateFailure entries
+              const rawErrors = rej.errors;
+              const failedRule = this.classifyValidationError(rawErrors);
+              const detail = rawErrors.join('; ');
+              feedbackLines.push(`Candidate ${idx}: INVALID — ${failedRule}: ${detail}`);
+
+              const failure: import('./LLMTranscriptLogger').CandidateFailure = {
+                candidateIndex: idx,
+                failedRule,
+                detail,
+              };
+
+              // Suggest a fix for missing_pickup (R2 "To fix candidate N: ...")
+              if (failedRule === 'missing_pickup') {
+                const missingLoad = this.extractMissingLoad(rawErrors);
+                const supplyCity = missingLoad
+                  ? context.demands.find(d => d.loadType === missingLoad)?.supplyCity ?? null
+                  : null;
+                if (missingLoad && supplyCity) {
+                  const suggestion = `prepend a PICKUP ${missingLoad} at ${supplyCity} stop before the DELIVER stop. If the trip needs 2 units, add two separate PICKUP ${missingLoad} at ${supplyCity} stops (one per demandCardId).`;
+                  failure.suggestion = suggestion;
+                  feedbackLines.push(`To fix candidate ${idx}: ${suggestion}`);
+                }
+              }
+
+              candidateFailures.push(failure);
+            }
+          }
+
+          const err = feedbackLines.join('\n');
+          const logEntry: LlmAttempt & { tripPlannerSelection?: import('./LLMTranscriptLogger').TripPlannerSelectionDiagnostic } = {
+            attemptNumber: attempt + 1,
+            status: 'validation_error',
+            responseText: response.text.substring(0, 500),
+            error: `All candidates failed validation`,
+            latencyMs,
+          };
+          if (candidateFailures.length > 0) {
+            logEntry.tripPlannerSelection = {
+              llmChosenIndex: parsed.chosenIndex ?? 0,
+              actualSelectedLlmIndex: -1,
+              fallbackReason: 'llm_rejected_validated',
+              candidates: [],
+              candidateFailures,
+            };
+          }
+          llmLog.push(logEntry);
           lastError = err;
           continue;
         }
@@ -264,12 +349,9 @@ export class TripPlanner {
           console.log(`[TripPlanner] chosenIndex honored: LLM picked candidate ${ci} (sorted pos ${chosenCandidateIdx}, ${affordableCandidates[chosenCandidateIdx].stops.length} feasible stops)`);
           // Honored — no diagnostic (R5)
         } else if (chosenCandidateIdx < 0 && llmProvidedChosenIndex) {
-          // JIRA-206 (R2): LLM explicitly provided a chosenIndex that is not in the validated+affordable set.
-          // Return no-route rather than falling back to bestIdx (ADR-2).
-          // Only fires when the LLM actually provided chosenIndex — not when it was absent (e.g. truncated JSON).
-          // This is different from chosen_zero_stops where the LLM DID pick a validated candidate
-          // but it got pruned. Here the LLM's pick was not among validated candidates at all.
-          console.log(`[TripPlanner] chosen_not_in_validated → no-route: chosenIndex ${ci} not found in affordable validated candidates; not falling back to bestIdx`);
+          // JIRA-207B (R5/R6): LLM explicitly provided a chosenIndex not in the validated+affordable set.
+          // When a validated+affordable sibling exists, use it with 'chosen_invalid_alternative_used'.
+          // Only return no-route (llm_rejected_validated) when NO sibling validates.
           const rejectionMap = new Map(rejections.map(r => [r.llmIndex, r]));
           const diagCandidates: TripPlannerSelectionDiagnostic['candidates'] = parsed.candidates.map((raw, idx) => {
             const validatedEntry = affordableCandidates.find(c => c.llmIndex === idx);
@@ -291,28 +373,45 @@ export class TripPlanner {
                 : (rejEntry?.prunedToZero ?? false),
             };
           });
-          const noRouteDiagnostic: TripPlannerSelectionDiagnostic = {
-            llmChosenIndex: ci,
-            actualSelectedLlmIndex: -1,
-            fallbackReason: 'llm_rejected_validated',
-            candidates: diagCandidates,
-          };
-          const noRouteLogEntry: LlmAttempt & { tripPlannerSelection?: TripPlannerSelectionDiagnostic } = {
-            attemptNumber: attempt + 1,
-            status: 'success',
-            responseText: response.text.substring(0, 500),
-            latencyMs,
-            tripPlannerSelection: noRouteDiagnostic,
-          };
-          llmLog.push(noRouteLogEntry);
-          return {
-            route: null,
-            llmLog,
-            selection: {
+
+          if (affordableCandidates.length > 0) {
+            // R5: Sibling exists — use highest-scoring validated+affordable candidate.
+            selectedIdx = bestIdx;
+            const fallbackReason: 'chosen_invalid_alternative_used' = 'chosen_invalid_alternative_used';
+            console.log(`[TripPlanner] chosen_invalid_alternative_used: chosenIndex ${ci} invalid; using best sibling (llmIndex=${affordableCandidates[bestIdx].llmIndex})`);
+
+            selectionDiagnostic = {
               llmChosenIndex: ci,
+              actualSelectedLlmIndex: affordableCandidates[bestIdx].llmIndex,
+              fallbackReason,
+              candidates: diagCandidates,
+            };
+          } else {
+            // R6: No sibling validates — return no-route with llm_rejected_validated.
+            console.log(`[TripPlanner] llm_rejected_validated: chosenIndex ${ci} invalid, no sibling validates → no-route`);
+            const noRouteDiagnostic: TripPlannerSelectionDiagnostic = {
+              llmChosenIndex: ci,
+              actualSelectedLlmIndex: -1,
               fallbackReason: 'llm_rejected_validated',
-            },
-          } as unknown as TripPlanResult;
+              candidates: diagCandidates,
+            };
+            const noRouteLogEntry: LlmAttempt & { tripPlannerSelection?: TripPlannerSelectionDiagnostic } = {
+              attemptNumber: attempt + 1,
+              status: 'success',
+              responseText: response.text.substring(0, 500),
+              latencyMs,
+              tripPlannerSelection: noRouteDiagnostic,
+            };
+            llmLog.push(noRouteLogEntry);
+            return {
+              route: null,
+              llmLog,
+              selection: {
+                llmChosenIndex: ci,
+                fallbackReason: 'llm_rejected_validated',
+              },
+            } as unknown as TripPlanResult;
+          }
         } else {
           // chosen_zero_stops: LLM picked a validated candidate but it was pruned to 0 stops.
           // Preserve existing bestIdx fallback (ADR-2: LLM DID intend to pick something).
@@ -754,5 +853,47 @@ export class TripPlanner {
     const buildTurns = Math.ceil(buildCostToDelivery / 20);
 
     return travelTurns + buildTurns;
+  }
+
+  /**
+   * JIRA-207B (R1): Classify a set of validator error strings into a CandidateFailure.failedRule.
+   * Uses heuristic keyword matching on the validator error text.
+   */
+  private classifyValidationError(
+    errors: string[],
+  ): import('./LLMTranscriptLogger').CandidateFailure['failedRule'] {
+    const combined = errors.join(' ').toLowerCase();
+    if (combined.includes('pickup') || combined.includes('missing') || combined.includes('not carried')) {
+      return 'missing_pickup';
+    }
+    if (combined.includes('capacity') || combined.includes('exceed') || combined.includes('too many')) {
+      return 'capacity_exceeded';
+    }
+    if (combined.includes('not on route') || combined.includes('city not') || combined.includes('not reachable')) {
+      return 'city_not_on_route';
+    }
+    if (combined.includes('not at supply') || combined.includes('unavailable') || combined.includes('not available')) {
+      return 'load_not_at_supply';
+    }
+    if (combined.includes('pruned') || combined.includes('zero stop') || combined.includes('all stops')) {
+      return 'pruned_to_zero';
+    }
+    // Default to missing_pickup as the most common failure mode
+    return 'missing_pickup';
+  }
+
+  /**
+   * JIRA-207B (R2): Extract the missing load type from validator error strings.
+   * Returns the load type mentioned in a "missing_pickup" error, or null if not found.
+   */
+  private extractMissingLoad(errors: string[]): string | null {
+    for (const err of errors) {
+      // Try to extract load type from patterns like "DELIVER Hops to ..." or "missing PICKUP for Hops"
+      const deliverMatch = err.match(/DELIVER\s+(\w+)\s+to/i);
+      if (deliverMatch) return deliverMatch[1];
+      const pickupMatch = err.match(/(?:missing|requires?)\s+(?:PICKUP\s+for\s+)?(\w+)/i);
+      if (pickupMatch) return pickupMatch[1];
+    }
+    return null;
   }
 }

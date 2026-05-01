@@ -1453,10 +1453,13 @@ describe('TripPlanner', () => {
       expect(result.route.reasoning).toBe('Candidate 0 — low payout');
     });
 
-    it('chosenIndex: 2 with Candidate 2 rejected by RouteValidator → JIRA-206 chosen_not_in_validated returns no-route', async () => {
+    // JIRA-207B (R5, AC19): Split the original "chosen_not_in_validated → no-route" test into:
+    // (a) validated sibling exists → chosen_invalid_alternative_used (non-null route)
+    // (b) no validated sibling → llm_rejected_validated (null route — preserved behavior)
+
+    it('JIRA-207B: chosenIndex=2 invalid, siblings 0+1 valid → chosen_invalid_alternative_used, non-null route (AC1)', async () => {
       // Candidate 0 and 1 validate fine. Candidate 2 is rejected entirely.
-      // JIRA-206 (R2): LLM picks chosenIndex=2 (rejected), which is not in the validated set.
-      // chosen_not_in_validated now returns no-route instead of falling back to bestIdx.
+      // JIRA-207B (R5): When a validated+affordable sibling exists, use it with chosen_invalid_alternative_used.
       (RouteValidator.validate as jest.Mock).mockImplementation((route: StrategicRoute) => {
         // Candidate 2 is identified by its reasoning text
         if (route.reasoning === 'Candidate 2 — invalid') {
@@ -1502,14 +1505,57 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 300, output: 150 } });
 
       const planner = new TripPlanner(brain);
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+
+      // JIRA-207B: sibling exists → route is non-null with chosen_invalid_alternative_used
+      expect(result.route).not.toBeNull();
+      expect(result.selection).toBeDefined();
+      expect(result.selection!.fallbackReason).toBe('chosen_invalid_alternative_used');
+      expect(result.selection!.llmChosenIndex).toBe(2);
+    });
+
+    it('JIRA-207B: chosenIndex=2 invalid, ALL siblings also invalid → llm_rejected_validated, null route (AC2, R6)', async () => {
+      // All candidates rejected — no validated sibling — llm_rejected_validated preserved (R6).
+      (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: false, errors: ['All stops infeasible'] });
+
+      const response = buildLlmResponse(
+        [
+          {
+            stops: [{ action: 'pickup', load: 'Junk', city: 'Nowhere' }],
+            reasoning: 'Candidate 0 — invalid',
+          },
+          {
+            stops: [{ action: 'pickup', load: 'Junk', city: 'Nowhere' }],
+            reasoning: 'Candidate 1 — invalid',
+          },
+          {
+            stops: [{ action: 'pickup', load: 'Junk', city: 'Nowhere' }],
+            reasoning: 'Candidate 2 — invalid',
+          },
+        ],
+        2,
+      );
+
+      const context = makeContext({
+        demands: [
+          makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15, estimatedTurns: 2 }),
+        ],
+      });
+
+      const { brain, chatFn, planRouteFn } = makeMockBrain();
+      chatFn.mockResolvedValue({ text: response, usage: { input: 300, output: 150 } });
+      planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+      const planner = new TripPlanner(brain);
       const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
 
-      // JIRA-206: chosen_not_in_validated now returns no-route (route: null)
+      // No valid sibling → route: null preserved
       expect(result.route).toBeNull();
     });
 
-    it('chosenIndex out of range → JIRA-206 returns no-route (llm_rejected_validated)', async () => {
-      // JIRA-206 (R2): chosen_not_in_validated now returns no-route instead of falling back to bestIdx.
+    it('JIRA-207B: chosenIndex out of range, sibling validates → chosen_invalid_alternative_used, non-null route', async () => {
+      // JIRA-207B (R5): chosenIndex=99 (out of range), but candidate 0 validates fine.
+      // Sibling exists → chosen_invalid_alternative_used (not no-route).
       (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: true, errors: [] });
 
       const response = buildLlmResponse(
@@ -1522,7 +1568,7 @@ describe('TripPlanner', () => {
             reasoning: 'Candidate 0',
           },
         ],
-        99, // chosenIndex out of range — not in validated set
+        99, // chosenIndex out of range — not in validated set, but sibling 0 validates
       );
 
       const context = makeContext({
@@ -1533,10 +1579,12 @@ describe('TripPlanner', () => {
       chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
       const planner = new TripPlanner(brain);
-      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
+      const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
 
-      // JIRA-206: chosen_not_in_validated → route: null with llm_rejected_validated
-      expect(result.route).toBeNull();
+      // JIRA-207B: sibling validates → non-null route with chosen_invalid_alternative_used
+      expect(result.route).not.toBeNull();
+      expect(result.selection).toBeDefined();
+      expect(result.selection!.fallbackReason).toBe('chosen_invalid_alternative_used');
     });
   });
 });
@@ -1622,12 +1670,16 @@ describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC
     expect(result.system).not.toMatch(/DROP|drop|Drop/);
   });
 
-  // AC4: system prompt contains no worked example block (no "EXAMPLE" or "Steel" token from old example)
-  it('AC4: system prompt contains no EXAMPLE block or Steel worked-example marker', () => {
+  // AC4: JIRA-207B: system prompt contains ACTION GRAMMAR RULES + WORKED EXAMPLE block (Cardiff×2 Hops).
+  // The old test banned "EXAMPLE" entirely; updated to verify the NEW worked example is present.
+  it('AC4: system prompt contains ACTION GRAMMAR RULES block with Cardiff×2 Hops WORKED EXAMPLE (JIRA-207B)', () => {
     const result = getTripPlanningPromptReal(BotSkillLevel.Medium, makeMinimalContext(), makeMinimalMemory());
-    expect(result.system).not.toContain('EXAMPLE');
-    // "Steel" was a distinctive load in the old example — regression marker
-    // (It may appear in user context but not in the static system prompt)
+    // JIRA-207B (R7): ACTION GRAMMAR RULES block required
+    expect(result.system).toContain('ACTION GRAMMAR RULES');
+    expect(result.system).toContain('WORKED EXAMPLE');
+    expect(result.system).toContain('Cardiff');
+    expect(result.system).toContain('Hops');
+    // "Steel" was a distinctive load in the OLD example — must NOT appear in the system prompt
     expect(result.system).not.toContain('Steel');
   });
 
@@ -2065,10 +2117,10 @@ describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
     jest.restoreAllMocks();
   });
 
-  // AC5: LLM returns 3 candidates; chosenIndex=0 fails validation; candidates 1,2 pass.
-  // JIRA-206 (R2): chosen_not_in_validated now returns { route: null } with llm_rejected_validated.
-  // The selection diagnostic is embedded in the llmLog success entry.
-  it('AC5: selection diagnostic populated when chosenIndex fails RouteValidator → JIRA-206 returns no-route', async () => {
+  // AC5: JIRA-207B (R5, AC1): LLM returns 3 candidates; chosenIndex=0 fails validation; candidates 1,2 pass.
+  // JIRA-207B amends: when a validated+affordable sibling exists, use it with chosen_invalid_alternative_used.
+  // The selection diagnostic is embedded in the success log entry.
+  it('AC5: JIRA-207B: chosenIndex=0 invalid, siblings 1+2 valid → chosen_invalid_alternative_used, non-null route', async () => {
     const { brain, chatFn } = makeMockBrain();
 
     const context = makeContext({
@@ -2112,20 +2164,55 @@ describe('TripPlanner — JIRA-194 selection override diagnostics', () => {
     chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
     const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory()) as TripPlanResult;
+
+    // JIRA-207B (R5): sibling validates → non-null route with chosen_invalid_alternative_used
+    expect(result).toBeDefined();
+    expect(result.route).not.toBeNull();
+    expect(result.selection).toBeDefined();
+    expect(result.selection!.fallbackReason).toBe('chosen_invalid_alternative_used');
+    expect(result.selection!.llmChosenIndex).toBe(0);
+    // The LLM transcript diagnostic must include the selection diagnostic
+    const diag = (result.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection;
+    expect(diag).toBeDefined();
+    expect(diag.fallbackReason).toBe('chosen_invalid_alternative_used');
+  });
+
+  // AC5-bis: JIRA-207B (R6): Regression guard — when ALL siblings also fail, no-route is preserved.
+  // Note: when ALL candidates fail validation across all retries, the code falls back to planRoute()
+  // which also returns null. There is no 'llm_rejected_validated' selection in this path — the
+  // selection is only set when a candidate validates but the LLM chose an invalid one.
+  it('AC5-bis: JIRA-207B: chosenIndex=0 invalid, ALL siblings also invalid → null route (R6)', async () => {
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+
+    const context = makeContext({
+      demands: [
+        makeDemand({ loadType: 'Ham', deliveryCity: 'Torino', supplyCity: 'Warszawa', payout: 20 }),
+        makeDemand({ loadType: 'Oil', deliveryCity: 'Zurich', supplyCity: 'Beograd', payout: 18 }),
+      ],
+    });
+
+    const response = buildLlmResponse([
+      {
+        stops: [{ action: 'pickup', load: 'Ham', supplyCity: 'Warszawa' }],
+        reasoning: 'Ham candidate — invalid',
+      },
+      {
+        stops: [{ action: 'pickup', load: 'Oil', supplyCity: 'Beograd' }],
+        reasoning: 'Oil candidate — invalid',
+      },
+    ], 0);
+
+    // Both candidates fail validation — no valid sibling exists
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: false, errors: ['All stops infeasible'] });
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const planner = new TripPlanner(brain);
     const result = await planner.planTrip(makeSnapshot(), context, [], makeMemory());
 
-    // JIRA-206 (R2): chosen_not_in_validated returns no-route
-    expect(result).toBeDefined();
+    // JIRA-207B (R6): No sibling validates → route: null is preserved
     expect(result.route).toBeNull();
-    // selection field carries the reason (returned inline)
-    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
-    expect(r.selection).toBeDefined();
-    expect(r.selection!.fallbackReason).toBe('llm_rejected_validated');
-    // The LLM transcript diagnostic must include candidate 0's validator errors
-    const diag = (r.llmLog.find(a => a.status === 'success') as any)?.tripPlannerSelection;
-    expect(diag).toBeDefined();
-    expect(diag.candidates[0].validatorErrors.length).toBeGreaterThan(0);
-    expect(diag.candidates[0].validatorErrors[0]).toContain('Ham');
   });
 
   // AC6: All 3 candidates validate; chosenIndex=0 is honored → no selection field.
@@ -2675,10 +2762,11 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
     expect(validationErrors[0].error).toContain('unaffordable');
   });
 
-  // ── R7d: chosen_not_in_validated → no-route + llm_rejected_validated ──
-  it('R7d: chosen_not_in_validated → no-route with llm_rejected_validated (bestIdx NOT used)', async () => {
+  // ── R7d: JIRA-207B amendment — split into "sibling validates" vs "no sibling" ──
+
+  it('R7d: JIRA-207B: chosenIndex=99 (out of range) but sibling validates → chosen_invalid_alternative_used, non-null route (AC1)', async () => {
     // LLM picks chosenIndex=99 (out of range). Candidate 0 validates fine.
-    // JIRA-206: return no-route instead of bestIdx fallback.
+    // JIRA-207B (R5): Sibling exists → chosen_invalid_alternative_used, non-null route.
     const response = buildLlmResponse([
       {
         stops: [
@@ -2687,7 +2775,7 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
         ],
         reasoning: 'Coal route',
       },
-    ], 99); // chosenIndex=99 — not in validated set
+    ], 99); // chosenIndex=99 — not in validated set, but sibling 0 validates
 
     const context = makeContext({
       money: 50,
@@ -2702,18 +2790,47 @@ describe('TripPlanner — JIRA-206 affordability filter and LLM-rejection no-rou
     chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
 
     const planner = new TripPlanner(brain);
+    const result = await planner.planTrip(snapshot, context, [], makeMemory()) as TripPlanResult;
+
+    // JIRA-207B: sibling validates → non-null route
+    expect(result.route).not.toBeNull();
+    expect(result.selection).toBeDefined();
+    expect(result.selection!.fallbackReason).toBe('chosen_invalid_alternative_used');
+    expect(result.selection!.llmChosenIndex).toBe(99);
+
+    // No retry was triggered (we return immediately)
+    expect(chatFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('R7d-preserved: null route when ALL candidates invalid (R6 regression guard — no valid sibling)', async () => {
+    // LLM picks chosenIndex=99 (out of range). ALL candidates also fail validation.
+    // JIRA-207B (R6): No valid sibling → route: null. (llm_rejected_validated fires only when
+    // some candidates validate but the chosen one does not — that path has no siblings here.)
+    (RouteValidator.validate as jest.Mock).mockReturnValue({ valid: false, errors: ['All stops infeasible'] });
+
+    const response = buildLlmResponse([
+      {
+        stops: [{ action: 'pickup', load: 'Junk', city: 'Nowhere' }],
+        reasoning: 'Junk route — invalid',
+      },
+    ], 99);
+
+    const context = makeContext({
+      money: 50,
+      demands: [makeDemand({ cardIndex: 1, loadType: 'Coal', supplyCity: 'Essen', deliveryCity: 'Berlin', payout: 15 })],
+    });
+
+    const snapshot = makeSnapshot(50);
+
+    const { brain, chatFn, planRouteFn } = makeMockBrain();
+    chatFn.mockResolvedValue({ text: response, usage: { input: 100, output: 50 } });
+    planRouteFn.mockResolvedValue({ route: null, llmLog: [] });
+
+    const planner = new TripPlanner(brain);
     const result = await planner.planTrip(snapshot, context, [], makeMemory());
 
-    // JIRA-206 (R2): chosen_not_in_validated → route: null
+    // No valid sibling → route: null preserved
     expect(result.route).toBeNull();
-
-    // selection carries the reason
-    const r = result as unknown as { route: null; llmLog: LlmAttempt[]; selection?: { llmChosenIndex: number; fallbackReason: string } };
-    expect(r.selection).toBeDefined();
-    expect(r.selection!.fallbackReason).toBe('llm_rejected_validated');
-
-    // No retry was triggered (we return immediately, not retry)
-    expect(chatFn).toHaveBeenCalledTimes(1);
   });
 
   // ── R7e: chosen_zero_stops still falls back to bestIdx ─────────────────

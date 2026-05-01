@@ -59,7 +59,7 @@ import type { Stage3Result } from './schemas';
  * Mirrors the constant in AIStrategyEngine.ts (single source of truth re-imported here
  * to avoid a circular import). Keep in lockstep with the canonical export.
  */
-const MIN_DELIVERIES_BEFORE_UPGRADE = 1;
+const MIN_DELIVERIES_BEFORE_UPGRADE = 2;
 
 /**
  * NewRoutePlanner result — full Stage3Result plus two diagnostic fields the
@@ -198,6 +198,41 @@ export class NewRoutePlanner {
       }
     }
     const tripResult = tripResultRaw;
+
+    // JIRA-207B (R10e): Handle keep_current_plan — the bot has carried loads but no new
+    // options. Preserve the existing activeRoute (null here) and skip heuristic-fallback.
+    // In practice this fires when carry-loads exist but no affordable new card is available.
+    // The turn will proceed to movement/build phases without a new plan being forced.
+    const tripSelection = 'selection' in tripResult ? tripResult.selection : undefined;
+    if (!tripResult.route && tripSelection?.fallbackReason === 'keep_current_plan') {
+      console.log(`${tag} [NewRoutePlanner] keep_current_plan: no new options but carry-loads committed; skip replan`);
+      return {
+        decision: {
+          plan: { type: AIActionType.PassTurn },
+          reasoning: '[keep_current_plan] No new options; carry-load commitment preserved; proceeding to movement/build phases',
+          planHorizon: 'Immediate',
+          model: 'keep_current_plan',
+          latencyMs: 0,
+          retried: false,
+          llmLog: tripResult.llmLog,
+        },
+        activeRoute,
+        routeWasCompleted,
+        routeWasAbandoned,
+        hasDelivery,
+        previousRouteStops: null,
+        secondaryDeliveryLog,
+        deadLoadDropActions,
+        pendingUpgradeAction,
+        upgradeSuppressionReason,
+        snapshot,
+        context,
+        execCompositionTrace,
+        autoDeliveredLoads,
+        tripPlanResult: null,
+      };
+    }
+
     // Wrap tripResult into routeResult-compatible shape for downstream code
     const routeResult = tripResult.route
       ? { route: (tripResult as TripPlanResult).route, model: 'trip-planner', latencyMs: (tripResult as TripPlanResult).llmLatencyMs, tokenUsage: (tripResult as TripPlanResult).llmTokens, llmLog: tripResult.llmLog, systemPrompt: (tripResult as TripPlanResult).systemPrompt, userPrompt: (tripResult as TripPlanResult).userPrompt }
