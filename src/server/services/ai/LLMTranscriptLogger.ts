@@ -16,6 +16,27 @@ function ensureDir(): void {
 }
 
 /**
+ * JIRA-207A: Per-candidate validation failure record for TripPlanner selection diagnostics.
+ * Populated by JIRA-207B when the validator rejects candidates — enables per-candidate
+ * retry feedback in the LLM prompt.
+ */
+export type CandidateFailure = {
+  /** Zero-based index of the candidate in the LLM's candidates array. */
+  candidateIndex: number;
+  /** Which validation rule this candidate violated. */
+  failedRule:
+    | 'missing_pickup'
+    | 'capacity_exceeded'
+    | 'city_not_on_route'
+    | 'load_not_at_supply'
+    | 'pruned_to_zero';
+  /** Human-readable description of why the candidate failed this rule. */
+  detail: string;
+  /** Optional suggestion for how the LLM could fix this candidate on retry. */
+  suggestion?: string;
+};
+
+/**
  * JIRA-194: Per-candidate diagnostic record for TripPlanner selection overrides.
  * Populated ONLY when the LLM's chosenIndex was not honored.
  */
@@ -24,8 +45,19 @@ export interface TripPlannerSelectionDiagnostic {
   llmChosenIndex: number;
   /** The llmIndex actually selected (-1 when no validated candidates). */
   actualSelectedLlmIndex: number;
-  /** Why the LLM's choice was not honored. JIRA-206: widened with affordability and LLM-rejection reasons. */
-  fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' | 'no_affordable_candidate' | 'llm_rejected_validated';
+  /**
+   * Why the LLM's choice was not honored.
+   * JIRA-206: widened with affordability and LLM-rejection reasons.
+   * JIRA-207A: widened with selection-fallback and short-circuit reasons for JIRA-207B.
+   */
+  fallbackReason:
+    | 'chosen_not_in_validated'
+    | 'chosen_zero_stops'
+    | 'no_affordable_candidate'
+    | 'llm_rejected_validated'
+    | 'chosen_invalid_alternative_used'
+    | 'no_actionable_options'
+    | 'keep_current_plan';
   /** Per-candidate evidence: validated candidates have empty validatorErrors. */
   candidates: Array<{
     llmIndex: number;
@@ -33,6 +65,12 @@ export interface TripPlannerSelectionDiagnostic {
     validatorErrors: string[];
     prunedToZero: boolean;
   }>;
+  /**
+   * JIRA-207A: Per-candidate per-rule failure details. Populated by JIRA-207B when
+   * the validator rejects candidates — enables targeted retry-feedback in the LLM prompt.
+   * Undefined when all candidates pass validation (no rejection to diagnose).
+   */
+  candidateFailures?: CandidateFailure[];
 }
 
 /** Shape of a single LLM call transcript entry. */

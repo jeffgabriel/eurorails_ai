@@ -1,4 +1,4 @@
-import { appendLLMCall, LLMTranscriptEntry, TripPlannerSelectionDiagnostic } from '../../services/ai/LLMTranscriptLogger';
+import { appendLLMCall, LLMTranscriptEntry, TripPlannerSelectionDiagnostic, CandidateFailure } from '../../services/ai/LLMTranscriptLogger';
 import * as fs from 'fs';
 import { join } from 'path';
 
@@ -159,5 +159,100 @@ describe('LLMTranscriptLogger — JIRA-194 tripPlannerSelection round-trip', () 
     const entry: LLMTranscriptEntry = makeEntry(); // no tripPlannerSelection
     const serialized = JSON.stringify(entry);
     expect(serialized).not.toContain('tripPlannerSelection');
+  });
+});
+
+// ── JIRA-207A: CandidateFailure round-trip + widened fallbackReason ────────────
+
+describe('LLMTranscriptLogger — JIRA-207A schema widening', () => {
+  // ── AC4: candidateFailures NDJSON round-trip ─────────────────────────────────
+
+  it('AC4: candidateFailures array round-trips through JSON.stringify/JSON.parse', () => {
+    const failures: CandidateFailure[] = [
+      {
+        candidateIndex: 1,
+        failedRule: 'missing_pickup',
+        detail: 'Candidate 1 PICKUP stop for Coal has no supply city in the candidates stops',
+        suggestion: 'Add a PICKUP stop for Coal before the DELIVER stop',
+      },
+      {
+        candidateIndex: 2,
+        failedRule: 'capacity_exceeded',
+        detail: 'Candidate 2 requests 3 loads but Freight train capacity is 2',
+      },
+    ];
+
+    const diag: TripPlannerSelectionDiagnostic = {
+      llmChosenIndex: 1,
+      actualSelectedLlmIndex: -1,
+      fallbackReason: 'no_affordable_candidate',
+      candidates: [],
+      candidateFailures: failures,
+    };
+
+    const entry: LLMTranscriptEntry = makeEntry({ tripPlannerSelection: diag });
+    const serialized = JSON.stringify(entry);
+    const parsed: LLMTranscriptEntry = JSON.parse(serialized);
+
+    expect(parsed.tripPlannerSelection!.candidateFailures).toBeDefined();
+    expect(parsed.tripPlannerSelection!.candidateFailures).toHaveLength(2);
+
+    const f0 = parsed.tripPlannerSelection!.candidateFailures![0];
+    expect(f0.candidateIndex).toBe(1);
+    expect(f0.failedRule).toBe('missing_pickup');
+    expect(f0.detail).toBe('Candidate 1 PICKUP stop for Coal has no supply city in the candidates stops');
+    expect(f0.suggestion).toBe('Add a PICKUP stop for Coal before the DELIVER stop');
+
+    const f1 = parsed.tripPlannerSelection!.candidateFailures![1];
+    expect(f1.candidateIndex).toBe(2);
+    expect(f1.failedRule).toBe('capacity_exceeded');
+    expect(f1.detail).toBe('Candidate 2 requests 3 loads but Freight train capacity is 2');
+    expect(f1.suggestion).toBeUndefined();
+  });
+
+  it('AC4b: tripPlannerSelection without candidateFailures does not serialize the key', () => {
+    const diag: TripPlannerSelectionDiagnostic = {
+      llmChosenIndex: 0,
+      actualSelectedLlmIndex: 0,
+      fallbackReason: 'chosen_not_in_validated',
+      candidates: [],
+      // candidateFailures omitted
+    };
+    const entry: LLMTranscriptEntry = makeEntry({ tripPlannerSelection: diag });
+    const serialized = JSON.stringify(entry);
+    const parsed: LLMTranscriptEntry = JSON.parse(serialized);
+    expect(parsed.tripPlannerSelection!.candidateFailures).toBeUndefined();
+  });
+
+  // ── AC5, AC10b: Compile-time type checks for widened fallbackReason union ─────
+
+  it('AC5: fallbackReason accepts chosen_invalid_alternative_used (compile-time)', () => {
+    // This test asserts TypeScript compile-time type correctness.
+    // If TripPlannerSelectionDiagnostic.fallbackReason does not include
+    // 'chosen_invalid_alternative_used', tsc will fail and this test won't reach runtime.
+    const reason: TripPlannerSelectionDiagnostic['fallbackReason'] = 'chosen_invalid_alternative_used';
+    expect(reason).toBe('chosen_invalid_alternative_used');
+  });
+
+  it('AC10b-a: fallbackReason accepts no_actionable_options (compile-time)', () => {
+    const reason: TripPlannerSelectionDiagnostic['fallbackReason'] = 'no_actionable_options';
+    expect(reason).toBe('no_actionable_options');
+  });
+
+  it('AC10b-b: fallbackReason accepts keep_current_plan (compile-time)', () => {
+    const reason: TripPlannerSelectionDiagnostic['fallbackReason'] = 'keep_current_plan';
+    expect(reason).toBe('keep_current_plan');
+  });
+
+  it('AC4c: CandidateFailure failedRule accepts all defined values', () => {
+    const rules: CandidateFailure['failedRule'][] = [
+      'missing_pickup',
+      'capacity_exceeded',
+      'city_not_on_route',
+      'load_not_at_supply',
+      'pruned_to_zero',
+    ];
+    expect(rules).toHaveLength(5);
+    rules.forEach(r => expect(typeof r).toBe('string'));
   });
 });

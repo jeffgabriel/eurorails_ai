@@ -55,11 +55,19 @@ export interface TripPlanResult {
   /**
    * JIRA-194: Present ONLY when the LLM's chosenIndex was overridden.
    * JIRA-206: Union widened to include affordability and LLM-rejection reasons.
+   * JIRA-207A: Union widened to add selection-fallback and short-circuit reasons for JIRA-207B.
    * Two scalars sufficient for game-log mirror (full diagnostic is in llmLog entry).
    */
   selection?: {
     llmChosenIndex: number;
-    fallbackReason: 'chosen_not_in_validated' | 'chosen_zero_stops' | 'no_affordable_candidate' | 'llm_rejected_validated';
+    fallbackReason:
+      | 'chosen_not_in_validated'
+      | 'chosen_zero_stops'
+      | 'no_affordable_candidate'
+      | 'llm_rejected_validated'
+      | 'chosen_invalid_alternative_used'
+      | 'no_actionable_options'
+      | 'keep_current_plan';
   };
 }
 
@@ -289,13 +297,14 @@ export class TripPlanner {
             fallbackReason: 'llm_rejected_validated',
             candidates: diagCandidates,
           };
-          llmLog.push({
+          const noRouteLogEntry: LlmAttempt & { tripPlannerSelection?: TripPlannerSelectionDiagnostic } = {
             attemptNumber: attempt + 1,
             status: 'success',
             responseText: response.text.substring(0, 500),
             latencyMs,
             tripPlannerSelection: noRouteDiagnostic,
-          });
+          };
+          llmLog.push(noRouteLogEntry);
           return {
             route: null,
             llmLog,
