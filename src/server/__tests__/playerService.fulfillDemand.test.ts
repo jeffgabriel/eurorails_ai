@@ -1,6 +1,7 @@
 import { db } from '../db/index';
 import { PlayerService } from '../services/playerService';
 import { demandDeckService } from '../services/demandDeckService';
+import { EventCardService } from '../services/EventCardService';
 
 // Mock socketService to prevent real socket emissions
 jest.mock('../services/socketService', () => ({
@@ -31,6 +32,20 @@ jest.mock('../services/demandDeckService', () => ({
     drawCard: jest.fn(),
     returnDealtCardToTop: jest.fn(),
     returnDiscardedCardToDealt: jest.fn(),
+  },
+}));
+
+// Mock EventCardService — prevents real DB calls when event cards are drawn
+jest.mock('../services/EventCardService', () => ({
+  EventCardService: {
+    processEventCard: jest.fn().mockResolvedValue({
+      cardId: 0,
+      cardType: 'Strike',
+      drawingPlayerId: '',
+      affectedZone: [],
+      perPlayerEffects: [],
+      floodSegmentsRemoved: [],
+    }),
   },
 }));
 
@@ -130,8 +145,37 @@ describe('PlayerService.fulfillDemand', () => {
     });
   });
 
-  describe('event card stub behavior', () => {
-    it('should discard event cards and return next demand card', async () => {
+  describe('event card integration behavior (BE-005)', () => {
+    it('should call EventCardService.processEventCard when an event card is drawn', async () => {
+      setupPlayerDb();
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(eventResult(121))
+        .mockReturnValueOnce(demandResult(99));
+
+      await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
+
+      expect(EventCardService.processEventCard).toHaveBeenCalledTimes(1);
+      expect(EventCardService.processEventCard).toHaveBeenCalledWith(
+        gameId,
+        expect.objectContaining({ id: 121 }),
+        playerId,
+        expect.anything(), // client
+      );
+    });
+
+    it('should discard the event card after processing it', async () => {
+      setupPlayerDb();
+      (demandDeckService.drawCard as jest.Mock)
+        .mockReturnValueOnce(eventResult(121))
+        .mockReturnValueOnce(demandResult(99));
+
+      await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
+
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledTimes(1);
+      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
+    });
+
+    it('should draw exactly one replacement card after processing an event card', async () => {
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock)
         .mockReturnValueOnce(eventResult(121))
@@ -139,12 +183,12 @@ describe('PlayerService.fulfillDemand', () => {
 
       const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
+      // drawCard called exactly twice: event card + one replacement
+      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(2);
       expect(result.newCard.id).toBe(99);
-      expect(demandDeckService.discardEventCard).toHaveBeenCalledTimes(1);
-      expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
     });
 
-    it('should discard multiple consecutive event cards before returning a demand card', async () => {
+    it('should process multiple consecutive event cards before returning a demand card', async () => {
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock)
         .mockReturnValueOnce(eventResult(121))
@@ -153,14 +197,15 @@ describe('PlayerService.fulfillDemand', () => {
 
       const result = await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
-      expect(result.newCard.id).toBe(99);
-      expect(demandDeckService.discardEventCard).toHaveBeenCalledTimes(2);
+      expect(EventCardService.processEventCard).toHaveBeenCalledTimes(2);
       expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(121);
       expect(demandDeckService.discardEventCard).toHaveBeenCalledWith(130);
+      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(3);
+      expect(result.newCard.id).toBe(99);
     });
 
-    it('should log a warning when an event card is drawn', async () => {
-      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    it('should log an info message (not warn) when an event card is drawn', async () => {
+      const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
 
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock)
@@ -169,30 +214,19 @@ describe('PlayerService.fulfillDemand', () => {
 
       await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      const warnMessage = warnSpy.mock.calls[0][0] as string;
-      expect(warnMessage).toContain('125');
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      const infoMessage = infoSpy.mock.calls[0][0] as string;
+      expect(infoMessage).toContain('125');
     });
 
-    it('should not call discardEventCard when only demand cards are drawn', async () => {
+    it('should not call EventCardService.processEventCard when only demand cards are drawn', async () => {
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock).mockReturnValueOnce(demandResult(99));
 
       await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
 
+      expect(EventCardService.processEventCard).not.toHaveBeenCalled();
       expect(demandDeckService.discardEventCard).not.toHaveBeenCalled();
-    });
-
-    it('should draw again after event card until demand card found', async () => {
-      setupPlayerDb();
-      (demandDeckService.drawCard as jest.Mock)
-        .mockReturnValueOnce(eventResult(121))
-        .mockReturnValueOnce(demandResult(50));
-
-      await PlayerService.fulfillDemand(gameId, playerId, city, loadType, cardId);
-
-      // drawCard called twice: event card + demand card
-      expect(demandDeckService.drawCard).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -211,7 +245,7 @@ describe('PlayerService.fulfillDemand', () => {
       ).rejects.toThrow('Player not found');
     });
 
-    it('should throw when deck is exhausted (all cards are null)', async () => {
+    it('should throw when deck is exhausted (first draw is null)', async () => {
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock).mockReturnValue(null);
 
@@ -220,7 +254,7 @@ describe('PlayerService.fulfillDemand', () => {
       ).rejects.toThrow('Failed to draw new card');
     });
 
-    it('should throw when deck is exhausted after event cards', async () => {
+    it('should throw when deck is exhausted after processing one event card', async () => {
       setupPlayerDb();
       (demandDeckService.drawCard as jest.Mock)
         .mockReturnValueOnce(eventResult(121))
