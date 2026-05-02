@@ -149,6 +149,8 @@ export interface ActiveEffectDescriptor {
   expiresAfterTurnNumber: number;
   /** Serialized milepost keys; rehydrated to Set<string> on read */
   affectedZone: string[];
+  /** Snow only — narrower subset of affectedZone filtered to blocked terrain types */
+  blockedTerrainZone?: string[];
 }
 
 // ─── ActiveEffectManager types (P3-SP1) ─────────────────────────────────────

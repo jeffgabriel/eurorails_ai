@@ -180,7 +180,11 @@ describe('ActiveEffectManager', () => {
 
     it('should persist a Snow Alpine effect with half_rate and blocked_terrain', async () => {
       const client = makeMockClient([{ active_event: null }]);
-      const descriptor = makeDescriptor({ cardId: 130, affectedZone: ['mp-alpine-1'] });
+      const descriptor = makeDescriptor({
+        cardId: 130,
+        affectedZone: ['mp-alpine-1', 'mp-clear-2', 'mp-clear-3'],
+        blockedTerrainZone: ['mp-alpine-1'],
+      });
 
       await manager.addActiveEffect(GAME_ID, descriptor, EventCardType.Snow, [], client);
 
@@ -190,10 +194,18 @@ describe('ActiveEffectManager', () => {
       const jsonArg = JSON.parse((updateCall as any[])[1][0]);
       expect(jsonArg[0].cardType).toBe(EventCardType.Snow);
       const movRestrictions = jsonArg[0].restrictions.movement;
-      expect(movRestrictions.some((r: any) => r.type === 'half_rate')).toBe(true);
-      expect(movRestrictions.some((r: any) => r.type === 'blocked_terrain')).toBe(true);
+      // half_rate uses the full affectedZone
+      const halfRate = movRestrictions.find((r: any) => r.type === 'half_rate');
+      expect(halfRate).toBeDefined();
+      expect(halfRate.zone).toEqual(['mp-alpine-1', 'mp-clear-2', 'mp-clear-3']);
+      // blocked_terrain uses the narrower blockedTerrainZone
+      const blockedMov = movRestrictions.find((r: any) => r.type === 'blocked_terrain');
+      expect(blockedMov).toBeDefined();
+      expect(blockedMov.zone).toEqual(['mp-alpine-1']);
       const buildRestrictions = jsonArg[0].restrictions.build;
-      expect(buildRestrictions.some((r: any) => r.type === 'blocked_terrain')).toBe(true);
+      const blockedBuild = buildRestrictions.find((r: any) => r.type === 'blocked_terrain');
+      expect(blockedBuild).toBeDefined();
+      expect(blockedBuild.zone).toEqual(['mp-alpine-1']);
     });
 
     it('should persist a Derailment effect with pendingLostTurns', async () => {

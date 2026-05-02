@@ -72,7 +72,7 @@ export class ActiveEffectManager {
 
     const existing: ActiveEffectRecord[] = lockResult.rows[0]?.active_event ?? [];
 
-    const restrictions = this.buildRestrictions(cardType, descriptor.affectedZone, descriptor.drawingPlayerId);
+    const restrictions = this.buildRestrictions(cardType, descriptor.affectedZone, descriptor.drawingPlayerId, descriptor.blockedTerrainZone);
 
     const pendingLostTurns = this.extractPendingLostTurns(cardType, perPlayerEffects);
 
@@ -259,6 +259,7 @@ export class ActiveEffectManager {
     cardType: EventCardType,
     affectedZone: string[],
     drawingPlayerId: string,
+    blockedTerrainZone?: string[],
   ): ActiveEffectRecord['restrictions'] {
     const movement: MovementRestriction[] = [];
     const build: BuildRestriction[] = [];
@@ -280,23 +281,13 @@ export class ActiveEffectManager {
         break;
 
       case EventCardType.Snow:
-        // Snow cards produce half_rate movement restriction + blocked terrain for movement and build.
-        // Alpine (#130) blocks Alpine terrain; Mountain (#131, #132) blocks Mountain terrain.
-        // We check affectedZone presence to determine applicability; terrain type is
-        // determined by the card's effectConfig but we don't have it here.
-        // Per spec: Snow #130 (Alpine) → blocked_terrain: [Alpine]; Snow #131/#132 → [Mountain]
-        // Since we don't have the card config, we store both in the same structure.
-        // The caller (addActiveEffect) passes the full effectConfig-derived zone.
-        // We use a helper to determine which terrain was blocked from the card's effectConfig.
-        // Since we can't know at this level, we store restrictions without blockedTerrain
-        // and rely on the affectedZone for enforcement. For strict spec compliance, the
-        // terrain types will be set by the calling code if needed.
-        // For now, we use generic Snow restrictions with zone only.
+        // Half-rate applies to the full affected zone
         movement.push({ type: 'half_rate', zone: affectedZone });
-        // Blocked terrain movement restriction — terrain type per spec
-        // (Alpine for card 130, Mountain for 131/132). Store zone-based restriction.
-        movement.push({ type: 'blocked_terrain', zone: affectedZone });
-        build.push({ type: 'blocked_terrain', zone: affectedZone });
+        // Blocked terrain restrictions use the narrower blockedTerrainZone
+        // (mileposts filtered to only mountain/alpine terrain by EventCardService.processSnow).
+        // This prevents incorrectly banning movement/building on clear mileposts in the radius.
+        movement.push({ type: 'blocked_terrain', zone: blockedTerrainZone ?? affectedZone });
+        build.push({ type: 'blocked_terrain', zone: blockedTerrainZone ?? affectedZone });
         break;
 
       case EventCardType.Flood:
