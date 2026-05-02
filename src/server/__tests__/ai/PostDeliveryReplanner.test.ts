@@ -22,6 +22,7 @@ import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
 import { TurnExecutorPlanner } from '../../services/ai/TurnExecutorPlanner';
 import type {
   AIActionType,
+  BotMemoryState,
   GameContext,
   GridPoint,
   LlmAttempt,
@@ -29,7 +30,9 @@ import type {
   StrategicRoute,
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
+import { BotSkillLevel } from '../../../shared/types/GameTypes';
 import type { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
+import { getTripPlanningPrompt } from '../../services/ai/prompts/systemPrompts';
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
 
@@ -790,5 +793,131 @@ describe('JIRA-207B: PostDeliveryReplanner keep_current_plan handling (R10e)', (
     expect(result.moveTargetInvalidated).toBe(false);
     // AdvisorCoordinator.adviseEnrichment should NOT be called (no new route from LLM)
     expect(AdvisorCoordinator.adviseEnrichment).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-210A: activeRoute sync into replanMemory (AC19, AC1, AC2, AC21) ─────
+
+describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', () => {
+  it('AC19/AC2: replanMemory.activeRoute === parameter when route still has remaining stops', async () => {
+    // Route with 2 stops; currentStopIndex=1 means stop[1] still pending
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Hops', city: 'Rotterdam' },
+        { action: 'deliver', loadType: 'Hops', city: 'Holland', demandCardId: 7, payment: 16 },
+      ],
+      currentStopIndex: 1,
+      phase: 'travel',
+      startingCity: 'Rotterdam',
+      createdAtTurn: 3,
+      reasoning: 'Hops route with remaining stop',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    MockTripPlannerClass.mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: null, llmLog: [] });
+        },
+      ),
+    }));
+
+    await PostDeliveryReplanner.replan(
+      activeRoute, makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 1, '[TEST]',
+    );
+
+    // replanMemory.activeRoute must be the parameter (referential equality), not the mocked null
+    expect(capturedMemory).toBeDefined();
+    expect(capturedMemory!.activeRoute).toBe(activeRoute);
+  });
+
+  it('AC19/AC1: replanMemory.activeRoute === null when route is fully completed (currentStopIndex >= stops.length)', async () => {
+    // Route with 2 stops; currentStopIndex=2 means fully completed (past last stop)
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Steel', city: 'Wroclaw' },
+        { action: 'deliver', loadType: 'Steel', city: 'Warszawa', demandCardId: 90, payment: 19 },
+      ],
+      currentStopIndex: 2, // advanced past last stop — route fully completed
+      phase: 'travel',
+      startingCity: 'Wroclaw',
+      createdAtTurn: 6,
+      reasoning: 'Steel delivery route',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    MockTripPlannerClass.mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: null, llmLog: [] });
+        },
+      ),
+    }));
+
+    await PostDeliveryReplanner.replan(
+      activeRoute, makeSnapshot(), makeContext(), makeBrain(), makeGridPoints(), 1, '[TEST]',
+    );
+
+    // Route is fully completed → replanMemory.activeRoute must be null
+    expect(capturedMemory).toBeDefined();
+    expect(capturedMemory!.activeRoute).toBeNull();
+  });
+
+  it('AC21: T6 reproduction — bot at Warszawa post-Steel-delivery → prompt shows "(no current plan in flight)" and no contradiction', async () => {
+    // Game d87a7577 T6: Haiku delivered Steel at Warszawa
+    // Route fully completed: currentStopIndex=2, stops.length=2
+    const activeRoute: StrategicRoute = {
+      stops: [
+        { action: 'pickup', loadType: 'Steel', city: 'Wroclaw' },
+        { action: 'deliver', loadType: 'Steel', city: 'Warszawa', demandCardId: 90, payment: 19 },
+      ],
+      currentStopIndex: 2, // advanced past last stop — route fully completed
+      phase: 'travel',
+      startingCity: 'Wroclaw',
+      createdAtTurn: 6,
+      reasoning: 'Steel delivery route T6',
+    };
+
+    let capturedMemory: BotMemoryState | undefined;
+    MockTripPlannerClass.mockImplementation(() => ({
+      planTrip: jest.fn().mockImplementation(
+        (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
+          capturedMemory = memory;
+          return Promise.resolve({ route: null, llmLog: [] });
+        },
+      ),
+    }));
+
+    // T6 context: bot at Warszawa, no carried loads
+    const t6Context = makeContext({
+      position: { row: 10, col: 15, city: 'Warszawa' },
+      loads: [],
+    });
+
+    await PostDeliveryReplanner.replan(
+      activeRoute, makeSnapshot(), t6Context, makeBrain(), makeGridPoints(), 1, '[TEST]',
+    );
+
+    // Verify replanMemory.activeRoute is null (Fix A)
+    expect(capturedMemory).toBeDefined();
+    expect(capturedMemory!.activeRoute).toBeNull();
+
+    // Render the prompt directly using the captured replanMemory
+    const { user: renderedUserPrompt } = getTripPlanningPrompt(
+      BotSkillLevel.Easy,
+      t6Context,
+      capturedMemory!,
+    );
+
+    // CURRENT PLAN must show "(no current plan in flight)" — no stale delivery
+    expect(renderedUserPrompt).toContain('(no current plan in flight)');
+
+    // The just-completed delivery must NOT appear in the prompt
+    expect(renderedUserPrompt).not.toContain('DELIVER Steel at Warszawa');
+
+    // Both assertions confirm no contradiction: empty loads + no stale plan
+    expect(renderedUserPrompt).toContain('Carried loads: none');
   });
 });

@@ -118,9 +118,18 @@ export class PostDeliveryReplanner {
       // deliveries already executed this turn so the LLM prompt's CURRENT STATE
       // block shows the correct count. Do NOT call updateMemory() here — the
       // authoritative write remains in AIStrategyEngine.ts at turn-end (R4).
+      //
+      // JIRA-210A: Patch activeRoute into replanMemory from the post-advance parameter.
+      // When the just-completed delivery was the route's last stop, currentStopIndex equals
+      // stops.length → set null so CURRENT PLAN renders "(no current plan in flight)".
+      // Otherwise, pass the post-advance route through so remaining stops are visible.
+      const postDeliveryRoute = activeRoute.currentStopIndex < activeRoute.stops.length
+        ? activeRoute    // route still has remaining stops — show them in CURRENT PLAN
+        : null;          // route fully completed — render "(no current plan in flight)"
       const replanMemory: BotMemoryState = {
         ...memory,
         deliveryCount: (memory.deliveryCount ?? 0) + deliveriesThisTurn,
+        activeRoute: postDeliveryRoute,
       };
       const replanResult = await tripPlanner.planTrip(snapshot, context, gridPoints, replanMemory);
 
