@@ -44,8 +44,10 @@ const BRITAIN_CITIES = new Set([
 const IRELAND_CITIES = new Set([
   'Belfast', 'Cork', 'Dublin',
 ]);
+// Arhus is on the Jutland peninsula (land-connected to Germany), so it is treated as continent
+// for ferry-region purposes — actual ferry need is detected by FerryPort milepost lookup.
 const SCANDINAVIA_CITIES = new Set([
-  'Oslo', 'Stockholm', 'Goteborg', 'Kobenhavn', 'Arhus',
+  'Oslo', 'Stockholm', 'Goteborg', 'Kobenhavn',
 ]);
 
 function getCityRegion(cityName: string): 'britain' | 'ireland' | 'scandinavia' | 'continent' {
