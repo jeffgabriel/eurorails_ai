@@ -628,6 +628,132 @@ describe('Cold-start hub model demand scoring (JIRA-72)', () => {
     });
   });
 
+  describe('JIRA-209: phase-gated cold-start branch', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    it('should fire cold-start when gameStatus=initialBuild AND segments exist (bug fix)', async () => {
+      // Verifies the JIRA-209 fix: cold-start fires even after first segment is placed during initial build
+      const gridPoints: GridPoint[] = [
+        makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
+        makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
+        makeCityPoint(29, 32, 'Paris', TerrainType.MajorCity, []),
+        makeCityPoint(30, 60, 'Warszawa', TerrainType.SmallCity, ['Ham']),
+        makeCityPoint(42, 58, 'Budapest', TerrainType.MediumCity, []),
+      ];
+
+      setupPathCosts({
+        '37,55->30,60': 15,
+        '37,55->42,58': 5,
+        '30,60->42,58': 18,
+        '24,52->30,60': 12,
+        '24,52->42,58': 22,
+        '29,32->30,60': 35,
+        '29,32->42,58': 30,
+      });
+
+      setupHopDistances({
+        '37,55->30,60': 8,
+        '37,55->42,58': 4,
+      });
+
+      // initialBuild phase but already has a segment placed
+      const snapshot = makeWorldSnapshot({
+        gameStatus: 'initialBuild',
+        botSegments: [makeSegment(37, 55, 36, 55)],
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Budapest', loadType: 'Ham', payment: 25 }],
+        }],
+      });
+
+      const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+      const demand = context.demands.find(d => d.deliveryCity === 'Budapest' && d.loadType === 'Ham');
+
+      expect(demand).toBeDefined();
+      // Cold-start should fire → optimalStartingCity is set
+      expect(demand!.optimalStartingCity).toBe('Wien');
+      expect(demand!.estimatedTrackCostToSupply).toBe(15);
+      expect(demand!.estimatedTrackCostToDelivery).toBe(5);
+    });
+
+    it('should fire cold-start when gameStatus=active AND zero segments (post-restart preservation)', async () => {
+      // Verifies mercy-rule restart case: active phase but segments wiped → cold-start still fires
+      const gridPoints: GridPoint[] = [
+        makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
+        makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
+        makeCityPoint(29, 32, 'Paris', TerrainType.MajorCity, []),
+        makeCityPoint(30, 60, 'Warszawa', TerrainType.SmallCity, ['Ham']),
+        makeCityPoint(42, 58, 'Budapest', TerrainType.MediumCity, []),
+      ];
+
+      setupPathCosts({
+        '37,55->30,60': 15,
+        '37,55->42,58': 5,
+        '30,60->42,58': 18,
+        '24,52->30,60': 12,
+        '24,52->42,58': 22,
+        '29,32->30,60': 35,
+        '29,32->42,58': 30,
+      });
+
+      setupHopDistances({
+        '37,55->30,60': 8,
+        '37,55->42,58': 4,
+      });
+
+      // active phase, zero segments (post-restart)
+      const snapshot = makeWorldSnapshot({
+        gameStatus: 'active',
+        botSegments: [],
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Budapest', loadType: 'Ham', payment: 25 }],
+        }],
+      });
+
+      const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+      const demand = context.demands.find(d => d.deliveryCity === 'Budapest' && d.loadType === 'Ham');
+
+      expect(demand).toBeDefined();
+      // Cold-start should fire → optimalStartingCity is set
+      expect(demand!.optimalStartingCity).toBe('Wien');
+    });
+
+    it('should NOT fire cold-start when gameStatus=active AND segments exist (normal active play)', async () => {
+      // Verifies normal post-initial-build behavior: active + segments → cold-start does NOT fire
+      const gridPoints: GridPoint[] = [
+        makeCityPoint(37, 55, 'Wien', TerrainType.MajorCity, []),
+        makeCityPoint(24, 52, 'Berlin', TerrainType.MajorCity, []),
+        makeCityPoint(29, 32, 'Paris', TerrainType.MajorCity, []),
+        makeCityPoint(30, 60, 'Warszawa', TerrainType.SmallCity, ['Ham']),
+        makeCityPoint(42, 58, 'Budapest', TerrainType.MediumCity, []),
+      ];
+
+      setupPathCosts({});
+
+      // active phase with existing segments
+      const snapshot = makeWorldSnapshot({
+        gameStatus: 'active',
+        botSegments: [makeSegment(37, 55, 36, 55)],
+        botPosition: { row: 37, col: 55 },
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Budapest', loadType: 'Ham', payment: 25 }],
+        }],
+        turnNumber: 5,
+      });
+
+      const context = await ContextBuilder.build(snapshot, BotSkillLevel.Medium, gridPoints);
+      const demand = context.demands.find(d => d.deliveryCity === 'Budapest' && d.loadType === 'Ham');
+
+      expect(demand).toBeDefined();
+      // Cold-start must NOT fire → optimalStartingCity is undefined
+      expect(demand!.optimalStartingCity).toBeUndefined();
+    });
+  });
+
   describe('JIRA-79: water-separated route Euclidean fallback', () => {
     it('should use Euclidean fallback when BFS returns 0 for water-separated route', async () => {
       // Cork (row 20, col 10) in Ireland → Beograd (row 50, col 60) in Serbia

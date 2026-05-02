@@ -503,7 +503,8 @@ function computeSingleSupplyDemandContext(
   let estimatedTrackCostToSupply = 0;
   let estimatedTrackCostToDelivery = 0;
   let optimalStartingCity: string | undefined;
-  const isColdStart = snapshot.bot.existingSegments.length === 0;
+  // JIRA-209: hold cold-start mode throughout initialBuild phase; also covers post-restart (mercy rule) when segments are wiped
+  const isColdStart = snapshot.gameStatus === 'initialBuild' || snapshot.bot.existingSegments.length === 0;
 
   if (isColdStart && supplyCity && !isLoadOnTrain) {
     const coldStartResult = estimateColdStartRouteCost(supplyCity, deliveryCity, gridPoints);
