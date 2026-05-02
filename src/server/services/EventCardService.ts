@@ -351,6 +351,7 @@ export class EventCardService {
     const descriptor: ActiveEffectDescriptor = await buildDescriptor(
       card, drawingPlayerId, gameId, client, Array.from(halfRateZone),
     );
+    descriptor.blockedTerrainZone = Array.from(blockedTerrainZone);
 
     return {
       cardId: card.id,
