@@ -1,10 +1,11 @@
 /**
- * logRoutes.jira194.test.ts — JIRA-194 viewer render tests.
+ * logRoutes.jira194.test.ts — JIRA-210B viewer render tests.
  *
- * AC9: handleGameViewer emits a visible diagnostic section when a turn entry
+ * AC15: handleGameViewer emits a visible diagnostic section when a turn entry
  * contains tripPlanning.fallbackReason. handleLLMViewer emits a visible
  * diagnostic section when an LLM entry contains tripPlannerSelection.
  * Both viewers render cleanly when the new fields are absent.
+ * Backward-compat: historical logs with candidates[]/chosen still render without throwing.
  */
 
 // ── Mock dependencies ──────────────────────────────────────────────────────
@@ -75,96 +76,129 @@ function baseLlmEntry(overrides: Partial<LLMTranscriptEntry> = {}): LLMTranscrip
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe('logRoutes — JIRA-194 viewer renders', () => {
-  // AC9: handleGameViewer emits diagnostic section when fallbackReason is present
-  it('renderTurnCard: emits TripPlanner Override section when fallbackReason is present', () => {
+describe('logRoutes — JIRA-210B viewer renders (single-route shape)', () => {
+  // AC15: renderTurnCard emits short-circuit section when fallbackReason is present
+  it('renderTurnCard: emits TripPlanner Short-circuit section when fallbackReason is no_actionable_options', () => {
     const entry = baseTurnEntry({
       tripPlanning: {
         trigger: 'no-active-route',
-        candidates: [],
-        chosen: 1,
+        stops: [],
         llmLatencyMs: 500,
         llmTokens: { input: 100, output: 50 },
-        llmReasoning: 'chose oil route',
-        chosenByLlm: 0,
-        fallbackReason: 'chosen_not_in_validated',
+        llmReasoning: '',
+        fallbackReason: 'no_actionable_options',
       },
     });
 
     const html = _renderTurnCard(entry, 0);
 
-    expect(html).toContain('TripPlanner Override');
-    expect(html).toContain('chosen_not_in_validated');
-    expect(html).toContain('LLM chose candidate');
-    expect(html).toContain('0'); // llmChosenIndex
+    expect(html).toContain('TripPlanner Short-circuit');
+    expect(html).toContain('no_actionable_options');
   });
 
-  // AC9: renderTurnCard renders cleanly when tripPlanning is absent
+  it('renderTurnCard: emits TripPlanner Short-circuit section when fallbackReason is keep_current_plan', () => {
+    const entry = baseTurnEntry({
+      tripPlanning: {
+        trigger: 'no-active-route',
+        llmLatencyMs: 200,
+        llmTokens: { input: 50, output: 25 },
+        llmReasoning: '',
+        fallbackReason: 'keep_current_plan',
+      },
+    });
+
+    const html = _renderTurnCard(entry, 0);
+
+    expect(html).toContain('TripPlanner Short-circuit');
+    expect(html).toContain('keep_current_plan');
+  });
+
+  // AC15: renderTurnCard renders single-route stops
+  it('renderTurnCard: renders single-route stops (no Chosen: Route N/M line)', () => {
+    const entry = baseTurnEntry({
+      tripPlanning: {
+        trigger: 'no-active-route',
+        stops: ['pickup(Coal@Cardiff)', 'deliver(Coal@Ruhr)'],
+        llmLatencyMs: 300,
+        llmTokens: { input: 80, output: 40 },
+        llmReasoning: 'good route',
+      },
+    });
+
+    const html = _renderTurnCard(entry, 0);
+    expect(html).toContain('Trip Planning');
+    expect(html).toContain('pickup(Coal@Cardiff)');
+    expect(html).not.toContain('Chosen: Route');
+  });
+
+  // AC15: renderTurnCard renders cleanly when tripPlanning is absent
   it('renderTurnCard: renders cleanly when tripPlanning is absent', () => {
     const entry = baseTurnEntry(); // no tripPlanning
 
     expect(() => _renderTurnCard(entry, 0)).not.toThrow();
     const html = _renderTurnCard(entry, 0);
-    expect(html).not.toContain('TripPlanner Override');
+    expect(html).not.toContain('TripPlanner Short-circuit');
   });
 
-  // AC9: renderTurnCard renders cleanly when tripPlanning exists but no fallbackReason
-  it('renderTurnCard: no TripPlanner Override section when fallbackReason is absent', () => {
+  // AC15: renderTurnCard renders cleanly when tripPlanning exists but no fallbackReason
+  it('renderTurnCard: no TripPlanner Short-circuit section when fallbackReason is absent', () => {
     const entry = baseTurnEntry({
       tripPlanning: {
         trigger: 'no-active-route',
-        candidates: [],
-        chosen: 0,
         llmLatencyMs: 200,
         llmTokens: { input: 50, output: 25 },
         llmReasoning: 'honored',
-        // No chosenByLlm or fallbackReason — honored path
+        // No fallbackReason — normal route planned
       },
     });
 
     const html = _renderTurnCard(entry, 0);
-    expect(html).not.toContain('TripPlanner Override');
+    expect(html).not.toContain('TripPlanner Short-circuit');
     expect(html).toContain('Trip Planning'); // still shows the trip planning section
   });
 
-  // AC9: handleLLMViewer emits diagnostic section when tripPlannerSelection is present
-  it('renderLLMCallCards: emits TripPlanner Selection Override section when tripPlannerSelection is present', () => {
+  // Backward-compat: historical log entries with candidates[]/chosen still render without throwing
+  it('renderTurnCard: handles historical logs with candidates[]/chosen without throwing (R19)', () => {
+    const historicalEntry = baseTurnEntry({
+      tripPlanning: {
+        trigger: 'no-active-route',
+        // Old shape fields (historical logs) — cast to any to simulate NDJSON read
+        ...({
+          candidates: [{ stops: ['pickup(Coal@Cardiff)', 'deliver(Coal@Ruhr)'], score: 5, netValue: 10, estimatedTurns: 2, buildCostEstimate: 5, usageFeeEstimate: 0 }],
+          chosen: 0,
+          chosenByLlm: 0,
+        } as any),
+        llmLatencyMs: 200,
+        llmTokens: { input: 50, output: 25 },
+        llmReasoning: 'old log',
+      } as any,
+    });
+
+    expect(() => _renderTurnCard(historicalEntry, 0)).not.toThrow();
+    const html = _renderTurnCard(historicalEntry, 0);
+    expect(html).toContain('Trip Planning');
+  });
+
+  // AC15: handleLLMViewer emits short-circuit diagnostic when tripPlannerSelection is present
+  it('renderLLMCallCards: emits TripPlanner Short-circuit section when tripPlannerSelection is present', () => {
     const entry = baseLlmEntry({
       tripPlannerSelection: {
-        llmChosenIndex: 0,
-        actualSelectedLlmIndex: 1,
-        fallbackReason: 'chosen_not_in_validated',
-        candidates: [
-          {
-            llmIndex: 0,
-            rawStops: [{ action: 'PICKUP', load: 'Ham', city: 'Warszawa' }],
-            validatorErrors: ['No demand card for Ham→Torino'],
-            prunedToZero: false,
-          },
-          {
-            llmIndex: 1,
-            rawStops: [{ action: 'PICKUP', load: 'Oil', city: 'Beograd' }],
-            validatorErrors: [],
-            prunedToZero: false,
-          },
-        ],
+        fallbackReason: 'no_actionable_options',
       },
     });
 
     const html = _renderLLMCallCards([entry], 'g1');
 
-    expect(html).toContain('TripPlanner Selection Override');
-    expect(html).toContain('chosen_not_in_validated');
-    expect(html).toContain('LLM chosenIndex: 0');
-    expect(html).toContain('No demand card for Ham');
+    expect(html).toContain('TripPlanner Short-circuit');
+    expect(html).toContain('no_actionable_options');
   });
 
-  // AC9: renderLLMCallCards renders cleanly when tripPlannerSelection is absent
+  // AC15: renderLLMCallCards renders cleanly when tripPlannerSelection is absent
   it('renderLLMCallCards: renders cleanly when tripPlannerSelection is absent', () => {
     const entry = baseLlmEntry(); // no tripPlannerSelection
 
     expect(() => _renderLLMCallCards([entry], 'g1')).not.toThrow();
     const html = _renderLLMCallCards([entry], 'g1');
-    expect(html).not.toContain('TripPlanner Selection Override');
+    expect(html).not.toContain('TripPlanner Short-circuit');
   });
 });

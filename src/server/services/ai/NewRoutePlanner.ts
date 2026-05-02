@@ -164,47 +164,40 @@ export class NewRoutePlanner {
     // ── D2: TripPlanner — consult for a new multi-stop trip (JIRA-126) ──
     const tripPlanner = new TripPlanner(brain);
 
-    const tripResultRaw = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
-    // JIRA-194: Capture full TripPlanResult for selection diagnostic
-    if (tripResultRaw.route) {
-      tripPlanResult = tripResultRaw as TripPlanResult;
-      // Write LLM transcript entry when LLM's chosenIndex was overridden (R2, R6)
-      if (tripPlanResult.selection) {
-        // Find the success llmLog entry that carries the diagnostic (set by TripPlanner)
-        const successEntry = tripPlanResult.llmLog.find(a => a.status === 'success');
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const diag = (successEntry as any)?.tripPlannerSelection;
-        if (diag) {
-          appendLLMCall(gameId, {
-            callId: `trip-planner-selection-${snapshot.turnNumber}-${botPlayerId}`,
-            gameId,
-            playerId: botPlayerId,
-            playerName: (snapshot.bot.botConfig as { name?: string } | null)?.name,
-            turn: snapshot.turnNumber,
-            timestamp: new Date().toISOString(),
-            caller: 'trip-planner',
-            method: 'selectionOverride',
-            model: brain.modelName,
-            systemPrompt: '',
-            userPrompt: '',
-            responseText: '',
-            status: 'success',
-            latencyMs: 0,
-            attemptNumber: 1,
-            totalAttempts: 1,
-            tripPlannerSelection: diag,
-          });
-        }
+    const tripResult = await tripPlanner.planTrip(snapshot, context, gridPoints, memory);
+    // JIRA-210B: TripPlanResult is now a flat type — no cast needed.
+    // Capture result for downstream log writer if route was planned.
+    if (tripResult.route) {
+      tripPlanResult = tripResult;
+      // Write LLM transcript entry when short-circuit diagnostic is present
+      if (tripResult.selection) {
+        appendLLMCall(gameId, {
+          callId: `trip-planner-selection-${snapshot.turnNumber}-${botPlayerId}`,
+          gameId,
+          playerId: botPlayerId,
+          playerName: (snapshot.bot.botConfig as { name?: string } | null)?.name,
+          turn: snapshot.turnNumber,
+          timestamp: new Date().toISOString(),
+          caller: 'trip-planner',
+          method: 'shortCircuit',
+          model: brain.modelName,
+          systemPrompt: '',
+          userPrompt: '',
+          responseText: '',
+          status: 'success',
+          latencyMs: 0,
+          attemptNumber: 1,
+          totalAttempts: 1,
+          tripPlannerSelection: tripResult.selection,
+        });
       }
     }
-    const tripResult = tripResultRaw;
 
     // JIRA-207B (R10e): Handle keep_current_plan — the bot has carried loads but no new
     // options. Preserve the existing activeRoute (null here) and skip heuristic-fallback.
     // In practice this fires when carry-loads exist but no affordable new card is available.
     // The turn will proceed to movement/build phases without a new plan being forced.
-    const tripSelection = 'selection' in tripResult ? tripResult.selection : undefined;
-    if (!tripResult.route && tripSelection?.fallbackReason === 'keep_current_plan') {
+    if (!tripResult.route && tripResult.selection?.fallbackReason === 'keep_current_plan') {
       console.log(`${tag} [NewRoutePlanner] keep_current_plan: no new options but carry-loads committed; skip replan`);
       return {
         decision: {
@@ -235,7 +228,7 @@ export class NewRoutePlanner {
 
     // Wrap tripResult into routeResult-compatible shape for downstream code
     const routeResult = tripResult.route
-      ? { route: (tripResult as TripPlanResult).route, model: 'trip-planner', latencyMs: (tripResult as TripPlanResult).llmLatencyMs, tokenUsage: (tripResult as TripPlanResult).llmTokens, llmLog: tripResult.llmLog, systemPrompt: (tripResult as TripPlanResult).systemPrompt, userPrompt: (tripResult as TripPlanResult).userPrompt }
+      ? { route: tripResult.route, model: 'trip-planner', latencyMs: tripResult.llmLatencyMs, tokenUsage: tripResult.llmTokens, llmLog: tripResult.llmLog, systemPrompt: tripResult.systemPrompt, userPrompt: tripResult.userPrompt }
       : { route: null as StrategicRoute | null, llmLog: tripResult.llmLog, systemPrompt: undefined as string | undefined, userPrompt: undefined as string | undefined };
 
     if (routeResult.route) {

@@ -505,21 +505,23 @@ function renderTurnCard(entry: GameTurnLogEntry, index: number): string {
 
   let sections = '';
 
-  // Trip Planning
+  // Trip Planning (JIRA-210B: single-route shape; backward-compat via optional-chain)
   if (entry.tripPlanning) {
     const tp = entry.tripPlanning;
-    const chosen = tp.chosen >= 0 && tp.chosen < tp.candidates.length ? tp.candidates[tp.chosen] : null;
+    // Backward-compat: historical logs may have candidates[]/chosen; new logs have stops[]
+    const stopsArr: string[] | undefined =
+      tp.stops ??
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ((tp as any).candidates?.[(tp as any).chosen]?.stops as string[] | undefined);
     sections += `<details><summary>Trip Planning (${secs(tp.llmLatencyMs)})</summary><div class="section">`;
     sections += `Trigger: ${escapeHtml(tp.trigger)}\n`;
-    if (chosen) sections += `Chosen: Route ${tp.chosen + 1}/${tp.candidates.length} — ${chosen.stops.join('→')} (score: ${chosen.score}, ${chosen.estimatedTurns}T, ${chosen.buildCostEstimate}M build)\n`;
+    if (stopsArr && stopsArr.length > 0) sections += `Route: ${stopsArr.join('→')}\n`;
     if (tp.llmReasoning) sections += `Reasoning: ${escapeHtml(tp.llmReasoning)}\n`;
     sections += `</div></details>`;
-    // JIRA-194: TripPlanner selection override diagnostic
+    // Short-circuit diagnostic (no_actionable_options / keep_current_plan)
     if (tp.fallbackReason) {
-      sections += `<details><summary>TripPlanner Override — LLM candidate ${tp.chosenByLlm} not used (${escapeHtml(tp.fallbackReason)})</summary><div class="section">`;
-      sections += `LLM chose candidate index: ${tp.chosenByLlm}\n`;
-      sections += `Override reason: ${escapeHtml(tp.fallbackReason)}\n`;
-      sections += `Actual selected index: ${tp.chosen} (highest-scoring validated candidate)\n`;
+      sections += `<details><summary>TripPlanner Short-circuit (${escapeHtml(tp.fallbackReason)})</summary><div class="section">`;
+      sections += `Reason: ${escapeHtml(tp.fallbackReason)}\n`;
       sections += `</div></details>`;
     }
   }
@@ -722,21 +724,11 @@ function renderLLMCallCards(entries: LLMTranscriptEntry[], gameId: string): stri
       sections += `<div style="color:#e74c3c;font-size:13px;margin-top:6px;">Error: ${escapeHtml(entry.error)}</div>`;
     }
 
-    // JIRA-194: TripPlanner selection override diagnostic
+    // JIRA-210B: TripPlanner short-circuit diagnostic (narrowed to two values)
     if (entry.tripPlannerSelection) {
       const sel = entry.tripPlannerSelection;
-      sections += `<details><summary>TripPlanner Selection Override — LLM chose ${sel.llmChosenIndex}, used ${sel.actualSelectedLlmIndex} (${escapeHtml(sel.fallbackReason)})</summary><div class="section">`;
-      sections += `LLM chosenIndex: ${sel.llmChosenIndex}\n`;
-      sections += `Actually selected llmIndex: ${sel.actualSelectedLlmIndex === -1 ? 'none (no validated candidates)' : String(sel.actualSelectedLlmIndex)}\n`;
-      sections += `Fallback reason: ${escapeHtml(sel.fallbackReason)}\n\n`;
-      sections += `Candidates:\n`;
-      for (const c of sel.candidates) {
-        const stops = c.rawStops.map(s => `${s.action}(${s.load}@${s.city ?? '?'})`).join('→');
-        sections += `  [${c.llmIndex}] ${stops}`;
-        if (c.prunedToZero) sections += ` — PRUNED TO ZERO`;
-        if (c.validatorErrors.length > 0) sections += `\n    Errors: ${c.validatorErrors.map(e => escapeHtml(e)).join('; ')}`;
-        sections += `\n`;
-      }
+      sections += `<details><summary>TripPlanner Short-circuit (${escapeHtml(sel.fallbackReason)})</summary><div class="section">`;
+      sections += `Reason: ${escapeHtml(sel.fallbackReason)}\n`;
       sections += `</div></details>`;
     }
 

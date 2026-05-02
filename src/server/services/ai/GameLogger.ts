@@ -112,25 +112,16 @@ export interface GameTurnLogEntry {
     deadLoadsDropped?: string[];
   };
 
-  // Trip Planning (JIRA-126)
+  // Trip Planning (JIRA-126, JIRA-210B: single-route shape)
   tripPlanning?: {
     trigger: string;
-    candidates: Array<{
-      stops: string[];
-      score: number;
-      netValue: number;
-      estimatedTurns: number;
-      buildCostEstimate: number;
-      usageFeeEstimate: number;
-    }>;
-    chosen: number;
+    /** Single-route stops rendered as action(load@city) strings. */
+    stops?: string[];
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
-    /** JIRA-194: LLM's original chosenIndex when it was overridden. Only present on override. */
-    chosenByLlm?: number;
-    /** JIRA-194: Why the LLM's chosenIndex was not honored. Only present on override. */
-    fallbackReason?: 'chosen_not_in_validated' | 'chosen_zero_stops';
+    /** JIRA-210B: Why the short-circuit path was taken. Only present when no_actionable_options or keep_current_plan fired. */
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
   };
 
   // Turn Validation (JIRA-126)

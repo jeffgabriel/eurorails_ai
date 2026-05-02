@@ -169,17 +169,17 @@ export function getPlanSelectionPrompt(skillLevel: BotSkillLevel): string {
   return `${PLAN_SELECTION_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
 }
 
-// ── Trip Planning Prompt (JIRA-126, JIRA-207B) ──
+// ── Trip Planning Prompt (JIRA-126, JIRA-207B, JIRA-210B) ──
 
 const TRIP_PLANNING_SYSTEM_SUFFIX = `
-You are planning multi-stop TRIP CANDIDATES. Generate 2-3 candidate trips, then choose the best one.
-Each candidate should consider ALL demand cards in NEW OPTIONS simultaneously.
+Plan one route — the best multi-stop trip for this turn.
+Your route should consider all OPTIONS simultaneously.
 
 SCORING: trip_score = (total payout - build costs - usage fees) / estimated turns
 A 30M trip in 4 turns (7.5M/turn) beats a 60M trip in 12 turns (5M/turn).
 
 ACTION GRAMMAR RULES — every stop must conform to these rules:
-- DELIVER requires a prior PICKUP in the same candidate's stop sequence, OR the load must already be in your CURRENT PLAN carried loads. You cannot emit a DELIVER without first establishing how the load reached your train.
+- DELIVER requires a prior PICKUP in the same stop sequence, OR the load must already be in your CURRENT PLAN carried loads. You cannot emit a DELIVER without first establishing how the load reached your train.
 - Same-city same-load multi-load pickups must be written as SEPARATE PICKUP stops — one stop per load unit. You cannot pick up two loads with a single PICKUP stop.
 - Total PICKUP stops plus carried loads (from CURRENT PLAN) must not exceed train capacity.
 
@@ -197,14 +197,12 @@ REASONING RULES:
 - When arguing against a demand card based on cost, you MUST cite the exact "Build cost" M figure shown in the prompt (e.g., "supply ~12M, delivery ~8M"). Qualitative descriptions ("expensive", "significant", "substantial") without citing the specific M figure are not allowed. If you cannot cite a specific figure, do not argue against the card on cost grounds.
 
 TRIP RULES:
-1. CARRIED LOADS: Loads in your CURRENT PLAN (carried loads section) are already in your possession. Start the candidate with a DELIVER stop for any carried load; do NOT emit a PICKUP for it.
+1. CARRIED LOADS: Loads in your CURRENT PLAN (carried loads section) are already in your possession. Do NOT emit a PICKUP for a carried load.
 2. COMBINE CORRIDORS: Two deliveries on one route beat two separate routes.
 3. EXISTING TRACK FIRST: On-network stops are essentially free.
-4. VICTORY ROUTING: Prefer trips through unconnected major cities when payout differences are within 30%.
-5. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
-6. Keep trips to 2-6 stops.
-7. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in NEW OPTIONS. If no demand card has a supply/delivery pair you need, do not emit that stop.
-8. ON-NETWORK DEMAND REQUIRED AS CANDIDATE: If any demand card in NEW OPTIONS is marked [ON-NETWORK] (meaning both its supply and delivery cities are already on your rail network, requiring zero build cost), you MUST propose the highest net-value such demand as a candidate — even if a higher-payout off-network demand exists. This rule is about WHICH demands you must propose as candidates; it says nothing about what stops that candidate contains — normal ACTION GRAMMAR RULES (above) still apply to the stops themselves.
+4. RUNNING CASH: Deliveries mid-trip pay out immediately. Later pickups and builds can be funded by earlier delivery income in the same trip. Evaluate affordability at the point of the action, not at turn start.
+5. Keep trips to 2-6 stops.
+6. PICKUP and DELIVER stops MUST reference the exact supplyCity or deliveryCity of a demand card listed in OPTIONS. If no demand card has a supply/delivery pair you need, do not emit that stop.
 
 GEOGRAPHIC STRATEGY: Bias toward the core cluster (Paris — Ruhr — Holland — Berlin — Wien) when short on cash or cities; otherwise optimize by corridor efficiency.
 
@@ -217,18 +215,12 @@ Include "upgradeOnRoute" in your top-level response if upgrading.
 
 RESPONSE FORMAT — respond with ONLY this JSON, no markdown fences:
 {
-  "candidates": [
-    {
-      "stops": [
-        { "action": "DELIVER", "load": "<carried load>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> },
-        { "action": "PICKUP", "load": "<load type>", "supplyCity": "<city name from demand card>" },
-        { "action": "DELIVER", "load": "<load type>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> }
-      ],
-      "reasoning": "<why this trip is good>"
-    }
+  "stops": [
+    { "action": "DELIVER", "load": "<carried load>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> },
+    { "action": "PICKUP", "load": "<load type>", "supplyCity": "<city name from demand card>" },
+    { "action": "DELIVER", "load": "<load type>", "deliveryCity": "<city name from demand card>", "demandCardId": <card number>, "payment": <payout> }
   ],
-  "chosenIndex": <0-based index of the best candidate>,
-  "reasoning": "<why you chose this candidate over the others>",
+  "reasoning": "<why this route is the best play>",
   "upgradeOnRoute": "<FastFreight|HeavyFreight|Superfreight — ONLY if upgrading, omit if not>"
 }`;
 
@@ -246,9 +238,10 @@ function canUpgradeThisTurn(context: GameContext, memory: BotMemoryState): boole
 
 /**
  * Build the dynamic trip planning context from current game state.
- * JIRA-207B: Reframed as REPLAN prompt with CURRENT PLAN + NEW OPTIONS sections.
- * NEW OPTIONS filters out unaffordable cards and carry-load cards (commitments).
+ * JIRA-207B: Reframed as REPLAN prompt with CURRENT PLAN + OPTIONS sections.
+ * OPTIONS filters out unaffordable cards and carry-load cards (commitments).
  * Upgrade prose is suppressed (with hard-suppression rule) when gate fails (Pattern B / R14-R17).
+ * JIRA-210B: Renamed NEW OPTIONS → OPTIONS; fixed count semantics; removed chosenIndex guidance.
  */
 function buildTripPlanningContext(context: GameContext, memory: BotMemoryState): string {
   const lines: string[] = [];
@@ -345,7 +338,7 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
   }
   lines.push('');
 
-  // ── NEW OPTIONS block (R10b) ──
+  // ── OPTIONS block (JIRA-207B R10b, JIRA-210B: renamed from NEW OPTIONS) ──
   // Filter: include only cards that are (a) affordable AND (b) not already a carry-load commitment.
   const newOptionCards = context.demands.filter(d => {
     if (!d.isAffordable) return false;
@@ -354,9 +347,10 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
   });
 
   const newOptionsCount = newOptionCards.length;
-  lines.push(`NEW OPTIONS (${newOptionsCount} card${newOptionsCount !== 1 ? 's' : ''} — evaluate for replanning):`);
+  const uniqueCardCount = new Set(newOptionCards.map(d => d.cardIndex)).size;
+  lines.push(`OPTIONS (${newOptionsCount} supply→delivery row${newOptionsCount !== 1 ? 's' : ''} across ${uniqueCardCount} card${uniqueCardCount !== 1 ? 's' : ''}):`);
   if (newOptionsCount === 0) {
-    lines.push(`(no actionable new options this turn)`);
+    lines.push(`(no actionable options this turn)`);
   } else {
     for (const d of newOptionCards) {
       const onNetwork = d.isSupplyOnNetwork && d.isDeliveryOnNetwork ? ' [ON-NETWORK]' : '';
@@ -368,9 +362,9 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
   }
   lines.push('');
 
-  // Guidance: when both CURRENT PLAN and NEW OPTIONS are non-empty, invite keep-or-replan decision
+  // Guidance: when both CURRENT PLAN and OPTIONS are non-empty, invite keep-or-replan decision
   if (hasPlan && newOptionsCount > 0) {
-    lines.push(`If your current plan still represents the best play, keep it (set chosenIndex to a candidate matching the current plan's first remaining stop). Otherwise, propose a replan from the NEW OPTIONS.`);
+    lines.push(`If your current plan still represents the best play, keep it (your route's first stop should be the current plan's first remaining stop). Otherwise, propose a replan from OPTIONS.`);
     lines.push('');
   }
 
@@ -405,23 +399,24 @@ function buildTripPlanningContext(context: GameContext, memory: BotMemoryState):
 }
 
 /**
- * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190, JIRA-207B).
+ * Get the system and user prompts for multi-stop trip planning (JIRA-126, JIRA-190, JIRA-207B, JIRA-210B).
  *
- * Returns { system, user } where system is byte-stable per skill level (cacheable)
- * and user contains the dynamic game state context per turn.
+ * Returns { system, user } where system is byte-stable (cacheable — never varies across turns).
+ * User prompt contains the dynamic game state context per turn.
  *
- * System prompt: static rules + skill level modifier (never changes across calls at same skill level — R17)
- * User prompt: dynamic context built from current game state, including CURRENT PLAN + NEW OPTIONS (R10),
+ * System prompt: static rules only (JIRA-210B: persona block removed; byte-stable across all skill levels)
+ * User prompt: dynamic context built from current game state, including CURRENT PLAN + OPTIONS (R10),
  *              and conditional upgrade suppression rule when gate fails (R15, Pattern B).
  */
 export function getTripPlanningPrompt(
-  skillLevel: BotSkillLevel,
+  _skillLevel: BotSkillLevel,
   context: GameContext,
   memory: BotMemoryState,
 ): { system: string; user: string } {
-  const system = `${TRIP_PLANNING_SYSTEM_SUFFIX}\n\n${SKILL_LEVEL_TEXT[skillLevel]}`;
+  // JIRA-210B: persona block removed — system prompt is now byte-stable regardless of skill level.
+  const system = TRIP_PLANNING_SYSTEM_SUFFIX;
   const dynamicContext = buildTripPlanningContext(context, memory);
-  const user = `${dynamicContext}\n\nReview your CURRENT PLAN and NEW OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from NEW OPTIONS.`;
+  const user = `${dynamicContext}\n\nReview your CURRENT PLAN and OPTIONS. Keep the current plan if it is still optimal, or propose a replan using one or more cards from OPTIONS.`;
   return { system, user };
 }
 

@@ -685,8 +685,9 @@ describe('RouteValidator', () => {
 // ── JIRA-181: Schema enum tests (standalone) ────────────────────────────────
 
 describe('JIRA-181: Schema enum includes DROP', () => {
-  it('TRIP_PLAN_SCHEMA stop action enum includes PICKUP and DELIVER (DROP removed per JIRA-190)', () => {
-    const stopSchema = TRIP_PLAN_SCHEMA.properties.candidates.items.properties.stops.items.properties.action;
+  it('TRIP_PLAN_SCHEMA stop action enum includes PICKUP and DELIVER (DROP removed per JIRA-190, JIRA-210B: single-route schema)', () => {
+    // JIRA-210B: TRIP_PLAN_SCHEMA is now a single-route schema — stops[] is top-level
+    const stopSchema = TRIP_PLAN_SCHEMA.properties.stops.items.properties.action;
     expect(stopSchema.enum).toContain('PICKUP');
     expect(stopSchema.enum).toContain('DELIVER');
     // JIRA-190: DROP removed from trip-planner LLM schema to prevent hallucinated drop stops

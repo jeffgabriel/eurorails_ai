@@ -212,12 +212,12 @@ export const ROUTE_ENRICHMENT_SCHEMA = {
 };
 
 /**
- * JSON Schema for the LLM trip planning response (JIRA-126, JIRA-190).
- * Multi-stop trip planner: generates 2-3 candidate trips with stops and reasoning,
- * then selects the best candidate by index.
+ * JSON Schema for the LLM trip planning response (JIRA-126, JIRA-190, JIRA-210B).
+ * Single-route trip planner: returns one best multi-stop route per turn.
  *
  * JIRA-190: Field renames — city → supplyCity (PICKUP) / deliveryCity (DELIVER).
- * DROP variant removed. Two discriminated stop types replace the single generic stop.
+ * JIRA-210B: Collapsed from multi-candidate {candidates[], chosenIndex} shape to
+ * single-route {stops, reasoning, upgradeOnRoute?} shape.
  *
  * Note: Anthropic requires additionalProperties: false on all object types.
  */
@@ -225,38 +225,26 @@ export const TRIP_PLAN_SCHEMA = {
   type: 'object' as const,
   additionalProperties: false as const,
   properties: {
-    candidates: {
+    stops: {
       type: 'array' as const,
       items: {
         type: 'object' as const,
         additionalProperties: false as const,
         properties: {
-          stops: {
-            type: 'array' as const,
-            items: {
-              type: 'object' as const,
-              additionalProperties: false as const,
-              properties: {
-                action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
-                load: { type: 'string' as const },
-                supplyCity: { type: 'string' as const },
-                deliveryCity: { type: 'string' as const },
-                demandCardId: { type: 'number' as const },
-                payment: { type: 'number' as const },
-              },
-              required: ['action', 'load'],
-            },
-          },
-          reasoning: { type: 'string' as const },
+          action: { type: 'string' as const, enum: ['PICKUP', 'DELIVER'] },
+          load: { type: 'string' as const },
+          supplyCity: { type: 'string' as const },
+          deliveryCity: { type: 'string' as const },
+          demandCardId: { type: 'number' as const },
+          payment: { type: 'number' as const },
         },
-        required: ['stops', 'reasoning'],
+        required: ['action', 'load'],
       },
     },
-    chosenIndex: { type: 'number' as const },
     reasoning: { type: 'string' as const },
     upgradeOnRoute: { type: 'string' as const, enum: ['FastFreight', 'HeavyFreight', 'Superfreight'] },
   },
-  required: ['candidates', 'chosenIndex', 'reasoning'],
+  required: ['stops', 'reasoning'],
 };
 
 // ── Stage3Result ──────────────────────────────────────────────────────────

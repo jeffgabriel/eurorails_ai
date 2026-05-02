@@ -128,21 +128,14 @@ export interface BotTurnResult {
   trainSpeed?: number;
   trainCapacity?: number;
   demandCards?: Array<{ loadType: string; supplyCity: string | null; deliveryCity: string; payout: number; cardIndex: number }>;
-  // JIRA-126: Trip planning results
+  // JIRA-210B: Trip planning results — single-route shape
   tripPlanning?: {
     trigger: string;
-    candidates: Array<{
-      stops: string[];
-      score: number;
-      netValue: number;
-      estimatedTurns: number;
-      buildCostEstimate: number;
-      usageFeeEstimate: number;
-    }>;
-    chosen: number;
+    stops?: string[];
     llmLatencyMs: number;
     llmTokens: { input: number; output: number };
     llmReasoning: string;
+    fallbackReason?: 'no_actionable_options' | 'keep_current_plan';
   };
   // JIRA-126: Turn validation results
   turnValidation?: {
@@ -884,23 +877,14 @@ export class AIStrategyEngine {
         actionTimeline: actionTimeline.length > 0 ? actionTimeline : undefined,
         secondaryDelivery: secondaryDeliveryLog,
         activeRoute: activeRoute ?? null,
-        // JIRA-194: Trip planning result — include selection diagnostic when override occurred
+        // JIRA-210B: Trip planning result — single-route shape (no candidates[], no chosen)
         tripPlanning: tripPlanResult ? {
           trigger: 'no-active-route',
-          candidates: tripPlanResult.candidates.map(c => ({
-            stops: c.stops.map(s => `${s.action}(${s.loadType}@${s.city})`),
-            score: c.score,
-            netValue: c.netValue,
-            estimatedTurns: c.estimatedTurns,
-            buildCostEstimate: c.buildCostEstimate,
-            usageFeeEstimate: c.usageFeeEstimate,
-          })),
-          chosen: tripPlanResult.chosen,
+          stops: tripPlanResult.route?.stops.map(s => `${s.action}(${s.loadType}@${s.city})`),
           llmLatencyMs: tripPlanResult.llmLatencyMs,
           llmTokens: tripPlanResult.llmTokens,
           llmReasoning: tripPlanResult.route?.reasoning ?? '',
           ...(tripPlanResult.selection ? {
-            chosenByLlm: tripPlanResult.selection.llmChosenIndex,
             fallbackReason: tripPlanResult.selection.fallbackReason,
           } : {}),
         } : undefined,

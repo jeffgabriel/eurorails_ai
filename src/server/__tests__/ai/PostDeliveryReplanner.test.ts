@@ -765,11 +765,13 @@ describe('JIRA-198: multi-replan accumulation — last non-null action wins', ()
 describe('JIRA-207B: PostDeliveryReplanner keep_current_plan handling (R10e)', () => {
   it('AC10d: keep_current_plan preserves activeRoute with moveTargetInvalidated=false', async () => {
     // TripPlanner returns keep_current_plan → PostDeliveryReplanner must NOT cascade to heuristic
-    MockTripPlannerClass.mockImplementation(() => ({
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({
         route: null,
+        llmLatencyMs: 0,
+        llmTokens: { input: 0, output: 0 },
         llmLog: [],
-        selection: { llmChosenIndex: -1, fallbackReason: 'keep_current_plan' },
+        selection: { fallbackReason: 'keep_current_plan' },
       }),
     }));
 
@@ -814,7 +816,7 @@ describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', 
     };
 
     let capturedMemory: BotMemoryState | undefined;
-    MockTripPlannerClass.mockImplementation(() => ({
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockImplementation(
         (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
           capturedMemory = memory;
@@ -847,7 +849,7 @@ describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', 
     };
 
     let capturedMemory: BotMemoryState | undefined;
-    MockTripPlannerClass.mockImplementation(() => ({
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockImplementation(
         (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
           capturedMemory = memory;
@@ -881,7 +883,7 @@ describe('JIRA-210A: PostDeliveryReplanner activeRoute sync into replanMemory', 
     };
 
     let capturedMemory: BotMemoryState | undefined;
-    MockTripPlannerClass.mockImplementation(() => ({
+    (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockImplementation(
         (_snapshot: unknown, _context: unknown, _gridPoints: unknown, memory: BotMemoryState) => {
           capturedMemory = memory;
