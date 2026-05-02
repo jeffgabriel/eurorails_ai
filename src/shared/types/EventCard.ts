@@ -151,6 +151,82 @@ export interface ActiveEffectDescriptor {
   affectedZone: string[];
 }
 
+// ─── ActiveEffectManager types (P3-SP1) ─────────────────────────────────────
+
+/**
+ * Restriction on train movement — half rate, blocked terrain, or player-rail movement ban.
+ */
+export interface MovementRestriction {
+  type: 'half_rate' | 'blocked_terrain' | 'no_movement_on_player_rail';
+  zone?: string[];
+  blockedTerrain?: TerrainType[];
+  targetPlayerId?: string;
+}
+
+/**
+ * Restriction on track building — blocked terrain or build ban for a specific player.
+ */
+export interface BuildRestriction {
+  type: 'blocked_terrain' | 'no_build_for_player';
+  zone?: string[];
+  blockedTerrain?: TerrainType[];
+  targetPlayerId?: string;
+}
+
+/**
+ * Restriction on pickup and delivery in a zone.
+ */
+export interface PickupDeliveryRestriction {
+  type: 'no_pickup_delivery_in_zone';
+  zone: string[];
+}
+
+/**
+ * Persisted to games.active_event JSONB array.
+ * games.active_event = ActiveEffectRecord[] (JSON array)
+ */
+export interface ActiveEffectRecord {
+  cardId: number;
+  /** 'Strike' | 'Snow' | 'Flood' | 'Derailment' */
+  cardType: string;
+  drawingPlayerId: string;
+  drawingPlayerIndex: number;
+  drawingPlayerTurnNumber: number;
+  expiresAfterTurnNumber: number;
+  affectedZone: string[];
+  restrictions: {
+    movement: MovementRestriction[];
+    build: BuildRestriction[];
+    pickupDelivery: PickupDeliveryRestriction[];
+  };
+  pendingLostTurns: { playerId: string }[];
+  /** Flood only — river name (e.g., "Rhine") for rebuild blocking */
+  floodedRiver?: string;
+  createdAt: string;
+}
+
+/**
+ * Runtime representation of an active effect (rehydrated from ActiveEffectRecord).
+ * affectedZone is a Set<string> for efficient lookup.
+ */
+export interface ActiveEffect {
+  cardId: number;
+  cardType: EventCardType;
+  drawingPlayerId: string;
+  drawingPlayerIndex: number;
+  expiresAfterTurnNumber: number;
+  /** Rehydrated from string[] */
+  affectedZone: Set<string>;
+  restrictions: {
+    movement: MovementRestriction[];
+    build: BuildRestriction[];
+    pickupDelivery: PickupDeliveryRestriction[];
+  };
+  pendingLostTurns: { playerId: string }[];
+  /** Flood only */
+  floodedRiver?: string;
+}
+
 /**
  * Structured result returned by `EventCardService.processEventCard`.
  * Describes every state change made (and every persistent descriptor to
