@@ -163,10 +163,8 @@ jest.mock('../../services/ai/TripPlanner', () => ({
         memory?.lastAbandonedRouteKey,
         memory?.previousRouteStops,
       );
-      if (!result || !result.route) return { route: null, llmLog: result?.llmLog ?? [] };
+      if (!result || !result.route) return { route: null, llmLatencyMs: 0, llmTokens: { input: 0, output: 0 }, llmLog: result?.llmLog ?? [] };
       return {
-        candidates: [],
-        chosen: -1,
         route: result.route,
         llmLatencyMs: result.latencyMs ?? 0,
         llmTokens: result.tokenUsage ?? { input: 0, output: 0 },
