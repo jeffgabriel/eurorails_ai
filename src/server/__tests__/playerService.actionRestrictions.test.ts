@@ -388,10 +388,10 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('PlayerService.pickupLoadForPlayer — pickup restrictions', () => {
-  // Use a city name and corresponding milepost key for zone matching
-  // The zone key format matches what EventCardService stores
+  // Use a city name and corresponding milepost key for zone matching.
+  // Hamburg: GridY=20 (row), GridX=47 (col) → key '20,47' per MapTopology.loadGridPoints
   const cityName = 'Hamburg';
-  const hamburgMpKey = '10,5'; // example coastal milepost key
+  const hamburgMpKey = '20,47'; // real milepost key from gridPoints.json
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -479,7 +479,8 @@ describe('PlayerService.pickupLoadForPlayer — pickup restrictions', () => {
 
 describe('PlayerService.deliverLoadForUser — delivery restrictions', () => {
   const cityName = 'Hamburg';
-  const hamburgMpKey = '10,5';
+  // Hamburg: GridY=20 (row), GridX=47 (col) → key '20,47' per MapTopology.loadGridPoints
+  const hamburgMpKey = '20,47';
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -825,10 +826,11 @@ describe('PlayerService — concurrent restrictions (Snow + Strike)', () => {
 
   it('pickup rejects when both coastal Strike and snow half_rate are active', async () => {
     const pickupRestrictions: PickupDeliveryRestriction[] = [
-      { type: 'no_pickup_delivery_in_zone', zone: ['10,5'] },
+      // Hamburg real milepost key: '20,47'
+      { type: 'no_pickup_delivery_in_zone', zone: ['20,47'] },
     ];
     const movementRestrictions: MovementRestriction[] = [
-      { type: 'half_rate', zone: ['10,5', '11,5'] },
+      { type: 'half_rate', zone: ['20,47', '21,47'] },
     ];
 
     mockActiveEffectManager.getPickupDeliveryRestrictions.mockResolvedValue(pickupRestrictions);

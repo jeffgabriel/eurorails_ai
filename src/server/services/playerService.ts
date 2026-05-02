@@ -5,7 +5,7 @@ import { LoadService } from "./loadService";
 import { QueryResult } from "pg";
 import { v4 as uuidv4 } from "uuid";
 import { demandDeckService } from "./demandDeckService";
-import { TrackService } from "./trackService";
+import { TrackService, getRiverEdgeKeys, segmentCrossesRiver } from "./trackService";
 import { DemandCard } from "../../shared/types/DemandCard";
 import { LoadType } from "../../shared/types/LoadTypes";
 import { computeTrackUsageForMove } from "../../shared/services/trackUsageFees";
@@ -13,6 +13,8 @@ import { loadGridPoints } from "./MapTopology";
 import { getFerryEdges } from "../../shared/services/majorCityGroups";
 import { TrackSegment } from "../../shared/types/TrackTypes";
 import { EventCardService } from "./EventCardService";
+import { activeEffectManager } from "./ActiveEffectManager";
+import { EventCardType } from "../../shared/types/EventCard";
 
 type TurnActionDeliver = {
   kind: "deliver";
@@ -48,6 +50,26 @@ interface PlayerRow {
 }
 
 export class PlayerService {
+  /**
+   * Return the canonical milepost key ("row,col") for a city name by looking
+   * up the grid. Returns null if the city is not found.
+   */
+  private static getCityMilepointKey(cityName: string): string | null {
+    const grid = loadGridPoints();
+    // Prefer MajorCity center; fall back to any milepost with matching name
+    for (const [key, point] of grid) {
+      if (point.name === cityName && point.terrain === TerrainType.MajorCity) {
+        return key;
+      }
+    }
+    for (const [key, point] of grid) {
+      if (point.name === cityName) {
+        return key;
+      }
+    }
+    return null;
+  }
+
   private static normalizeTrainType(raw: unknown): TrainType {
     const s = String(raw ?? "").toLowerCase();
     const compact = s.replace(/[\s_-]+/g, "");
@@ -870,6 +892,24 @@ export class PlayerService {
         throw new Error("Not your turn");
       }
 
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check pickup/delivery restrictions from active event effects (coastal Strike)
+      const deliveryRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+      if (deliveryRestrictions.length > 0) {
+        const cityKey = PlayerService.getCityMilepointKey(city);
+        for (const restriction of deliveryRestrictions) {
+          if (restriction.type === 'no_pickup_delivery_in_zone') {
+            const zoneSet = new Set(restriction.zone);
+            if (cityKey && zoneSet.has(cityKey)) {
+              throw new Error(
+                `Delivery blocked by active event (Strike): city ${city} is within the coastal strike zone`,
+              );
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
       if (!handIds.includes(cardId)) {
         throw new Error("Demand card not in hand");
       }
@@ -1179,6 +1219,32 @@ export class PlayerService {
       if (activePlayerId !== playerId) {
         throw new Error("Not your turn");
       }
+
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check movement restrictions from active event effects (Snow, Rail Strike)
+      const movementRestrictions = await activeEffectManager.getMovementRestrictions(gameId);
+      const destKey = `${to.row},${to.col}`;
+      for (const restriction of movementRestrictions) {
+        if (restriction.type === 'blocked_terrain' && restriction.zone) {
+          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
+          // Zone membership alone is sufficient — no need to re-check terrain type.
+          const zoneSet = new Set(restriction.zone);
+          if (zoneSet.has(destKey)) {
+            throw new Error(
+              `Movement blocked by active event (Snow): destination ${destKey} is in the blocked terrain zone`,
+            );
+          }
+        }
+        if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
+          // The drawing player cannot move on their own rail this turn (Rail Strike #123)
+          throw new Error(
+            `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
+          );
+        }
+        // half_rate: does not block movement, only caps speed — enforcement is client-side movement cap
+        // The server does not re-validate movement distance, so no throw needed here.
+      }
+      // ── End restriction checks ────────────────────────────────────────────
 
       // Lock action log row for this turn (if it exists) so we can safely compute already-paid opponents.
       const actionsResult = await client.query(
@@ -2300,6 +2366,24 @@ export class PlayerService {
         throw new Error(`Train at full capacity (${currentLoads.length}/${capacity})`);
       }
 
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check pickup/delivery restrictions from active event effects (coastal Strike)
+      const pickupRestrictions = await activeEffectManager.getPickupDeliveryRestrictions(gameId);
+      if (pickupRestrictions.length > 0 && cityName) {
+        const cityKey = PlayerService.getCityMilepointKey(cityName);
+        for (const restriction of pickupRestrictions) {
+          if (restriction.type === 'no_pickup_delivery_in_zone') {
+            const zoneSet = new Set(restriction.zone);
+            if (cityKey && zoneSet.has(cityKey)) {
+              throw new Error(
+                `Pickup blocked by active event (Strike): city ${cityName} is within the coastal strike zone`,
+              );
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
+
       // Atomically append load
       const updateResult = await client.query(
         `UPDATE players SET loads = array_append(loads, $1)
@@ -2435,6 +2519,47 @@ export class PlayerService {
           `Insufficient funds: need ${cost}, have ${currentMoney}`,
         );
       }
+
+      // ── Event card restriction checks ─────────────────────────────────────
+      // Check build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
+      const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId);
+      for (const restriction of buildRestrictions) {
+        if (restriction.type === 'blocked_terrain' && restriction.zone && restriction.blockedTerrain) {
+          const zoneSet = new Set(restriction.zone);
+          for (const seg of newSegments) {
+            const destKey = `${seg.to.row},${seg.to.col}`;
+            if (zoneSet.has(destKey) && restriction.blockedTerrain.includes(seg.to.terrain)) {
+              throw new Error(
+                `Build blocked by active event: destination milepost ${destKey} has blocked terrain (${TerrainType[seg.to.terrain]}) in restricted zone`,
+              );
+            }
+          }
+        }
+        if (restriction.type === 'no_build_for_player' && restriction.targetPlayerId === playerId) {
+          throw new Error(
+            `Build blocked by active event (Rail Strike): player ${playerId} cannot build track this turn`,
+          );
+        }
+      }
+
+      // Check for active Flood effects blocking river rebuild
+      // (Product Decision 2: Flood does NOT emit a BuildRestriction — we check floodedRiver directly)
+      const activeEffects = await activeEffectManager.getActiveEffects(gameId);
+      for (const effect of activeEffects) {
+        if (effect.cardType === EventCardType.Flood && effect.floodedRiver) {
+          const riverEdgeKeys = getRiverEdgeKeys(effect.floodedRiver);
+          if (riverEdgeKeys) {
+            for (const seg of newSegments) {
+              if (segmentCrossesRiver(seg, riverEdgeKeys)) {
+                throw new Error(
+                  `Build blocked: cannot rebuild track across the ${effect.floodedRiver} river while Flood event is active`,
+                );
+              }
+            }
+          }
+        }
+      }
+      // ── End restriction checks ────────────────────────────────────────────
 
       // 1. UPSERT player_tracks
       await client.query(
