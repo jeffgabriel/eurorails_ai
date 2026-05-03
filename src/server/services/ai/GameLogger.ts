@@ -8,6 +8,7 @@
 import { mkdirSync, appendFile } from 'fs';
 import { join } from 'path';
 import { AIActionType, TimelineStep } from '../../../shared/types/GameTypes';
+import { VictoryCheckResult } from './BotTurnTrigger';
 
 const LOGS_DIR = join(process.cwd(), 'logs');
 
@@ -168,6 +169,10 @@ export interface GameTurnLogEntry {
     chainDistance: number; totalBuildCost: number; totalPayout: number;
     estimatedTurns: number; efficiency: number; pairingScore: number;
   }>;
+
+  // JIRA-212: Structured victory check outcome for this turn (R4, R5)
+  // Populated on every bot turn that runs checkBotVictory; omitted when check was skipped.
+  victoryCheck?: VictoryCheckResult;
 
   // Execution Results
   success: boolean;

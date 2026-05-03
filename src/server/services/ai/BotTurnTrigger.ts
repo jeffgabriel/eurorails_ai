@@ -17,6 +17,40 @@ import { TrackService } from '../trackService';
 import { getConnectedMajorCities } from './connectedMajorCities';
 import { VICTORY_INITIAL_THRESHOLD } from '../../../shared/types/GameTypes';
 
+/**
+ * All possible outcomes of a single victory check.
+ */
+export type VictoryCheckOutcome =
+  | 'declared'
+  | 'already-triggered'
+  | 'no-player'
+  | 'insufficient-funds'
+  | 'no-track'
+  | 'too-few-cities'
+  | 'declaration-rejected'
+  | 'error';
+
+/**
+ * Structured diagnostic record returned by checkBotVictory on every code path.
+ * Persisted in the per-turn NDJSON game log via GameTurnLogEntry.victoryCheck.
+ */
+export interface VictoryCheckResult {
+  /** Which branch of the victory check fired. */
+  outcome: VictoryCheckOutcome;
+  /** Bot's net worth (money - debt) — populated once the player row is read. */
+  netWorth?: number;
+  /** Victory threshold required — populated alongside netWorth. */
+  threshold?: number;
+  /** Number of connected major cities — populated once track is queried. */
+  connectedCityCount?: number;
+  /** Names of connected major cities — populated alongside connectedCityCount. */
+  connectedCityNames?: string[];
+  /** Error string from declareVictory — only set when outcome === 'declaration-rejected'. */
+  rejectionReason?: string;
+  /** Caught exception message — only set when outcome === 'error'. */
+  errorMessage?: string;
+}
+
 /** Delay in ms before executing a bot turn */
 export const BOT_TURN_DELAY_MS = 1500;
 
@@ -75,13 +109,43 @@ export async function onTurnChange(
 
   // Check game status
   const gameResult = await db.query(
-    'SELECT status FROM games WHERE id = $1',
+    'SELECT status, current_player_index FROM games WHERE id = $1',
     [gameId],
   );
   const status = gameResult.rows[0]?.status;
   if (status === 'completed' || status === 'abandoned') {
     await clearMemory(gameId, currentPlayerId);
     return;
+  }
+
+  // JIRA-212 Guard B: Detect stalled-victory state — victory triggered but resolution
+  // never fired after a full round of play. Force resolution to prevent indefinite autoplay.
+  try {
+    const victoryState = await VictoryService.getVictoryState(gameId);
+    if (victoryState?.triggered) {
+      const gameCurrentIndex = gameResult.rows[0]?.current_player_index ?? currentPlayerIndex;
+      const finalTurnIndex = victoryState.finalTurnPlayerIndex;
+      const triggerIndex = victoryState.triggerPlayerIndex;
+      // Guard fires if: victory is triggered AND this is the trigger player's next turn
+      // AND final_turn_player_index is different from triggerPlayerIndex (non-trivial round).
+      if (gameCurrentIndex === triggerIndex && finalTurnIndex !== triggerIndex) {
+        console.error(`[BotTurnTrigger] Stalled victory detected for game ${gameId} — forcing resolution`);
+        try {
+          const resolveResult = await VictoryService.resolveVictory(gameId);
+          if (resolveResult.gameOver && resolveResult.winnerId && resolveResult.winnerName) {
+            emitGameOver(gameId, resolveResult.winnerId, resolveResult.winnerName);
+          } else if (resolveResult.tieExtended && resolveResult.newThreshold) {
+            emitTieExtended(gameId, resolveResult.newThreshold);
+          }
+        } catch (resolveError) {
+          console.error(`[BotTurnTrigger] Stalled victory resolution failed for game ${gameId}:`, resolveError instanceof Error ? resolveError.message : resolveError);
+        }
+        return;
+      }
+    }
+  } catch (guardError) {
+    // Guard errors must not abort the turn — log and continue
+    console.error(`[BotTurnTrigger] Stalled-victory guard failed for game ${gameId}:`, guardError instanceof Error ? guardError.message : guardError);
   }
 
   // Double execution guard — queue the turn instead of dropping it
@@ -203,6 +267,14 @@ export async function onTurnChange(
       initialBuildPairings: result.initialBuildPairings,
     });
 
+    // JIRA-212: Check victory conditions BEFORE appendTurn so the outcome
+    // is threaded into the same NDJSON entry that records this turn (R5).
+    const victoryCheckResult = await checkBotVictory(gameId, currentPlayerId);
+    if (victoryCheckResult.outcome === 'declared') {
+      // Victory declared — game enters final-turn mode, but turn still advances
+      console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
+    }
+
     // JIRA-32: Append structured turn log to NDJSON game file
     try {
       appendTurn(gameId, {
@@ -266,16 +338,11 @@ export async function onTurnChange(
         initialBuildPairings: result.initialBuildPairings,
         // JIRA-194: Trip planning result (includes chosenByLlm/fallbackReason on override)
         tripPlanning: result.tripPlanning,
+        // JIRA-212: Victory check diagnostic breadcrumb (R4, R5)
+        victoryCheck: victoryCheckResult,
       });
     } catch (logError) {
       console.error(`[BotTurnTrigger] NDJSON log failed for game ${gameId}:`, logError instanceof Error ? logError.message : logError);
-    }
-
-    // JIRA-106: Check victory conditions for bot after turn completes
-    const victoryDeclared = await checkBotVictory(gameId, currentPlayerId);
-    if (victoryDeclared) {
-      // Victory declared — game enters final-turn mode, but turn still advances
-      console.log(`[BotTurnTrigger] Bot ${currentPlayerId} declared victory in game ${gameId}`);
     }
 
     // JIRA-131: Check if this was the final turn and resolve victory
@@ -382,45 +449,51 @@ export async function advanceTurnAfterBot(gameId: string): Promise<void> {
  * JIRA-106: Check if a bot meets victory conditions after its turn.
  * Mirrors the client-side check in GameScene.checkAndDeclareVictory().
  *
- * Returns true if victory was successfully declared.
+ * Returns a structured VictoryCheckResult identifying which branch fired.
+ * R8: The existing console.log/warn calls remain for real-time stdout consumers.
  */
 export async function checkBotVictory(
   gameId: string,
   playerId: string,
-): Promise<boolean> {
+): Promise<VictoryCheckResult> {
   try {
     // Skip if victory already triggered
     const victoryState = await VictoryService.getVictoryState(gameId);
-    if (victoryState?.triggered) return false;
+    if (victoryState?.triggered) return { outcome: 'already-triggered' };
 
     // Get bot's money and debt
     const playerResult = await db.query(
       'SELECT money, debt_owed, name FROM players WHERE id = $1',
       [playerId],
     );
-    if (playerResult.rows.length === 0) return false;
+    if (playerResult.rows.length === 0) return { outcome: 'no-player' };
 
     const player = playerResult.rows[0];
     const threshold = victoryState?.victoryThreshold ?? VICTORY_INITIAL_THRESHOLD;
     const netWorth = player.money - (player.debt_owed || 0);
 
     // Quick check: enough money?
-    if (netWorth < threshold) return false;
+    if (netWorth < threshold) return { outcome: 'insufficient-funds', netWorth, threshold };
 
     // Get track segments and check connected cities
     const trackState = await TrackService.getTrackState(gameId, playerId);
-    if (!trackState || trackState.segments.length === 0) return false;
+    if (!trackState || trackState.segments.length === 0) return { outcome: 'no-track', netWorth, threshold };
 
     const connectedCities = getConnectedMajorCities(trackState.segments);
-    if (connectedCities.length < 7) return false;
+    const connectedCityCount = connectedCities.length;
+    const connectedCityNames = connectedCities.map(c => c.name);
+
+    if (connectedCityCount < 7) {
+      return { outcome: 'too-few-cities', netWorth, threshold, connectedCityCount, connectedCityNames };
+    }
 
     // Both conditions met — declare victory
-    console.log(`[BotTurnTrigger] Bot "${player.name}" meets victory conditions: ${netWorth}M ECU, ${connectedCities.length} connected cities`);
+    console.log(`[BotTurnTrigger] Bot "${player.name}" meets victory conditions: ${netWorth}M ECU, ${connectedCityCount} connected cities`);
     const result = await VictoryService.declareVictory(gameId, playerId, connectedCities);
 
     if (!result.success) {
       console.warn(`[BotTurnTrigger] Victory declaration rejected: ${result.error}`);
-      return false;
+      return { outcome: 'declaration-rejected', netWorth, threshold, connectedCityCount, connectedCityNames, rejectionReason: result.error };
     }
 
     // Emit victory triggered event to all clients
@@ -434,10 +507,11 @@ export async function checkBotVictory(
       );
     }
 
-    return true;
+    return { outcome: 'declared', netWorth, threshold, connectedCityCount, connectedCityNames };
   } catch (error) {
-    console.error(`[BotTurnTrigger] Victory check failed for game ${gameId}:`, error instanceof Error ? error.message : error);
-    return false;
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`[BotTurnTrigger] Victory check failed for game ${gameId}:`, errorMessage);
+    return { outcome: 'error', errorMessage };
   }
 }
 

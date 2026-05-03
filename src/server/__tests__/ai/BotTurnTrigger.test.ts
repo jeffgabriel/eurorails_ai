@@ -403,7 +403,7 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     const result = await checkBotVictory('game-1', 'bot-1');
 
-    expect(result).toBe(true);
+    expect(result.outcome).toBe('declared');
     expect(mockDeclareVictory).toHaveBeenCalledWith('game-1', 'bot-1', sevenCities);
     expect(mockEmitVictoryTriggered).toHaveBeenCalledWith('game-1', 1, 'Flash', 0, 250);
   });
@@ -422,7 +422,7 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     const result = await checkBotVictory('game-1', 'bot-1');
 
-    expect(result).toBe(false);
+    expect(result.outcome).toBe('insufficient-funds');
     expect(mockDeclareVictory).not.toHaveBeenCalled();
   });
 
@@ -442,7 +442,7 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     const result = await checkBotVictory('game-1', 'bot-1');
 
-    expect(result).toBe(false);
+    expect(result.outcome).toBe('too-few-cities');
     expect(mockDeclareVictory).not.toHaveBeenCalled();
   });
 
@@ -456,7 +456,7 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     const result = await checkBotVictory('game-1', 'bot-1');
 
-    expect(result).toBe(false);
+    expect(result.outcome).toBe('already-triggered');
     expect(mockDeclareVictory).not.toHaveBeenCalled();
   });
 
@@ -475,8 +475,325 @@ describe('BotTurnTrigger — JIRA-106: Bot victory check', () => {
 
     const result = await checkBotVictory('game-1', 'bot-1');
 
-    expect(result).toBe(false);
+    expect(result.outcome).toBe('insufficient-funds');
     expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  // ── AC1: New tests covering all eight outcomes ──────────────────────────
+
+  it('returns outcome=no-player when player row is missing', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [] };
+      return { rows: [] };
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('no-player');
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome=no-track when player has no track segments', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 300, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [] } as any);
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('no-track');
+    expect(result.netWorth).toBe(300);
+    expect(result.threshold).toBe(250);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome=too-few-cities with diagnostic fields', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 300, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 }] } as any);
+    const fourCities = sevenCities.slice(0, 4);
+    mockGetConnectedMajorCities.mockReturnValue(fourCities);
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('too-few-cities');
+    expect(result.netWorth).toBe(300);
+    expect(result.threshold).toBe(250);
+    expect(result.connectedCityCount).toBe(4);
+    expect(result.connectedCityNames).toEqual(['London', 'Paris', 'Berlin', 'Madrid']);
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome=declaration-rejected with rejectionReason when declareVictory fails', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 300, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 }] } as any);
+    mockGetConnectedMajorCities.mockReturnValue(sevenCities);
+    mockDeclareVictory.mockResolvedValue({
+      success: false,
+      error: 'Claimed city coordinates not found in track',
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('declaration-rejected');
+    expect(result.rejectionReason).toBe('Claimed city coordinates not found in track');
+    expect(result.connectedCityCount).toBe(7);
+    expect(mockEmitVictoryTriggered).not.toHaveBeenCalled();
+  });
+
+  it('returns outcome=declared with full diagnostic fields on success', async () => {
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+    (db.query as any).mockImplementation(async (sql: string) => {
+      if (sql.includes('SELECT money')) return { rows: [{ money: 280, debt_owed: 0, name: 'Flash' }] };
+      return { rows: [] };
+    });
+    mockGetTrackState.mockResolvedValue({ segments: [{ from: { row: 1, col: 1 }, to: { row: 1, col: 2 }, cost: 1 }] } as any);
+    mockGetConnectedMajorCities.mockReturnValue(sevenCities);
+    mockDeclareVictory.mockResolvedValue({
+      success: true,
+      victoryState: {
+        triggered: true,
+        triggerPlayerIndex: 0,
+        victoryThreshold: 250,
+        finalTurnPlayerIndex: 1,
+      },
+    });
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('declared');
+    expect(result.netWorth).toBe(280);
+    expect(result.threshold).toBe(250);
+    expect(result.connectedCityCount).toBe(7);
+    expect(result.connectedCityNames).toHaveLength(7);
+  });
+
+  it('returns outcome=error when an underlying call throws', async () => {
+    mockGetVictoryState.mockRejectedValue(new Error('DB connection lost'));
+
+    const result = await checkBotVictory('game-1', 'bot-1');
+    expect(result.outcome).toBe('error');
+    expect(result.errorMessage).toBe('DB connection lost');
+    expect(mockDeclareVictory).not.toHaveBeenCalled();
+  });
+});
+
+// ── JIRA-212: victoryCheck threaded into appendTurn (AC2) ───────────────────
+
+describe('BotTurnTrigger — JIRA-212: victoryCheck in appendTurn payload', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    pendingBotTurns.clear();
+    process.env.ENABLE_AI_BOTS = 'true';
+
+    mockIsFinalTurn.mockResolvedValue(false);
+    mockResolveVictory.mockResolvedValue({ gameOver: false });
+
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
+        if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
+          return mockResult([{ status: 'active', current_player_index: 1 }]);
+        }
+        if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);
+        if (sql.includes('UPDATE players SET current_turn_number')) return mockResult([]);
+        if (sql.includes('UPDATE player_tracks')) return mockResult([]);
+        if (sql.includes('UPDATE bot_turn_audits')) return mockResult([]);
+        if (sql.includes('SELECT COUNT')) return mockResult([{ count: 2 }]);
+        if (sql.includes('SELECT money')) return { rows: [{ money: 200, debt_owed: 0, name: 'Flash' }] };
+      }
+      return mockResult([]);
+    });
+  });
+
+  it('threads victoryCheck result into appendTurn payload (AC2)', async () => {
+    // Insufficient funds → outcome = 'insufficient-funds'
+    mockGetVictoryState.mockResolvedValue({
+      triggered: false,
+      triggerPlayerIndex: -1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: -1,
+    });
+
+    mockTakeTurn.mockResolvedValue({
+      action: AIActionType.BuildTrack,
+      segmentsBuilt: 1,
+      cost: 3,
+      durationMs: 500,
+      success: true,
+      actor: 'system',
+      actorDetail: 'route-executor',
+    } as any);
+
+    await onTurnChange('game-1', 1, 'bot-1');
+
+    expect(mockAppendTurn).toHaveBeenCalledWith(
+      'game-1',
+      expect.objectContaining({
+        victoryCheck: expect.objectContaining({
+          outcome: 'insufficient-funds',
+        }),
+      }),
+    );
+  });
+});
+
+// ── JIRA-212: Stalled-victory guard (AC3, AC4) ──────────────────────────────
+
+describe('BotTurnTrigger — JIRA-212: stalled-victory backstop guard', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    pendingBotTurns.clear();
+    process.env.ENABLE_AI_BOTS = 'true';
+
+    mockIsFinalTurn.mockResolvedValue(false);
+    mockResolveVictory.mockResolvedValue({ gameOver: false });
+  });
+
+  it('forces resolveVictory and skips takeTurn when victory is stalled (AC3)', async () => {
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    // current_player_index === triggerPlayerIndex (0) → stall detected
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
+        if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
+          return mockResult([{ status: 'active', current_player_index: 0 }]);
+        }
+      }
+      return mockResult([]);
+    });
+
+    // Victory is triggered; trigger player = 0; final turn player = 1 (different)
+    mockGetVictoryState.mockResolvedValue({
+      triggered: true,
+      triggerPlayerIndex: 0,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: 1,
+    });
+
+    mockResolveVictory.mockResolvedValue({
+      gameOver: true,
+      winnerId: 'bot-1',
+      winnerName: 'Flash',
+    });
+
+    // currentPlayerIndex = 0 matches triggerPlayerIndex = 0 → stall
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    // (a) takeTurn NOT called
+    expect(mockTakeTurn).not.toHaveBeenCalled();
+    // (b) resolveVictory IS called
+    expect(mockResolveVictory).toHaveBeenCalledWith('game-1');
+    // (c) console.error logged the stall message
+    const stallLog = consoleErrorSpy.mock.calls.find(
+      (call: any[]) => typeof call[0] === 'string' && call[0].includes('Stalled victory detected'),
+    );
+    expect(stallLog).toBeDefined();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('emits gameOver after stall resolution when winner found', async () => {
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
+        if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
+          return mockResult([{ status: 'active', current_player_index: 0 }]);
+        }
+      }
+      return mockResult([]);
+    });
+
+    mockGetVictoryState.mockResolvedValue({
+      triggered: true,
+      triggerPlayerIndex: 0,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: 1,
+    });
+
+    mockResolveVictory.mockResolvedValue({
+      gameOver: true,
+      winnerId: 'bot-1',
+      winnerName: 'Flash',
+    });
+
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(mockEmitGameOver).toHaveBeenCalledWith('game-1', 'bot-1', 'Flash');
+  });
+
+  it('does NOT fire stall guard when final-turn player has not yet taken their turn (AC4)', async () => {
+    // current_player_index = 0 (NOT trigger player 1) → guard does NOT fire
+    mockQuery.mockImplementation(async (sql: string) => {
+      if (typeof sql === 'string') {
+        if (sql.includes('SELECT is_bot')) return mockResult([{ is_bot: true, name: 'Flash' }]);
+        if (sql.includes('status, current_player_index') || sql.includes('SELECT status FROM games')) {
+          return mockResult([{ status: 'active', current_player_index: 0 }]);
+        }
+        if (sql.includes('SELECT current_turn_number')) return mockResult([{ current_turn_number: 5 }]);
+        if (sql.includes('UPDATE players SET current_turn_number')) return mockResult([]);
+        if (sql.includes('UPDATE player_tracks')) return mockResult([]);
+        if (sql.includes('UPDATE bot_turn_audits')) return mockResult([]);
+        if (sql.includes('SELECT COUNT')) return mockResult([{ count: 2 }]);
+        if (sql.includes('SELECT money')) return { rows: [{ money: 200, debt_owed: 0, name: 'Flash' }] };
+      }
+      return mockResult([]);
+    });
+
+    // Victory triggered but current player (0) != triggerPlayerIndex (1) → guard does NOT fire
+    mockGetVictoryState.mockResolvedValue({
+      triggered: true,
+      triggerPlayerIndex: 1,
+      victoryThreshold: 250,
+      finalTurnPlayerIndex: 0,
+    });
+
+    mockTakeTurn.mockResolvedValue({
+      action: AIActionType.BuildTrack,
+      segmentsBuilt: 1,
+      cost: 3,
+      durationMs: 500,
+      success: true,
+      actor: 'system',
+      actorDetail: 'route-executor',
+    } as any);
+
+    // Should proceed normally (takeTurn called)
+    await onTurnChange('game-1', 0, 'bot-1');
+
+    expect(mockTakeTurn).toHaveBeenCalled();
+    expect(mockResolveVictory).not.toHaveBeenCalled();
   });
 });
 
@@ -488,6 +805,8 @@ describe('BotTurnTrigger — chained bot turn queuing', () => {
     pendingBotTurns.clear();
     queuedBotTurns.clear();
     process.env.ENABLE_AI_BOTS = 'true';
+    // Ensure JIRA-212 stall guard does not fire — no triggered victory state
+    mockGetVictoryState.mockResolvedValue(null);
   });
 
   it('should queue a bot turn when pendingBotTurns guard is active', async () => {
@@ -524,6 +843,8 @@ describe('BotTurnTrigger — stuck bot recovery on reconnect', () => {
     pendingBotTurns.clear();
     queuedBotTurns.clear();
     process.env.ENABLE_AI_BOTS = 'true';
+    // Ensure JIRA-212 stall guard does not fire — no triggered victory state
+    mockGetVictoryState.mockResolvedValue(null);
 
     mockQuery.mockImplementation(async (sql: string) => {
       if (typeof sql === 'string') {

@@ -203,14 +203,22 @@ describe('BotTurnTrigger', () => {
     it('should execute bot turn with delay for bot player in active game', async () => {
       // is_bot query
       mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
-      // game status query
-      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // game status query (SELECT status, current_player_index FROM games)
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // JIRA-212 stall guard: VictoryService.getVictoryState — not triggered, no stall
+      mockQuery.mockResolvedValueOnce({ rows: [{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
       // turn number query
       mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 3 }], command: '', rowCount: 1, oid: 0, fields: [] });
       // UPDATE players (increment turn)
       mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
       // UPDATE player_tracks (reset build cost)
       mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      // checkBotVictory: VictoryService.getVictoryState
+      mockQuery.mockResolvedValueOnce({ rows: [{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // checkBotVictory: SELECT money, debt_owed, name
+      mockQuery.mockResolvedValueOnce({ rows: [{ money: 50, debt_owed: 0, name: 'Bot' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // checkAndResolveFinalTurn: isFinalTurn query
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_player_index: 0, victory_triggered: false, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
       // advanceTurnAfterBot: game status query
       mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
       // advanceTurnAfterBot: player count query
@@ -274,20 +282,30 @@ describe('BotTurnTrigger', () => {
 
     it('should clean up pendingBotTurns after execution', async () => {
       mockQuery.mockResolvedValueOnce({ rows: [{ is_bot: true }], command: '', rowCount: 1, oid: 0, fields: [] });
-      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // game status (SELECT status, current_player_index)
+      mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // JIRA-212 stall guard: VictoryService.getVictoryState
+      mockQuery.mockResolvedValueOnce({ rows: [{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
       mockQuery.mockResolvedValueOnce({ rows: [{ current_turn_number: 1 }], command: '', rowCount: 1, oid: 0, fields: [] });
       mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
       mockQuery.mockResolvedValueOnce({ rows: [], command: 'UPDATE', rowCount: 1, oid: 0, fields: [] });
+      // checkBotVictory: VictoryService.getVictoryState
+      mockQuery.mockResolvedValueOnce({ rows: [{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // checkBotVictory: SELECT money
+      mockQuery.mockResolvedValueOnce({ rows: [{ money: 50, debt_owed: 0, name: 'Bot' }], command: '', rowCount: 1, oid: 0, fields: [] });
+      // isFinalTurn
+      mockQuery.mockResolvedValueOnce({ rows: [{ current_player_index: 0, victory_triggered: false, final_turn_player_index: -1 }], command: '', rowCount: 1, oid: 0, fields: [] });
       mockQuery.mockResolvedValueOnce({ rows: [{ status: 'active', current_player_index: 0 }], command: '', rowCount: 1, oid: 0, fields: [] });
       mockQuery.mockResolvedValueOnce({ rows: [{ count: 2 }], command: '', rowCount: 1, oid: 0, fields: [] });
 
       const { onTurnChange, pendingBotTurns } = await import('../services/ai/BotTurnTrigger');
       const promise = onTurnChange('game-1', 0, 'bot-1');
 
-      // Flush microtasks so onTurnChange reaches pendingBotTurns.add() after its 2 await db.query() calls
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+      // Flush microtasks so onTurnChange reaches pendingBotTurns.add()
+      // After my changes there are more awaits before pendingBotTurns.add:
+      // is_bot (1) + game status (1) + VictoryService.getVictoryState (inner await, 2) = at least 4 ticks
+      // Use a setImmediate-style flush instead of counting ticks
+      for (let i = 0; i < 10; i++) await Promise.resolve();
       expect(pendingBotTurns.has('game-1')).toBe(true);
       await jest.advanceTimersByTimeAsync(1500);
       await promise;

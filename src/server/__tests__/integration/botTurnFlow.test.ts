@@ -218,14 +218,22 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
 
       // is_bot check
       mockQuery.mockResolvedValueOnce(mockResult([{ is_bot: true }]));
-      // game status check
-      mockQuery.mockResolvedValueOnce(mockResult([{ status: 'initialBuild' }]));
+      // game status check (SELECT status, current_player_index FROM games)
+      mockQuery.mockResolvedValueOnce(mockResult([{ status: 'initialBuild', current_player_index: 1 }]));
+      // JIRA-212 stall guard: VictoryService.getVictoryState (victory_triggered = false → no stall)
+      mockQuery.mockResolvedValueOnce(mockResult([{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }]));
       // turn number query
       mockQuery.mockResolvedValueOnce(mockResult([{ current_turn_number: 1 }]));
       // UPDATE players (increment turn)
       mockQuery.mockResolvedValueOnce(mockResult([]));
       // UPDATE player_tracks (reset build cost)
       mockQuery.mockResolvedValueOnce(mockResult([]));
+      // checkBotVictory: VictoryService.getVictoryState
+      mockQuery.mockResolvedValueOnce(mockResult([{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }]));
+      // checkBotVictory: SELECT money, debt_owed, name FROM players
+      mockQuery.mockResolvedValueOnce(mockResult([{ money: 50, debt_owed: 0, name: 'Heinrich' }]));
+      // checkAndResolveFinalTurn: VictoryService.isFinalTurn
+      mockQuery.mockResolvedValueOnce(mockResult([{ current_player_index: 1, victory_triggered: false, final_turn_player_index: -1 }]));
       // advanceTurnAfterBot: game status query
       mockQuery.mockResolvedValueOnce(mockResult([{
         status: 'initialBuild',
@@ -252,25 +260,40 @@ describe('Bot Turn + Initial Build Flow (Integration)', () => {
     it('should increment turn number and reset build cost during bot turn', async () => {
       jest.useFakeTimers();
 
+      // is_bot check (index 0)
       mockQuery.mockResolvedValueOnce(mockResult([{ is_bot: true }]));
-      mockQuery.mockResolvedValueOnce(mockResult([{ status: 'active' }]));
-      mockQuery.mockResolvedValueOnce(mockResult([{ current_turn_number: 3 }]));
-      mockQuery.mockResolvedValueOnce(mockResult([])); // UPDATE players
-      mockQuery.mockResolvedValueOnce(mockResult([])); // UPDATE player_tracks
+      // game status (index 1)
       mockQuery.mockResolvedValueOnce(mockResult([{ status: 'active', current_player_index: 1 }]));
+      // JIRA-212 stall guard: VictoryService.getVictoryState (index 2)
+      mockQuery.mockResolvedValueOnce(mockResult([{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }]));
+      // turn number query (index 3)
+      mockQuery.mockResolvedValueOnce(mockResult([{ current_turn_number: 3 }]));
+      // UPDATE players (index 4)
+      mockQuery.mockResolvedValueOnce(mockResult([]));
+      // UPDATE player_tracks (index 5)
+      mockQuery.mockResolvedValueOnce(mockResult([]));
+      // checkBotVictory: VictoryService.getVictoryState (index 6)
+      mockQuery.mockResolvedValueOnce(mockResult([{ victory_triggered: false, victory_trigger_player_index: -1, victory_threshold: 250, final_turn_player_index: -1 }]));
+      // checkBotVictory: SELECT money, debt_owed, name (index 7)
+      mockQuery.mockResolvedValueOnce(mockResult([{ money: 50, debt_owed: 0, name: 'Heinrich' }]));
+      // checkAndResolveFinalTurn: isFinalTurn (index 8)
+      mockQuery.mockResolvedValueOnce(mockResult([{ current_player_index: 1, victory_triggered: false, final_turn_player_index: -1 }]));
+      // advanceTurnAfterBot: game status query (index 9)
+      mockQuery.mockResolvedValueOnce(mockResult([{ status: 'active', current_player_index: 1 }]));
+      // advanceTurnAfterBot: SELECT COUNT players (index 10)
       mockQuery.mockResolvedValueOnce(mockResult([{ count: 3 }]));
 
       const promise = onTurnChange(gameId, 1, bot1Id);
       await jest.advanceTimersByTimeAsync(1500);
       await promise;
 
-      // Verify turn number increment
-      const incrementCall = mockQuery.mock.calls[3];
+      // Verify turn number increment (now at index 4, after stall guard query at index 2)
+      const incrementCall = mockQuery.mock.calls[4];
       expect(incrementCall[0]).toContain('current_turn_number');
       expect(incrementCall[1]).toEqual([bot1Id]);
 
-      // Verify build cost reset
-      const resetCall = mockQuery.mock.calls[4];
+      // Verify build cost reset (now at index 5)
+      const resetCall = mockQuery.mock.calls[5];
       expect(resetCall[0]).toContain('turn_build_cost = 0');
       expect(resetCall[1]).toEqual([gameId, bot1Id]);
 
