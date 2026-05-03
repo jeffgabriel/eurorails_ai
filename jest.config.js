@@ -59,7 +59,7 @@ module.exports = {
         // Explicitly handle JS files with babel-jest (only for .js/.jsx, not .ts/.tsx)
         '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/(?!(phaser)/)'],
+      transformIgnorePatterns: ['/node_modules/(?!(phaser|uuid)/)'],
       moduleNameMapper: {
         '^phaser$': '<rootDir>/node_modules/phaser/dist/phaser.js',
         '^@/(.*)$': '<rootDir>/src/$1',
@@ -84,8 +84,9 @@ module.exports = {
             useESM: false,
           },
         ],
+        '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/'],
+      transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
     },
 
     // Skip integration tests in CI to avoid flaky database initialization issues
@@ -134,8 +135,9 @@ module.exports = {
             useESM: false,
           },
         ],
+        '^.+\\.(js|jsx)$': 'babel-jest',
       },
-      transformIgnorePatterns: ['/node_modules/'],
+      transformIgnorePatterns: ['/node_modules/(?!(uuid)/)'],
     },
   ],
 };
