@@ -3,12 +3,14 @@ import { ProviderAdapter, ThinkingConfig } from './ProviderAdapter';
 import { ProviderTimeoutError, ProviderAPIError, ProviderAuthError } from './errors';
 
 export class AnthropicAdapter implements ProviderAdapter {
-  private readonly apiKey: string;
+  private readonly credential: string;
   private readonly timeoutMs: number;
+  private readonly authMode: 'api-key' | 'bearer';
 
-  constructor(apiKey: string, timeoutMs: number = 15000) {
-    this.apiKey = apiKey;
+  constructor(credential: string, timeoutMs: number = 15000, authMode: 'api-key' | 'bearer' = 'api-key') {
+    this.credential = credential;
     this.timeoutMs = timeoutMs;
+    this.authMode = authMode;
   }
 
   async chat(request: {
@@ -128,10 +130,16 @@ export class AnthropicAdapter implements ProviderAdapter {
     signal: AbortSignal,
     isHaiku: boolean = false,
   ): Promise<{ response?: ProviderResponse; error?: { status: number; body: string } }> {
+    // Build auth header: bearer mode sends Authorization header; api-key mode sends x-api-key.
+    // Never send both simultaneously.
+    const authHeader: Record<string, string> = this.authMode === 'bearer'
+      ? { 'Authorization': `Bearer ${this.credential}` }
+      : { 'x-api-key': this.credential };
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': this.apiKey,
+        ...authHeader,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },

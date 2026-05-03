@@ -1206,9 +1206,31 @@ export class AIStrategyEngine {
     [LLMProvider.OpenAI]: 'OPENAI_API_KEY',
   };
 
+  /**
+   * Resolve the Anthropic credential from environment variables.
+   * Precedence: ANTHROPIC_AUTH_TOKEN (bearer) → ANTHROPIC_API_KEY (api-key) → null.
+   * Centralised here so hasLLMApiKey and createBrain share the same resolution logic.
+   */
+  private static resolveAnthropicCredential():
+    | { credential: string; mode: 'api-key' | 'bearer' }
+    | null {
+    const authToken = process.env['ANTHROPIC_AUTH_TOKEN'];
+    if (authToken) {
+      return { credential: authToken, mode: 'bearer' };
+    }
+    const apiKey = process.env['ANTHROPIC_API_KEY'];
+    if (apiKey) {
+      return { credential: apiKey, mode: 'api-key' };
+    }
+    return null;
+  }
+
   private static hasLLMApiKey(botConfig: BotConfig | null): boolean {
     if (!botConfig) return false;
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
+    if (provider === LLMProvider.Anthropic) {
+      return AIStrategyEngine.resolveAnthropicCredential() !== null;
+    }
     const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
     return !!process.env[envKey];
   }
@@ -1219,14 +1241,25 @@ export class AIStrategyEngine {
   private static createBrain(botConfig: BotConfig): LLMStrategyBrain {
     const provider = (botConfig.provider as LLMProvider) ?? LLMProvider.Anthropic;
     const skillLevel = (botConfig.skillLevel as BotSkillLevel) ?? BotSkillLevel.Medium;
-    const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
-    const apiKey = process.env[envKey] ?? '';
+
+    let apiKey: string;
+    let authMode: 'api-key' | 'bearer' | undefined;
+
+    if (provider === LLMProvider.Anthropic) {
+      const resolved = AIStrategyEngine.resolveAnthropicCredential();
+      apiKey = resolved?.credential ?? '';
+      authMode = resolved?.mode;
+    } else {
+      const envKey = AIStrategyEngine.ENV_KEY_MAP[provider];
+      apiKey = process.env[envKey] ?? '';
+    }
 
     return new LLMStrategyBrain({
       skillLevel,
       provider,
       model: botConfig.model,
       apiKey,
+      authMode,
       timeoutMs: 30000,
       maxRetries: 1,
     });

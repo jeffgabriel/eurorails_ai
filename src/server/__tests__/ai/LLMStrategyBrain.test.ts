@@ -788,6 +788,77 @@ describe('LLMStrategyBrain', () => {
       expect(AnthropicAdapter).toHaveBeenCalledWith('anthropic-key', 5000);
     });
 
+    // AC5: two-arg constructor remains valid — existing assertion is preserved unchanged
+    it('AC5: AnthropicAdapter two-arg call (api-key default) — existing assertion unchanged', () => {
+      new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'anthropic-key',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+
+      // This is the exact assertion from line 788 — must pass unchanged
+      expect(AnthropicAdapter).toHaveBeenCalledWith('anthropic-key', 5000);
+    });
+
+    // AC8: bearer mode — auth-mode log line emitted at construction, contains 'bearer', not token value
+    it('AC8: authMode=bearer emits exactly one log line containing "bearer" and NOT the token value', () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'tok-SECRET',
+        authMode: 'bearer',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+
+      const bearerLogs = logSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('bearer'),
+      );
+      expect(bearerLogs).toHaveLength(1);
+      expect(bearerLogs[0][0]).not.toContain('tok-SECRET');
+
+      logSpy.mockRestore();
+    });
+
+    // AC8: api-key mode — log line emitted at construction, contains 'api-key', not credential
+    it('AC8: authMode=api-key emits exactly one log line containing "api-key"', () => {
+      const logSpy = jest.spyOn(console, 'log').mockImplementation();
+
+      new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'key-SECRET',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+
+      const apiKeyLogs = logSpy.mock.calls.filter(
+        (call) => typeof call[0] === 'string' && call[0].includes('api-key'),
+      );
+      expect(apiKeyLogs).toHaveLength(1);
+      expect(apiKeyLogs[0][0]).not.toContain('key-SECRET');
+
+      logSpy.mockRestore();
+    });
+
+    // bearer mode → AnthropicAdapter called with third arg 'bearer'
+    it('authMode=bearer: AnthropicAdapter constructed with credential, timeout, and bearer mode', () => {
+      new LLMStrategyBrain({
+        skillLevel: BotSkillLevel.Medium,
+        provider: LLMProvider.Anthropic,
+        apiKey: 'tok-XYZ',
+        authMode: 'bearer',
+        timeoutMs: 5000,
+        maxRetries: 1,
+      });
+
+      expect(AnthropicAdapter).toHaveBeenCalledWith('tok-XYZ', 5000, 'bearer');
+    });
+
     it('should use correct default model per provider and skill level', () => {
       // Anthropic Easy
       expect(LLM_DEFAULT_MODELS[LLMProvider.Anthropic][BotSkillLevel.Easy]).toBe('claude-haiku-4-5-20251001');

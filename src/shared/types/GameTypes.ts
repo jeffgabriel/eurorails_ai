@@ -582,6 +582,8 @@ export interface LLMStrategyConfig {
     /** If omitted, uses LLM_DEFAULT_MODELS[provider][skillLevel] */
     model?: string;
     apiKey: string;
+    /** Auth mode for Anthropic provider. 'bearer' uses OAuth token; 'api-key' uses x-api-key (default). */
+    authMode?: 'api-key' | 'bearer';
     /** Timeout in ms for LLM API calls. Default 30000 (30s). */
     timeoutMs: number;
     /** Number of retries with minimal prompt before heuristic fallback. Default 1. */
