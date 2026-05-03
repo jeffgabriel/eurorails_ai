@@ -760,6 +760,167 @@ describe('RouteValidator', () => {
   });
 });
 
+// ── JIRA-214: insertionDetourCostOverride-aware cumulative budget gate ───────
+
+describe('JIRA-214: insertionDetourCostOverride in checkCumulativeBudget (AC5)', () => {
+  it('(a) stop with insertionDetourCostOverride smaller than estimatedTrackCostToSupply survives budget check', () => {
+    // Demand says track costs 40M to reach supply — would normally fail with 30M cash.
+    // Override says the marginal cost is only 5M — stop should survive.
+    const demand = makeDemand({
+      cardIndex: 10,
+      loadType: 'Coal',
+      supplyCity: 'Essen',
+      deliveryCity: 'Berlin',
+      payout: 20,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: true,
+      estimatedTrackCostToSupply: 40, // without override: would fail (40 > 30)
+      estimatedTrackCostToDelivery: 0,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        {
+          action: 'pickup',
+          loadType: 'Coal',
+          city: 'Essen',
+          insertionDetourCostOverride: 5, // marginal cost per RouteDetourEstimator
+        },
+        {
+          action: 'deliver',
+          loadType: 'Coal',
+          city: 'Berlin',
+          demandCardId: 10,
+          payment: 20,
+        },
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(30); // 30M cash — without override this would be pruned (40 > 30)
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // With override of 5M, the pickup passes the budget check (5 <= 30)
+    expect(result.valid).toBe(true);
+    // When all stops feasible, prunedRoute is not set — check errors are empty
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(a) deliver stop with insertionDetourCostOverride smaller than estimatedTrackCostToDelivery survives budget check', () => {
+    // Delivery normally costs 50M track — would fail with 25M cash.
+    // Override says only 3M marginal cost.
+    const demand = makeDemand({
+      cardIndex: 11,
+      loadType: 'Steel',
+      supplyCity: 'OnTrain', // bot is carrying Steel
+      deliveryCity: 'Hamburg',
+      payout: 22,
+      isSupplyOnNetwork: true,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 0,
+      estimatedTrackCostToDelivery: 50, // without override: would fail (50 > 25)
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+      isLoadOnTrain: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        {
+          action: 'deliver',
+          loadType: 'Steel',
+          city: 'Hamburg',
+          demandCardId: 11,
+          payment: 22,
+          insertionDetourCostOverride: 3,
+        },
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(25); // 25M cash
+    snapshot.bot.loads = ['Steel']; // bot is carrying Steel
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Deliver stop should survive because override (3M) <= cash (25M)
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(b) absent override → byte-identical behavior to baseline (regression guard)', () => {
+    // Standard demand: pickup costs 8M, deliver costs 5M, cash is 20M
+    // No insertionDetourCostOverride — uses demand fields as before
+    const demand = makeDemand({
+      cardIndex: 20,
+      loadType: 'Grain',
+      supplyCity: 'Lodz',
+      deliveryCity: 'Praha',
+      payout: 18,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 8,
+      estimatedTrackCostToDelivery: 5,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Grain', city: 'Lodz' }, // no override
+        { action: 'deliver', loadType: 'Grain', city: 'Praha', demandCardId: 20, payment: 18 }, // no override
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(20); // 20M cash (8 + 5 = 13M total, fits in 20M)
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Without override, the route uses demand estimates — should pass (8+5=13 <= 20)
+    expect(result.valid).toBe(true);
+    // All stops feasible — prunedRoute absent, errors empty
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('(b) regression: stop without override still fails budget check when demand estimate is too high', () => {
+    const demand = makeDemand({
+      cardIndex: 21,
+      loadType: 'Wine',
+      supplyCity: 'Milano',
+      deliveryCity: 'Paris',
+      payout: 30,
+      isSupplyOnNetwork: false,
+      isDeliveryOnNetwork: false,
+      estimatedTrackCostToSupply: 50, // too high
+      estimatedTrackCostToDelivery: 5,
+      isSupplyReachable: true,
+      isDeliveryReachable: true,
+    });
+
+    const route = makeRoute({
+      stops: [
+        { action: 'pickup', loadType: 'Wine', city: 'Milano' }, // no override — uses 50M estimate
+        { action: 'deliver', loadType: 'Wine', city: 'Paris', demandCardId: 21, payment: 30 },
+      ],
+    });
+
+    const context = makeContext({ demands: [demand] });
+    const snapshot = makeSnapshot(30); // 30M cash — 50M > 30M: pickup should be pruned
+
+    const result = RouteValidator.validate(route, context, snapshot);
+
+    // Pickup is infeasible (50M > 30M) — behavior unchanged from pre-JIRA-214
+    // The Milano pickup should be absent from prunedRoute (if any)
+    const prunedStops = result.prunedRoute?.stops ?? [];
+    const milanoPick = prunedStops.filter(s => s.action === 'pickup' && s.city === 'Milano');
+    expect(milanoPick).toHaveLength(0);
+  });
+});
+
 // ── JIRA-181: Schema enum tests (standalone) ────────────────────────────────
 
 describe('JIRA-181: Schema enum includes DROP', () => {

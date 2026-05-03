@@ -322,7 +322,12 @@ export class RouteValidator {
       if (!demand) continue; // will be caught by per-stop checks
 
       if (stop.action === 'pickup') {
-        const trackCost = demand.isSupplyOnNetwork ? 0 : demand.estimatedTrackCostToSupply;
+        // R5: prefer insertionDetourCostOverride (set by RouteEnrichmentAdvisor) when present —
+        // it is the marginal build cost computed by RouteDetourEstimator and is more accurate
+        // than the demand-level estimate.
+        const trackCost = stop.insertionDetourCostOverride != null
+          ? stop.insertionDetourCostOverride
+          : (demand.isSupplyOnNetwork ? 0 : demand.estimatedTrackCostToSupply);
         if (trackCost > runningCash) {
           v.feasible = false;
           v.error = `Cumulative budget exceeded: need ~${trackCost}M track to reach ${stop.city}, only ~${runningCash}M remaining after prior stops.`;
@@ -333,7 +338,10 @@ export class RouteValidator {
         runningCash -= trackCost;
       } else {
         // deliver
-        const trackCost = demand.isDeliveryOnNetwork ? 0 : demand.estimatedTrackCostToDelivery;
+        // R5: prefer insertionDetourCostOverride when present (same reasoning as pickup above).
+        const trackCost = stop.insertionDetourCostOverride != null
+          ? stop.insertionDetourCostOverride
+          : (demand.isDeliveryOnNetwork ? 0 : demand.estimatedTrackCostToDelivery);
         if (trackCost > runningCash) {
           v.feasible = false;
           v.error = `Cumulative budget exceeded: need ~${trackCost}M track to reach ${stop.city}, only ~${runningCash}M remaining after prior stops.`;

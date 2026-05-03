@@ -1569,7 +1569,8 @@ export class ActionResolver {
    * Build a set of edges owned by other players (Right of Way rule).
    * Format: "row,col-row,col" for each direction.
    */
-  private static getOccupiedEdges(snapshot: WorldSnapshot): Set<string> {
+  /** @internal Widened to public static for RouteDetourEstimator (JIRA-214 P1). */
+  public static getOccupiedEdges(snapshot: WorldSnapshot): Set<string> {
     const occupied = new Set<string>();
     for (const pt of snapshot.allPlayerTracks) {
       if (pt.playerId === snapshot.bot.playerId) continue;

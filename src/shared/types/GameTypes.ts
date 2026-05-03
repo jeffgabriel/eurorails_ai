@@ -457,6 +457,14 @@ export interface RouteStop {
   city: string;
   demandCardId?: number;   // for delivers — which demand card this fulfills
   payment?: number;         // for delivers — ECU payout
+  /**
+   * When set by RouteEnrichmentAdvisor (Project 2), overrides
+   * demand.estimatedTrackCostToSupply / estimatedTrackCostToDelivery in the
+   * RouteValidator cumulative-budget gate. Represents the marginal build cost
+   * computed by RouteDetourEstimator for an inserted stop.
+   * R4 — Project 1 adds field; Project 2 sets it.
+   */
+  insertionDetourCostOverride?: number;
 }
 
 /** Multi-stop strategic route planned by LLM, auto-executed over multiple turns */
