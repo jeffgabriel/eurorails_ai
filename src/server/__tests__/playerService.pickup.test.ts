@@ -13,7 +13,8 @@ jest.mock('../db/index', () => {
   return {
     db: {
       connect: jest.fn().mockResolvedValue(mockClient),
-      query: jest.fn(),
+      // Default: return empty rows so activeEffectManager queries don't fail
+      query: jest.fn().mockResolvedValue({ rows: [] }),
     },
     __mockClient: mockClient,
   };
