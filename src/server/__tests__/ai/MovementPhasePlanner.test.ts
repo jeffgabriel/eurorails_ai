@@ -146,15 +146,32 @@ jest.mock('../../services/ai/ContextBuilder', () => ({
   },
 }));
 
+jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
+  RouteEnrichmentAdvisor: {
+    enrich: jest.fn((route: unknown) => Promise.resolve(route)),
+  },
+}));
+
+jest.mock('../../services/ai/RouteDetourEstimator', () => ({
+  computeCandidateDetourCosts: jest.fn(() => []),
+  MAX_DETOUR_TURNS: 3,
+  OPPORTUNITY_COST_PER_TURN_M: 5,
+}));
+
 import { isStopComplete, resolveBuildTarget } from '../../services/ai/routeHelpers';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { PostDeliveryReplanner } from '../../services/ai/PostDeliveryReplanner';
+import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
+import { computeCandidateDetourCosts } from '../../services/ai/RouteDetourEstimator';
+import type { DemandContext } from '../../../shared/types/GameTypes';
 
 const mockIsStopComplete = isStopComplete as jest.Mock;
 const mockResolveBuildTarget = resolveBuildTarget as jest.Mock;
 const mockResolve = ActionResolver.resolve as jest.Mock;
 const mockResolveMove = ActionResolver.resolveMove as jest.Mock;
 const mockPostDeliveryReplan = PostDeliveryReplanner.replan as jest.Mock;
+const mockEnrichRoute = RouteEnrichmentAdvisor.enrich as jest.Mock;
+const mockComputeDetourCosts = computeCandidateDetourCosts as jest.Mock;
 let mockRevalidate: jest.SpyInstance;
 let mockSkipCompleted: jest.SpyInstance;
 let mockExecuteStopAction: jest.SpyInstance;
@@ -812,5 +829,275 @@ describe('JIRA-202: arrival on last milepost executes stop action', () => {
     // The regular isBotAtCity branch handles this — no move emitted
     expect(result.accumulatedPlans.some(p => p.type === AIActionType.PickupLoad)).toBe(true);
     expect(result.accumulatedPlans.some(p => p.type === AIActionType.MoveTrain)).toBe(false);
+  });
+});
+
+// ── JIRA-214 P2: Advisor trigger (AC10, AC11, AC12) ──────────────────────────
+
+function makeDemand(loadType: string, supplyCity: string, deliveryCity: string, payout = 10): DemandContext {
+  return {
+    cardIndex: 0,
+    loadType,
+    supplyCity,
+    deliveryCity,
+    payout,
+    isSupplyReachable: true,
+    isDeliveryReachable: true,
+    isSupplyOnNetwork: false,
+    isDeliveryOnNetwork: false,
+    estimatedTrackCostToSupply: 0,
+    estimatedTrackCostToDelivery: 0,
+    isLoadAvailable: true,
+    isLoadOnTrain: false,
+    ferryRequired: false,
+    loadChipTotal: 4,
+    loadChipCarried: 0,
+    estimatedTurns: 5,
+    demandScore: 2,
+    efficiencyPerTurn: 2,
+    networkCitiesUnlocked: 0,
+    victoryMajorCitiesEnRoute: 0,
+    isAffordable: true,
+    projectedFundsAfterDelivery: 100,
+  };
+}
+
+function makeBrain(): import('../../services/ai/LLMStrategyBrain').LLMStrategyBrain {
+  return {
+    providerAdapter: {
+      chat: jest.fn().mockResolvedValue({ text: '{"decision":"keep","reasoning":"ok"}', usage: {} }),
+      setContext: jest.fn(),
+    },
+    modelName: 'test-model',
+  } as unknown as import('../../services/ai/LLMStrategyBrain').LLMStrategyBrain;
+}
+
+describe('JIRA-214 P2: Advisor trigger after pickup at city (AC10)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockEnrichRoute.mockImplementation((route: unknown) => Promise.resolve(route));
+    mockComputeDetourCosts.mockReturnValue([]);
+
+    jest.spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
+      .mockImplementation((route: StrategicRoute) => route);
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((route: StrategicRoute) => route);
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({ success: false, error: 'default' });
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('AC10: fires advisor after pickup when next stop is at a different city', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Bot at Paris, picks up Coal, next stop is Berlin (different city)
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Paris', 'Coal'),
+        makeStop('deliver', 'Berlin', 'Coal'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Paris' },
+      demands: [makeDemand('Flowers', 'Paris', 'Krakow', 18)],
+    });
+
+    // Snapshot: Paris has Flowers available, bot has 1 free slot
+    const snapshot = makeSnapshot();
+    (snapshot.loadAvailability as Record<string, string[]>) = { 'Paris': ['Flowers'] };
+    snapshot.bot.loads = []; // empty loads — has free slot
+
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Paris' },
+      });
+
+    // Skip after pickup → different city next stop
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+
+    // computeCandidateDetourCosts returns a viable candidate
+    mockComputeDetourCosts.mockReturnValue([{
+      loadType: 'Flowers', deliveryCity: 'Krakow', payout: 18,
+      cardIndex: 0, bestSlotIndex: 1, marginalBuildM: 0, marginalTurns: 0, feasible: true,
+    }]);
+
+    const gridPoints = makeGridPointsForCity(5, 5, 'Paris');
+    const brain = makeBrain();
+    const trace = makeTrace();
+
+    await MovementPhasePlanner.run(route, snapshot, context, trace, brain, gridPoints);
+
+    // Advisor must have been called
+    expect(mockEnrichRoute).toHaveBeenCalled();
+    const enrichCall = mockEnrichRoute.mock.calls[0];
+    expect(enrichCall[5]).toBe('Paris'); // currentCity param
+    expect(enrichCall[6]).toHaveLength(1); // 1 viable candidate
+  });
+
+  it('AC10: does NOT fire advisor when next stop is at the same city', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Bot at Paris, picks up Coal, next stop is ALSO Paris (deliver)
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Paris', 'Coal'),
+        makeStop('deliver', 'Paris', 'Coal'), // same city!
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Paris' },
+    });
+
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Paris' },
+      });
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+
+    const snapshot = makeSnapshot();
+    (snapshot.loadAvailability as Record<string, string[]>) = { 'Paris': ['Flowers'] };
+
+    const gridPoints = makeGridPointsForCity(5, 5, 'Paris');
+    const brain = makeBrain();
+
+    await MovementPhasePlanner.run(route, snapshot, context, makeTrace(), brain, gridPoints);
+
+    // Advisor must NOT be called — next stop is same city
+    expect(mockEnrichRoute).not.toHaveBeenCalled();
+  });
+
+  it('AC10: does NOT fire advisor (no LLM call) when no candidates pass pre-LLM filter', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Paris', 'Coal'),
+        makeStop('deliver', 'Berlin', 'Coal'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Paris' },
+      demands: [],  // No demands → no candidates pass filter
+    });
+
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Paris' },
+      });
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+
+    const snapshot = makeSnapshot();
+    const gridPoints = makeGridPointsForCity(5, 5, 'Paris');
+    const brain = makeBrain();
+
+    await MovementPhasePlanner.run(route, snapshot, context, makeTrace(), brain, gridPoints);
+
+    // Advisor must NOT be called — no candidates
+    expect(mockEnrichRoute).not.toHaveBeenCalled();
+  });
+
+  it('AC12: already-in-plan case — route has DELIVER Flowers@Krakow, filter drops candidate', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Route already has DELIVER Flowers@Krakow
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Paris', 'Coal'),
+        { action: 'deliver', loadType: 'Flowers', city: 'Krakow', payment: 18 } as RouteStop,
+        makeStop('deliver', 'Berlin', 'Coal'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Paris' },
+      demands: [makeDemand('Flowers', 'Paris', 'Krakow', 18)], // Flowers demand present
+    });
+
+    // Snapshot: Paris has Flowers available
+    const snapshot = makeSnapshot();
+    (snapshot.loadAvailability as Record<string, string[]>) = { 'Paris': ['Flowers'] };
+
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Paris' },
+      });
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+
+    const gridPoints = makeGridPointsForCity(5, 5, 'Paris');
+    const brain = makeBrain();
+
+    await MovementPhasePlanner.run(route, snapshot, context, makeTrace(), brain, gridPoints);
+
+    // Advisor NOT called — Flowers@Krakow already in route (condition 2 blocks it)
+    expect(mockEnrichRoute).not.toHaveBeenCalled();
+    // computeCandidateDetourCosts NOT called either (short-circuit before conditions 4-5)
+    expect(mockComputeDetourCosts).not.toHaveBeenCalled();
+  });
+
+  it('AC11: same-resource second-copy — route has DELIVER Flowers@Krakow but NOT @Kaliningrad', async () => {
+    mockIsStopComplete.mockReturnValue(false);
+
+    // Route has DELIVER Flowers@Krakow only — @Kaliningrad is NOT in route
+    const route = makeRoute({
+      stops: [
+        makeStop('pickup', 'Paris', 'Coal'),
+        { action: 'deliver', loadType: 'Flowers', city: 'Krakow', payment: 18 } as RouteStop,
+        makeStop('deliver', 'Berlin', 'Coal'),
+      ],
+      currentStopIndex: 0,
+    });
+    const context = makeContext({
+      position: { row: 5, col: 5, city: 'Paris' },
+      demands: [
+        makeDemand('Flowers', 'Paris', 'Krakow', 18),       // already in plan
+        makeDemand('Flowers', 'Paris', 'Kaliningrad', 22),  // NOT in plan
+      ],
+    });
+
+    const snapshot = makeSnapshot();
+    (snapshot.loadAvailability as Record<string, string[]>) = { 'Paris': ['Flowers'] };
+    snapshot.bot.loads = []; // has free slot
+
+    jest.spyOn(TurnExecutorPlanner, 'executeStopAction')
+      .mockResolvedValue({
+        success: true,
+        plan: { type: AIActionType.PickupLoad, load: 'Coal', city: 'Paris' },
+      });
+    jest.spyOn(TurnExecutorPlanner, 'skipCompletedStops')
+      .mockImplementation((r: StrategicRoute) => r);
+
+    // Only Kaliningrad passes the pre-LLM filter (Krakow is filtered by condition 2)
+    // computeCandidateDetourCosts is called for Kaliningrad candidate
+    mockComputeDetourCosts.mockReturnValue([{
+      loadType: 'Flowers', deliveryCity: 'Kaliningrad', payout: 22,
+      cardIndex: 1, bestSlotIndex: 2, marginalBuildM: 0, marginalTurns: 0, feasible: true,
+    }]);
+
+    const gridPoints = makeGridPointsForCity(5, 5, 'Paris');
+    const brain = makeBrain();
+
+    await MovementPhasePlanner.run(route, snapshot, context, makeTrace(), brain, gridPoints);
+
+    // Advisor IS called with the Kaliningrad candidate
+    expect(mockEnrichRoute).toHaveBeenCalled();
+    const enrichCall = mockEnrichRoute.mock.calls[0];
+    const passedCandidates = enrichCall[6];
+    // Should include Kaliningrad, not Krakow
+    expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Kaliningrad')).toBe(true);
+    expect(passedCandidates.some((c: { deliveryCity: string }) => c.deliveryCity === 'Krakow')).toBe(false);
   });
 });

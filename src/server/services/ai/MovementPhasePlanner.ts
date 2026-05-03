@@ -25,6 +25,8 @@ import {
   GridPoint,
   LlmAttempt,
   TerrainType,
+  TrainType,
+  TRAIN_PROPERTIES,
 } from '../../../shared/types/GameTypes';
 import { resolveBuildTarget, applyStopEffectToLocalState } from './routeHelpers';
 import { computeBuildSegments } from './computeBuildSegments';
@@ -39,6 +41,8 @@ import { capture } from './WorldSnapshotService';
 import { ContextBuilder } from './ContextBuilder';
 import { loadGridPoints as loadGridPointsMap } from './MapTopology';
 import type { PhaseAResult } from './schemas';
+import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
+import { computeCandidateDetourCosts, MAX_DETOUR_TURNS } from './RouteDetourEstimator';
 
 // ── MovementPhasePlanner ──────────────────────────────────────────────────
 
@@ -164,10 +168,20 @@ export class MovementPhasePlanner {
             `pickup(${currentStop.loadType}@${targetCity})`,
             tag,
           );
+
+          // JIRA-214 P2: Fire advisor trigger after pickup
+          activeRoute = await MovementPhasePlanner.maybeFireAdvisor(
+            activeRoute, targetCity, snapshot, context, brain, gridPoints, tag,
+          );
         } else if (currentStop.action === 'drop') {
           console.log(`${tag} Dropped ${currentStop.loadType} at ${targetCity}. Advancing stop index.`);
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
           activeRoute = TurnExecutorPlanner.skipCompletedStops(activeRoute, context);
+
+          // JIRA-214 P2: Fire advisor trigger after drop
+          activeRoute = await MovementPhasePlanner.maybeFireAdvisor(
+            activeRoute, targetCity, snapshot, context, brain, gridPoints, tag,
+          );
         } else {
           // Delivery
           hasDelivery = true;
@@ -259,6 +273,11 @@ export class MovementPhasePlanner {
 
           // Advance stop index
           activeRoute = { ...activeRoute, currentStopIndex: activeRoute.currentStopIndex + 1 };
+
+          // JIRA-214 P2: Fire advisor trigger after delivery (before post-delivery replan)
+          activeRoute = await MovementPhasePlanner.maybeFireAdvisor(
+            activeRoute, targetCity, snapshot, context, brain, gridPoints, tag,
+          );
 
           // Delegate post-delivery replan to PostDeliveryReplanner
           const replanResult = await PostDeliveryReplanner.replan(
@@ -463,6 +482,108 @@ export class MovementPhasePlanner {
     }
 
     return MovementPhasePlanner.makeResult(activeRoute, plans, hasDelivery, lastMoveTargetCity, deliveriesThisTurn, snapshot, context, false, false, replanLlmLog, replanSystemPrompt, replanUserPrompt, pendingUpgradeAction, upgradeSuppressionReason);
+  }
+
+  /**
+   * Advisor trigger: fires after each pickup/deliver/drop action at `currentCity`.
+   *
+   * Peeks at the next pending stop in `route`. If the next stop is at a different
+   * city, there is no next stop, or Phase A is terminating, runs the 5-condition
+   * pre-LLM filter, computes detour costs, and invokes RouteEnrichmentAdvisor.
+   *
+   * Returns the (potentially enriched) route. Never throws — falls back to input
+   * route on any error.
+   *
+   * R8 — JIRA-214 P2 BE-002.
+   */
+  private static async maybeFireAdvisor(
+    route: StrategicRoute,
+    currentCity: string,
+    snapshot: WorldSnapshot,
+    context: GameContext,
+    brain: LLMStrategyBrain | null | undefined,
+    gridPoints: GridPoint[] | undefined,
+    tag: string,
+  ): Promise<StrategicRoute> {
+    // Guard: brain and gridPoints are required for the advisor
+    if (!brain || !gridPoints || gridPoints.length === 0) return route;
+
+    // Peek at the next pending stop
+    const nextStop = route.stops[route.currentStopIndex];
+    if (nextStop && nextStop.city.toLowerCase() === currentCity.toLowerCase()) {
+      // Same-city next stop → more planned actions here; do not fire
+      return route;
+    }
+    // Different-city next stop, no next stop, or end of stops → fire
+
+    // ── Pre-LLM filter (conditions 1-3: pure data checks) ──────────────────
+    const trainCapacity = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.capacity ?? 2;
+    const availableLoads = snapshot.loadAvailability[currentCity] ?? [];
+
+    const earlyPassCandidates = context.demands.filter(d => {
+      // Condition 1: load available at currentCity AND demand.supplyCity === currentCity
+      if (!d.supplyCity) return false;
+      const supplyMatch = d.supplyCity.toLowerCase() === currentCity.toLowerCase();
+      if (!supplyMatch) return false;
+      if (!availableLoads.includes(d.loadType)) return false;
+
+      // Condition 2: route does NOT already contain DELIVER for (loadType, deliveryCity)
+      const alreadyPlanned = route.stops.some(
+        s => s.action === 'deliver' && s.loadType === d.loadType && s.city === d.deliveryCity,
+      );
+      if (alreadyPlanned) return false;
+
+      // Condition 3: train has a free slot
+      if (snapshot.bot.loads.length >= trainCapacity) return false;
+
+      return true;
+    });
+
+    if (earlyPassCandidates.length === 0) {
+      console.log(`[RouteEnrichmentAdvisor] no viable candidates at ${currentCity}`);
+      return route;
+    }
+
+    // ── Conditions 4-5: require per-candidate CandidateDetourInfo ──────────
+    const rawCandidates = earlyPassCandidates.map(d => ({
+      loadType: d.loadType,
+      deliveryCity: d.deliveryCity,
+      payout: d.payout,
+      cardIndex: d.cardIndex,
+    }));
+
+    let detourInfos;
+    try {
+      detourInfos = computeCandidateDetourCosts(currentCity, rawCandidates, route, snapshot);
+    } catch (err) {
+      console.warn(`${tag} [Advisor] computeCandidateDetourCosts failed (${(err as Error).message}), skipping advisor`);
+      return route;
+    }
+
+    // Apply conditions 4 and 5
+    const viableCandidates = detourInfos.filter(c => {
+      // Condition 4: marginalBuildM <= snapshot.bot.money
+      if (c.marginalBuildM > snapshot.bot.money) return false;
+      // Condition 5: marginalTurns <= MAX_DETOUR_TURNS
+      if (c.marginalTurns > MAX_DETOUR_TURNS) return false;
+      return true;
+    });
+
+    if (viableCandidates.length === 0) {
+      console.log(`[RouteEnrichmentAdvisor] no viable candidates at ${currentCity}`);
+      return route;
+    }
+
+    // ── Invoke advisor (awaited inline) ────────────────────────────────────
+    try {
+      const enriched = await RouteEnrichmentAdvisor.enrich(
+        route, snapshot, context, brain, gridPoints, currentCity, viableCandidates,
+      );
+      return enriched;
+    } catch (err) {
+      console.warn(`${tag} [Advisor] RouteEnrichmentAdvisor.enrich failed (${(err as Error).message}), continuing without enrichment`);
+      return route;
+    }
   }
 
   /**
