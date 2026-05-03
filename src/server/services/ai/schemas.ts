@@ -145,6 +145,8 @@ export interface RouteEnrichmentInsertion {
   loadType: string;
   city: string;
   reasoning: string;
+  /** Optional: LLM-echoed detour cost used for divergence logging (R6). Not used for gating. */
+  expectedDetourCost?: number;
 }
 
 /**
@@ -187,6 +189,7 @@ export const ROUTE_ENRICHMENT_SCHEMA = {
           loadType: { type: 'string' as const },
           city: { type: 'string' as const },
           reasoning: { type: 'string' as const },
+          expectedDetourCost: { type: 'number' as const },
         },
         required: ['afterStopIndex', 'action', 'loadType', 'city', 'reasoning'],
       },
