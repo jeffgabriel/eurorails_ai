@@ -192,7 +192,7 @@ describe('InitialBuildPlanner', () => {
       expect(options.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should filter out REMOTE_DELIVERY_CITIES as delivery destinations', () => {
+    it('should filter out REMOTE_INITIAL_BUILD_CITIES as delivery destinations', () => {
       mockGetSourceCitiesForLoad.mockReturnValue(['Essen']);
       const snapshot = makeWorldSnapshot({
         resolvedDemands: [{
@@ -208,7 +208,7 @@ describe('InitialBuildPlanner', () => {
 
       const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
 
-      // Madrid and Lisboa are in REMOTE_DELIVERY_CITIES — must be filtered out
+      // Madrid and Lisboa are in REMOTE_INITIAL_BUILD_CITIES — must be filtered out
       expect(options.every(o => o.deliveryCity !== 'Madrid')).toBe(true);
       expect(options.every(o => o.deliveryCity !== 'Lisboa')).toBe(true);
       // Frankfurt is not remote — should appear
@@ -413,11 +413,15 @@ describe('InitialBuildPlanner', () => {
 
       // Compute expected efficiency: contextScore=1.0, totalBuildCost=FIXED_COST+FIXED_COST=8
       // localCostFactor = max(0, 1 - 8/40) = 0.8
-      // rawEfficiency = 1.0 * (1 + 0.8) = 1.8
-      // With JIRA-178 penalty (start≠supply, start≠delivery): efficiency = 1.8 * 0.7 = 1.26
+      // localTurnFactor = TURN_REFERENCE / max(estimatedTurns, TURN_REFERENCE) = 2 / max(est, 2)
+      // localFactor = (localCostFactor + localTurnFactor) / 2
+      // rawEfficiency = 1.0 * (1 + localFactor)
+      // With JIRA-178 penalty (start≠supply, start≠delivery): efficiency = rawEfficiency * 0.7
       const totalBuildCost = FIXED_COST + FIXED_COST;
       const localCostFactor = Math.max(0, 1 - totalBuildCost / 40);
-      const rawEfficiency = contextScore * (1 + localCostFactor);
+      const localTurnFactor = 2 / Math.max(milanoOption!.estimatedTurns, 2);
+      const localFactor = (localCostFactor + localTurnFactor) / 2;
+      const rawEfficiency = contextScore * (1 + localFactor);
       const expectedEfficiency = rawEfficiency * 0.7;
 
       expect(milanoOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
@@ -456,8 +460,10 @@ describe('InitialBuildPlanner', () => {
       // and equal to what we'd compute without the 0.7 multiplier.
       // Since supply==start, buildCostToSupply = 0, so total cost is just supply→Praha.
       const costs = milanoOption!.totalBuildCost;
-      const turnsFactor = 1 - costs / 40; // localCostFactor
-      const expectedEfficiency = 1.0 * (1 + Math.max(0, turnsFactor));
+      const localCostFactor = Math.max(0, 1 - costs / 40);
+      const localTurnFactor = 2 / Math.max(milanoOption!.estimatedTurns, 2);
+      const localFactor = (localCostFactor + localTurnFactor) / 2;
+      const expectedEfficiency = 1.0 * (1 + localFactor);
       expect(milanoOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
     });
 
@@ -510,8 +516,188 @@ describe('InitialBuildPlanner', () => {
       // totalBuildCost = 0 (start==supply) + FIXED_COST (supply→delivery) = FIXED_COST
       const totalBuildCost = londonOption!.totalBuildCost;
       const localCostFactor = Math.max(0, 1 - totalBuildCost / 40);
-      const expectedEfficiency = contextScore * (1 + localCostFactor);
+      const localTurnFactor = 2 / Math.max(londonOption!.estimatedTurns, 2);
+      const localFactor = (localCostFactor + localTurnFactor) / 2;
+      const expectedEfficiency = contextScore * (1 + localFactor);
       expect(londonOption!.efficiency).toBeCloseTo(expectedEfficiency, 5);
+    });
+
+    // ── JIRA-213 regression tests (Cause A, B, C) ────────────────────────────
+
+    it('JIRA-213 Cause C: Arhus is filtered out as a supply city (symmetric remote filter)', () => {
+      // Cheese demand to Berlin. Supply cities include Arhus (remote) and Essen (continental).
+      // After R1/R2 fix, Arhus must be excluded from supply candidates.
+      mockGetSourceCitiesForLoad.mockReturnValue(['Arhus', 'Essen']);
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [{
+          cardId: 1,
+          demands: [{ city: 'Frankfurt', loadType: 'Cheese', payment: 20 }],
+        }],
+        loadAvailability: {
+          'Arhus': ['Cheese'],
+          'Essen': ['Cheese'],
+        },
+      });
+
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, grid);
+
+      // Arhus is in REMOTE_INITIAL_BUILD_CITIES — must be filtered out as supply
+      expect(options.every(o => o.supplyCity !== 'Arhus')).toBe(true);
+      // Essen is not remote — should appear as supply
+      expect(options.some(o => o.supplyCity === 'Essen')).toBe(true);
+    });
+
+    it('JIRA-213 Cause B: estimatedTurns uses ceil(travelDistance/speed) without +1 or buildTurns', () => {
+      // Use non-remote stand-in supply cities with engineered hex distances:
+      //   NearSupply: total travelDistance = 13 → ceil(13/9) = 2
+      //   FarSupply:  total travelDistance = 22 → ceil(22/9) = 3
+      // Old formula would add +1 and include buildTurns, giving much larger values.
+      // Starting city: Ruhr (15,12). Frankfurt (17,14) is the delivery city.
+      // Ruhr→NearSupply: 5, NearSupply→Frankfurt: 8 → total 13 → estimatedTurns 2
+      // Ruhr→FarSupply: 12, FarSupply→Frankfurt: 10 → total 22 → estimatedTurns 3
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Coal') return ['NearSupply'];
+        if (loadType === 'Steel') return ['FarSupply'];
+        return [];
+      });
+
+      const nearSupply = makeCityPoint(50, 50, 'NearSupply', TerrainType.SmallCity, ['Coal']);
+      const farSupply = makeCityPoint(60, 60, 'FarSupply', TerrainType.SmallCity, ['Steel']);
+      const extendedGrid = [...grid, nearSupply, farSupply];
+
+      mockHexDistance.mockImplementation((r1, c1, r2, c2) => {
+        const isNearSupply = (r1 === 50 && c1 === 50) || (r2 === 50 && c2 === 50);
+        const isFarSupply = (r1 === 60 && c1 === 60) || (r2 === 60 && c2 === 60);
+        const isFrankfurt = (r1 === 17 && c1 === 14) || (r2 === 17 && c2 === 14);
+        const isRuhr = (r1 === 15 && c1 === 12) || (r2 === 15 && c2 === 12);
+        if (isNearSupply && isRuhr) return 5;
+        if (isNearSupply && isFrankfurt) return 8;
+        if (isNearSupply) return 5;
+        if (isFarSupply && isRuhr) return 12;
+        if (isFarSupply && isFrankfurt) return 10;
+        if (isFarSupply) return 12;
+        // Real formula for all other city pairs
+        const x1 = c1 - Math.floor(r1 / 2);
+        const z1 = r1; const y1 = -x1 - z1;
+        const x2 = c2 - Math.floor(r2 / 2);
+        const z2 = r2; const y2 = -x2 - z2;
+        return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+      });
+
+      // Build costs: 8 per leg → 16 total, well within 40M budget
+      mockEstimatePathCost.mockReturnValue(8);
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 30 }] },
+          { cardId: 2, demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 30 }] },
+        ],
+        loadAvailability: {
+          'NearSupply': ['Coal'],
+          'FarSupply': ['Steel'],
+        },
+      });
+
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid);
+
+      const nearOption = options.find(o => o.supplyCity === 'NearSupply');
+      const farOption = options.find(o => o.supplyCity === 'FarSupply');
+
+      expect(nearOption).toBeDefined();
+      expect(farOption).toBeDefined();
+
+      // travelDistance 13 → ceil(13/9) = 2; travelDistance 22 → ceil(22/9) = 3
+      // Old formula added +1 to travelTurns and included buildTurns, inflating the values.
+      expect(nearOption!.estimatedTurns).toBe(2);
+      expect(farOption!.estimatedTurns).toBe(3);
+    });
+
+    it('JIRA-213 Cause A: lower-estimatedTurns candidate ranks above lower-totalBuildCost candidate', () => {
+      // Two non-remote supply cities with diverging (cost, turns):
+      //   CheapSlow: totalBuildCost=16, estimatedTurns=3 → localCostFactor=0.6, turnFactor=2/3≈0.667
+      //   ExpFast:   totalBuildCost=19, estimatedTurns=2 → localCostFactor=0.525, turnFactor=2/2=1.0
+      // With contextScore=0.6 (positive), localFactor=(cost+turn)/2:
+      //   CheapSlow: localFactor=(0.6+0.667)/2=0.633 → efficiency=0.6*(1.633)≈0.980
+      //   ExpFast:   localFactor=(0.525+1.0)/2=0.7625 → efficiency=0.6*(1.7625)≈1.058
+      // ExpFast (lower turns) must rank above CheapSlow (lower cost).
+      mockGetSourceCitiesForLoad.mockImplementation((loadType: string) => {
+        if (loadType === 'Coal') return ['CheapSlow'];
+        if (loadType === 'Steel') return ['ExpFast'];
+        return [];
+      });
+
+      const cheapSlowSupply = makeCityPoint(55, 55, 'CheapSlow', TerrainType.SmallCity, ['Coal']);
+      const expFastSupply = makeCityPoint(65, 65, 'ExpFast', TerrainType.SmallCity, ['Steel']);
+      const extendedGrid = [...grid, cheapSlowSupply, expFastSupply];
+
+      // Ruhr (15,12) as starting city. Frankfurt (17,14) as delivery (non-major city, avoids hub=0 case).
+      // CheapSlow: Ruhr→CheapSlow=2, CheapSlow→Frankfurt=18 → total travelDistance=20, ceil(20/9)=3
+      // ExpFast:   Ruhr→ExpFast=2, ExpFast→Frankfurt=8  → total travelDistance=10, ceil(10/9)=2
+      mockHexDistance.mockImplementation((r1, c1, r2, c2) => {
+        const isCheapSlow = (r1 === 55 && c1 === 55) || (r2 === 55 && c2 === 55);
+        const isExpFast = (r1 === 65 && c1 === 65) || (r2 === 65 && c2 === 65);
+        const isFrankfurt = (r1 === 17 && c1 === 14) || (r2 === 17 && c2 === 14);
+        const isRuhr = (r1 === 15 && c1 === 12) || (r2 === 15 && c2 === 12);
+        if (isCheapSlow && isRuhr) return 2;
+        if (isCheapSlow && isFrankfurt) return 18;
+        if (isCheapSlow) return 2;
+        if (isExpFast && isRuhr) return 2;
+        if (isExpFast && isFrankfurt) return 8;
+        if (isExpFast) return 2;
+        const x1 = c1 - Math.floor(r1 / 2);
+        const z1 = r1; const y1 = -x1 - z1;
+        const x2 = c2 - Math.floor(r2 / 2);
+        const z2 = r2; const y2 = -x2 - z2;
+        return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2), Math.abs(z1 - z2));
+      });
+
+      // CheapSlow: Ruhr→CheapSlow=8 + CheapSlow→Frankfurt=8 = 16
+      // ExpFast:   Ruhr→ExpFast=8 + ExpFast→Frankfurt=11 = 19
+      // Hub alternative (any start→Frankfurt) must not be cheaper. Make Frankfurt paths expensive
+      // for non-supply starting cities so hub routing doesn't reduce the target costs.
+      mockEstimatePathCost.mockImplementation((r1, c1, r2, c2) => {
+        const isCheapSlow = (r1 === 55 && c1 === 55) || (r2 === 55 && c2 === 55);
+        const isExpFast = (r1 === 65 && c1 === 65) || (r2 === 65 && c2 === 65);
+        const isFrankfurt = (r1 === 17 && c1 === 14) || (r2 === 17 && c2 === 14);
+        if (isCheapSlow) return 8;       // Ruhr→CheapSlow=8, CheapSlow→Frankfurt=8 → total 16
+        if (isExpFast && isFrankfurt) return 11; // ExpFast→Frankfurt=11
+        if (isExpFast) return 8;         // Ruhr→ExpFast=8 → total 8+11=19
+        if (isFrankfurt) return 25;      // Any major city → Frankfurt via hub: too expensive
+        return 25;
+      });
+
+      const snapshot = makeWorldSnapshot({
+        resolvedDemands: [
+          { cardId: 1, demands: [{ city: 'Frankfurt', loadType: 'Coal', payment: 40 }] },
+          { cardId: 2, demands: [{ city: 'Frankfurt', loadType: 'Steel', payment: 40 }] },
+        ],
+        loadAvailability: {
+          'CheapSlow': ['Coal'],
+          'ExpFast': ['Steel'],
+        },
+      });
+
+      const demandScores = new Map([
+        ['Coal:Frankfurt', 0.6],
+        ['Steel:Frankfurt', 0.6],
+      ]);
+      const options = InitialBuildPlanner.expandDemandOptions(snapshot, extendedGrid, demandScores);
+
+      const cheapSlowOption = options.find(o => o.supplyCity === 'CheapSlow');
+      const expFastOption = options.find(o => o.supplyCity === 'ExpFast');
+
+      expect(cheapSlowOption).toBeDefined();
+      expect(expFastOption).toBeDefined();
+
+      // Verify cost and turns match the designed scenario
+      expect(cheapSlowOption!.totalBuildCost).toBe(16);
+      expect(expFastOption!.totalBuildCost).toBe(19);
+      expect(cheapSlowOption!.estimatedTurns).toBe(3);
+      expect(expFastOption!.estimatedTurns).toBe(2);
+
+      // Key assertion: lower-estimatedTurns candidate ranks above lower-totalBuildCost candidate
+      expect(expFastOption!.efficiency).toBeGreaterThan(cheapSlowOption!.efficiency);
     });
   });
 

@@ -28,17 +28,23 @@ const PERIPHERAL_CITIES = new Set(['London', 'Milano']);
 const BLOCKED_STARTING_CITIES = new Set<string>();
 
 /**
- * Remote/peripheral delivery cities excluded from expandDemandOptions().
+ * Remote/peripheral cities excluded from both supply and delivery ends in expandDemandOptions().
  * These cities require extensive track into outlying areas, causing early bankruptcy.
  * emergencyFallback() does NOT apply this filter — they remain available as last resort.
  */
-const REMOTE_DELIVERY_CITIES = new Set([
+const REMOTE_INITIAL_BUILD_CITIES = new Set([
   'Nantes', 'Bordeaux', 'Bilbao', 'Porto', 'Lisboa', 'Madrid',
   'Roma', 'Napoli', 'Kobenhavn', 'Arhus', 'Goteborg', 'Oslo', 'Stockholm',
 ]);
 
 /** Max affordable build cost within 2 initial build turns (2 × 20M) */
 const MAX_BUILD_BUDGET = 40;
+
+/** Initial build budget (2 turns × 20M) used in overflow calculation */
+const INITIAL_BUILD_BUDGET = 40;
+
+/** Reference turn count for localTurnFactor: minimum feasible turns for a one-way delivery */
+const TURN_REFERENCE = 2;
 
 
 /** Point penalty for ferry routes in double-delivery pairings */
@@ -176,8 +182,11 @@ export class InitialBuildPlanner {
           const available = snapshot.loadAvailability[supplyCity];
           if (!available || !available.includes(demand.loadType)) continue;
 
+          // Skip remote supply cities — they require overextended track during initial build
+          if (REMOTE_INITIAL_BUILD_CITIES.has(supplyCity)) continue;
+
           // Skip remote delivery cities — they require overextended track during initial build
-          if (REMOTE_DELIVERY_CITIES.has(demand.city)) continue;
+          if (REMOTE_INITIAL_BUILD_CITIES.has(demand.city)) continue;
 
           // Check ferry requirement
           const ferryRequired = InitialBuildPlanner.isFerryBetween(
@@ -204,7 +213,6 @@ export class InitialBuildPlanner {
             if (costs.totalBuildCost > MAX_BUILD_BUDGET) continue;
 
             const speed = TRAIN_PROPERTIES[snapshot.bot.trainType as TrainType]?.speed ?? 9;
-            const buildTurns = Math.ceil(costs.totalBuildCost / 20);
             // Compute travel distance using hex distance (milepost proxy), not build cost
             const startPoints = gridPoints.filter(gp => gp.city?.name === group.cityName);
             const supplyGridPoints = gridPoints.filter(gp => gp.city?.name === supplyCity);
@@ -224,26 +232,33 @@ export class InitialBuildPlanner {
               }
             }
             const travelDistance = (hexToSupply === Infinity ? 0 : hexToSupply) + (hexSupplyToDelivery === Infinity ? 0 : hexSupplyToDelivery);
-            const travelTurns = Math.ceil(travelDistance / speed) + 1;
-            const estimatedTurns = Math.max(buildTurns + travelTurns, 1);
+            const travelTurns = Math.ceil(travelDistance / speed);
+            // buildOverflowTurns accounts for build cost exceeding the 2-turn budget (always 0
+            // in practice, since MAX_BUILD_BUDGET = INITIAL_BUILD_BUDGET; kept for safety).
+            const buildOverflowTurns = Math.ceil(Math.max(0, costs.totalBuildCost - INITIAL_BUILD_BUDGET) / 20);
+            const estimatedTurns = Math.max(travelTurns + buildOverflowTurns, 1);
             // JIRA-148: Use pre-computed demand score (corridor + victory bonuses)
             // when available, falling back to simple ROI formula
             const scoreKey = `${demand.loadType}:${demand.city}`;
             const contextScore = demandScores?.get(scoreKey);
             let efficiency: number;
             if (contextScore !== undefined) {
-              // Scale context score by local build cost efficiency.
+              // Scale context score by local cost + turn efficiency.
               // localCostFactor is higher for cheaper routes (0=max cost, 1=zero cost).
-              // For positive scores: multiply by (1 + factor) to boost cheap routes.
-              // For negative scores: divide by (1 + factor) — cheap routes (high factor)
+              // localTurnFactor is higher for faster routes (1.0=best, decays for more turns).
+              // localFactor averages both signals 50/50 to balance cost and velocity.
+              // For positive scores: multiply by (1 + factor) to boost cheap/fast routes.
+              // For negative scores: divide by (1 + factor) — cheap/fast routes (high factor)
               //   produce a result closer to 0 (less negative = better rank). Multiplying
               //   by (1 + factor) would instead amplify the negative magnitude, making cheap
               //   routes rank WORSE than expensive ones (the original bug).
               const localCostFactor = Math.max(0, 1 - costs.totalBuildCost / MAX_BUILD_BUDGET);
+              const localTurnFactor = TURN_REFERENCE / Math.max(estimatedTurns, TURN_REFERENCE);
+              const localFactor = (localCostFactor + localTurnFactor) / 2;
               if (contextScore >= 0) {
-                efficiency = contextScore * (1 + localCostFactor);
+                efficiency = contextScore * (1 + localFactor);
               } else {
-                efficiency = contextScore / (1 + localCostFactor);
+                efficiency = contextScore / (1 + localFactor);
               }
             } else {
               efficiency = (demand.payment - costs.totalBuildCost) / estimatedTurns;
