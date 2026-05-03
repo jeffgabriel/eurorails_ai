@@ -9,6 +9,17 @@ import { TripPlanner, TripPlanResult } from '../../services/ai/TripPlanner';
 import { RouteValidator } from '../../services/ai/RouteValidator';
 import { estimateHopDistance } from '../../services/ai/MapTopology';
 import {
+  UPGRADE_OPERATING_BUFFER,
+  UPGRADE_DELIVERY_THRESHOLD,
+} from '../../services/ai/context/UpgradeGatingConstants';
+
+// Cash fixtures derived from the gating constants. Freight upgrade cost is 20M.
+const FREIGHT_UPGRADE_COST = 20;
+// Just below the buffer: post-upgrade cash = buffer - 1 → upgrade gate FAILS.
+const MONEY_BUFFER_FAIL = FREIGHT_UPGRADE_COST + UPGRADE_OPERATING_BUFFER - 1;
+// Comfortably above the buffer: post-upgrade cash >> buffer → upgrade gate PASSES.
+const MONEY_BUFFER_PASS = FREIGHT_UPGRADE_COST + UPGRADE_OPERATING_BUFFER + 25;
+import {
   BotSkillLevel,
   BotMemoryState,
   GameContext,
@@ -1466,22 +1477,22 @@ describe('JIRA-190: getTripPlanningPrompt — prompt shape and content (AC1–AC
   });
 
   it('JIRA-207B: upgrade suppression rule present when gate fails (R15, AC16)', () => {
-    // deliveriesCompleted=1 < UPGRADE_DELIVERY_THRESHOLD=2 → gate fails
+    // deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD → gate fails
     const ctx = makeMinimalContext();
     (ctx as GameContext).canUpgrade = true;
-    (ctx as GameContext).money = 60;
-    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: 1 } as BotMemoryState;
+    (ctx as GameContext).money = MONEY_BUFFER_PASS;
+    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: UPGRADE_DELIVERY_THRESHOLD - 1 } as BotMemoryState;
     const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, mem);
     expect(result.user).toContain('UPGRADE STATUS: You do not qualify to upgrade this turn');
     expect(result.user).toContain('Do NOT include "upgradeOnRoute"');
   });
 
   it('JIRA-207B: upgrade suppression rule absent when gate passes (R16, AC17)', () => {
-    // deliveriesCompleted=5 >= threshold=2, money=60 - 20=40 >= OPERATING_BUFFER=30 → gate passes
+    // deliveriesCompleted >= threshold AND money - upgrade cost >= OPERATING_BUFFER → gate passes
     const ctx = makeMinimalContext();
     (ctx as GameContext).canUpgrade = true;
-    (ctx as GameContext).money = 60;
-    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: 5 } as BotMemoryState;
+    (ctx as GameContext).money = MONEY_BUFFER_PASS;
+    const mem: BotMemoryState = { ...makeMinimalMemory(), deliveryCount: UPGRADE_DELIVERY_THRESHOLD + 3 } as BotMemoryState;
     const result = getTripPlanningPromptReal(BotSkillLevel.Medium, ctx as GameContext, mem);
     expect(result.user).not.toContain('UPGRADE STATUS: You do not qualify');
     // UPGRADE AVAILABLE should appear in user prompt when gate passes
@@ -2830,13 +2841,16 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
 
   /**
    * AC22: Game 5302ee21 T9 prompt rendering reproduction.
-   * Nano at Cardiff, capacity=2, deliveries=2, cash=37M.
+   * Nano at Cardiff, capacity=2, deliveries=2.
+   * Cash fixture is derived from UPGRADE_OPERATING_BUFFER so this test stays
+   * meaningful when the buffer is tuned. The original game cash was 37M; the
+   * fixture below uses MONEY_BUFFER_FAIL to ensure the upgrade gate still fails.
    */
   it('AC22: T9 prompt rendering — unaffordable filtered, no FERRY tag, upgrade suppressed, ACTION GRAMMAR RULES present, ON-NETWORK rule rewritten', () => {
     // T9 demand hand per spec
     const t9Context: GameContext = {
       position: { city: 'Cardiff', row: 10, col: 5 },
-      money: 37,
+      money: MONEY_BUFFER_FAIL,
       trainType: 'FastFreight' as TrainType,
       speed: 12,
       capacity: 2,
@@ -2878,13 +2892,14 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
       turnNumber: 9,
     };
 
-    // Memory: deliveries=2, cash=37M → upgrade gate: 37-20=17 < 30 → gate FAILS
+    // Memory: deliveries meets threshold; cash is MONEY_BUFFER_FAIL so the
+    // operating buffer check fails → upgrade gate FAILS overall.
     const t9Memory: BotMemoryState = {
       currentBuildTarget: null,
       turnsOnTarget: 0,
       lastAction: null,
       consecutiveDiscards: 0,
-      deliveryCount: 2, // deliveriesCompleted = 2 >= UPGRADE_DELIVERY_THRESHOLD=2 (passes)
+      deliveryCount: UPGRADE_DELIVERY_THRESHOLD, // delivery threshold met
       totalEarnings: 0,
       turnNumber: 9,
       activeRoute: null,
@@ -2911,7 +2926,7 @@ describe('JIRA-207B: Game 5302ee21 reproduction tests (TEST-002)', () => {
     // (b) [FERRY] tag absent from entire user prompt
     expect(user).not.toContain('[FERRY]');
 
-    // (c) Upgrade gate: money=37, 37-20=17 < UPGRADE_OPERATING_BUFFER=30 → gate FAILS
+    // (c) Upgrade gate: post-upgrade cash < UPGRADE_OPERATING_BUFFER → gate FAILS
     // Suppression rule must be present
     expect(user).toContain('UPGRADE STATUS: You do not qualify to upgrade this turn');
     // UPGRADE AVAILABLE must NOT be in user prompt

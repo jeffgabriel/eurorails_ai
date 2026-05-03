@@ -22,11 +22,11 @@ export const UPGRADE_DELIVERY_THRESHOLD = 2;
  * Minimum cash the bot must retain *after* paying the upgrade cost.
  * Tunable. ECU millions.
  *
- * Example: at UPGRADE_OPERATING_BUFFER=30M and Freight upgrade cost=20M,
- * the bot needs money >= 50M for the upgrade gate to pass
- * (20M for upgrade + 30M operating reserve).
+ * Example: at UPGRADE_OPERATING_BUFFER=15M and Freight upgrade cost=20M,
+ * the bot needs money >= 35M for the upgrade gate to pass
+ * (20M for upgrade + 15M operating reserve).
  *
  * This prevents the bot from upgrading into a cash-poor state where it cannot
  * afford track-use fees or JIT build opportunities.
  */
-export const UPGRADE_OPERATING_BUFFER = 30;  // ECU millions
+export const UPGRADE_OPERATING_BUFFER = 15;  // ECU millions

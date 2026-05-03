@@ -11,6 +11,19 @@ import {
   TrainType,
 } from '../../../shared/types/GameTypes';
 import { NetworkContextResult } from '../../services/ai/context/NetworkContext';
+import {
+  UPGRADE_OPERATING_BUFFER,
+  UPGRADE_DELIVERY_THRESHOLD,
+} from '../../services/ai/context/UpgradeGatingConstants';
+
+// Cash fixtures derived from the gating constants so changes to the constants
+// don't require touching every fixture. Freight upgrade cost is 20M.
+const FREIGHT_UPGRADE_COST = 20;
+// Just below the buffer: post-upgrade cash = buffer - 1 → gate FAILS.
+const MONEY_BUFFER_FAIL = FREIGHT_UPGRADE_COST + UPGRADE_OPERATING_BUFFER - 1;
+// Comfortably above the buffer: post-upgrade cash >> buffer → gate PASSES.
+const MONEY_BUFFER_PASS = FREIGHT_UPGRADE_COST + UPGRADE_OPERATING_BUFFER + 25;
+const DELIVERIES_OVER_THRESHOLD = UPGRADE_DELIVERY_THRESHOLD + 3;
 
 // ── Helper factories ────────────────────────────────────────────────────────
 
@@ -95,29 +108,28 @@ describe('BuildContext.compute', () => {
       expect(result.canUpgrade).toBe(false);
     });
 
-    it('Freight: canUpgrade is false when money < 20', () => {
-      const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    it('Freight: canUpgrade is false when money < upgrade cost', () => {
+      const snapshot = makeSnapshot({ money: FREIGHT_UPGRADE_COST - 1, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
     });
 
-    it('Freight: canUpgrade is false when deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD (0 deliveries)', () => {
+    it('Freight: canUpgrade is false when deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD', () => {
       // cash OK, but delivery threshold unmet
-      const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 0 });
+      const snapshot = makeSnapshot({ money: MONEY_BUFFER_PASS, trainType: TrainType.Freight, deliveriesCompleted: 0 });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
     });
 
-    it('Freight: canUpgrade is false when operating buffer not met after upgrade (35M - 20M = 15M < 30M)', () => {
-      // delivery threshold met, cash met, but post-upgrade cash < UPGRADE_OPERATING_BUFFER
-      const snapshot = makeSnapshot({ money: 35, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    it('Freight: canUpgrade is false when operating buffer not met after upgrade', () => {
+      // delivery threshold met, cash >= upgrade cost, but post-upgrade cash < UPGRADE_OPERATING_BUFFER
+      const snapshot = makeSnapshot({ money: MONEY_BUFFER_FAIL, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(false);
     });
 
-    it('Freight: canUpgrade is true when all three conditions met (60M, 5 deliveries)', () => {
-      // 60 >= 20, 5 >= 2, 60-20=40 >= 30
-      const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    it('Freight: canUpgrade is true when all three conditions met', () => {
+      const snapshot = makeSnapshot({ money: MONEY_BUFFER_PASS, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
       const result = BuildContext.compute(snapshot, undefined, emptyNetwork, []);
       expect(result.canUpgrade).toBe(true);
     });
@@ -160,25 +172,22 @@ describe('BuildContext.checkCanUpgrade', () => {
   // ── Three-condition gate (AC20 cases) ───────────────────────────────────────
 
   it('(AC20a) returns false when cash OK but deliveriesCompleted < UPGRADE_DELIVERY_THRESHOLD', () => {
-    // cash 60M >= 20M cost, but 0 deliveries < 2 threshold
-    const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 0 });
+    const snapshot = makeSnapshot({ money: MONEY_BUFFER_PASS, trainType: TrainType.Freight, deliveriesCompleted: 0 });
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
   });
 
   it('(AC20b) returns false when cash + delivery threshold met but operating buffer unmet', () => {
-    // 35 >= 20 (cash), 5 >= 2 (deliveries), but 35-20=15 < 30 (buffer)
-    const snapshot = makeSnapshot({ money: 35, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    const snapshot = makeSnapshot({ money: MONEY_BUFFER_FAIL, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
   });
 
   it('(AC20c) returns true when all three conditions met', () => {
-    // 60 >= 20 (cash), 5 >= 2 (deliveries), 60-20=40 >= 30 (buffer)
-    const snapshot = makeSnapshot({ money: 60, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    const snapshot = makeSnapshot({ money: MONEY_BUFFER_PASS, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(true);
   });
 
   it('returns false when money < upgrade cost', () => {
-    const snapshot = makeSnapshot({ money: 19, trainType: TrainType.Freight, deliveriesCompleted: 5 });
+    const snapshot = makeSnapshot({ money: FREIGHT_UPGRADE_COST - 1, trainType: TrainType.Freight, deliveriesCompleted: DELIVERIES_OVER_THRESHOLD });
     expect(BuildContext.checkCanUpgrade(snapshot)).toBe(false);
   });
 
