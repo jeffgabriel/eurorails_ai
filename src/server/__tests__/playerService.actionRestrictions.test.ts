@@ -850,13 +850,14 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
     mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
     setupFullMoveMocks();
 
-    // half_rate does not reject — it caps movement. The train may still reach dest.
-    // We verify restriction check was called and no unexpected errors thrown for valid moves.
-    await PlayerService.moveTrainForUser({
-      gameId: GAME_ID,
-      userId: USER_ID,
-      to: { row: 6, col: 5 },
-    }).catch(() => {});
+    // half_rate does not reject — it caps movement speed. The move should still resolve.
+    await expect(
+      PlayerService.moveTrainForUser({
+        gameId: GAME_ID,
+        userId: USER_ID,
+        to: { row: 6, col: 5 },
+      }),
+    ).resolves.toBeDefined();
 
     expect(mockActiveEffectManager.getMovementRestrictions).toHaveBeenCalledWith(GAME_ID);
   });
