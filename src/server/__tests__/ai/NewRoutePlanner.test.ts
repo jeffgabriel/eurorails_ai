@@ -11,9 +11,10 @@
  *   7. JIRA-105b upgrade-before-drop — capacity-increasing upgrade chosen over drop
  *   8. JIRA-92 cargo conflict — LLM picks a load to drop when upgrade not chosen
  *
- * All four LLM call sites are mocked at the LLMStrategyBrain boundary
- * (planTrip, RouteEnrichmentAdvisor.enrich, brain.evaluateUpgradeBeforeDrop,
- * brain.evaluateCargoConflict). Heuristic fallback mocked via ActionResolver.
+ * LLM call sites mocked at the LLMStrategyBrain boundary
+ * (planTrip, brain.evaluateUpgradeBeforeDrop, brain.evaluateCargoConflict).
+ * Note: RouteEnrichmentAdvisor.enrich removed from NewRoutePlanner (JIRA-214 P2).
+ * Heuristic fallback mocked via ActionResolver.
  */
 
 import { NewRoutePlanner } from '../../services/ai/NewRoutePlanner';
@@ -23,7 +24,6 @@ import { ActionResolver } from '../../services/ai/ActionResolver';
 import { ContextBuilder } from '../../services/ai/ContextBuilder';
 import { capture } from '../../services/ai/WorldSnapshotService';
 import { TripPlanner } from '../../services/ai/TripPlanner';
-import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { ContextSerializer } from '../../services/ai/prompts/ContextSerializer';
 import { AIActionType, BotSkillLevel, TrainType, TRAIN_PROPERTIES } from '../../../shared/types/GameTypes';
 import type {
@@ -92,12 +92,6 @@ jest.mock('../../services/ai/TripPlanner', () => ({
   TripPlanner: jest.fn(),
 }));
 
-jest.mock('../../services/ai/RouteEnrichmentAdvisor', () => ({
-  RouteEnrichmentAdvisor: {
-    enrich: jest.fn(async (route: unknown) => route),
-  },
-}));
-
 jest.mock('../../services/ai/prompts/ContextSerializer', () => ({
   ContextSerializer: {
     serializeUpgradeBeforeDropPrompt: jest.fn().mockReturnValue('upgrade-prompt'),
@@ -122,7 +116,6 @@ const mockHeuristicFallback = ActionResolver.heuristicFallback as jest.Mock;
 const mockBuild = ContextBuilder.build as jest.Mock;
 const mockCapture = capture as jest.Mock;
 const MockTripPlannerClass = TripPlanner as jest.MockedClass<typeof TripPlanner>;
-const mockEnrich = RouteEnrichmentAdvisor.enrich as jest.Mock;
 
 // ── Factory helpers ───────────────────────────────────────────────────────────
 
@@ -193,7 +186,7 @@ function makeSnapshot(overrides: Partial<WorldSnapshot['bot']> = {}): WorldSnaps
 
 function makeMemory(overrides: Partial<BotMemoryState> = {}): BotMemoryState {
   return {
-    deliveryCount: 5, // above MIN_DELIVERIES_BEFORE_UPGRADE (1) — enables upgrade gates
+    deliveryCount: 5, // above MIN_DELIVERIES_BEFORE_UPGRADE (2) — enables upgrade gates
     consecutiveLlmFailures: 0,
     activeRoute: null,
     lastReasoning: undefined,
@@ -255,8 +248,6 @@ beforeEach(() => {
   }) as unknown as TripPlanner);
   // Default executor: produces a single PassTurn
   mockExecute.mockResolvedValue(makeExecResult());
-  // Default RouteEnrichmentAdvisor: passthrough
-  mockEnrich.mockImplementation(async (route: unknown) => route);
   // Default findDeadLoads: none
   mockFindDeadLoads.mockReturnValue([]);
 });

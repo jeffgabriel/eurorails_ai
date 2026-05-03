@@ -71,17 +71,15 @@ jest.mock('../../services/ai/TripPlanner', () => ({
 
 jest.mock('../../services/ai/AdvisorCoordinator', () => ({
   AdvisorCoordinator: {
-    adviseEnrichment: jest.fn(async (route: unknown) => route),
+    // adviseEnrichment removed by JIRA-214 P2 (moved to MovementPhasePlanner trigger)
   },
 }));
 
 // Import mocked modules to access their mock functions
 import { TripPlanner } from '../../services/ai/TripPlanner';
-import { AdvisorCoordinator } from '../../services/ai/AdvisorCoordinator';
 import { NewRoutePlanner } from '../../services/ai/NewRoutePlanner';
 
 const MockTripPlannerClass = TripPlanner as jest.MockedClass<typeof TripPlanner>;
-const mockAdviseEnrichment = AdvisorCoordinator.adviseEnrichment as jest.Mock;
 const mockTryConsumeUpgrade = NewRoutePlanner.tryConsumeUpgrade as jest.Mock;
 
 // TurnExecutorPlanner static methods — spy on the real implementation
@@ -190,9 +188,6 @@ beforeEach(() => {
     .spyOn(TurnExecutorPlanner, 'revalidateRemainingDeliveries')
     .mockImplementation((route: StrategicRoute) => route);
 
-  // By default, adviseEnrichment passes the route through
-  mockAdviseEnrichment.mockImplementation(async (route: StrategicRoute) => route);
-
   // By default, tryConsumeUpgrade returns no action (not called unless route has upgradeOnRoute)
   mockTryConsumeUpgrade.mockReturnValue({ action: null, reason: 'Upgrade blocked: default mock' });
 });
@@ -205,9 +200,8 @@ afterEach(() => {
 // ── Sub-path 1: Success ────────────────────────────────────────────────────
 
 describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () => {
-  it('returns the enriched route with moveTargetInvalidated=true', async () => {
-    const newRoute = makeRoute({ currentStopIndex: 0, reasoning: 'new enriched route' });
-    const enrichedRoute = { ...newRoute, reasoning: 'enriched' };
+  it('returns the route from TripPlanner with moveTargetInvalidated=true', async () => {
+    const newRoute = makeRoute({ currentStopIndex: 0, reasoning: 'new planned route' });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (MockTripPlannerClass as any).mockImplementation(() => ({
@@ -218,7 +212,6 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
         userPrompt: 'usr',
       }),
     }));
-    mockAdviseEnrichment.mockResolvedValue(enrichedRoute);
 
     const result = await PostDeliveryReplanner.replan(
       makeRoute(),
@@ -231,9 +224,8 @@ describe('PostDeliveryReplanner.replan — sub-path 1: TripPlanner success', () 
     );
 
     expect(result.moveTargetInvalidated).toBe(true);
-    expect(result.route.reasoning).toBe('enriched');
-    expect(mockAdviseEnrichment).toHaveBeenCalledTimes(1);
-    expect(mockSkipCompletedStops).toHaveBeenCalledWith(enrichedRoute, expect.anything());
+    expect(result.route.reasoning).toBe('new planned route');
+    expect(mockSkipCompletedStops).toHaveBeenCalledWith(newRoute, expect.anything());
   });
 
   it('propagates llmLog, systemPrompt, userPrompt from TripPlanner', async () => {
@@ -316,13 +308,13 @@ describe('PostDeliveryReplanner.replan — sub-path 2: TripPlanner returns null 
     expect(mockSkipCompletedStops).toHaveBeenCalledWith(revalidatedRoute, expect.anything());
   });
 
-  it('does not call adviseEnrichment when route is null', async () => {
+  it('handles null route from TripPlanner without error', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: null, llmLog: [] }),
     }));
 
-    await PostDeliveryReplanner.replan(
+    const result = await PostDeliveryReplanner.replan(
       makeRoute(),
       makeSnapshot(),
       makeContext(),
@@ -332,7 +324,8 @@ describe('PostDeliveryReplanner.replan — sub-path 2: TripPlanner returns null 
       '[TEST]',
     );
 
-    expect(mockAdviseEnrichment).not.toHaveBeenCalled();
+    // Route remains the original active route (no new route from LLM)
+    expect(result).toBeDefined();
   });
 });
 
@@ -449,8 +442,8 @@ describe('PostDeliveryReplanner.replan — sub-path 4: no brain or no gridPoints
     expect(MockTripPlannerClass).not.toHaveBeenCalled();
   });
 
-  it('does not call adviseEnrichment when brain is null', async () => {
-    await PostDeliveryReplanner.replan(
+  it('handles null brain gracefully (revalidation path)', async () => {
+    const result = await PostDeliveryReplanner.replan(
       makeRoute(),
       makeSnapshot(),
       makeContext(),
@@ -460,7 +453,8 @@ describe('PostDeliveryReplanner.replan — sub-path 4: no brain or no gridPoints
       '[TEST]',
     );
 
-    expect(mockAdviseEnrichment).not.toHaveBeenCalled();
+    // Without brain, falls back to revalidation path
+    expect(result).toBeDefined();
   });
 });
 
@@ -513,7 +507,6 @@ describe('PostDeliveryReplanner — moveTargetInvalidated invariant', () => {
 describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-path 1)', () => {
   /**
    * Helper: set up TripPlanner to return a route with upgradeOnRoute set,
-   * and set up AdvisorCoordinator to pass it through unchanged.
    */
   function setupRouteWithUpgrade(upgradeOnRoute: string) {
     const routeWithUpgrade = makeRoute({ upgradeOnRoute });
@@ -521,7 +514,6 @@ describe('JIRA-198: PostDeliveryReplanner.replan — upgrade consumption (sub-pa
     (MockTripPlannerClass as any).mockImplementation(() => ({
       planTrip: jest.fn().mockResolvedValue({ route: routeWithUpgrade, llmLog: [] }),
     }));
-    // adviseEnrichment passes through (set in beforeEach)
     return routeWithUpgrade;
   }
 
@@ -793,8 +785,6 @@ describe('JIRA-207B: PostDeliveryReplanner keep_current_plan handling (R10e)', (
     expect(result.route).not.toBeNull();
     // moveTargetInvalidated should be false (route unchanged — stale indices still valid)
     expect(result.moveTargetInvalidated).toBe(false);
-    // AdvisorCoordinator.adviseEnrichment should NOT be called (no new route from LLM)
-    expect(AdvisorCoordinator.adviseEnrichment).not.toHaveBeenCalled();
   });
 });
 

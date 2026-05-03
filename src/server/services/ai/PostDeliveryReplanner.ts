@@ -26,7 +26,6 @@ import {
   WorldSnapshot,
 } from '../../../shared/types/GameTypes';
 import { LLMStrategyBrain } from './LLMStrategyBrain';
-import { AdvisorCoordinator } from './AdvisorCoordinator';
 import { TripPlanner } from './TripPlanner';
 import { getMemory } from './BotMemory';
 import { TurnExecutorPlanner } from './TurnExecutorPlanner';
@@ -150,14 +149,7 @@ export class PostDeliveryReplanner {
 
       // Sub-path 1: TripPlanner returned a route
       if (replanResult.route) {
-        const enrichedRoute = await AdvisorCoordinator.adviseEnrichment(
-          replanResult.route,
-          snapshot,
-          context,
-          brain,
-          gridPoints,
-        );
-        const finalRoute = TurnExecutorPlanner.skipCompletedStops(enrichedRoute, context);
+        const finalRoute = TurnExecutorPlanner.skipCompletedStops(replanResult.route, context);
         console.log(
           `${tag} [PostDeliveryReplanner] Replan succeeded. New route: ${finalRoute.stops.map(s => `${s.action}(${s.loadType}@${s.city})`).join(' → ')}`,
         );

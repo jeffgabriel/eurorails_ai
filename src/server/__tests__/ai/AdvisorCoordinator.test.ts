@@ -1,22 +1,20 @@
 /**
- * Unit tests for AdvisorCoordinator (JIRA-195 Slice 2 TEST-001).
+ * Unit tests for AdvisorCoordinator (JIRA-195 Slice 2 TEST-001, JIRA-214 P2).
  *
  * Covers:
- *   adviseEnrichment:
- *     - delegates to RouteEnrichmentAdvisor.enrich and returns its result
- *     - passes all parameters through unchanged
- *
  *   adviseBuild:
  *     - precondition skip (advisor returns null — falls through to heuristic path)
  *     - build success (first advise call succeeds)
  *     - solvency-retry success (first build resolution fails, retry succeeds)
  *     - solvency-retry failure (both build resolutions fail → null plan)
  *     - advisor-throw fallback (advise throws → null plan, no crash)
+ *
+ * Note: adviseEnrichment tests removed by JIRA-214 P2 (method deleted from
+ * AdvisorCoordinator; route enrichment now fires from MovementPhasePlanner).
  */
 
 import { AdvisorCoordinator } from '../../services/ai/AdvisorCoordinator';
 import { BuildAdvisor } from '../../services/ai/BuildAdvisor';
-import { RouteEnrichmentAdvisor } from '../../services/ai/RouteEnrichmentAdvisor';
 import { ActionResolver } from '../../services/ai/ActionResolver';
 import { LLMStrategyBrain } from '../../services/ai/LLMStrategyBrain';
 import {
@@ -32,11 +30,9 @@ import {
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 jest.mock('../../services/ai/BuildAdvisor');
-jest.mock('../../services/ai/RouteEnrichmentAdvisor');
 jest.mock('../../services/ai/ActionResolver');
 
 const MockBuildAdvisor = BuildAdvisor as jest.Mocked<typeof BuildAdvisor>;
-const MockRouteEnrichmentAdvisor = RouteEnrichmentAdvisor as jest.Mocked<typeof RouteEnrichmentAdvisor>;
 const MockActionResolver = ActionResolver as jest.Mocked<typeof ActionResolver>;
 
 // ── Fixture factories ─────────────────────────────────────────────────────────
@@ -138,63 +134,6 @@ const TAG = '[AdvisorCoordinator test]';
 describe('AdvisorCoordinator', () => {
   afterEach(() => {
     jest.clearAllMocks();
-  });
-
-  // ── adviseEnrichment ────────────────────────────────────────────────────────
-
-  describe('adviseEnrichment', () => {
-    it('delegates to RouteEnrichmentAdvisor.enrich and returns its result', async () => {
-      const originalRoute = makeRoute();
-      const enrichedRoute: StrategicRoute = {
-        ...originalRoute,
-        stops: [
-          ...originalRoute.stops,
-          { action: 'pickup', loadType: 'Coal', city: 'SomeCity' },
-        ],
-      };
-
-      MockRouteEnrichmentAdvisor.enrich.mockResolvedValue(enrichedRoute);
-
-      const result = await AdvisorCoordinator.adviseEnrichment(
-        originalRoute,
-        makeSnapshot(),
-        makeContext(),
-        makeBrain(),
-        testGrid,
-      );
-
-      expect(MockRouteEnrichmentAdvisor.enrich).toHaveBeenCalledTimes(1);
-      expect(result).toBe(enrichedRoute);
-    });
-
-    it('returns original route when RouteEnrichmentAdvisor returns it unchanged', async () => {
-      const route = makeRoute();
-      MockRouteEnrichmentAdvisor.enrich.mockResolvedValue(route);
-
-      const result = await AdvisorCoordinator.adviseEnrichment(
-        route,
-        makeSnapshot(),
-        makeContext(),
-        makeBrain(),
-        testGrid,
-      );
-
-      expect(result).toBe(route);
-    });
-
-    it('passes all parameters to RouteEnrichmentAdvisor.enrich', async () => {
-      const route = makeRoute();
-      const snapshot = makeSnapshot();
-      const context = makeContext();
-      const brain = makeBrain();
-      MockRouteEnrichmentAdvisor.enrich.mockResolvedValue(route);
-
-      await AdvisorCoordinator.adviseEnrichment(route, snapshot, context, brain, testGrid);
-
-      expect(MockRouteEnrichmentAdvisor.enrich).toHaveBeenCalledWith(
-        route, snapshot, context, brain, testGrid,
-      );
-    });
   });
 
   // ── adviseBuild ─────────────────────────────────────────────────────────────

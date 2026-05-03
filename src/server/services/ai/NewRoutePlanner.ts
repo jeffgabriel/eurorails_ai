@@ -50,7 +50,6 @@ import { ActionResolver } from './ActionResolver';
 import { TurnExecutorPlanner, CompositionTrace } from './TurnExecutorPlanner';
 import { appendLLMCall } from './LLMTranscriptLogger';
 import { TripPlanner, TripPlanResult } from './TripPlanner';
-import { RouteEnrichmentAdvisor } from './RouteEnrichmentAdvisor';
 import { loadGridPoints as loadGridPointsMap } from './MapTopology';
 import type { Stage3Result } from './schemas';
 
@@ -234,15 +233,6 @@ export class NewRoutePlanner {
     if (routeResult.route) {
       activeRoute = routeResult.route;
       console.log(`${tag} Trip planned: ${activeRoute.stops.length} stops, starting at ${activeRoute.startingCity ?? 'current position'}`);
-
-      // ── D3: RouteEnrichmentAdvisor (JIRA-156 P2/JIRA-165/173) — enrich new route with corridor map ──
-      if (gridPoints.length > 0) {
-        try {
-          activeRoute = await RouteEnrichmentAdvisor.enrich(activeRoute, snapshot, context, brain, gridPoints);
-        } catch (enrichErr) {
-          console.warn(`${tag} RouteEnrichmentAdvisor failed (${(enrichErr as Error).message}), using original route`);
-        }
-      }
 
       // ── D4: JIRA-105 — Consume upgradeOnRoute from LLM route plan ──
       if (activeRoute.upgradeOnRoute) {
