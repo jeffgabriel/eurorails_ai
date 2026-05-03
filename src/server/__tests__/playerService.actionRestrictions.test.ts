@@ -208,11 +208,11 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
   // ── Snow blocked_terrain: Alpine ─────────────────────────────────────────
 
   it('rejects build to Alpine milepost in Snow blocked_terrain zone', async () => {
+    // Zone is pre-filtered by ActiveEffectManager to only include mountain/alpine mileposts
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
         zone: [mpKey(2, 2)], // destination of alpineSegments
-        blockedTerrain: [TerrainType.Alpine],
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
@@ -223,12 +223,11 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     ).rejects.toThrow();
   });
 
-  it('error message for Alpine blocked_terrain describes the restriction', async () => {
+  it('error message for blocked_terrain describes the restriction', async () => {
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
         zone: [mpKey(2, 2)],
-        blockedTerrain: [TerrainType.Alpine],
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
@@ -236,7 +235,7 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
 
     await expect(
       PlayerService.buildTrackForPlayer(GAME_ID, PLAYER_ID, alpineSegments, [], 5),
-    ).rejects.toThrow(/block|restrict|Snow|terrain|alpine/i);
+    ).rejects.toThrow(/block|restrict|Snow|terrain/i);
   });
 
   // ── Snow blocked_terrain: Mountain ───────────────────────────────────────
@@ -246,7 +245,6 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
       {
         type: 'blocked_terrain',
         zone: [mpKey(4, 4)], // destination of mountainSegments
-        blockedTerrain: [TerrainType.Mountain],
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
@@ -262,7 +260,6 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
       {
         type: 'blocked_terrain',
         zone: [mpKey(99, 99)], // different milepost — not the destination
-        blockedTerrain: [TerrainType.Mountain],
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
@@ -273,12 +270,13 @@ describe('PlayerService.buildTrackForPlayer — build restrictions', () => {
     ).resolves.toBeDefined();
   });
 
-  it('allows build to Clear terrain even when Alpine is in Snow zone', async () => {
+  it('allows build to milepost not in the blocked terrain zone', async () => {
+    // ActiveEffectManager pre-filters the zone to only mountain/alpine mileposts,
+    // so clear-terrain destinations are never in the zone.
     const restrictions: BuildRestriction[] = [
       {
         type: 'blocked_terrain',
-        zone: [mpKey(1, 2)], // destination of clearSegments IS in zone but terrain is Clear
-        blockedTerrain: [TerrainType.Alpine], // Alpine blocked, not Clear
+        zone: [mpKey(99, 99)], // zone does not include the clear destination
       },
     ];
     mockActiveEffectManager.getBuildRestrictions.mockResolvedValue(restrictions);
@@ -589,7 +587,60 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
     jest.restoreAllMocks();
   });
 
-  // Setup full moveTrainForUser DB mocks
+  // Setup move mocks WITH a current position and player-owned track from (5,5) to (6,5).
+  // This ensures computeTrackUsageForMove runs and detects own-track usage.
+  function setupFullMoveMocksWithPosition(playerId: string = PLAYER_ID): void {
+    // TrackService.getAllTracks returns player's own track segment
+    mockDb.query.mockResolvedValue({
+      rows: [{
+        player_id: playerId,
+        segments: JSON.stringify([{ from: { row: 5, col: 5 }, to: { row: 6, col: 5 } }]),
+      }],
+    });
+
+    mockClient.query.mockImplementation((sql: string) => {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') {
+        return Promise.resolve();
+      }
+      if (sql.includes('FROM players') && sql.includes('user_id = $2') && sql.includes('FOR UPDATE')) {
+        return Promise.resolve({
+          rows: [{
+            id: playerId,
+            money: 100,
+            position_row: 5,
+            position_col: 5,
+            position_x: 100,
+            position_y: 100,
+            turnNumber: 1,
+          }],
+        });
+      }
+      if (sql.includes('FROM games') && sql.includes('FOR UPDATE')) {
+        return Promise.resolve({ rows: [{ current_player_index: 0 }] });
+      }
+      if (sql.includes('FROM players') && sql.includes('ORDER BY created_at ASC LIMIT 1 OFFSET')) {
+        return Promise.resolve({ rows: [{ id: playerId }] });
+      }
+      if (sql.includes('FROM turn_actions') && sql.includes('FOR UPDATE')) {
+        return Promise.resolve({ rows: [] });
+      }
+      if (sql.includes('FROM movement_history') && !sql.includes('INSERT') && !sql.includes('UPDATE')) {
+        return Promise.resolve({ rows: [] });
+      }
+      if (sql.includes('INSERT INTO movement_history') || sql.includes('UPDATE movement_history')) {
+        return Promise.resolve({ rows: [] });
+      }
+      if (sql.includes('INSERT INTO turn_actions')) {
+        return Promise.resolve({ rows: [] });
+      }
+      if (sql.includes('UPDATE players') && sql.includes('position_row')) {
+        return Promise.resolve({ rows: [{ money: 100 }] });
+      }
+      return Promise.resolve({ rows: [] });
+    });
+  }
+
+  // Setup full moveTrainForUser DB mocks (null position = first placement, no track usage)
   function setupFullMoveMocks(playerId: string = PLAYER_ID): void {
     // db.query is used by TrackService.getAllTracks
     mockDb.query.mockResolvedValue({ rows: [] });
@@ -731,7 +782,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
     ).rejects.toThrow();
   });
 
-  it('rejects movement when no_movement_on_player_rail targets moving player (Rail Strike)', async () => {
+  it('rejects movement when no_movement_on_player_rail targets moving player using own track (Rail Strike)', async () => {
     const restrictions: MovementRestriction[] = [
       {
         type: 'no_movement_on_player_rail',
@@ -739,6 +790,26 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       },
     ];
     mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
+    setupFullMoveMocksWithPosition();
+
+    await expect(
+      PlayerService.moveTrainForUser({
+        gameId: GAME_ID,
+        userId: USER_ID,
+        to: { row: 6, col: 5 },
+      }),
+    ).rejects.toThrow('Rail Strike');
+  });
+
+  it('allows movement for target player when move does not use own track (Rail Strike)', async () => {
+    const restrictions: MovementRestriction[] = [
+      {
+        type: 'no_movement_on_player_rail',
+        targetPlayerId: PLAYER_ID,
+      },
+    ];
+    mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
+    // Use standard mocks — null position means first placement, no track usage
     setupFullMoveMocks();
 
     await expect(
@@ -747,7 +818,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
         userId: USER_ID,
         to: { row: 6, col: 5 },
       }),
-    ).rejects.toThrow();
+    ).resolves.toBeDefined();
   });
 
   it('allows movement for non-target player when no_movement_on_player_rail targets a different player', async () => {
@@ -758,7 +829,7 @@ describe('PlayerService.moveTrainForUser — movement restrictions (TDD)', () =>
       },
     ];
     mockActiveEffectManager.getMovementRestrictions.mockResolvedValue(restrictions);
-    setupFullMoveMocks();
+    setupFullMoveMocksWithPosition();
 
     await expect(
       PlayerService.moveTrainForUser({
@@ -806,7 +877,7 @@ describe('PlayerService — concurrent restrictions (Snow + Strike)', () => {
       {
         type: 'blocked_terrain',
         zone: [mpKey(2, 2)],
-        blockedTerrain: [TerrainType.Alpine],
+        // No blockedTerrain — zone is pre-filtered by ActiveEffectManager
       },
       {
         type: 'no_build_for_player',

@@ -1241,15 +1241,7 @@ export class PlayerService {
             );
           }
         }
-        if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
-          // The drawing player cannot move on their own rail this turn (Rail Strike #123)
-          console.warn(
-            `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
-          );
-          throw new Error(
-            `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
-          );
-        }
+        // no_movement_on_player_rail: checked after track usage is computed (below)
         // half_rate: does not block movement, only caps speed — enforcement is client-side movement cap
         // The server does not re-validate movement distance, so no throw needed here.
       }
@@ -1330,6 +1322,7 @@ export class PlayerService {
 
       // Compute owners used for this move. If this is the first placement (no from), no fees.
       let ownersUsed: string[] = [];
+      let usesOwnTrack = false;
       if (from && (from.row !== to.row || from.col !== to.col)) {
         const allTracks = await TrackService.getAllTracks(gameId);
         const usage = computeTrackUsageForMove({
@@ -1342,6 +1335,25 @@ export class PlayerService {
           throw new Error(usage.errorMessage || "Invalid move");
         }
         ownersUsed = Array.from(usage.ownersUsed);
+        // Check if any edge in the path is owned by the current player
+        usesOwnTrack = usage.path.some(edge => edge.ownerPlayerIds.includes(playerId));
+      }
+
+      // ── Rail Strike: reject if this move uses the targeted player's own track ──
+      // This check must happen after track usage is computed so we know which
+      // track edges are involved. The player can still move on opponent or
+      // public track; only movement on their own rail is blocked.
+      if (usesOwnTrack) {
+        for (const restriction of movementRestrictions) {
+          if (restriction.type === 'no_movement_on_player_rail' && restriction.targetPlayerId === playerId) {
+            console.warn(
+              `[PlayerService] Movement rejected by event restriction: type=no_movement_on_player_rail gameId=${gameId} playerId=${playerId}`,
+            );
+            throw new Error(
+              `Movement blocked by active event (Rail Strike): player ${playerId} cannot move on their own track this turn`,
+            );
+          }
+        }
       }
 
       const newlyPayable = ownersUsed.filter((pid) => !alreadyPaid.has(pid));
@@ -2536,16 +2548,18 @@ export class PlayerService {
       // Check build restrictions from active event effects (Snow blocked_terrain, Rail Strike)
       const buildRestrictions = await activeEffectManager.getBuildRestrictions(gameId);
       for (const restriction of buildRestrictions) {
-        if (restriction.type === 'blocked_terrain' && restriction.zone && restriction.blockedTerrain) {
+        if (restriction.type === 'blocked_terrain' && restriction.zone) {
+          // The zone is pre-filtered to only include blocked terrain mileposts (blockedTerrainZone).
+          // Zone membership alone is sufficient — no need to re-check terrain type.
           const zoneSet = new Set(restriction.zone);
           for (const seg of newSegments) {
             const destKey = `${seg.to.row},${seg.to.col}`;
-            if (zoneSet.has(destKey) && restriction.blockedTerrain.includes(seg.to.terrain)) {
+            if (zoneSet.has(destKey)) {
               console.warn(
-                `[PlayerService] Build rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey} terrain=${TerrainType[seg.to.terrain]}`,
+                `[PlayerService] Build rejected by event restriction: type=blocked_terrain gameId=${gameId} playerId=${playerId} destKey=${destKey}`,
               );
               throw new Error(
-                `Build blocked by active event: destination milepost ${destKey} has blocked terrain (${TerrainType[seg.to.terrain]}) in restricted zone`,
+                `Build blocked by active event (Snow): destination milepost ${destKey} is in the blocked terrain zone`,
               );
             }
           }
