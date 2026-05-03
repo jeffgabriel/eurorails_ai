@@ -261,15 +261,24 @@ describe('DemandDeckService unified draw pile', () => {
 
   describe('returnDiscardedCardToDealt() — both card types', () => {
     it('should move a discarded demand card back to dealt', () => {
-      const r = service.drawCard();
+      // Draw until we get a demand card (drawCard may return event cards)
+      let r = service.drawCard();
+      let discardedEventCards = 0;
+      while (r && r.type === 'event') {
+        service.discardEventCard(r.card.id);
+        discardedEventCards++;
+        r = service.drawCard();
+      }
       expect(r).not.toBeNull();
+      expect(r!.type).toBe('demand');
       const cardId = r!.card.id;
       service.discardCard(cardId);
 
       const success = service.returnDiscardedCardToDealt(cardId);
       expect(success).toBe(true);
       const state = service.getDeckState();
-      expect(state.discardPileSize).toBe(0);
+      // discardPile contains only the event cards we discarded along the way
+      expect(state.discardPileSize).toBe(discardedEventCards);
       expect(state.dealtCardsCount).toBe(1);
     });
 
